@@ -1,0 +1,7 @@
+defaults:
+  - approach: random
+  - environment: small_maze
+  - _self_
+
+seed: 42
+max_steps: 1000
