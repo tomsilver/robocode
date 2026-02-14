@@ -19,3 +19,22 @@ def test_random_approach():
     approach.reset(state, info)
     action = approach.step()
     assert env.action_space.contains(action)
+
+
+def test_random_approach_train():
+    """Test that train is a no-op and the approach still works afterward."""
+    env = MazeEnv(5, 8, 5, 8)
+    sim = EnvSimulator(MazeEnv(5, 8, 5, 8))
+    approach = RandomApproach(
+        sim,
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=456,
+    )
+    train_states = [env.reset(seed=s) for s in [10, 20, 30]]
+    approach.train(train_states)
+
+    state, info = env.reset(seed=99)
+    approach.reset(state, info)
+    action = approach.step()
+    assert env.action_space.contains(action)

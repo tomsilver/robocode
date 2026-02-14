@@ -42,7 +42,7 @@ def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
             if "seed" not in row:
                 row["seed"] = cfg["seed"]
 
-            row.update(results)
+            row.update({k: v for k, v in results.items() if k != "per_episode"})
             rows.append(row)
 
     return pd.DataFrame(rows)
