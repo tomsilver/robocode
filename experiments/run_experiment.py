@@ -1,5 +1,6 @@
 """Run an experiment with a given approach and environment."""
 
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -49,11 +50,13 @@ def _run_episode(
 def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
     env = hydra.utils.instantiate(cfg.environment)
+    env_source = inspect.getfile(type(env))
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=cfg.seed,
+        visible_filepaths=[env_source],
     )
 
     task_rng = np.random.default_rng(cfg.seed)
