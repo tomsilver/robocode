@@ -108,7 +108,19 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             max_turns=self._max_turns,
         )
 
-        result = asyncio.run(run_agent_in_sandbox(config))
+        # Write agent logs to a file in the sandbox directory.
+        sandbox_logger = logging.getLogger("robocode.utils.sandbox")
+        log_path = sandbox_dir / "agent_log.txt"
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S")
+        )
+        sandbox_logger.addHandler(file_handler)
+        try:
+            result = asyncio.run(run_agent_in_sandbox(config))
+        finally:
+            sandbox_logger.removeHandler(file_handler)
+            file_handler.close()
 
         if result.success and result.output_file is not None:
             self._load_generated(result.output_file)
