@@ -1,15 +1,17 @@
 """Data structures."""
 
 from dataclasses import dataclass
+from typing import Hashable, TypeAlias
+
+# Define some data structures for this example repository (to be changed).
+State: TypeAlias = Hashable
+Action: TypeAlias = int
+Goal: TypeAlias = str
 
 
 @dataclass(frozen=True)
-class Dog:
-    """An example class."""
+class Task:
+    """An initial state and goal."""
 
-    name: str
-    breed: str
-
-    def is_good(self) -> bool:
-        """All dogs are good."""
-        return True
+    init: State
+    goal: Goal

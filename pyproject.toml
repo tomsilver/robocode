@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
    "matplotlib",
    "numpy",
+   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-utils",
 ]
 
 [project.optional-dependencies]
