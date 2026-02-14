@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from robocode.sandbox import (
+from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _is_path_within_sandbox,
