@@ -1,0 +1,12 @@
+approach:
+  _target_: robocode.approaches.random_approach.RandomApproach
+environment:
+  _target_: robocode.environments.maze_env.MazeEnv
+  min_height: 10
+  max_height: 15
+  min_width: 10
+  max_width: 15
+seed: 2
+max_steps: 1000
+num_train_tasks: 10
+num_eval_tasks: 10

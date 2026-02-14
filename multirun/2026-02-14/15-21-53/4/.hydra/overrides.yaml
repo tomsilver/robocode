@@ -1,0 +1,3 @@
+- seed=2
+- environment=small_maze
+- approach=random

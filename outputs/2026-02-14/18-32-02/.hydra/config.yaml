@@ -1,0 +1,14 @@
+approach:
+  _target_: robocode.approaches.agentic_approach.AgenticApproach
+  model: claude-sonnet-4-20250514
+  max_turns: 50
+  output_dir: ${hydra:runtime.output_dir}
+environment:
+  _target_: robocode.environments.maze_env.MazeEnv
+  min_height: 3
+  max_height: 5
+  min_width: 3
+  max_width: 5
+seed: 42
+max_steps: 1000
+num_eval_tasks: 10
