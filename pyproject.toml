@@ -17,6 +17,7 @@ dependencies = [
    "hydra-core",
    "omegaconf",
    "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-utils",
+   "claude-agent-sdk",
 ]
 
 [project.optional-dependencies]
@@ -61,5 +62,6 @@ exclude = ["venv/*", ".venv/*"]
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
+    "claude_agent_sdk.*",
 ]
 ignore_missing_imports = true
