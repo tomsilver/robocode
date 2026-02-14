@@ -61,8 +61,8 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         self._last_reward = reward
         self._last_done = done
 
-    def train(self, train_states: list[tuple[_StateType, dict[str, Any]]]) -> None:
-        """Train on initial states.
+    def train(self) -> None:
+        """Train the approach.
 
         Override to implement learning.
         """

@@ -5,5 +5,4 @@ defaults:
 
 seed: 42
 max_steps: 1000
-num_train_tasks: 10
 num_eval_tasks: 10
