@@ -18,7 +18,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from robocode.sandbox import SandboxConfig, run_agent_in_sandbox
+from robocode.utils.sandbox import SandboxConfig, run_agent_in_sandbox
 
 RED_TEAM_DIR = Path("red_team_workdir")
 SANDBOX_DIR = RED_TEAM_DIR / "sandbox"

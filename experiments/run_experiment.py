@@ -1,5 +1,6 @@
 """Run an experiment with a given approach and environment."""
 
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -11,7 +12,9 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
+import robocode
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.source_deps import collect_local_deps
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +52,16 @@ def _run_episode(
 def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
     env = hydra.utils.instantiate(cfg.environment)
+    env_source = Path(inspect.getfile(type(env)))
+    assert robocode.__file__ is not None
+    pkg_root = Path(robocode.__file__).parent.parent
+    visible_filepaths = [str(p) for p in collect_local_deps(env_source, pkg_root)]
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=cfg.seed,
+        visible_filepaths=visible_filepaths,
     )
 
     task_rng = np.random.default_rng(cfg.seed)
