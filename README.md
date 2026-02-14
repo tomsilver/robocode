@@ -6,6 +6,11 @@ Agents for robot physical reasoning.
 
 Work in progress.
 
+## TODO
+
+- [ ] Fix sandbox: transition to Docker-based sandboxing for full filesystem isolation, and consider using the Anthropic API directly instead of the Claude Agent SDK for full control over tool execution (see [Sandbox](#sandbox) for details)
+- [ ] Ensure that experiment seeds cannot be guessed by agent in sandbox
+
 ## Sandbox
 
 The `robocode.sandbox` module runs a Claude agent in a restricted working directory. The agent can use Bash, Read, Write, Edit, Glob, and Grep tools, but file tools are restricted to the sandbox directory via a PreToolUse hook and Bash is sandboxed at the OS level (macOS Seatbelt / Linux bubblewrap).
