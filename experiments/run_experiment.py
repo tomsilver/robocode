@@ -1,8 +1,11 @@
 """Run an experiment with a given approach and environment."""
 
+import json
 import logging
+from pathlib import Path
 
 import hydra
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
@@ -29,6 +32,17 @@ def _main(cfg: DictConfig) -> float:
         approach.update(state, float(reward), terminated or truncated, info)
         if terminated or truncated:
             break
+
+    results = {
+        "total_reward": total_reward,
+        "num_steps": num_steps,
+        "solved": terminated,
+    }
+    output_dir = Path(HydraConfig.get().runtime.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_path = output_dir / "results.json"
+    with open(results_path, "w", encoding="utf-8") as results_file:
+        json.dump(results, results_file, indent=2)
 
     logger.info(
         "Total reward: %.1f, Steps: %d, Solved: %s",

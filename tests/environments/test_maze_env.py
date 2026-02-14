@@ -6,6 +6,7 @@ from robocode.environments.maze_env import MazeEnv, _MazeAction, _MazeState
 def test_maze_env():
     """Tests for MazeEnv()."""
     env = MazeEnv(5, 8, 5, 8)
+    env.action_space.seed(123)
     state, _ = env.reset(seed=123)
     assert isinstance(state, _MazeState)
     action = env.action_space.sample()
