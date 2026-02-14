@@ -1,0 +1,151 @@
+"""An approach that uses a Claude agent to generate approach code."""
+
+import asyncio
+import logging
+import shutil
+from pathlib import Path
+from typing import Any, TypeVar
+
+from gymnasium.spaces import Space
+
+import robocode
+from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.sandbox import SandboxConfig, run_agent_in_sandbox
+
+logger = logging.getLogger(__name__)
+
+_ObsType = TypeVar("_ObsType")
+_ActType = TypeVar("_ActType")
+
+_SYSTEM_PROMPT = (
+    "You are an expert at writing policies for gymnasium environments. "
+    "You will read environment source code, understand the dynamics, "
+    "and write an optimal approach class."
+)
+
+_USER_PROMPT = """\
+Read the environment source files in this directory to understand the state \
+type, action space, and dynamics. Then write `approach.py` containing a class \
+`GeneratedApproach` with the following interface:
+
+```python
+class GeneratedApproach:
+    def __init__(self, action_space, observation_space):
+        \"\"\"Initialize with the environment's gym spaces.\"\"\"
+        ...
+
+    def reset(self, state, info):
+        \"\"\"Called at the start of each episode with the initial state.\"\"\"
+        ...
+
+    def get_action(self, state):
+        \"\"\"Return a valid action for the given state.\"\"\"
+        ...
+```
+
+The class can maintain internal state between calls (e.g., a computed plan). \
+The `reset` method is called at the start of each episode. The `get_action` \
+method is called each step and must return a valid action.
+
+Read the environment code to understand what attributes the state has and what \
+actions are available. Write the best approach you can \u2014 ideally one that \
+solves the environment optimally (e.g., pathfinding for navigation). You may \
+write and run test scripts to verify your approach works.
+
+Your `approach.py` should be self-contained (only import standard library \
+and common packages like numpy).\
+"""
+
+
+class AgenticApproach(BaseApproach[_ObsType, _ActType]):
+    """An approach that uses a Claude agent to write approach code."""
+
+    def __init__(
+        self,
+        action_space: Space[_ActType],
+        observation_space: Space[_ObsType],
+        seed: int,
+        visible_filepaths: list[str] | None = None,
+        model: str = "claude-sonnet-4-20250514",
+        max_turns: int = 50,
+        output_dir: str = ".",
+    ) -> None:
+        super().__init__(action_space, observation_space, seed, visible_filepaths)
+        self._model = model
+        self._max_turns = max_turns
+        self._output_dir = Path(output_dir)
+        self._generated: Any = None
+
+    def train(self) -> None:
+        sandbox_dir = self._output_dir / "sandbox"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+
+        assert robocode.__file__ is not None
+        pkg_root = Path(robocode.__file__).parent.parent
+
+        for filepath_str in self._visible_filepaths:
+            filepath = Path(filepath_str)
+            rel = filepath.relative_to(pkg_root)
+            dest = sandbox_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(filepath, dest)
+
+        # Create __init__.py stubs so the agent can import env modules.
+        for pyfile in sandbox_dir.rglob("*.py"):
+            for parent in pyfile.relative_to(sandbox_dir).parents:
+                if parent == Path("."):
+                    continue
+                init = sandbox_dir / parent / "__init__.py"
+                if not init.exists():
+                    init.touch()
+
+        config = SandboxConfig(
+            sandbox_dir=sandbox_dir,
+            output_filename="approach.py",
+            prompt=_USER_PROMPT,
+            system_prompt=_SYSTEM_PROMPT,
+            model=self._model,
+            max_turns=self._max_turns,
+        )
+
+        result = asyncio.run(run_agent_in_sandbox(config))
+
+        if result.success and result.output_file is not None:
+            self._load_generated(result.output_file)
+        else:
+            logger.warning("Agent failed to generate approach: %s", result.error)
+
+    def _load_generated(self, path: Path) -> None:
+        """Load a GeneratedApproach class from the given file."""
+        source = path.read_text()
+        namespace: dict[str, Any] = {}
+        exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
+        cls = namespace["GeneratedApproach"]
+        self._generated = cls(self._action_space, self._state_space)
+        logger.info("Loaded generated approach from %s", path)
+
+    def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
+        """Start a new episode."""
+        super().reset(state, info)
+        if self._generated is not None:
+            self._generated.reset(state, info)
+
+    def update(
+        self,
+        state: _ObsType,
+        reward: float,
+        done: bool,
+        info: dict[str, Any],
+    ) -> None:
+        """Record the reward and next state following an action."""
+        super().update(state, reward, done, info)
+        if self._generated is not None and hasattr(self._generated, "update"):
+            self._generated.update(state, reward, done, info)
+
+    def _get_action(self) -> _ActType:
+        if self._generated is not None:
+            try:
+                return self._generated.get_action(self._last_state)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("Generated approach failed, using random")
+        return self._action_space.sample()

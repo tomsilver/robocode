@@ -1,0 +1,4 @@
+_target_: robocode.approaches.agentic_approach.AgenticApproach
+model: claude-sonnet-4-20250514
+max_turns: 50
+output_dir: ${hydra:runtime.output_dir}
