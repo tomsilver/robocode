@@ -1,21 +1,19 @@
 """Tests for random_approach.py."""
 
-import numpy as np
+from copy import deepcopy
+
+import gymnasium
 
 from robocode.approaches.random_approach import RandomApproach
-from robocode.benchmarks.maze_benchmark import MazeBenchmark
 
 
 def test_random_approach():
     """Tests for RandomApproach()."""
-    benchmark = MazeBenchmark(5, 8, 5, 8)
-    approach = RandomApproach(
-        benchmark.get_actions(),
-        benchmark.get_next_state,
-        benchmark.get_cost,
-        benchmark.check_goal,
-    )
-    rng = np.random.default_rng(123)
-    task = benchmark.generate_tasks(1, "train", rng)[0]
-    plan = approach.generate_plan(task, "test", 1e-1, rng)
-    assert len(plan) > 0
+    env = gymnasium.make("Taxi-v3")
+    action_space = deepcopy(env.action_space)
+    action_space.seed(123)
+    approach = RandomApproach(action_space, seed=123)
+    obs, info = env.reset(seed=123)
+    approach.reset(obs, info)
+    action = approach.step()
+    assert env.action_space.contains(action)

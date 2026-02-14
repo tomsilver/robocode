@@ -1,32 +1,24 @@
-"""An approach that attempts to make a plan by taking random actions."""
+"""An approach that takes random actions."""
 
-import time
+from typing import TypeVar
 
-import numpy as np
+from gymnasium.spaces import Space
+from prpl_utils.gym_agent import Agent
 
-from robocode.approaches.base_approach import Approach
-from robocode.structs import Action, Task
+_ObsType = TypeVar("_ObsType")
+_ActType = TypeVar("_ActType")
 
 
-class RandomApproach(Approach):
-    """An approach that attempts to make a plan by taking random actions."""
+class RandomApproach(Agent[_ObsType, _ActType]):
+    """An approach that takes random actions."""
 
-    def train(self, training_tasks: list[Task]) -> None:
-        pass
+    def __init__(
+        self,
+        action_space: Space[_ActType],
+        seed: int,
+    ) -> None:
+        super().__init__(seed)
+        self._action_space = action_space
 
-    def generate_plan(
-        self, task: Task, train_or_test: str, timeout: float, rng: np.random.Generator
-    ) -> list[Action]:
-        start_time = time.perf_counter()
-
-        plan: list[Action] = []
-        state = task.init
-
-        while time.perf_counter() - start_time < timeout:
-            if self._goal_fn(state, task.goal):
-                return plan
-            action = rng.choice(self._actions)
-            plan.append(action)
-            state = self._transition_fn(state, action)
-
-        return plan
+    def _get_action(self) -> _ActType:
+        return self._action_space.sample()
