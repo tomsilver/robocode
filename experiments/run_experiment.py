@@ -65,18 +65,10 @@ def _main(cfg: DictConfig) -> float:
     )
 
     task_rng = np.random.default_rng(cfg.seed)
-    num_train = cfg.num_train_tasks
     num_eval = cfg.num_eval_tasks
-    train_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_train)]
     eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
-    assert not set(train_seeds) & set(eval_seeds), "Train/eval seed collision"
 
-    # Collect training initial states.
-    train_states = []
-    for s in train_seeds:
-        state, info = env.reset(seed=s)
-        train_states.append((state, info))
-    approach.train(train_states)
+    approach.train()
 
     # Evaluate on held-out episodes.
     per_episode = []
@@ -92,7 +84,6 @@ def _main(cfg: DictConfig) -> float:
         "mean_eval_reward": mean_reward,
         "mean_eval_steps": mean_steps,
         "solve_rate": solve_rate,
-        "num_train_tasks": num_train,
         "num_eval_tasks": num_eval,
         "per_episode": per_episode,
     }

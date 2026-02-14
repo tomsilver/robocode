@@ -26,8 +26,7 @@ def test_random_approach_train():
         observation_space=env.observation_space,
         seed=456,
     )
-    train_states = [env.reset(seed=s) for s in [10, 20, 30]]
-    approach.train(train_states)
+    approach.train()
 
     state, info = env.reset(seed=99)
     approach.reset(state, info)
