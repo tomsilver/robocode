@@ -2,15 +2,12 @@
 
 from robocode.approaches.random_approach import RandomApproach
 from robocode.environments.maze_env import MazeEnv
-from robocode.simulators.env_simulator import EnvSimulator
 
 
 def test_random_approach():
     """Tests for RandomApproach()."""
     env = MazeEnv(5, 8, 5, 8)
-    sim = EnvSimulator(MazeEnv(5, 8, 5, 8))
     approach = RandomApproach(
-        sim,
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=123,
@@ -24,9 +21,7 @@ def test_random_approach():
 def test_random_approach_train():
     """Test that train is a no-op and the approach still works afterward."""
     env = MazeEnv(5, 8, 5, 8)
-    sim = EnvSimulator(MazeEnv(5, 8, 5, 8))
     approach = RandomApproach(
-        sim,
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=456,
