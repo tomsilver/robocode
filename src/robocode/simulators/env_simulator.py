@@ -3,6 +3,7 @@
 from typing import TypeVar
 
 import numpy as np
+from gymnasium.spaces import Space
 
 from robocode.environments.base_env import BaseEnv
 from robocode.simulators.base_simulator import BaseSimulator
@@ -16,6 +17,16 @@ class EnvSimulator(BaseSimulator[_StateType, _ActType]):
 
     def __init__(self, env: BaseEnv[_StateType, _ActType]) -> None:
         self._env = env
+
+    @property
+    def action_space(self) -> Space[_ActType]:
+        """The action space of the simulator."""
+        return self._env.action_space
+
+    @property
+    def observation_space(self) -> Space[_StateType]:
+        """The observation space of the simulator."""
+        return self._env.observation_space
 
     def sample_next_state(
         self, state: _StateType, action: _ActType, rng: np.random.Generator
