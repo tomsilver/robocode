@@ -1,5 +1,19 @@
-"""Sandboxed Claude agent runner."""
+"""Sandboxed Claude agent runner.
 
+WARNING: The current sandbox is NOT fully secure. The OS-level sandbox
+(macOS Seatbelt / Linux bubblewrap) restricts filesystem *writes* to the
+sandbox directory, but allows *reads* of the entire filesystem. This means
+bash commands like `cat /etc/passwd` or `python -c "open('/etc/hosts').read()"`
+will succeed. The PreToolUse hook restricts the Read/Write/Edit/Glob/Grep
+tools to the sandbox directory, but cannot fully restrict what bash
+subprocesses read.
+
+TODO: Transition to Docker-based sandboxing for full filesystem isolation.
+TODO: Consider using the Anthropic API directly instead of the Claude Agent
+SDK, which would give us full control over tool execution.
+"""
+
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,7 +25,12 @@ from claude_agent_sdk import (  # type: ignore[import-untyped]
     ClaudeSDKClient,
     HookMatcher,
     ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
 )
+
+logger = logging.getLogger(__name__)
 
 _FILE_TOOLS: set[str] = {"Read", "Write", "Edit", "Glob", "Grep"}
 
@@ -80,6 +99,11 @@ def _make_pre_tool_use_hook(
         tool_name: str = input_data.get("tool_name", "")
         tool_input: dict[str, Any] = input_data.get("tool_input", {})
 
+        if tool_name == "Bash":
+            if tool_input.get("dangerouslyDisableSandbox"):
+                return _deny("dangerouslyDisableSandbox is not allowed")
+            return {}
+
         if tool_name in _FILE_TOOLS:
             path_key = _PATH_KEYS.get(tool_name)
             if path_key and path_key in tool_input:
@@ -122,11 +146,42 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         setting_sources=[],
     )
 
+    result_message: ResultMessage | None = None
+
     async with ClaudeSDKClient(options=options) as client:
         await client.query(config.prompt)
         async for message in client.receive_response():
-            if isinstance(message, (AssistantMessage, ResultMessage)):
-                pass
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        logger.info("Agent: %s", block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        logger.info("Tool call: %s(%s)", block.name, block.input)
+                    elif isinstance(block, ToolResultBlock):
+                        content = block.content
+                        if isinstance(content, str) and len(content) > 500:
+                            content = content[:500] + "..."
+                        logger.info(
+                            "Tool result (error=%s): %s",
+                            block.is_error,
+                            content,
+                        )
+            elif isinstance(message, ResultMessage):
+                result_message = message
+
+    if result_message is not None:
+        logger.info(
+            "Session done: turns=%d, cost=$%s, error=%s",
+            result_message.num_turns,
+            result_message.total_cost_usd,
+            result_message.is_error,
+        )
+        if result_message.is_error:
+            return SandboxResult(
+                success=False,
+                output_file=None,
+                error=result_message.result,
+            )
 
     output_path = config.sandbox_dir / config.output_filename
     if output_path.exists():

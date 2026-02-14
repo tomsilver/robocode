@@ -195,6 +195,27 @@ def test_hook_passes_through_bash(tmp_path: Path) -> None:
     assert result == {}
 
 
+def test_hook_blocks_dangerously_disable_sandbox(tmp_path: Path) -> None:
+    """Bash with dangerouslyDisableSandbox is denied."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    hook = _make_pre_tool_use_hook(sandbox)
+    result = _run(
+        hook(
+            _make_hook_input(
+                "Bash",
+                {
+                    "command": "cat /etc/passwd",
+                    "dangerouslyDisableSandbox": True,
+                },
+            ),
+            None,
+            {},
+        )
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_hook_allows_unknown_tool(tmp_path: Path) -> None:
     """Unknown tools are allowed (not restricted)."""
     sandbox = tmp_path / "sandbox"
