@@ -8,6 +8,8 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
+from robocode.simulators.env_simulator import EnvSimulator
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,8 +17,14 @@ logger = logging.getLogger(__name__)
 def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
     env = hydra.utils.instantiate(cfg.environment)
-    sim = hydra.utils.instantiate(cfg.environment)
-    approach = hydra.utils.instantiate(cfg.approach, simulator=sim, seed=cfg.seed)
+    sim = EnvSimulator(hydra.utils.instantiate(cfg.environment))
+    approach = hydra.utils.instantiate(
+        cfg.approach,
+        simulator=sim,
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=cfg.seed,
+    )
 
     state, info = env.reset(seed=cfg.seed)
     approach.reset(state, info)

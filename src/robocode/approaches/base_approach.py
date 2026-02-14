@@ -1,11 +1,12 @@
-"""An approach that takes random actions."""
+"""Base class for approaches."""
 
 import abc
 from typing import Any, Generic, SupportsFloat, TypeVar
 
 import numpy as np
+from gymnasium.spaces import Space
 
-from robocode.environments.base_env import BaseEnv
+from robocode.simulators.base_simulator import BaseSimulator
 
 _StateType = TypeVar("_StateType")
 _ActType = TypeVar("_ActType")
@@ -16,13 +17,15 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
 
     def __init__(
         self,
-        simulator: BaseEnv[_StateType, _ActType],
+        simulator: BaseSimulator[_StateType, _ActType],
+        action_space: Space[_ActType],
+        observation_space: Space[_StateType],
         seed: int,
     ) -> None:
         self._rng = np.random.default_rng(seed)
         self._simulator = simulator
-        self._state_space = simulator.observation_space
-        self._action_space = simulator.action_space
+        self._state_space = observation_space
+        self._action_space = action_space
         self._action_space.seed(seed)
         self._last_state: _StateType | None = None
         self._last_action: _ActType | None = None
