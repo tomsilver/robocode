@@ -69,14 +69,23 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 50,
         output_dir: str = ".",
+        load_dir: str | None = None,
     ) -> None:
         super().__init__(action_space, observation_space, seed, visible_filepaths)
         self._model = model
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
+        self._load_dir = Path(load_dir) if load_dir is not None else None
         self._generated: Any = None
 
     def train(self) -> None:
+        if self._load_dir is not None:
+            approach_file = self._load_dir / "sandbox" / "approach.py"
+            if not approach_file.exists():
+                raise FileNotFoundError(f"No approach file at {approach_file}")
+            self._load_generated(approach_file)
+            return
+
         sandbox_dir = self._output_dir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
 
