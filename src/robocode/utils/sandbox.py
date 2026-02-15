@@ -4,9 +4,8 @@ WARNING: The current sandbox is NOT fully secure. The OS-level sandbox
 (macOS Seatbelt / Linux bubblewrap) restricts filesystem *writes* to the
 sandbox directory, but allows *reads* of the entire filesystem. This means
 bash commands like `cat /etc/passwd` or `python -c "open('/etc/hosts').read()"`
-will succeed. The PreToolUse hook restricts the Read/Write/Edit/Glob/Grep
-tools to the sandbox directory, but cannot fully restrict what bash
-subprocesses read.
+will succeed. The PreToolUse hook restricts Write/Edit to the sandbox
+directory; Read/Glob/Grep are unrestricted (matching the OS-level policy).
 
 TODO: Transition to Docker-based sandboxing for full filesystem isolation.
 TODO: Consider using the Anthropic API directly instead of the Claude Agent
@@ -32,14 +31,11 @@ from claude_agent_sdk import (  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
-_FILE_TOOLS: set[str] = {"Read", "Write", "Edit", "Glob", "Grep"}
+_WRITE_TOOLS: set[str] = {"Write", "Edit"}
 
 _PATH_KEYS: dict[str, str] = {
-    "Read": "file_path",
     "Write": "file_path",
     "Edit": "file_path",
-    "Glob": "path",
-    "Grep": "path",
 }
 
 
@@ -75,8 +71,9 @@ def _is_path_within_sandbox(path_str: str, sandbox_dir: Path) -> bool:
         return False
 
 
-def _deny(reason: str) -> dict[str, Any]:
+def _deny(tool_name: str, reason: str) -> dict[str, Any]:
     """Return a hook response that denies tool use."""
+    logger.warning("SANDBOX DENIED %s: %s", tool_name, reason)
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -101,17 +98,17 @@ def _make_pre_tool_use_hook(
 
         if tool_name == "Bash":
             if tool_input.get("dangerouslyDisableSandbox"):
-                return _deny("dangerouslyDisableSandbox is not allowed")
+                return _deny(tool_name, "dangerouslyDisableSandbox is not allowed")
             return {}
 
-        if tool_name in _FILE_TOOLS:
+        if tool_name in _WRITE_TOOLS:
             path_key = _PATH_KEYS.get(tool_name)
             if path_key and path_key in tool_input:
                 path_str = tool_input[path_key]
                 if not Path(path_str).is_absolute():
                     path_str = str(sandbox_dir / path_str)
                 if not _is_path_within_sandbox(path_str, sandbox_dir):
-                    return _deny(f"Path {path_str} is outside the sandbox")
+                    return _deny(tool_name, f"Path {path_str} is outside the sandbox")
             return {}
 
         return {}
