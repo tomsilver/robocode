@@ -84,7 +84,8 @@ def _main(cfg: DictConfig) -> float:
         desc_path.write_text(env.env_description)
         env_description_path = str(desc_path)
 
-    primitives = {"check_action_collision": env.check_action_collision}
+    all_primitives = {"check_action_collision": env.check_action_collision}
+    primitives = {name: all_primitives[name] for name in cfg.primitives}
 
     approach = hydra.utils.instantiate(
         cfg.approach,
