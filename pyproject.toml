@@ -18,6 +18,7 @@ dependencies = [
    "omegaconf",
    "prpl_utils",
    "kinder",
+   "imageio",
    "claude-agent-sdk",
 ]
 

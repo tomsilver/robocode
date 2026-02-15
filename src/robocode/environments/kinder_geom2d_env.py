@@ -4,11 +4,11 @@ from typing import Any, SupportsFloat
 
 import gymnasium
 import kinder
+import numpy as np
 from gymnasium.core import RenderFrame
 from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 from relational_structs.spaces import ObjectCentricBoxSpace
-import numpy as np
 
 from robocode.environments.base_env import BaseEnv
 
