@@ -23,10 +23,9 @@ _SYSTEM_PROMPT = (
     "and write an optimal approach class."
 )
 
-_USER_PROMPT = """\
-Read the environment source files in this directory to understand the state \
-type, action space, and dynamics. Then write `approach.py` containing a class \
-`GeneratedApproach` with the following interface:
+_INTERFACE_SPEC = """\
+Write `approach.py` containing a class `GeneratedApproach` with the following \
+interface:
 
 ```python
 class GeneratedApproach:
@@ -47,13 +46,28 @@ The class can maintain internal state between calls (e.g., a computed plan). \
 The `reset` method is called at the start of each episode. The `get_action` \
 method is called each step and must return a valid action.
 
-Read the environment code to understand what attributes the state has and what \
-actions are available. Write the best approach you can \u2014 ideally one that \
-solves the environment optimally (e.g., pathfinding for navigation). You may \
-write and run test scripts to verify your approach works.
+Write the best approach you can \u2014 ideally one that solves the environment \
+optimally. You may write and run test scripts to verify your approach works.
 
 Your `approach.py` should be self-contained (only import standard library \
 and common packages like numpy).\
+"""
+
+_PROMPT_WITH_DESCRIPTION = """\
+You are writing an approach for ONE specific environment. The environment is \
+fully described below \u2014 this is the ONLY environment your code will be \
+tested on. Do NOT try to handle other environments or be generic.
+
+{env_description}
+
+{interface_spec}\
+"""
+
+_PROMPT_WITH_SOURCE = """\
+Read the environment source files in this directory to understand the state \
+type, action space, and dynamics.
+
+{interface_spec}\
 """
 
 
@@ -66,12 +80,19 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         observation_space: Space[_ObsType],
         seed: int,
         visible_filepaths: list[str] | None = None,
+        env_description_path: str | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 50,
         output_dir: str = ".",
         load_dir: str | None = None,
     ) -> None:
-        super().__init__(action_space, observation_space, seed, visible_filepaths)
+        super().__init__(
+            action_space,
+            observation_space,
+            seed,
+            visible_filepaths,
+            env_description_path,
+        )
         self._model = model
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
@@ -99,6 +120,17 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(filepath, dest)
 
+        # Build the prompt. If we have an env description, inline it so the
+        # agent knows exactly which environment to target.  Otherwise fall
+        # back to asking the agent to read source files.
+        if self._env_description_path is not None:
+            env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
+            prompt = _PROMPT_WITH_DESCRIPTION.format(
+                env_description=env_desc, interface_spec=_INTERFACE_SPEC
+            )
+        else:
+            prompt = _PROMPT_WITH_SOURCE.format(interface_spec=_INTERFACE_SPEC)
+
         # Create __init__.py stubs so the agent can import env modules.
         for pyfile in sandbox_dir.rglob("*.py"):
             for parent in pyfile.relative_to(sandbox_dir).parents:
@@ -111,7 +143,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         config = SandboxConfig(
             sandbox_dir=sandbox_dir,
             output_filename="approach.py",
-            prompt=_USER_PROMPT,
+            prompt=prompt,
             system_prompt=_SYSTEM_PROMPT,
             model=self._model,
             max_turns=self._max_turns,

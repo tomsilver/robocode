@@ -8,6 +8,7 @@ Work in progress.
 
 ## TODO
 
+- [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_p1` and understand why it doesn't work that well
 - [ ] Fix sandbox: transition to Docker-based sandboxing for full filesystem isolation, and consider using the Anthropic API directly instead of the Claude Agent SDK for full control over tool execution (see [Sandbox](#sandbox) for details)
 - [ ] Ensure that experiment seeds cannot be guessed by agent in sandbox
 

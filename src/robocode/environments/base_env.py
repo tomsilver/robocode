@@ -13,6 +13,11 @@ _ActType = TypeVar("_ActType")
 class BaseEnv(Env[_StateType, _ActType]):
     """Base class for environments, are assumed fully observed and resettable."""
 
+    @property
+    def env_description(self) -> str | None:
+        """Optional markdown description of this environment for an agent."""
+        return None
+
     @abc.abstractmethod
     def set_state(self, state: _StateType) -> None:
         """Reset the internal state of the environment to the given one."""

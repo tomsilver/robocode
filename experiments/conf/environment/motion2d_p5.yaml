@@ -1,0 +1,2 @@
+_target_: robocode.environments.kinder_geom2d_env.KinderGeom2DEnv
+env_id: kinder/Motion2D-p5-v0
