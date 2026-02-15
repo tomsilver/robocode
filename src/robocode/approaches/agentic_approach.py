@@ -54,7 +54,15 @@ IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:
 ```bash
 {python_executable} test_approach.py
-```\
+```
+
+You can also inspect the source code of any imported module to understand \
+the environment's dynamics in detail (reward function, transition logic, \
+termination conditions, etc.). To locate a module's source file:
+```bash
+{python_executable} -c "import some_module; print(some_module.__file__)"
+```
+Then read the source to inform your approach.\
 """
 
 _PROMPT_WITH_DESCRIPTION = """\

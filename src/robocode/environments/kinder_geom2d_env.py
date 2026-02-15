@@ -67,7 +67,21 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             f"    obs, reward, terminated, truncated, info = env.step(action)\n"
             f"    done = terminated or truncated\n"
             f"```\n\n"
-            f"`obs` and `action` are numpy arrays matching the tables above."
+            f"`obs` and `action` are numpy arrays matching the tables above.\n\n"
+            f"## Source Code\n\n"
+            f"`KinderGeom2DEnv` is a thin wrapper. The underlying environment "
+            f"logic lives in the `kinder` package. To find the source files:\n\n"
+            f"```python\n"
+            f"import kinder.envs.geom2d\n"
+            f"print(kinder.envs.geom2d.__path__)\n"
+            f"```\n\n"
+            f"Key files in that directory:\n"
+            f"- `base_env.py` \u2014 `step()` transition dynamics and collision "
+            f"handling\n"
+            f"- The environment-specific module (e.g. `motion2d.py`) \u2014 "
+            f"reward function (`_get_reward_and_done`), config, and "
+            f"scene generation\n"
+            f"- `object_types.py` \u2014 object type definitions and feature names"
         )
 
     def reset(self, *args: Any, **kwargs: Any) -> tuple[NDArray[Any], dict[str, Any]]:
