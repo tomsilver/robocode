@@ -36,7 +36,9 @@ def test_agentic_approach_with_generated():
     approach_file = sandbox_dir / "approach.py"
     approach_file.write_text(
         "class GeneratedApproach:\n"
-        "    def __init__(self, action_space, observation_space):\n"
+        "    def __init__(self, action_space,"
+        " observation_space,\n"
+        "                 check_action_collision=None):\n"
         "        self._n = action_space.n\n"
         "        self._step_count = 0\n"
         "    def reset(self, state, info):\n"
@@ -61,7 +63,9 @@ def test_load_dir_skips_agent(tmp_path):
     approach_file = sandbox_dir / "approach.py"
     approach_file.write_text(
         "class GeneratedApproach:\n"
-        "    def __init__(self, action_space, observation_space):\n"
+        "    def __init__(self, action_space,"
+        " observation_space,\n"
+        "                 check_action_collision=None):\n"
         "        pass\n"
         "    def reset(self, state, info):\n"
         "        pass\n"

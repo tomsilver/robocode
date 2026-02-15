@@ -98,6 +98,7 @@ def _main(cfg: DictConfig) -> float:
         seed=cfg.seed,
         visible_filepaths=visible_filepaths,
         env_description_path=env_description_path,
+        check_action_collision=env.check_action_collision,
     )
 
     task_rng = np.random.default_rng(cfg.seed)

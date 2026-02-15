@@ -26,6 +26,18 @@ class BaseEnv(Env[_StateType, _ActType]):
     def get_state(self) -> _StateType:
         """Get the internal state of the environment."""
 
+    def check_action_collision(self, state: _StateType, action: _ActType) -> bool:
+        """Return True if taking `action` in `state` causes a collision.
+
+        Default: step and check whether the state changed. Subclasses should
+        override with a cheaper, mutation-free check when possible.
+        """
+        saved = self.get_state()
+        self.set_state(state)
+        next_state, _, _, _, _ = self.step(action)
+        self.set_state(saved)
+        return np.array_equal(np.asarray(state), np.asarray(next_state))
+
     def sample_next_state(
         self, state: _StateType, action: _ActType, rng: np.random.Generator
     ) -> _StateType:

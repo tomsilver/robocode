@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
+import numpy as np
 from gymnasium.spaces import Space
 
 from robocode.approaches.base_approach import BaseApproach
@@ -28,7 +30,7 @@ interface:
 
 ```python
 class GeneratedApproach:
-    def __init__(self, action_space, observation_space):
+    def __init__(self, action_space, observation_space, check_action_collision=None):
         \"\"\"Initialize with the environment's gym spaces.\"\"\"
         ...
 
@@ -93,6 +95,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         seed: int,
         visible_filepaths: list[str] | None = None,
         env_description_path: str | None = None,
+        check_action_collision: Callable[[Any, Any], bool] | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 50,
         output_dir: str = ".",
@@ -104,6 +107,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             seed,
             visible_filepaths,
             env_description_path,
+            check_action_collision,
         )
         self._model = model
         self._max_turns = max_turns
@@ -136,6 +140,11 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
 
+        mcp_servers: dict[str, Any] = {}
+        mcp_tool_names: list[str] = []
+        if self._check_action_collision is not None:
+            mcp_servers, mcp_tool_names = self._build_collision_mcp()
+
         config = SandboxConfig(
             sandbox_dir=sandbox_dir,
             output_filename="approach.py",
@@ -143,6 +152,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             system_prompt=_SYSTEM_PROMPT,
             model=self._model,
             max_turns=self._max_turns,
+            mcp_servers=mcp_servers,
+            mcp_tool_names=mcp_tool_names,
         )
 
         # Write agent logs to a file in the sandbox directory.
@@ -170,7 +181,11 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         namespace: dict[str, Any] = {}
         exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
         cls = namespace["GeneratedApproach"]
-        self._generated = cls(self._action_space, self._state_space)
+        self._generated = cls(
+            self._action_space,
+            self._state_space,
+            check_action_collision=self._check_action_collision,
+        )
         logger.info("Loaded generated approach from %s", path)
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
@@ -190,6 +205,41 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         super().update(state, reward, done, info)
         if self._generated is not None and hasattr(self._generated, "update"):
             self._generated.update(state, reward, done, info)
+
+    def _build_collision_mcp(self) -> tuple[dict[str, Any], list[str]]:
+        """Build an MCP server exposing `check_action_collision`."""
+        from claude_agent_sdk import (  # type: ignore[import-untyped]  # pylint: disable=import-outside-toplevel
+            create_sdk_mcp_server,
+            tool,
+        )
+
+        checker = self._check_action_collision
+        assert checker is not None
+
+        @tool(
+            "check_action_collision",
+            "Check whether taking an action in a given state would cause a "
+            "collision (i.e. the agent would stay in place). Returns true if "
+            "the action collides, false otherwise.",
+            {
+                "state": list[float],
+                "action": float | list[float],
+            },
+        )
+        async def check_tool(args: dict[str, Any]) -> dict[str, Any]:
+            state = np.array(args["state"])
+            action_raw = args["action"]
+            if isinstance(action_raw, list):
+                action: Any = np.array(action_raw)
+            else:
+                action = action_raw
+            result = checker(state, action)
+            return {
+                "content": [{"type": "text", "text": str(bool(result))}],
+            }
+
+        server = create_sdk_mcp_server("collision_checker", tools=[check_tool])
+        return {"collision_checker": server}, ["check_action_collision"]
 
     def _get_action(self) -> _ActType:
         if self._generated is not None:
