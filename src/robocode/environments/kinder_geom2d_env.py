@@ -108,21 +108,5 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         inner._current_state = obj_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
         self._current_obs = state.copy()
 
-    def check_action_collision(self, state: NDArray[Any], action: NDArray[Any]) -> bool:
-        """Return True if taking `action` in `state` causes a collision.
-
-        Uses reference identity: kinder only reassigns _current_state when
-        there is no collision, so if the reference is unchanged after step,
-        the action collided.
-        """
-        saved = self.get_state()
-        self.set_state(state)
-        inner = self._kinder_env._object_centric_env  # type: ignore[attr-defined]  # pylint: disable=protected-access
-        ref_before = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
-        self.step(np.array(action, dtype=np.float32))
-        ref_after = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
-        self.set_state(saved)
-        return ref_after is ref_before
-
     def render(self) -> RenderFrame | list[RenderFrame] | None:
         return self._kinder_env.render()  # type: ignore[no-untyped-call]

@@ -1,7 +1,10 @@
 """Tests for random_approach.py."""
 
+from functools import partial
+
 from robocode.approaches.random_approach import RandomApproach
 from robocode.environments.maze_env import MazeEnv
+from robocode.primitives.check_action_collision import check_action_collision
 
 
 def test_random_approach():
@@ -11,7 +14,7 @@ def test_random_approach():
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=123,
-        primitives={"check_action_collision": env.check_action_collision},
+        primitives={"check_action_collision": partial(check_action_collision, env)},
     )
     state, info = env.reset(seed=123)
     approach.reset(state, info)
@@ -26,7 +29,7 @@ def test_random_approach_train():
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=456,
-        primitives={"check_action_collision": env.check_action_collision},
+        primitives={"check_action_collision": partial(check_action_collision, env)},
     )
     approach.train()
 
