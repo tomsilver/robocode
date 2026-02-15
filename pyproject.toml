@@ -16,7 +16,7 @@ dependencies = [
    "pandas-stubs",
    "hydra-core",
    "omegaconf",
-   "prpl_utils@git+https://github.com/Princeton-Robot-Planning-and-Learning/prpl-mono.git#subdirectory=prpl-utils",
+   "prpl_utils",
    "claude-agent-sdk",
 ]
 
