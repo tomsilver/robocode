@@ -47,10 +47,9 @@ The `reset` method is called at the start of each episode. The `get_action` \
 method is called each step and must return a valid action.
 
 Write the best approach you can \u2014 ideally one that solves the environment \
-optimally. You may write and run test scripts to verify your approach works.
-
-Your `approach.py` should be self-contained (only import standard library \
-and common packages like numpy).\
+optimally. Your `approach.py` should only use packages available in the \
+current environment. Write test scripts that use the real environment to \
+verify your approach works.\
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
