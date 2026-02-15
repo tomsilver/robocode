@@ -66,12 +66,19 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         observation_space: Space[_ObsType],
         seed: int,
         visible_filepaths: list[str] | None = None,
+        env_description_path: str | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 50,
         output_dir: str = ".",
         load_dir: str | None = None,
     ) -> None:
-        super().__init__(action_space, observation_space, seed, visible_filepaths)
+        super().__init__(
+            action_space,
+            observation_space,
+            seed,
+            visible_filepaths,
+            env_description_path,
+        )
         self._model = model
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
@@ -98,6 +105,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             dest = sandbox_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(filepath, dest)
+
+        # Copy env description into the sandbox if available.
+        if self._env_description_path is not None:
+            shutil.copy2(self._env_description_path, sandbox_dir / "env_description.md")
 
         # Create __init__.py stubs so the agent can import env modules.
         for pyfile in sandbox_dir.rglob("*.py"):

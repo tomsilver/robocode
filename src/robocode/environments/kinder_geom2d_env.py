@@ -26,11 +26,25 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     """A robocode environment backed by a kinder geom2d environment."""
 
     def __init__(self, env_id: str) -> None:
+        self._env_id = env_id
         self._kinder_env = _unwrap_to_kinder(kinder.make(env_id))
         self.observation_space = self._kinder_env.observation_space
         self.action_space = self._kinder_env.action_space
         self._current_obs: NDArray[Any] | None = None
         super().__init__()
+
+    @property
+    def env_description(self) -> str:
+        """Markdown description of this environment for an agent."""
+        md = self._kinder_env.metadata
+        return (
+            f"# {self._env_id}\n\n"
+            f"{md.get('description', '')}\n\n"
+            f"## Variant\n\n{md.get('variant_specific_description', '')}\n\n"
+            f"## Observation Space\n\n{md.get('observation_space_description', '')}\n\n"
+            f"## Action Space\n\n{md.get('action_space_description', '')}\n\n"
+            f"## Reward\n\n{md.get('reward_description', '')}"
+        )
 
     def reset(self, *args: Any, **kwargs: Any) -> tuple[NDArray[Any], dict[str, Any]]:
         obs, info = self._kinder_env.reset(*args, **kwargs)

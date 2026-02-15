@@ -56,12 +56,24 @@ def _main(cfg: DictConfig) -> float:
     assert robocode.__file__ is not None
     pkg_root = Path(robocode.__file__).parent.parent
     visible_filepaths = [str(p) for p in collect_local_deps(env_source, pkg_root)]
+
+    # If the environment provides a description (e.g. kinder envs), write it
+    # to a file so the agentic approach can read it in its sandbox.
+    env_description_path: str | None = None
+    if env.env_description is not None:
+        output_dir = Path(HydraConfig.get().runtime.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        desc_path = output_dir / "env_description.md"
+        desc_path.write_text(env.env_description)
+        env_description_path = str(desc_path)
+
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=cfg.seed,
         visible_filepaths=visible_filepaths,
+        env_description_path=env_description_path,
     )
 
     task_rng = np.random.default_rng(cfg.seed)
