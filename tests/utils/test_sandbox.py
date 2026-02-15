@@ -83,8 +83,8 @@ def test_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
     assert result == {}
 
 
-def test_hook_blocks_read_outside_sandbox(tmp_path: Path) -> None:
-    """Read tool targeting paths outside sandbox is denied."""
+def test_hook_allows_read_outside_sandbox(tmp_path: Path) -> None:
+    """Read tool is allowed anywhere (OS sandbox handles restrictions)."""
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
     hook = _make_pre_tool_use_hook(sandbox)
@@ -95,7 +95,7 @@ def test_hook_blocks_read_outside_sandbox(tmp_path: Path) -> None:
             {},
         )
     )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result == {}
 
 
 def test_hook_blocks_write_outside_sandbox(tmp_path: Path) -> None:
@@ -150,8 +150,8 @@ def test_hook_allows_relative_path_inside_sandbox(tmp_path: Path) -> None:
     assert result == {}
 
 
-def test_hook_blocks_glob_outside_sandbox(tmp_path: Path) -> None:
-    """Glob tool targeting paths outside sandbox is denied."""
+def test_hook_allows_glob_outside_sandbox(tmp_path: Path) -> None:
+    """Glob tool is allowed anywhere (OS sandbox handles restrictions)."""
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
     hook = _make_pre_tool_use_hook(sandbox)
@@ -162,7 +162,7 @@ def test_hook_blocks_glob_outside_sandbox(tmp_path: Path) -> None:
             {},
         )
     )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result == {}
 
 
 def test_hook_allows_glob_without_path(tmp_path: Path) -> None:
