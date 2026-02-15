@@ -10,10 +10,12 @@ jobs:
       - name: Run black to test code linting
         uses: psf/black@stable
         with:
-          options: "--check --verbose"
+          options: "--check --verbose --exclude 'prpl-mono|\\.venv|outputs'"
           jupyter: true
       - name: Run isort to organize imports
         uses: isort/isort-action@master
+        with:
+          configuration: "--skip prpl-mono --skip .venv --skip outputs --check-only"
   linting:
     runs-on: ubuntu-latest
     strategy:
@@ -21,18 +23,20 @@ jobs:
         python-version: ["3.11"]
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
         enable-cache: true
         cache-dependency-glob: "pyproject.toml"
     - name: Set up Python ${{ matrix.python-version }}
-      run: uv python install ${{ matrix.python-version }}    
+      run: uv python install ${{ matrix.python-version }}
     - name: Install the project
       run: uv sync --all-extras --dev
     - name: Lint
       run: |
-        uv run pytest . --pylint -m pylint --pylint-rcfile=.pylintrc
+        uv run pytest . --pylint -m pylint --pylint-rcfile=.pylintrc --ignore=prpl-mono --ignore=outputs
   static-type-checking:
     runs-on: ubuntu-latest
     strategy:
@@ -40,6 +44,8 @@ jobs:
         python-version: ["3.11"]
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
@@ -51,7 +57,7 @@ jobs:
       run: uv sync --all-extras --dev
     - name: Mypy
       run: |
-        uv run mypy .
+        uv run mypy . --exclude prpl-mono --exclude outputs
   unit-tests:
     runs-on: ubuntu-latest
     strategy:
@@ -63,13 +69,15 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y liblapack-dev libblas-dev
     - uses: actions/checkout@v4
+      with:
+        submodules: recursive
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
         enable-cache: true
         cache-dependency-glob: "pyproject.toml"
     - name: Set up Python ${{ matrix.python-version }}
-      run: uv python install ${{ matrix.python-version }}    
+      run: uv python install ${{ matrix.python-version }}
     - name: Install the project
       run: uv sync --all-extras --dev
     - name: Pytest
