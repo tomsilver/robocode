@@ -1,6 +1,5 @@
 """Run an experiment with a given approach and environment."""
 
-import inspect
 import json
 import logging
 from pathlib import Path
@@ -14,9 +13,7 @@ from hydra.core.hydra_config import HydraConfig
 from numpy.typing import NDArray
 from omegaconf import DictConfig
 
-import robocode
 from robocode.approaches.base_approach import BaseApproach
-from robocode.utils.source_deps import collect_local_deps
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +75,6 @@ def _main(cfg: DictConfig) -> float:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     env = hydra.utils.instantiate(cfg.environment)
-    env_source = Path(inspect.getfile(type(env)))
-    assert robocode.__file__ is not None
-    pkg_root = Path(robocode.__file__).parent.parent
-    visible_filepaths = [str(p) for p in collect_local_deps(env_source, pkg_root)]
 
     # If the environment provides a description (e.g. kinder envs), write it
     # to a file so the agentic approach can read it in its sandbox.
@@ -96,7 +89,7 @@ def _main(cfg: DictConfig) -> float:
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=cfg.seed,
-        visible_filepaths=visible_filepaths,
+        check_action_collision=env.check_action_collision,
         env_description_path=env_description_path,
     )
 

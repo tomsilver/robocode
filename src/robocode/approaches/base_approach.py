@@ -2,6 +2,7 @@
 
 import abc
 import copy
+from collections.abc import Callable
 from typing import Any, Generic, SupportsFloat, TypeVar
 
 import numpy as np
@@ -19,17 +20,15 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         action_space: Space[_ActType],
         observation_space: Space[_StateType],
         seed: int,
-        visible_filepaths: list[str] | None = None,
+        check_action_collision: Callable[[Any, Any], bool],
         env_description_path: str | None = None,
     ) -> None:
         self._rng = np.random.default_rng(seed)
         self._state_space = copy.deepcopy(observation_space)
         self._action_space = copy.deepcopy(action_space)
         self._action_space.seed(seed)
-        # Paths the approach is allowed to read. All transitive dependencies
-        # of these files (i.e., any module they import) are also visible.
-        self._visible_filepaths = list(visible_filepaths or [])
         self._env_description_path = env_description_path
+        self._check_action_collision = check_action_collision
         self._last_state: _StateType | None = None
         self._last_action: _ActType | None = None
         self._last_reward: SupportsFloat | None = None

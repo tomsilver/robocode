@@ -11,6 +11,7 @@ def test_random_approach():
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=123,
+        check_action_collision=env.check_action_collision,
     )
     state, info = env.reset(seed=123)
     approach.reset(state, info)
@@ -25,6 +26,7 @@ def test_random_approach_train():
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=456,
+        check_action_collision=env.check_action_collision,
     )
     approach.train()
 

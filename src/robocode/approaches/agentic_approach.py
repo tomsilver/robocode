@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -28,7 +29,7 @@ interface:
 
 ```python
 class GeneratedApproach:
-    def __init__(self, action_space, observation_space):
+    def __init__(self, action_space, observation_space, check_action_collision):
         \"\"\"Initialize with the environment's gym spaces.\"\"\"
         ...
 
@@ -44,6 +45,9 @@ class GeneratedApproach:
 The class can maintain internal state between calls (e.g., a computed plan). \
 The `reset` method is called at the start of each episode. The `get_action` \
 method is called each step and must return a valid action.
+
+`check_action_collision(state, action) -> bool` returns True when taking \
+`action` in `state` would cause a collision (i.e. the agent stays in place).
 
 Write the best approach you can \u2014 ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
@@ -91,7 +95,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         action_space: Space[_ActType],
         observation_space: Space[_ObsType],
         seed: int,
-        visible_filepaths: list[str] | None = None,
+        check_action_collision: Callable[[Any, Any], bool],
         env_description_path: str | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 50,
@@ -102,7 +106,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             action_space,
             observation_space,
             seed,
-            visible_filepaths,
+            check_action_collision,
             env_description_path,
         )
         self._model = model
@@ -170,7 +174,11 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         namespace: dict[str, Any] = {}
         exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
         cls = namespace["GeneratedApproach"]
-        self._generated = cls(self._action_space, self._state_space)
+        self._generated = cls(
+            self._action_space,
+            self._state_space,
+            check_action_collision=self._check_action_collision,
+        )
         logger.info("Loaded generated approach from %s", path)
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
