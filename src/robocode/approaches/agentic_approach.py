@@ -2,13 +2,12 @@
 
 import asyncio
 import logging
-import shutil
+import sys
 from pathlib import Path
 from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
 
-import robocode
 from robocode.approaches.base_approach import BaseApproach
 from robocode.utils.sandbox import SandboxConfig, run_agent_in_sandbox
 
@@ -49,7 +48,13 @@ method is called each step and must return a valid action.
 Write the best approach you can \u2014 ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
 current environment. Write test scripts that use the real environment to \
-verify your approach works.\
+verify your approach works.
+
+IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
+interpreter has all required packages installed. For example:
+```bash
+{python_executable} test_approach.py
+```\
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
@@ -109,35 +114,19 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir = self._output_dir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
 
-        assert robocode.__file__ is not None
-        pkg_root = Path(robocode.__file__).parent.parent
-
-        for filepath_str in self._visible_filepaths:
-            filepath = Path(filepath_str)
-            rel = filepath.relative_to(pkg_root)
-            dest = sandbox_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(filepath, dest)
-
         # Build the prompt. If we have an env description, inline it so the
         # agent knows exactly which environment to target.  Otherwise fall
         # back to asking the agent to read source files.
+        python_exe = sys.executable
+        interface_spec = _INTERFACE_SPEC.format(python_executable=python_exe)
+
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
             prompt = _PROMPT_WITH_DESCRIPTION.format(
-                env_description=env_desc, interface_spec=_INTERFACE_SPEC
+                env_description=env_desc, interface_spec=interface_spec
             )
         else:
-            prompt = _PROMPT_WITH_SOURCE.format(interface_spec=_INTERFACE_SPEC)
-
-        # Create __init__.py stubs so the agent can import env modules.
-        for pyfile in sandbox_dir.rglob("*.py"):
-            for parent in pyfile.relative_to(sandbox_dir).parents:
-                if parent == Path("."):
-                    continue
-                init = sandbox_dir / parent / "__init__.py"
-                if not init.exists():
-                    init.touch()
+            prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
 
         config = SandboxConfig(
             sandbox_dir=sandbox_dir,
