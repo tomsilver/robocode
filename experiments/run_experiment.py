@@ -44,7 +44,7 @@ def _run_episode(
     return {
         "total_reward": total_reward,
         "num_steps": num_steps,
-        "solved": terminated,
+        "solved": bool(terminated),
     }
 
 
