@@ -16,7 +16,9 @@ dependencies = [
    "pandas-stubs",
    "hydra-core",
    "omegaconf",
+   "relational-structs",
    "prpl_utils",
+   "tomsgeoms2d",
    "kinder",
    "imageio",
    "claude-agent-sdk",
@@ -60,6 +62,12 @@ strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
 exclude = ["venv/*", ".venv/*", "outputs/*"]
+
+[tool.uv.sources]
+relational-structs = { path = "prpl-mono/relational-structs" }
+prpl_utils = { path = "prpl-mono/prpl-utils" }
+tomsgeoms2d = { path = "prpl-mono/toms-geoms-2d" }
+kinder = { path = "prpl-mono/kinder" }
 
 [[tool.mypy.overrides]]
 module = [
