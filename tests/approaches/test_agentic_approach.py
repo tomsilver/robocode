@@ -1,5 +1,7 @@
 """Tests for agentic_approach.py."""
 
+import pytest
+
 from robocode.approaches.agentic_approach import AgenticApproach
 from robocode.environments.maze_env import MazeEnv
 
@@ -50,3 +52,46 @@ def test_agentic_approach_with_generated():
     action = approach.step()
     assert action == 0
     assert env.action_space.contains(action)
+
+
+def test_load_dir_skips_agent(tmp_path):
+    """When load_dir is set, train() loads from it without calling the agent."""
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    approach_file = sandbox_dir / "approach.py"
+    approach_file.write_text(
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space):\n"
+        "        pass\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return 0\n"
+    )
+
+    env = MazeEnv(5, 8, 5, 8)
+    approach = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=42,
+        load_dir=str(tmp_path),
+    )
+    approach.train()
+
+    state, info = env.reset(seed=42)
+    approach.reset(state, info)
+    assert approach.step() == 0
+
+
+def test_load_dir_missing_file_raises(tmp_path):
+    """When load_dir points to a directory without approach.py, raise
+    FileNotFoundError."""
+    env = MazeEnv(5, 8, 5, 8)
+    approach = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=42,
+        load_dir=str(tmp_path),
+    )
+    with pytest.raises(FileNotFoundError):
+        approach.train()
