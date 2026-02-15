@@ -13,7 +13,7 @@ def test_agentic_approach_fallback():
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=123,
-        check_action_collision=env.check_action_collision,
+        primitives={"check_action_collision": env.check_action_collision},
     )
     state, info = env.reset(seed=123)
     approach.reset(state, info)
@@ -28,7 +28,7 @@ def test_agentic_approach_with_generated():
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=123,
-        check_action_collision=env.check_action_collision,
+        primitives={"check_action_collision": env.check_action_collision},
         output_dir="/tmp/test_agentic",
     )
 
@@ -40,7 +40,7 @@ def test_agentic_approach_with_generated():
         "class GeneratedApproach:\n"
         "    def __init__(self, action_space,"
         " observation_space,\n"
-        "                 check_action_collision):\n"
+        "                 primitives):\n"
         "        self._n = action_space.n\n"
         "        self._step_count = 0\n"
         "    def reset(self, state, info):\n"
@@ -67,7 +67,7 @@ def test_load_dir_skips_agent(tmp_path):
         "class GeneratedApproach:\n"
         "    def __init__(self, action_space,"
         " observation_space,\n"
-        "                 check_action_collision):\n"
+        "                 primitives):\n"
         "        pass\n"
         "    def reset(self, state, info):\n"
         "        pass\n"
@@ -80,7 +80,7 @@ def test_load_dir_skips_agent(tmp_path):
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=42,
-        check_action_collision=env.check_action_collision,
+        primitives={"check_action_collision": env.check_action_collision},
         load_dir=str(tmp_path),
     )
     approach.train()
@@ -98,7 +98,7 @@ def test_load_dir_missing_file_raises(tmp_path):
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=42,
-        check_action_collision=env.check_action_collision,
+        primitives={"check_action_collision": env.check_action_collision},
         load_dir=str(tmp_path),
     )
     with pytest.raises(FileNotFoundError):

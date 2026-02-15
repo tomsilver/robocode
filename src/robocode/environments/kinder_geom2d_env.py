@@ -59,8 +59,6 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             f"saved = env.get_state()\n"
             f"env.step(env.action_space.sample())\n"
             f"env.set_state(saved)  # restores to the saved state\n\n"
-            f"# Check whether an action would collide\n"
-            f"collides = env.check_action_collision(saved, action)\n\n"
             f"# Run an episode\n"
             f"obs, info = env.reset(seed=1)\n"
             f"done = False\n"

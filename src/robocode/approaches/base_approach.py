@@ -20,7 +20,7 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         action_space: Space[_ActType],
         observation_space: Space[_StateType],
         seed: int,
-        check_action_collision: Callable[[Any, Any], bool],
+        primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
     ) -> None:
         self._rng = np.random.default_rng(seed)
@@ -28,7 +28,7 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         self._action_space = copy.deepcopy(action_space)
         self._action_space.seed(seed)
         self._env_description_path = env_description_path
-        self._check_action_collision = check_action_collision
+        self._primitives = primitives
         self._last_state: _StateType | None = None
         self._last_action: _ActType | None = None
         self._last_reward: SupportsFloat | None = None
