@@ -17,6 +17,7 @@ dependencies = [
    "hydra-core",
    "omegaconf",
    "prpl_utils",
+   "kinder",
    "claude-agent-sdk",
 ]
 
