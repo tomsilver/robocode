@@ -8,6 +8,7 @@ from gymnasium.core import RenderFrame
 from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 from relational_structs.spaces import ObjectCentricBoxSpace
+import numpy as np
 
 from robocode.environments.base_env import BaseEnv
 
@@ -54,6 +55,7 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     def step(
         self, action: NDArray[Any]
     ) -> tuple[NDArray[Any], SupportsFloat, bool, bool, dict[str, Any]]:
+        action = np.array(action, dtype=np.float32)
         obs, reward, terminated, truncated, info = self._kinder_env.step(action)
         self._current_obs = obs
         return obs, reward, terminated, truncated, info
