@@ -82,20 +82,6 @@ class MazeEnv(BaseEnv[_MazeState, _MazeAction]):
         assert self._current_state is not None, "Must call reset()"
         return self._current_state
 
-    def check_action_collision(self, state: _MazeState, action: _MazeAction) -> bool:
-        """Return True if the action hits a wall or obstacle."""
-        r, c = state.agent
-        dr, dc = {
-            self._up: (-1, 0),
-            self._down: (1, 0),
-            self._left: (0, -1),
-            self._right: (0, 1),
-        }[int(action)]
-        nr, nc = r + dr, c + dc
-        return (not (0 <= nr < state.height and 0 <= nc < state.width)) or (
-            (nr, nc) in state.obstacles
-        )
-
     def render(self) -> RenderFrame | list[RenderFrame] | None:
         raise NotImplementedError
 

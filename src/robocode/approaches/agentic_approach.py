@@ -29,7 +29,7 @@ interface:
 
 ```python
 class GeneratedApproach:
-    def __init__(self, action_space, observation_space, check_action_collision):
+    def __init__(self, action_space, observation_space, primitives):
         \"\"\"Initialize with the environment's gym spaces.\"\"\"
         ...
 
@@ -46,8 +46,7 @@ The class can maintain internal state between calls (e.g., a computed plan). \
 The `reset` method is called at the start of each episode. The `get_action` \
 method is called each step and must return a valid action.
 
-`check_action_collision(state, action) -> bool` returns True when taking \
-`action` in `state` would cause a collision (i.e. the agent stays in place).
+{primitives_description}
 
 Write the best approach you can \u2014 ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
@@ -68,6 +67,15 @@ termination conditions, etc.). To locate a module's source file:
 ```
 Then read the source to inform your approach.\
 """
+
+_PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
+    "check_action_collision": (
+        "`check_action_collision(state, action) -> bool` returns True when "
+        "taking `action` in `state` would cause a collision (i.e. the agent "
+        "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
+        "planning algorithms, skip actions that collide."
+    ),
+}
 
 _PROMPT_WITH_DESCRIPTION = """\
 You are writing an approach for ONE specific environment. The environment is \
@@ -95,7 +103,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         action_space: Space[_ActType],
         observation_space: Space[_ObsType],
         seed: int,
-        check_action_collision: Callable[[Any, Any], bool],
+        primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 50,
@@ -106,7 +114,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             action_space,
             observation_space,
             seed,
-            check_action_collision,
+            primitives,
             env_description_path,
         )
         self._model = model
@@ -129,8 +137,20 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         # Build the prompt. If we have an env description, inline it so the
         # agent knows exactly which environment to target.  Otherwise fall
         # back to asking the agent to read source files.
+        if self._primitives:
+            lines = ["`primitives` is a dict with these callables:\n"]
+            for name in sorted(self._primitives):
+                desc = _PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
+                lines.append(f"- {desc}")
+            primitives_desc = "\n".join(lines)
+        else:
+            primitives_desc = "`primitives` is an empty dict."
+
         python_exe = sys.executable
-        interface_spec = _INTERFACE_SPEC.format(python_executable=python_exe)
+        interface_spec = _INTERFACE_SPEC.format(
+            python_executable=python_exe,
+            primitives_description=primitives_desc,
+        )
 
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
@@ -177,7 +197,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._generated = cls(
             self._action_space,
             self._state_space,
-            check_action_collision=self._check_action_collision,
+            primitives=self._primitives,
         )
         logger.info("Loaded generated approach from %s", path)
 
