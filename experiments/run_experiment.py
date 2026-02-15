@@ -16,6 +16,7 @@ from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
 from robocode.primitives.check_action_collision import check_action_collision
+from robocode.primitives.render_state import render_state
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ def _main(cfg: DictConfig) -> float:
 
     all_primitives = {
         "check_action_collision": partial(check_action_collision, env),
+        "render_state": partial(render_state, env),
     }
     primitives = {name: all_primitives[name] for name in cfg.primitives}
 

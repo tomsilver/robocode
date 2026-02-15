@@ -75,6 +75,12 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
         "planning algorithms, skip actions that collide."
     ),
+    "render_state": (
+        "`render_state(state) -> np.ndarray` renders the given `state` as an "
+        "RGB image (H\u00d7W\u00d73 uint8 numpy array). Save it to disk with "
+        '`imageio.imwrite("state.png", render_state(state))` and read the '
+        "file to visually understand the spatial layout."
+    ),
 }
 
 _PROMPT_WITH_DESCRIPTION = """\
