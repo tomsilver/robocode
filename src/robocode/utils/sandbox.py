@@ -24,7 +24,6 @@ from claude_agent_sdk import (  # type: ignore[import-untyped]
     ClaudeAgentOptions,
     ClaudeSDKClient,
     HookMatcher,
-    McpServerConfig,
     ResultMessage,
     TextBlock,
     ToolResultBlock,
@@ -55,8 +54,6 @@ class SandboxConfig:
     model: str = "claude-sonnet-4-20250514"
     max_turns: int = 50
     system_prompt: str = ""
-    mcp_servers: dict[str, McpServerConfig] = field(default_factory=dict)
-    mcp_tool_names: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -142,13 +139,11 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         model=config.model,
         sandbox={"enabled": True, "autoAllowBashIfSandboxed": True},
         hooks={"PreToolUse": [HookMatcher(hooks=[hook_fn])]},
-        allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
-        + list(config.mcp_tool_names),
+        allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
         permission_mode="bypassPermissions",
         max_turns=config.max_turns,
         system_prompt=config.system_prompt,
         setting_sources=[],
-        mcp_servers=config.mcp_servers,
     )
 
     result_message: ResultMessage | None = None
