@@ -19,7 +19,8 @@ dependencies = [
    "relational-structs",
    "prpl_utils",
    "tomsgeoms2d",
-   "kinder",
+   "kinder[geom3d]",
+   "pybullet_helpers",
    "imageio",
    "claude-agent-sdk",
 ]
@@ -68,10 +69,14 @@ relational-structs = { path = "prpl-mono/relational-structs" }
 prpl_utils = { path = "prpl-mono/prpl-utils" }
 tomsgeoms2d = { path = "prpl-mono/toms-geoms-2d" }
 kinder = { path = "prpl-mono/kinder" }
+pybullet_helpers = { path = "prpl-mono/pybullet-helpers" }
 
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
     "claude_agent_sdk.*",
+    "pybullet.*",
+    "pybullet_helpers.*",
+    "pybullet_utils.*",
 ]
 ignore_missing_imports = true
