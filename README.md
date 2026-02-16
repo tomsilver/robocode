@@ -6,6 +6,25 @@ Agents for robot physical reasoning.
 
 Work in progress.
 
+## Intsallation
+```
+# Clone this repo
+git clone https://github.com/tomsilver/robocode.git
+cd robocode
+git submodule init
+git submodule update
+uv venv --python=3.11
+source .venv/bin/activate
+
+# Install prpl-mono
+cd prpl-mono
+python3 scripts/install_all.py
+cd ..
+
+# Install robocode
+uv pip install -e .
+```
+
 ## TODO
 
 - [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_p1` and understand why it doesn't work that well
