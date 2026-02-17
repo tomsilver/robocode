@@ -112,7 +112,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
         model: str = "claude-sonnet-4-20250514",
-        max_turns: int = 50,
+        max_budget_usd: float = 5.0,
         output_dir: str = ".",
         load_dir: str | None = None,
     ) -> None:
@@ -124,7 +124,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             env_description_path,
         )
         self._model = model
-        self._max_turns = max_turns
+        self._max_budget_usd = max_budget_usd
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._generated: Any = None
@@ -172,7 +172,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             prompt=prompt,
             system_prompt=_SYSTEM_PROMPT,
             model=self._model,
-            max_turns=self._max_turns,
+            max_budget_usd=self._max_budget_usd,
         )
 
         # Write agent logs to a file in the sandbox directory.

@@ -22,7 +22,6 @@ dependencies = [
    "kinder[geom3d]",
    "pybullet_helpers",
    "imageio",
-   "claude-agent-sdk",
 ]
 
 [project.optional-dependencies]
@@ -74,7 +73,6 @@ pybullet_helpers = { path = "prpl-mono/pybullet-helpers" }
 [[tool.mypy.overrides]]
 module = [
     "matplotlib.*",
-    "claude_agent_sdk.*",
     "pybullet.*",
     "pybullet_helpers.*",
     "pybullet_utils.*",
