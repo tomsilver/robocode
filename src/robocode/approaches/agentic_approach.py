@@ -20,7 +20,10 @@ _ActType = TypeVar("_ActType")
 _SYSTEM_PROMPT = (
     "You are an expert at writing policies for gymnasium environments. "
     "You will read environment source code, understand the dynamics, "
-    "and write an optimal approach class."
+    "and write an optimal approach class. "
+    "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
+    "to the current working directory using RELATIVE paths only. "
+    "Never use absolute paths when writing files."
 )
 
 _INTERFACE_SPEC = """\
@@ -86,7 +89,9 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
 _PROMPT_WITH_DESCRIPTION = """\
 You are writing an approach for ONE specific environment. The environment is \
 fully described below \u2014 this is the ONLY environment your code will be \
-tested on. Do NOT try to handle other environments or be generic.
+tested on. Do NOT try to handle other environments. \
+Your approach should be general enough to solve any instance of this environment (env.reset()), \
+but it does NOT need to be adaptable to different other environments.
 
 {env_description}
 
@@ -111,8 +116,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         seed: int,
         primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
-        model: str = "claude-sonnet-4-20250514",
-        max_turns: int = 50,
+        model: str = "sonnet",
+        max_budget_usd: float = 5.0,
         output_dir: str = ".",
         load_dir: str | None = None,
     ) -> None:
@@ -124,7 +129,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             env_description_path,
         )
         self._model = model
-        self._max_turns = max_turns
+        self._max_budget_usd = max_budget_usd
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._generated: Any = None
@@ -172,7 +177,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             prompt=prompt,
             system_prompt=_SYSTEM_PROMPT,
             model=self._model,
-            max_turns=self._max_turns,
+            max_budget_usd=self._max_budget_usd,
         )
 
         # Write agent logs to a file in the sandbox directory.

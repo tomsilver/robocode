@@ -1,25 +1,12 @@
 """Tests for sandbox.py."""
 
-import asyncio
 from pathlib import Path
-from typing import Any
 
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _is_path_within_sandbox,
-    _make_pre_tool_use_hook,
 )
-
-
-def _run(coro: Any) -> Any:
-    """Run an async coroutine synchronously."""
-    return asyncio.get_event_loop().run_until_complete(coro)
-
-
-def _make_hook_input(tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
-    """Create a minimal PreToolUse hook input dict."""
-    return {"tool_name": tool_name, "tool_input": tool_input}
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:
@@ -50,187 +37,6 @@ def test_path_traversal_blocked(tmp_path: Path) -> None:
     )
 
 
-def test_hook_allows_read_inside_sandbox(tmp_path: Path) -> None:
-    """Read tool targeting sandbox paths is allowed."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Read", {"file_path": str(sandbox / "file.py")}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
-    """Write tool targeting sandbox paths is allowed."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input(
-                "Write",
-                {"file_path": str(sandbox / "out.txt"), "content": "hello"},
-            ),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_allows_read_outside_sandbox(tmp_path: Path) -> None:
-    """Read tool is allowed anywhere (OS sandbox handles restrictions)."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Read", {"file_path": "/etc/passwd"}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_blocks_write_outside_sandbox(tmp_path: Path) -> None:
-    """Write tool targeting paths outside sandbox is denied."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Write", {"file_path": "/tmp/evil.txt"}),
-            None,
-            {},
-        )
-    )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_hook_blocks_edit_outside_sandbox(tmp_path: Path) -> None:
-    """Edit tool targeting paths outside sandbox is denied."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input(
-                "Edit",
-                {
-                    "file_path": str(tmp_path / "other.py"),
-                    "old_string": "a",
-                    "new_string": "b",
-                },
-            ),
-            None,
-            {},
-        )
-    )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_hook_allows_relative_path_inside_sandbox(tmp_path: Path) -> None:
-    """Relative paths are resolved against sandbox_dir."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Read", {"file_path": "subdir/file.py"}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_allows_glob_outside_sandbox(tmp_path: Path) -> None:
-    """Glob tool is allowed anywhere (OS sandbox handles restrictions)."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Glob", {"path": "/etc", "pattern": "*.conf"}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_allows_glob_without_path(tmp_path: Path) -> None:
-    """Glob tool without explicit path is allowed (uses cwd)."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Glob", {"pattern": "*.py"}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_passes_through_bash(tmp_path: Path) -> None:
-    """Bash commands are not filtered (OS sandbox handles restrictions)."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("Bash", {"command": "python script.py"}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
-def test_hook_blocks_dangerously_disable_sandbox(tmp_path: Path) -> None:
-    """Bash with dangerouslyDisableSandbox is denied."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input(
-                "Bash",
-                {
-                    "command": "cat /etc/passwd",
-                    "dangerouslyDisableSandbox": True,
-                },
-            ),
-            None,
-            {},
-        )
-    )
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_hook_allows_unknown_tool(tmp_path: Path) -> None:
-    """Unknown tools are allowed (not restricted)."""
-    sandbox = tmp_path / "sandbox"
-    sandbox.mkdir()
-    hook = _make_pre_tool_use_hook(sandbox)
-    result = _run(
-        hook(
-            _make_hook_input("SomeOtherTool", {"arg": "value"}),
-            None,
-            {},
-        )
-    )
-    assert result == {}
-
-
 def test_sandbox_config_defaults() -> None:
     """SandboxConfig has expected defaults."""
     config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
@@ -238,7 +44,9 @@ def test_sandbox_config_defaults() -> None:
     assert not config.init_files
     assert config.prompt == ""
     assert config.output_filename == ""
-    assert config.max_turns == 50
+    assert config.model == "sonnet"
+    assert config.max_budget_usd == 5.0
+    assert config.system_prompt == ""
 
 
 def test_sandbox_result_success() -> None:

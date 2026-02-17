@@ -13,6 +13,36 @@ cd robocode
 bash install.sh
 ```
 
+### Claude Code CLI setup
+
+The agentic approach requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`). Authenticate via one of:
+
+- **Subscription (free usage):** `claude login`
+- **API key:** set `ANTHROPIC_API_KEY` in your environment
+
+Optionally set `ROBOCODE_CLAUDE_CMD` to point to a specific `claude` binary (defaults to `claude` on `PATH`).
+
+The `model` parameter in `agentic.yaml` accepts CLI model aliases or full model IDs. Override per-run with e.g. `model=opus` on the command line.
+
+| Alias | Full model ID |
+|---|---|
+| `sonnet` | `claude-sonnet-4-6` (latest Sonnet, default) |
+| `opus` | `claude-opus-4-6` (latest Opus) |
+| `haiku` | `claude-haiku-4-5-20251001` (latest Haiku) |
+
+Older model versions can also be used by specifying the full ID:
+
+| Full model ID | Description |
+|---|---|
+| `claude-sonnet-4-5-20250929` | Claude Sonnet 4.5 |
+| `claude-opus-4-5-20251101` | Claude Opus 4.5 |
+| `claude-opus-4-1-20250805` | Claude Opus 4.1 |
+| `claude-sonnet-4-20250514` | Claude Sonnet 4 |
+| `claude-opus-4-20250514` | Claude Opus 4 |
+| `claude-3-7-sonnet-20250219` | Claude 3.7 Sonnet |
+
+See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude/models/overview) for the full list.
+
 ## Environments
 
 All environments are available as Hydra configs via `environment=<config_name>`.
@@ -65,14 +95,14 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 ## TODO
 
 - [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_medium` and understand why it doesn't work that well
-- [ ] Fix sandbox: transition to Docker-based sandboxing for full filesystem isolation, and consider using the Anthropic API directly instead of the Claude Agent SDK for full control over tool execution (see [Sandbox](#sandbox) for details)
+- [ ] Fix sandbox: transition to Docker-based sandboxing for full filesystem isolation (see [Sandbox](#sandbox) for details)
 - [ ] Ensure that experiment seeds cannot be guessed by agent in sandbox
 
 ## Sandbox
 
-The `robocode.sandbox` module runs a Claude agent in a restricted working directory. The agent can use Bash, Read, Write, Edit, Glob, and Grep tools, but file tools are restricted to the sandbox directory via a PreToolUse hook and Bash is sandboxed at the OS level (macOS Seatbelt / Linux bubblewrap).
+The `robocode.sandbox` module runs a Claude agent via the Claude Code CLI in a restricted working directory. The agent can use Bash, Read, Write, Edit, Glob, and Grep tools. The CLI's `--dangerously-skip-permissions` flag enables OS-level sandboxing (macOS Seatbelt / Linux bubblewrap) which restricts filesystem writes to the working directory.
 
-**Known limitation:** The OS-level sandbox restricts filesystem *writes* but allows *reads* of the entire filesystem. Bash commands like `cat /etc/passwd` or Python's `open()` can read files outside the sandbox. This will be addressed by transitioning to Docker-based sandboxing. We may also move from the Claude Agent SDK to running Claude directly (e.g., via the Anthropic API with tool use), which would give us full control over tool execution rather than relying on the SDK's built-in tool dispatch.
+**Known limitation:** The OS-level sandbox restricts filesystem *writes* but allows *reads* of the entire filesystem. Bash commands like `cat /etc/passwd` or Python's `open()` can read files outside the sandbox. This will be addressed by transitioning to Docker-based sandboxing.
 
 Red team the sandbox:
 ```bash
