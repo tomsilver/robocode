@@ -93,6 +93,16 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             capture_output=True,
         )
 
+    # Write a CLAUDE.md that instructs the agent to keep files in the
+    # sandbox.  The CLI automatically reads this from the project root.
+    claude_md = config.sandbox_dir / "CLAUDE.md"
+    if not claude_md.exists():
+        claude_md.write_text(
+            "All files you create MUST use relative paths so they "
+            "stay in the current working directory. Never write files "
+            "using absolute paths.\n"
+        )
+
     claude_cmd = _get_claude_cmd()
     sandbox_abs = str(config.sandbox_dir.resolve())
     cmd = [

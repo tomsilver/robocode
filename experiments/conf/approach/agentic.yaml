@@ -2,4 +2,4 @@ _target_: robocode.approaches.agentic_approach.AgenticApproach
 model: claude-sonnet-4-20250514
 max_budget_usd: 5.0
 output_dir: ${hydra:runtime.output_dir}
-load_dir: null
+load_dir: outputs/2026-02-17/16-01-26
