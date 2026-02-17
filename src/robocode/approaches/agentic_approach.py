@@ -116,7 +116,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         seed: int,
         primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "sonnet",
         max_budget_usd: float = 5.0,
         output_dir: str = ".",
         load_dir: str | None = None,

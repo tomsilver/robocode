@@ -41,7 +41,7 @@ class SandboxConfig:
     init_files: dict[str, Path] = field(default_factory=dict)
     prompt: str = ""
     output_filename: str = ""
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "sonnet"
     max_budget_usd: float = 5.0
     system_prompt: str = ""
 
