@@ -83,7 +83,18 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, dest)
 
+    # Initialize a git repo so the CLI treats the sandbox as the project
+    # root and doesn't walk up to the real repo.
+    if not (config.sandbox_dir / ".git" / "HEAD").exists():
+        subprocess.run(
+            ["git", "init"],
+            cwd=str(config.sandbox_dir),
+            check=True,
+            capture_output=True,
+        )
+
     claude_cmd = _get_claude_cmd()
+    sandbox_abs = str(config.sandbox_dir.resolve())
     cmd = [
         claude_cmd,
         "-p",
@@ -109,11 +120,11 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     # session state.
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
 
-    logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", config.sandbox_dir)
+    logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
 
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         cmd,
-        cwd=str(config.sandbox_dir),
+        cwd=sandbox_abs,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
