@@ -6,23 +6,11 @@ Agents for robot physical reasoning.
 
 Work in progress.
 
-## Intsallation
-```
-# Clone this repo
+## Installation
+```bash
 git clone https://github.com/tomsilver/robocode.git
 cd robocode
-git submodule init
-git submodule update
-uv venv --python=3.11
-source .venv/bin/activate
-
-# Install prpl-mono
-cd prpl-mono
-python3 scripts/install_all.py
-cd ..
-
-# Install robocode
-uv pip install -e .
+bash install.sh
 ```
 
 ## Environments
