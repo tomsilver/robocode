@@ -1,0 +1,2 @@
+_target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
+env_id: kinder/Obstruction3D-o4-v0

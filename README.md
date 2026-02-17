@@ -6,9 +6,65 @@ Agents for robot physical reasoning.
 
 Work in progress.
 
+## Installation
+```bash
+git clone https://github.com/tomsilver/robocode.git
+cd robocode
+bash install.sh
+```
+
+## Environments
+
+All environments are available as Hydra configs via `environment=<config_name>`.
+
+### Maze (discrete)
+
+| Config | Description |
+|---|---|
+| `small_maze` | Small grid maze |
+| `large_maze` | Large grid maze |
+
+### 2D Kinematic (continuous, kinder geom2d)
+
+| Config | Kinder ID | Difficulty |
+|---|---|---|
+| `motion2d_easy` | `kinder/Motion2D-p0-v0` | Easy (0 passages) |
+| `motion2d_medium` | `kinder/Motion2D-p1-v0` | Medium (1 passage) |
+| `motion2d_hard` | `kinder/Motion2D-p3-v0` | Hard (3 passages) |
+| `obstruction2d_easy` | `kinder/Obstruction2D-o0-v0` | Easy (0 obstructions) |
+| `obstruction2d_medium` | `kinder/Obstruction2D-o2-v0` | Medium (2 obstructions) |
+| `obstruction2d_hard` | `kinder/Obstruction2D-o4-v0` | Hard (4 obstructions) |
+| `clutteredretrieval2d_easy` | `kinder/ClutteredRetrieval2D-o1-v0` | Easy (1 obstruction) |
+| `clutteredretrieval2d_medium` | `kinder/ClutteredRetrieval2D-o10-v0` | Medium (10 obstructions) |
+| `clutteredretrieval2d_hard` | `kinder/ClutteredRetrieval2D-o25-v0` | Hard (25 obstructions) |
+| `clutteredstorage2d_easy` | `kinder/ClutteredStorage2D-b1-v0` | Easy (1 block) |
+| `clutteredstorage2d_medium` | `kinder/ClutteredStorage2D-b3-v0` | Medium (3 blocks) |
+| `clutteredstorage2d_hard` | `kinder/ClutteredStorage2D-b7-v0` | Hard (7 blocks) |
+| `stickbutton2d_easy` | `kinder/StickButton2D-b1-v0` | Easy (1 button) |
+| `stickbutton2d_medium` | `kinder/StickButton2D-b3-v0` | Medium (3 buttons) |
+| `stickbutton2d_hard` | `kinder/StickButton2D-b5-v0` | Hard (5 buttons) |
+| `pushpullhook2d` | `kinder/PushPullHook2D-v0` | Single variant |
+
+### 3D Kinematic (continuous, kinder geom3d)
+
+| Config | Kinder ID | Difficulty |
+|---|---|---|
+| `motion3d` | `kinder/Motion3D-v0` | Single variant |
+| `obstruction3d_easy` | `kinder/Obstruction3D-o0-v0` | Easy (0 obstructions) |
+| `obstruction3d_medium` | `kinder/Obstruction3D-o2-v0` | Medium (2 obstructions) |
+| `obstruction3d_hard` | `kinder/Obstruction3D-o4-v0` | Hard (4 obstructions) |
+| `shelf3d_easy` | `kinder/Shelf3D-o1-v0` | Easy (1 cube) |
+| `shelf3d_medium` | `kinder/Shelf3D-o3-v0` | Medium (3 cubes) |
+| `shelf3d_hard` | `kinder/Shelf3D-o5-v0` | Hard (5 cubes) |
+| `transport3d_easy` | `kinder/Transport3D-o1-v0` | Easy (1 cube) |
+| `transport3d_hard` | `kinder/Transport3D-o2-v0` | Hard (2 cubes) |
+| `packing3d_easy` | `kinder/Packing3D-p1-v0` | Easy (1 part) |
+| `packing3d_medium` | `kinder/Packing3D-p2-v0` | Medium (2 parts) |
+| `packing3d_hard` | `kinder/Packing3D-p3-v0` | Hard (3 parts) |
+
 ## TODO
 
-- [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_p1` and understand why it doesn't work that well
+- [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_medium` and understand why it doesn't work that well
 - [ ] Fix sandbox: transition to Docker-based sandboxing for full filesystem isolation, and consider using the Anthropic API directly instead of the Claude Agent SDK for full control over tool execution (see [Sandbox](#sandbox) for details)
 - [ ] Ensure that experiment seeds cannot be guessed by agent in sandbox
 

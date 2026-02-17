@@ -1,34 +1,30 @@
-"""Tests for kinder_geom2d_env.py."""
+"""Tests for kinder_geom3d_env.py."""
 
 import numpy as np
 import pytest
 
-from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
+from robocode.environments.kinder_geom3d_env import KinderGeom3DEnv
 
-ALL_2D_ENV_IDS = [
-    "kinder/Motion2D-p0-v0",
-    "kinder/Motion2D-p1-v0",
-    "kinder/Motion2D-p3-v0",
-    "kinder/Obstruction2D-o0-v0",
-    "kinder/Obstruction2D-o2-v0",
-    "kinder/Obstruction2D-o4-v0",
-    "kinder/ClutteredRetrieval2D-o1-v0",
-    "kinder/ClutteredRetrieval2D-o10-v0",
-    "kinder/ClutteredRetrieval2D-o25-v0",
-    "kinder/ClutteredStorage2D-b1-v0",
-    "kinder/ClutteredStorage2D-b3-v0",
-    "kinder/ClutteredStorage2D-b7-v0",
-    "kinder/StickButton2D-b1-v0",
-    "kinder/StickButton2D-b3-v0",
-    "kinder/StickButton2D-b5-v0",
-    "kinder/PushPullHook2D-v0",
+ALL_3D_ENV_IDS = [
+    "kinder/Motion3D-v0",
+    "kinder/Obstruction3D-o0-v0",
+    "kinder/Obstruction3D-o2-v0",
+    "kinder/Obstruction3D-o4-v0",
+    "kinder/Shelf3D-o1-v0",
+    "kinder/Shelf3D-o3-v0",
+    "kinder/Shelf3D-o5-v0",
+    "kinder/Transport3D-o1-v0",
+    "kinder/Transport3D-o2-v0",
+    "kinder/Packing3D-p1-v0",
+    "kinder/Packing3D-p2-v0",
+    "kinder/Packing3D-p3-v0",
 ]
 
 
-@pytest.mark.parametrize("env_id", ALL_2D_ENV_IDS)
-def test_kinder_geom2d_basic(env_id: str) -> None:
+@pytest.mark.parametrize("env_id", ALL_3D_ENV_IDS)
+def test_kinder_geom3d_basic(env_id: str) -> None:
     """Basic functionality: reset, step, get/set state."""
-    env = KinderGeom2DEnv(env_id)
+    env = KinderGeom3DEnv(env_id)
     env.action_space.seed(123)
     state, _ = env.reset(seed=123)
     assert env.observation_space.contains(state)
@@ -53,10 +49,10 @@ def test_kinder_geom2d_basic(env_id: str) -> None:
     env.close()
 
 
-@pytest.mark.parametrize("env_id", ALL_2D_ENV_IDS)
-def test_kinder_geom2d_sample_next_state(env_id: str) -> None:
+@pytest.mark.parametrize("env_id", ALL_3D_ENV_IDS)
+def test_kinder_geom3d_sample_next_state(env_id: str) -> None:
     """sample_next_state produces a valid next state."""
-    env = KinderGeom2DEnv(env_id)
+    env = KinderGeom3DEnv(env_id)
     env.action_space.seed(42)
     state, _ = env.reset(seed=42)
     action = env.action_space.sample()
