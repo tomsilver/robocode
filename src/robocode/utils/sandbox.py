@@ -32,6 +32,56 @@ _PATH_KEYS: dict[str, str] = {
     "Edit": "file_path",
 }
 
+_VALIDATE_SANDBOX_SCRIPT = """\
+#!/usr/bin/env python3
+import json
+import os
+import sys
+
+data = json.load(sys.stdin)
+tool_name = data.get("tool_name", "")
+tool_input = data.get("tool_input", {})
+
+if tool_name not in ("Write", "Edit"):
+    sys.exit(0)
+
+file_path = tool_input.get("file_path", "")
+if not file_path:
+    sys.exit(0)
+
+sandbox = os.path.realpath(os.getcwd())
+resolved = os.path.realpath(file_path)
+
+if resolved == sandbox or resolved.startswith(sandbox + os.sep):
+    sys.exit(0)
+
+json.dump({
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            f"Blocked: {file_path} resolves outside the sandbox directory"
+        ),
+    }
+}, sys.stdout)
+"""
+
+_SANDBOX_SETTINGS: dict = {
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python3 .claude/validate_sandbox.py",
+                    }
+                ],
+            }
+        ]
+    }
+}
+
 
 @dataclass(frozen=True)
 class SandboxConfig:
@@ -73,8 +123,8 @@ def _get_claude_cmd() -> str:
 async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     """Run a Claude agent in a sandboxed working directory.
 
-    Initializes the sandbox with files, gives the agent a prompt via the
-    Claude Code CLI, and retrieves the specified output file.
+    Initializes the sandbox with files, gives the agent a prompt via the Claude Code
+    CLI, and retrieves the specified output file.
     """
     config.sandbox_dir.mkdir(parents=True, exist_ok=True)
 
@@ -103,6 +153,14 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             "using absolute paths.\n"
         )
 
+    # Install a PreToolUse hook that blocks Write/Edit outside the sandbox.
+    claude_dir = config.sandbox_dir / ".claude"
+    claude_dir.mkdir(exist_ok=True)
+    (claude_dir / "settings.json").write_text(
+        json.dumps(_SANDBOX_SETTINGS, indent=2) + "\n"
+    )
+    (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
+
     claude_cmd = _get_claude_cmd()
     sandbox_abs = str(config.sandbox_dir.resolve())
     cmd = [
@@ -119,7 +177,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         "--tools",
         "Bash,Read,Write,Edit,Glob,Grep",
         "--setting-sources",
-        "",
+        "project",
     ]
     if config.system_prompt:
         cmd += ["--system-prompt", config.system_prompt]
