@@ -23,10 +23,23 @@ _SYSTEM_PROMPT = (
     "and write an optimal approach class. "
     "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
     "to the current working directory using RELATIVE paths only. "
-    "Never use absolute paths when writing files."
+    "Never use absolute paths when writing files. "
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
-    "your best current attempt at all times."
+    "your best current attempt at all times. "
+    "IMPORTANT: Write modular code. Break your logic into small, well-named "
+    "helper functions rather than putting everything in get_action(). Each "
+    "function should do one thing. For example, separate planning, state "
+    "parsing, and action selection into distinct functions. "
+    "IMPORTANT: Develop test-first. Before integrating a piece of logic "
+    "into approach.py, write a unit test for it. Test helper functions "
+    "individually, not just the full approach end-to-end. Keep your tests "
+    "in separate test_*.py files and run them frequently as you develop. "
+    "IMPORTANT: Debug with tests. When you encounter a bug or unexpected "
+    "behavior, do NOT jump straight to fixing the code. First, write a "
+    "test that reproduces the issue. Then debug by iterating until that "
+    "test passes. This applies to all issues: wrong actions, crashes, "
+    "edge cases, incorrect computations, etc."
 )
 
 _INTERFACE_SPEC = """\
@@ -56,8 +69,27 @@ method is called each step and must return a valid action.
 
 Write the best approach you can \u2014 ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
-current environment. Write test scripts that use the real environment to \
-verify your approach works.
+current environment.
+
+Structure your code modularly:
+- Break complex logic into small helper functions with clear names.
+- Each function should have a single responsibility.
+- Avoid deeply nested logic; extract inner blocks into named functions.
+
+Develop with unit tests:
+- For each helper function you write, create a corresponding unit test.
+- Test functions in isolation with simple, targeted inputs.
+- Put tests in separate `test_*.py` files (e.g. `test_helpers.py`).
+- Run tests after each change to catch regressions early.
+- Only after your unit tests pass, write an integration test that runs \
+the full approach in the real environment.
+
+Debug with tests:
+- When you hit a bug or unexpected behavior, FIRST write a test that \
+reproduces the problem before attempting a fix.
+- Then iterate on the code until that test passes.
+- This ensures every bug you fix stays fixed and you understand the root \
+cause before changing code.
 
 IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:
