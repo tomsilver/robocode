@@ -68,21 +68,7 @@ Structure your code modularly:
 - Break complex logic into small helper functions with clear names.
 - Each function should have a single responsibility.
 - Avoid deeply nested logic; extract inner blocks into named functions.
-
-Develop with unit tests:
-- For each helper function you write, create a corresponding unit test.
-- Test functions in isolation with simple, targeted inputs.
-- Put tests in separate `test_*.py` files (e.g. `test_helpers.py`).
-- Run tests after each change to catch regressions early.
-- Only after your unit tests pass, write an integration test that runs \
-the full approach in the real environment.
-
-Debug with tests:
-- When you hit a bug or unexpected behavior, FIRST write a test that \
-reproduces the problem before attempting a fix.
-- Then iterate on the code until that test passes.
-- This ensures every bug you fix stays fixed and you understand the root \
-cause before changing code.
+- Put tests in separate `test_*.py` files and run them frequently.
 
 IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:

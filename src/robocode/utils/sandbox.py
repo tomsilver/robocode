@@ -82,7 +82,7 @@ _SANDBOX_SETTINGS: dict = {
     }
 }
 
-_PLAN_TOOLS = "Read,Glob,Grep"
+_PLAN_TOOLS = "Bash,Read,Glob,Grep"
 _EXECUTE_TOOLS = "Bash,Read,Write,Edit,Glob,Grep"
 
 
@@ -162,22 +162,33 @@ def _setup_sandbox(config: SandboxConfig) -> None:
 def _build_planning_prompt(original_prompt: str) -> str:
     """Wrap the original prompt with instructions to produce a plan only."""
     return (
-        "You are in a PLANNING phase. Your goal is to thoroughly analyze "
-        "the environment source code and produce a detailed plan for "
-        "writing the approach. Do NOT write any files.\n\n"
-        "Steps:\n"
-        "1. Read all relevant source files to understand the state type, "
-        "action space, reward structure, and dynamics.\n"
-        "2. Identify the optimal strategy for this environment.\n"
-        "3. Output a detailed implementation plan including:\n"
-        "   - Key observations about the environment\n"
-        "   - The algorithm/strategy you will implement\n"
-        "   - The helper functions you will write and their signatures\n"
-        "   - The test cases you will create\n"
-        "   - Any edge cases or tricky aspects\n\n"
-        "IMPORTANT: Do NOT create or write any files. Only read and "
-        "analyze, then output your plan as text.\n\n"
-        "--- Original task ---\n"
+        "You are in a PLANNING phase. Read the environment source code "
+        "and produce TWO things: a strategy and a test curriculum. "
+        "Do NOT write any files.\n\n"
+        "First, read all relevant source files to understand the state "
+        "type, action space, reward structure, and dynamics. Pay "
+        "special attention to the state class — understand every field "
+        "and how to construct a state object directly.\n\n"
+        "Then output:\n\n"
+        "## Strategy\n"
+        "Briefly describe the algorithm you would implement and why.\n\n"
+        "## Curriculum\n"
+        "This is the most important part. Design 3-5 environment "
+        "states ordered from simple to complex. Each state is "
+        "constructed directly using the environment's state class "
+        "(the state object encodes both the configuration AND the "
+        "goal). For EACH state provide:\n"
+        "1. The exact Python code to construct the state object.\n"
+        "2. What the goal is in this state.\n"
+        "3. What the correct behavior / expected outcome is.\n"
+        "4. What aspect of the approach this tests.\n\n"
+        "Start with the simplest possible state (e.g., agent already "
+        "at the goal, or one step away with no obstacles) and "
+        "progressively increase difficulty.\n\n"
+        "IMPORTANT: Do NOT write any files. Only read and analyze, "
+        "then output your strategy and curriculum as text.\n\n"
+        "The environment you are analyzing is described by the "
+        "following task:\n\n"
         f"{original_prompt}"
     )
 
@@ -185,14 +196,21 @@ def _build_planning_prompt(original_prompt: str) -> str:
 def _build_execution_prompt(original_prompt: str, plan_text: str) -> str:
     """Wrap the original prompt with the plan for execution."""
     return (
-        "You previously analyzed the environment and produced the "
-        "following plan. Now execute it.\n\n"
+        "A planning agent analyzed the environment and produced a "
+        "strategy and test curriculum. Your job is to implement the "
+        "approach.\n\n"
         "--- Plan ---\n"
         f"{plan_text}\n\n"
-        "--- Original task ---\n"
+        "--- Task ---\n"
         f"{original_prompt}\n\n"
-        "Follow the plan above. You may adapt details as needed, but "
-        "stick to the overall strategy."
+        "IMPORTANT: Start by writing the curriculum tests from the "
+        "plan above. Create a separate file for each curriculum "
+        "state: `test_curriculum_1.py`, `test_curriculum_2.py`, etc. "
+        "Each file constructs the concrete state object, runs the "
+        "approach on it, and checks the expected behavior. "
+        "Then implement the approach incrementally, getting each "
+        "curriculum test to pass in order (simplest first) before "
+        "moving to the next."
     )
 
 
@@ -212,8 +230,6 @@ def _run_cli_in_sandbox(
     prompt: str,
     max_budget_usd: float,
     tools: str,
-    *,
-    use_plan_permission_mode: bool = False,
 ) -> _CliRunResult:
     """Run a single CLI invocation inside the sandbox directory."""
     claude_cmd = _get_claude_cmd()
@@ -235,10 +251,7 @@ def _run_cli_in_sandbox(
         "project",
     ]
 
-    if use_plan_permission_mode:
-        cmd += ["--permission-mode", "plan"]
-    else:
-        cmd.append("--dangerously-skip-permissions")
+    cmd.append("--dangerously-skip-permissions")
 
     if config.system_prompt:
         cmd += ["--system-prompt", config.system_prompt]
@@ -359,7 +372,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             plan_prompt,
             plan_budget,
             _PLAN_TOOLS,
-            use_plan_permission_mode=True,
         )
 
         if plan_result.is_error or not plan_result.result_text.strip():
