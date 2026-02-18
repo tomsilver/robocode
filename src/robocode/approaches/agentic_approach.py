@@ -84,6 +84,17 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         '`imageio.imwrite("state.png", render_state(state))` and read the '
         "file to visually understand the spatial layout."
     ),
+    "BiRRT": (
+        "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
+        "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
+        "planner. Construct one, then call `birrt.query(start, goal)` to get "
+        "a collision-free path (list of states) or None. "
+        "`sample_fn(state) -> state` samples a random state, "
+        "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
+        "`collision_fn(state) -> bool` returns True if state is in collision, "
+        "`distance_fn(s1, s2) -> float` returns distance between states, "
+        "`rng` is a `np.random.Generator`."
+    ),
 }
 
 _PROMPT_WITH_DESCRIPTION = """\
