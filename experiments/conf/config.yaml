@@ -10,3 +10,5 @@ render_videos: false
 primitives:
   - check_action_collision
   - render_state
+  - csp
+required_primitives: []

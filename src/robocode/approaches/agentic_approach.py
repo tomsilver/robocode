@@ -87,6 +87,27 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         '`imageio.imwrite("state.png", render_state(state))` and read the '
         "file to visually understand the spatial layout."
     ),
+    "csp": (
+        "`csp` is a module providing a constraint satisfaction problem (CSP) "
+        "solver. Use it to sample configurations (e.g. placements, grasps) "
+        "that satisfy constraints (e.g. collision-free). Key classes:\n"
+        "  - `csp.CSPVariable(name, domain)` \u2014 a variable with a "
+        "`gymnasium.spaces.Space` domain.\n"
+        "  - `csp.FunctionalCSPConstraint(name, variables, fn)` \u2014 a "
+        "constraint where `fn(*vals) -> bool`.\n"
+        "  - `csp.CSP(variables, constraints, cost=None)` \u2014 the problem.\n"
+        "  - `csp.FunctionalCSPSampler(fn, csp, sampled_vars)` \u2014 a "
+        "sampler where `fn(current_vals, rng) -> dict | None`.\n"
+        "  - `csp.RandomWalkCSPSolver(seed)` \u2014 solver; call "
+        "`.solve(csp, initialization, samplers)` to get a satisfying "
+        "assignment or None.\n"
+        "  - `csp.CSPCost(name, variables, cost_fn)` \u2014 optional cost to "
+        "minimize.\n"
+        "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
+        "threshold)` \u2014 constraint from log probabilities.\n"
+        "Access via `primitives['csp']`, e.g. "
+        "`primitives['csp'].CSPVariable(...)`."
+    ),
 }
 
 _PROMPT_WITH_DESCRIPTION = """\
@@ -122,6 +143,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         max_budget_usd: float = 5.0,
         output_dir: str = ".",
         load_dir: str | None = None,
+        required_primitives: list[str] | None = None,
     ) -> None:
         super().__init__(
             action_space,
@@ -134,6 +156,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._max_budget_usd = max_budget_usd
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
+        self._required_primitives = required_primitives or []
         self._generated: Any = None
 
     def train(self) -> None:
@@ -156,6 +179,14 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 desc = _PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
                 lines.append(f"- {desc}")
             primitives_desc = "\n".join(lines)
+            if self._required_primitives:
+                names = ", ".join(f"`{n}`" for n in self._required_primitives)
+                primitives_desc += (
+                    f"\n\nIMPORTANT: Your approach MUST use the following "
+                    f"primitives: {names}. These are essential for solving "
+                    f"this environment. Read their descriptions above and "
+                    f"integrate them into your solution."
+                )
         else:
             primitives_desc = "`primitives` is an empty dict."
 
