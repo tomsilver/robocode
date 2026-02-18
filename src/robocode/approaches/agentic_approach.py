@@ -78,6 +78,14 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
         "planning algorithms, skip actions that collide."
     ),
+    "draw_labeled_points": (
+        "`draw_labeled_points(image, points, marker_radius=5, font_size=12) "
+        "-> np.ndarray` draws labeled markers onto an RGB image and returns "
+        "the annotated copy. `points` is a list of `(pixel_x, pixel_y, label)` "
+        "tuples. Use it to annotate rendered images with coordinate labels "
+        '(e.g., `(120, 45, "(120, 45)")`) or object names '
+        '(e.g., `(60, 30, "robot")`, `(200, 180, "goal")`).'
+    ),
     "render_state": (
         "`render_state(state) -> np.ndarray` renders the given `state` as an "
         "RGB image (H\u00d7W\u00d73 uint8 numpy array). Save it to disk with "

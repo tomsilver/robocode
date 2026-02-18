@@ -9,4 +9,5 @@ num_eval_tasks: 10
 render_videos: false
 primitives:
   - check_action_collision
+  - draw_labeled_points
   - render_state
