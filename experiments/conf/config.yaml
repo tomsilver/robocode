@@ -11,5 +11,5 @@ primitives:
   - check_action_collision
   - render_state
   - csp
-required_primitives: []
   - BiRRT
+required_primitives: []
