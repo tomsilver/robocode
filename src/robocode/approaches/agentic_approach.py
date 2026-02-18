@@ -82,8 +82,14 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "planning algorithms, skip actions that collide."
     ),
     "render_state": (
-        "`render_state(state) -> np.ndarray` renders the given `state` as an "
-        "RGB image (H\u00d7W\u00d73 uint8 numpy array). Save it to disk with "
+        "`render_state(state, ax_callback=None) -> np.ndarray` renders the "
+        "given `state` as an RGB image (H\u00d7W\u00d73 uint8 numpy array). "
+        "Optionally pass `ax_callback`, a function that takes a matplotlib "
+        "`Axes` and draws on it. Use this to add markers, lines, "
+        "annotations, or any other matplotlib drawing. Examples:\n"
+        "  `render_state(state, ax_callback=lambda ax: ax.plot(1.5, 2.0, 'ro'))`\n"
+        "  `render_state(state, ax_callback=lambda ax: ax.annotate('goal', (3, 1)))`\n"
+        "Save to disk with "
         '`imageio.imwrite("state.png", render_state(state))` and read the '
         "file to visually understand the spatial layout."
     ),
