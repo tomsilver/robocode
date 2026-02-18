@@ -12,3 +12,4 @@ primitives:
   - render_state
   - csp
 required_primitives: []
+  - BiRRT
