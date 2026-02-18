@@ -27,19 +27,12 @@ _SYSTEM_PROMPT = (
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
     "your best current attempt at all times. "
-    "IMPORTANT: Write modular code. Break your logic into small, well-named "
-    "helper functions rather than putting everything in get_action(). Each "
-    "function should do one thing. For example, separate planning, state "
-    "parsing, and action selection into distinct functions. "
-    "IMPORTANT: Develop test-first. Before integrating a piece of logic "
-    "into approach.py, write a unit test for it. Test helper functions "
-    "individually, not just the full approach end-to-end. Keep your tests "
+    "IMPORTANT: Write modular code. Develop test-first. Keep your tests "
     "in separate test_*.py files and run them frequently as you develop. "
-    "IMPORTANT: Debug with tests. When you encounter a bug or unexpected "
+    "Debug with tests. When you encounter a bug or unexpected "
     "behavior, do NOT jump straight to fixing the code. First, write a "
     "test that reproduces the issue. Then debug by iterating until that "
-    "test passes. This applies to all issues: wrong actions, crashes, "
-    "edge cases, incorrect computations, etc."
+    "test passes."
 )
 
 _INTERFACE_SPEC = """\
