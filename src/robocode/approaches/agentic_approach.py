@@ -24,6 +24,9 @@ _SYSTEM_PROMPT = (
     "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
     "to the current working directory using RELATIVE paths only. "
     "Never use absolute paths when writing files."
+    "IMPORTANT: Write code often to approach.py as you iterate. You may be "
+    "interrupted at any time, so you should make sure that approach.py is "
+    "your best current attempt at all times."
 )
 
 _INTERFACE_SPEC = """\
@@ -79,8 +82,14 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "planning algorithms, skip actions that collide."
     ),
     "render_state": (
-        "`render_state(state) -> np.ndarray` renders the given `state` as an "
-        "RGB image (H\u00d7W\u00d73 uint8 numpy array). Save it to disk with "
+        "`render_state(state, ax_callback=None) -> np.ndarray` renders the "
+        "given `state` as an RGB image (H\u00d7W\u00d73 uint8 numpy array). "
+        "Optionally pass `ax_callback`, a function that takes a matplotlib "
+        "`Axes` and draws on it. Use this to add markers, lines, "
+        "annotations, or any other matplotlib drawing. Examples:\n"
+        "  `render_state(state, ax_callback=lambda ax: ax.plot(1.5, 2.0, 'ro'))`\n"
+        "  `render_state(state, ax_callback=lambda ax: ax.annotate('goal', (3, 1)))`\n"
+        "Save to disk with "
         '`imageio.imwrite("state.png", render_state(state))` and read the '
         "file to visually understand the spatial layout."
     ),
@@ -98,9 +107,8 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
 }
 
 _PROMPT_WITH_DESCRIPTION = """\
-You are writing an approach for ONE specific environment. The environment is \
-fully described below \u2014 this is the ONLY environment your code will be \
-tested on. Do NOT try to handle other environments. \
+You are writing an approach for the environment is described below.
+
 Your approach should be general enough to solve any instance of this environment (env.reset()), \
 but it does NOT need to be adaptable to different other environments.
 
