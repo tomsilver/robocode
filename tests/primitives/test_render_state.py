@@ -19,8 +19,8 @@ def env() -> KinderGeom2DEnv:
     return e
 
 
-def test_no_labels_returns_valid_image(env: KinderGeom2DEnv) -> None:
-    """No-labels render returns a valid RGB image."""
+def test_no_callback_returns_valid_image(env: KinderGeom2DEnv) -> None:
+    """No-callback render returns a valid RGB image."""
     state = env.get_state()
     img = render_state(env, state)
     assert img.ndim == 3
@@ -28,61 +28,45 @@ def test_no_labels_returns_valid_image(env: KinderGeom2DEnv) -> None:
     assert img.dtype == np.uint8
 
 
-def test_labeled_render_differs_from_unlabeled(env: KinderGeom2DEnv) -> None:
-    """Labeled render returns correct shape/dtype and differs from unlabeled."""
+def test_callback_render_differs_from_plain(env: KinderGeom2DEnv) -> None:
+    """Callback render returns correct shape/dtype and differs from plain."""
     state = env.get_state()
     plain = render_state(env, state)
-    labeled = render_state(env, state, labels=[(1.0, 1.0, "A")])
-    assert labeled.shape == plain.shape
-    assert labeled.dtype == np.uint8
-    assert not np.array_equal(plain, labeled)
+    with_cb = render_state(
+        env, state, ax_callback=lambda ax: ax.plot(1.0, 1.0, "ro", markersize=10)
+    )
+    assert with_cb.shape == plain.shape
+    assert with_cb.dtype == np.uint8
+    assert not np.array_equal(plain, with_cb)
 
 
-def test_multiple_labels(env: KinderGeom2DEnv) -> None:
-    """Multiple labels work."""
-    state = env.get_state()
-    labels = [(0.5, 0.5, "P1"), (1.5, 1.5, "P2"), (2.0, 0.5, "P3")]
-    img = render_state(env, state, labels=labels)
-    assert img.ndim == 3
-    assert img.dtype == np.uint8
-
-
-def test_empty_labels_same_as_no_labels(env: KinderGeom2DEnv) -> None:
-    """Empty labels behaves like no labels."""
-    state = env.get_state()
-    plain = render_state(env, state)
-    empty = render_state(env, state, labels=[])
-    assert plain.shape == empty.shape
-    np.testing.assert_array_equal(plain, empty)
-
-
-def test_state_preserved_after_unlabeled(env: KinderGeom2DEnv) -> None:
-    """Env state is preserved after unlabeled render."""
+def test_state_preserved_without_callback(env: KinderGeom2DEnv) -> None:
+    """Env state is preserved after plain render."""
     state = env.get_state()
     render_state(env, state)
     np.testing.assert_array_equal(env.get_state(), state)
 
 
-def test_state_preserved_after_labeled(env: KinderGeom2DEnv) -> None:
-    """Env state is preserved after labeled render."""
+def test_state_preserved_with_callback(env: KinderGeom2DEnv) -> None:
+    """Env state is preserved after callback render."""
     state = env.get_state()
-    render_state(env, state, labels=[(1.0, 1.0, "X")])
+    render_state(env, state, ax_callback=lambda ax: ax.plot(1.0, 1.0, "ro"))
     np.testing.assert_array_equal(env.get_state(), state)
 
 
 def test_not_implemented_for_unsupported_env() -> None:
-    """NotImplementedError raised for unsupported env types with labels."""
+    """NotImplementedError raised for unsupported env types with ax_callback."""
 
     class _FakeEnv:
         """Stub env for testing."""
 
     with pytest.raises(NotImplementedError):
-        render_state(_FakeEnv(), None, labels=[(0.0, 0.0, "X")])
+        render_state(_FakeEnv(), None, ax_callback=lambda ax: None)
 
 
 def test_output_dimensions_match(env: KinderGeom2DEnv) -> None:
-    """Output dimensions match between labeled and unlabeled renders."""
+    """Output dimensions match between callback and plain renders."""
     state = env.get_state()
     plain = render_state(env, state)
-    labeled = render_state(env, state, labels=[(1.0, 1.0, "A")])
-    assert plain.shape == labeled.shape
+    with_cb = render_state(env, state, ax_callback=lambda ax: ax.plot(1.0, 1.0, "ro"))
+    assert plain.shape == with_cb.shape
