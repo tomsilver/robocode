@@ -2,6 +2,7 @@
 
 import abc
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -214,12 +215,14 @@ class RandomWalkCSPSolver(CSPSolver):
         max_iters: int = 100_000,
         num_improvements: int = 5,
         max_improvement_attempts: int = 1_000,
+        timeout_s: float = 10.0,
         show_progress_bar: bool = True,
     ) -> None:
         super().__init__(seed)
         self._max_iters = max_iters
         self._num_improvements = num_improvements
         self._max_improvement_attempts = max_improvement_attempts
+        self._timeout_s = timeout_s
         self._show_progress_bar = show_progress_bar
         self._rng = np.random.default_rng(seed)
 
@@ -236,9 +239,13 @@ class RandomWalkCSPSolver(CSPSolver):
         num_improve_attempts = 0
         num_improve_found = 0
         sampler_idxs = list(range(len(samplers)))
+        deadline = time.monotonic() + self._timeout_s
         for _ in (
             pbar := tqdm(range(self._max_iters), disable=not self._show_progress_bar)
         ):
+            if time.monotonic() >= deadline:
+                logging.warning("CSP solver timed out after %.1fs", self._timeout_s)
+                break
             if solution_found and (
                 num_improve_attempts >= self._max_improvement_attempts
                 or num_improve_found >= self._num_improvements
