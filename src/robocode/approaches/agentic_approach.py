@@ -24,6 +24,9 @@ _SYSTEM_PROMPT = (
     "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
     "to the current working directory using RELATIVE paths only. "
     "Never use absolute paths when writing files."
+    "IMPORTANT: Write code often to approach.py as you iterate. You may be "
+    "interrupted at any time, so you should make sure that approach.py is "
+    "your best current attempt at all times."
 )
 
 _INTERFACE_SPEC = """\
@@ -93,9 +96,8 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
 }
 
 _PROMPT_WITH_DESCRIPTION = """\
-You are writing an approach for ONE specific environment. The environment is \
-fully described below \u2014 this is the ONLY environment your code will be \
-tested on. Do NOT try to handle other environments. \
+You are writing an approach for the environment is described below.
+
 Your approach should be general enough to solve any instance of this environment (env.reset()), \
 but it does NOT need to be adaptable to different other environments.
 
