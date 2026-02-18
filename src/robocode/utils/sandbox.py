@@ -82,6 +82,9 @@ _SANDBOX_SETTINGS: dict = {
     }
 }
 
+_PLAN_TOOLS = "Read,Glob,Grep"
+_EXECUTE_TOOLS = "Bash,Read,Write,Edit,Glob,Grep"
+
 
 @dataclass(frozen=True)
 class SandboxConfig:
@@ -94,6 +97,8 @@ class SandboxConfig:
     model: str = "sonnet"
     max_budget_usd: float = 5.0
     system_prompt: str = ""
+    plan_mode: bool = True
+    plan_budget_fraction: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,7 @@ class SandboxResult:
     success: bool
     output_file: Path | None
     error: str | None
+    assistant_text: str = ""
 
 
 def _is_path_within_sandbox(path_str: str, sandbox_dir: Path) -> bool:
@@ -120,12 +126,8 @@ def _get_claude_cmd() -> str:
     return os.environ.get("ROBOCODE_CLAUDE_CMD", "claude")
 
 
-async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
-    """Run a Claude agent in a sandboxed working directory.
-
-    Initializes the sandbox with files, gives the agent a prompt via the Claude Code
-    CLI, and retrieves the specified output file.
-    """
+def _setup_sandbox(config: SandboxConfig) -> None:
+    """Initialize the sandbox directory with files, git repo, and hooks."""
     config.sandbox_dir.mkdir(parents=True, exist_ok=True)
 
     for dest_name, source_path in config.init_files.items():
@@ -133,8 +135,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, dest)
 
-    # Initialize a git repo so the CLI treats the sandbox as the project
-    # root and doesn't walk up to the real repo.
     if not (config.sandbox_dir / ".git" / "HEAD").exists():
         subprocess.run(
             ["git", "init"],
@@ -143,8 +143,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             capture_output=True,
         )
 
-    # Write a CLAUDE.md that instructs the agent to keep files in the
-    # sandbox.  The CLI automatically reads this from the project root.
     claude_md = config.sandbox_dir / "CLAUDE.md"
     if not claude_md.exists():
         claude_md.write_text(
@@ -153,7 +151,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             "using absolute paths.\n"
         )
 
-    # Install a PreToolUse hook that blocks Write/Edit outside the sandbox.
     claude_dir = config.sandbox_dir / ".claude"
     claude_dir.mkdir(exist_ok=True)
     (claude_dir / "settings.json").write_text(
@@ -161,31 +158,93 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     )
     (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
 
+
+def _build_planning_prompt(original_prompt: str) -> str:
+    """Wrap the original prompt with instructions to produce a plan only."""
+    return (
+        "You are in a PLANNING phase. Your goal is to thoroughly analyze "
+        "the environment source code and produce a detailed plan for "
+        "writing the approach. Do NOT write any files.\n\n"
+        "Steps:\n"
+        "1. Read all relevant source files to understand the state type, "
+        "action space, reward structure, and dynamics.\n"
+        "2. Identify the optimal strategy for this environment.\n"
+        "3. Output a detailed implementation plan including:\n"
+        "   - Key observations about the environment\n"
+        "   - The algorithm/strategy you will implement\n"
+        "   - The helper functions you will write and their signatures\n"
+        "   - The test cases you will create\n"
+        "   - Any edge cases or tricky aspects\n\n"
+        "IMPORTANT: Do NOT create or write any files. Only read and "
+        "analyze, then output your plan as text.\n\n"
+        "--- Original task ---\n"
+        f"{original_prompt}"
+    )
+
+
+def _build_execution_prompt(original_prompt: str, plan_text: str) -> str:
+    """Wrap the original prompt with the plan for execution."""
+    return (
+        "You previously analyzed the environment and produced the "
+        "following plan. Now execute it.\n\n"
+        "--- Plan ---\n"
+        f"{plan_text}\n\n"
+        "--- Original task ---\n"
+        f"{original_prompt}\n\n"
+        "Follow the plan above. You may adapt details as needed, but "
+        "stick to the overall strategy."
+    )
+
+
+@dataclass
+class _CliRunResult:
+    """Internal result from a single CLI invocation."""
+
+    is_error: bool
+    error_text: str | None
+    result_text: str
+    num_turns: int
+    total_cost: float | None
+
+
+def _run_cli_in_sandbox(
+    config: SandboxConfig,
+    prompt: str,
+    max_budget_usd: float,
+    tools: str,
+    *,
+    use_plan_permission_mode: bool = False,
+) -> _CliRunResult:
+    """Run a single CLI invocation inside the sandbox directory."""
     claude_cmd = _get_claude_cmd()
     sandbox_abs = str(config.sandbox_dir.resolve())
+
     cmd = [
         claude_cmd,
         "-p",
-        config.prompt,
+        prompt,
         "--output-format",
         "stream-json",
         "--verbose",
         "--model",
         config.model,
-        "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--tools",
-        "Bash,Read,Write,Edit,Glob,Grep",
+        tools,
         "--setting-sources",
         "project",
     ]
+
+    if use_plan_permission_mode:
+        cmd += ["--permission-mode", "plan"]
+    else:
+        cmd.append("--dangerously-skip-permissions")
+
     if config.system_prompt:
         cmd += ["--system-prompt", config.system_prompt]
-    if config.max_budget_usd > 0:
-        cmd += ["--max-budget-usd", str(config.max_budget_usd)]
+    if max_budget_usd > 0:
+        cmd += ["--max-budget-usd", str(max_budget_usd)]
 
-    # Strip CLAUDECODE env vars so the subprocess doesn't inherit parent
-    # session state.
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
@@ -201,6 +260,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
 
     is_error = False
     error_text: str | None = None
+    result_text = ""
     num_turns = 0
     total_cost: float | None = None
 
@@ -218,7 +278,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         msg_type = msg.get("type", "")
 
         if msg_type == "assistant":
-            # Log text content from assistant messages.
             for block in msg.get("message", {}).get("content", []):
                 if block.get("type") == "text":
                     logger.info("Agent: %s", block["text"])
@@ -238,12 +297,12 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             is_error = msg.get("is_error", False)
             num_turns = msg.get("num_turns", 0)
             total_cost = msg.get("total_cost_usd")
+            result_text = msg.get("result", "")
             if is_error:
-                error_text = msg.get("result", "Unknown error")
+                error_text = result_text or "Unknown error"
 
     proc.wait()
 
-    # Check stderr for process-level errors.
     assert proc.stderr is not None
     stderr_output = proc.stderr.read()
     if proc.returncode != 0 and not is_error:
@@ -261,18 +320,97 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         is_error,
     )
 
-    if is_error:
+    return _CliRunResult(
+        is_error=is_error,
+        error_text=error_text,
+        result_text=result_text,
+        num_turns=num_turns,
+        total_cost=total_cost,
+    )
+
+
+async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
+    """Run a Claude agent in a sandboxed working directory.
+
+    Initializes the sandbox with files, gives the agent a prompt via the Claude Code
+    CLI, and retrieves the specified output file.
+
+    When plan_mode is enabled, runs two phases:
+    1. Plan phase (read-only): analyzes the environment and outputs a plan.
+    2. Execute phase (full tools): follows the plan to write the output file.
+
+    If the plan phase fails, falls back to single-phase execution.
+    """
+    _setup_sandbox(config)
+
+    if config.plan_mode:
+        plan_budget = config.max_budget_usd * config.plan_budget_fraction
+        execute_budget = config.max_budget_usd - plan_budget
+
+        logger.info(
+            "Plan mode: plan_budget=$%.2f, execute_budget=$%.2f",
+            plan_budget,
+            execute_budget,
+        )
+
+        plan_prompt = _build_planning_prompt(config.prompt)
+        plan_result = _run_cli_in_sandbox(
+            config,
+            plan_prompt,
+            plan_budget,
+            _PLAN_TOOLS,
+            use_plan_permission_mode=True,
+        )
+
+        if plan_result.is_error or not plan_result.result_text.strip():
+            logger.warning(
+                "Plan phase failed (error=%s), falling back to single-phase",
+                plan_result.error_text,
+            )
+            cli_result = _run_cli_in_sandbox(
+                config,
+                config.prompt,
+                execute_budget,
+                _EXECUTE_TOOLS,
+            )
+        else:
+            logger.info("Plan phase succeeded, proceeding to execution")
+            exec_prompt = _build_execution_prompt(
+                config.prompt, plan_result.result_text
+            )
+            cli_result = _run_cli_in_sandbox(
+                config,
+                exec_prompt,
+                execute_budget,
+                _EXECUTE_TOOLS,
+            )
+    else:
+        cli_result = _run_cli_in_sandbox(
+            config,
+            config.prompt,
+            config.max_budget_usd,
+            _EXECUTE_TOOLS,
+        )
+
+    if cli_result.is_error:
         return SandboxResult(
             success=False,
             output_file=None,
-            error=error_text,
+            error=cli_result.error_text,
+            assistant_text=cli_result.result_text,
         )
 
     output_path = config.sandbox_dir / config.output_filename
     if output_path.exists():
-        return SandboxResult(success=True, output_file=output_path, error=None)
+        return SandboxResult(
+            success=True,
+            output_file=output_path,
+            error=None,
+            assistant_text=cli_result.result_text,
+        )
     return SandboxResult(
         success=False,
         output_file=None,
         error=f"Output file not found: {config.output_filename}",
+        assistant_text=cli_result.result_text,
     )

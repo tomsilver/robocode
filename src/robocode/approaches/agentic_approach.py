@@ -186,6 +186,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         output_dir: str = ".",
         load_dir: str | None = None,
         required_primitives: list[str] | None = None,
+        plan_mode: bool = True,
     ) -> None:
         super().__init__(
             action_space,
@@ -199,6 +200,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._required_primitives = required_primitives or []
+        self._plan_mode = plan_mode
         self._generated: Any = None
 
     def train(self) -> None:
@@ -253,6 +255,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             system_prompt=_SYSTEM_PROMPT,
             model=self._model,
             max_budget_usd=self._max_budget_usd,
+            plan_mode=self._plan_mode,
         )
 
         # Write agent logs to a file in the sandbox directory.

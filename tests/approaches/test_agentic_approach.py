@@ -106,3 +106,24 @@ def test_load_dir_missing_file_raises(tmp_path):
     )
     with pytest.raises(FileNotFoundError):
         approach.train()
+
+
+def test_plan_mode_parameter():
+    """AgenticApproach accepts plan_mode parameter."""
+    env = MazeEnv(5, 8, 5, 8)
+    approach = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=123,
+        primitives={"check_action_collision": partial(check_action_collision, env)},
+        plan_mode=False,
+    )
+    assert not approach._plan_mode  # pylint: disable=protected-access
+
+    approach_default = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=123,
+        primitives={"check_action_collision": partial(check_action_collision, env)},
+    )
+    assert approach_default._plan_mode  # pylint: disable=protected-access

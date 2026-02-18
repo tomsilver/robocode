@@ -47,6 +47,8 @@ def test_sandbox_config_defaults() -> None:
     assert config.model == "sonnet"
     assert config.max_budget_usd == 5.0
     assert config.system_prompt == ""
+    assert config.plan_mode is True
+    assert config.plan_budget_fraction == 0.2
 
 
 def test_sandbox_result_success() -> None:
@@ -55,6 +57,7 @@ def test_sandbox_result_success() -> None:
     assert result.success
     assert result.output_file == Path("/tmp/out.txt")
     assert result.error is None
+    assert result.assistant_text == ""
 
 
 def test_sandbox_result_failure() -> None:
@@ -63,3 +66,15 @@ def test_sandbox_result_failure() -> None:
     assert not result.success
     assert result.output_file is None
     assert result.error == "file not found"
+    assert result.assistant_text == ""
+
+
+def test_sandbox_result_with_assistant_text() -> None:
+    """SandboxResult stores assistant_text when provided."""
+    result = SandboxResult(
+        success=True,
+        output_file=Path("/tmp/out.txt"),
+        error=None,
+        assistant_text="Here is my plan...",
+    )
+    assert result.assistant_text == "Here is my plan..."
