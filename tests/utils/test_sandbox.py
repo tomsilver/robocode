@@ -47,8 +47,6 @@ def test_sandbox_config_defaults() -> None:
     assert config.model == "sonnet"
     assert config.max_budget_usd == 5.0
     assert config.system_prompt == ""
-    assert config.plan_mode is True
-    assert config.plan_budget_fraction == 0.2
 
 
 def test_sandbox_result_success() -> None:

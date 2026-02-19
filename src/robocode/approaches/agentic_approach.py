@@ -1,9 +1,11 @@
 """An approach that uses a Claude agent to generate approach code."""
 
 import asyncio
+import inspect
 import logging
 import sys
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -27,6 +29,9 @@ _SYSTEM_PROMPT = (
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
     "your best current attempt at all times. "
+    "IMPORTANT: Keep CLAUDE.md updated with your plan and progress. It is "
+    "loaded into your context every turn and acts as your persistent memory. "
+    "Update the Progress checklist as you complete each step. "
     "IMPORTANT: Write modular code. Develop test-first. Keep your tests "
     "in separate test_*.py files and run them frequently as you develop. "
     "Debug with tests. When you encounter a bug or unexpected "
@@ -58,22 +63,48 @@ The class can maintain internal state between calls (e.g., a computed plan). \
 The `reset` method is called at the start of each episode. The `get_action` \
 method is called each step and must return a valid action.
 
-{primitives_description}
-
+`primitives` is a dict of helper callables. Their source code is in the \
+`primitives/` directory — read each file to understand what is available. \
+{required_primitives_note}
 Write the best approach you can \u2014 ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
 current environment.
+
+Follow this workflow:
+
+STEP 0 — PLAN: Before writing any code, read the environment source to \
+understand the state type, action space, dynamics, reward function, and \
+termination conditions. Then update CLAUDE.md with these sections:
+- **Plan**: Your approach strategy (algorithm, key insights, edge cases).
+- **Curriculum**: 3-5 test scenarios ordered simple→complex. For each, \
+note what aspect it tests and how to construct the state.
+- **Progress**: A markdown checklist tracking your work — plan written, \
+each curriculum test passing, integration test passing. Update this \
+checklist as you complete each step.
+
+STEP 1 — CURRICULUM: Following your plan, write the test files. For each \
+scenario in your curriculum, write a separate file: `test_curriculum_1.py`, \
+`test_curriculum_2.py`, etc. Construct each state directly using the state \
+class (do NOT use env.reset()). Each file should construct the state, import \
+GeneratedApproach from approach.py, instantiate it, call reset(state, {{}}) \
+and get_action(state), and assert the expected behavior.
+
+STEP 2 — IMPLEMENT: Write approach.py incrementally. Get \
+test_curriculum_1.py to pass first, then test_curriculum_2.py, and so on. \
+Run each test to verify before moving to the next.
+
+STEP 3 — INTEGRATION TEST: After all curriculum tests pass, write a final \
+integration test that runs the full approach in the real environment.
 
 Structure your code modularly:
 - Break complex logic into small helper functions with clear names.
 - Each function should have a single responsibility.
 - Avoid deeply nested logic; extract inner blocks into named functions.
-- Put tests in separate `test_*.py` files and run them frequently.
 
 IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:
 ```bash
-{python_executable} test_approach.py
+{python_executable} test_curriculum_1.py
 ```
 
 You can also inspect the source code of any imported module to understand \
@@ -85,58 +116,19 @@ termination conditions, etc.). To locate a module's source file:
 Then read the source to inform your approach.\
 """
 
-_PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
-    "check_action_collision": (
-        "`check_action_collision(state, action) -> bool` returns True when "
-        "taking `action` in `state` would cause a collision (i.e. the agent "
-        "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
-        "planning algorithms, skip actions that collide."
-    ),
-    "render_state": (
-        "`render_state(state, ax_callback=None) -> np.ndarray` renders the "
-        "given `state` as an RGB image (H\u00d7W\u00d73 uint8 numpy array). "
-        "Optionally pass `ax_callback`, a function that takes a matplotlib "
-        "`Axes` and draws on it. Use this to add markers, lines, "
-        "annotations, or any other matplotlib drawing. Examples:\n"
-        "  `render_state(state, ax_callback=lambda ax: ax.plot(1.5, 2.0, 'ro'))`\n"
-        "  `render_state(state, ax_callback=lambda ax: ax.annotate('goal', (3, 1)))`\n"
-        "Save to disk with "
-        '`imageio.imwrite("state.png", render_state(state))` and read the '
-        "file to visually understand the spatial layout."
-    ),
-    "csp": (
-        "`csp` is a module providing a constraint satisfaction problem (CSP) "
-        "solver. Use it to sample configurations (e.g. placements, grasps) "
-        "that satisfy constraints (e.g. collision-free). Key classes:\n"
-        "  - `csp.CSPVariable(name, domain)` \u2014 a variable with a "
-        "`gymnasium.spaces.Space` domain.\n"
-        "  - `csp.FunctionalCSPConstraint(name, variables, fn)` \u2014 a "
-        "constraint where `fn(*vals) -> bool`.\n"
-        "  - `csp.CSP(variables, constraints, cost=None)` \u2014 the problem.\n"
-        "  - `csp.FunctionalCSPSampler(fn, csp, sampled_vars)` \u2014 a "
-        "sampler where `fn(current_vals, rng) -> dict | None`.\n"
-        "  - `csp.RandomWalkCSPSolver(seed)` \u2014 solver; call "
-        "`.solve(csp, initialization, samplers)` to get a satisfying "
-        "assignment or None.\n"
-        "  - `csp.CSPCost(name, variables, cost_fn)` \u2014 optional cost to "
-        "minimize.\n"
-        "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
-        "threshold)` \u2014 constraint from log probabilities.\n"
-        "Access via `primitives['csp']`, e.g. "
-        "`primitives['csp'].CSPVariable(...)`."
-    ),
-    "BiRRT": (
-        "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
-        "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
-        "planner. Construct one, then call `birrt.query(start, goal)` to get "
-        "a collision-free path (list of states) or None. "
-        "`sample_fn(state) -> state` samples a random state, "
-        "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
-        "`collision_fn(state) -> bool` returns True if state is in collision, "
-        "`distance_fn(s1, s2) -> float` returns distance between states, "
-        "`rng` is a `np.random.Generator`."
-    ),
-}
+
+def _get_primitive_source(obj: Any) -> Path | None:
+    """Resolve the source file for a primitive callable or module."""
+    # Unwrap functools.partial to get the underlying function.
+    while isinstance(obj, partial):
+        obj = obj.func
+    try:
+        source_file = inspect.getfile(obj)
+    except (TypeError, OSError):
+        return None
+    path = Path(source_file)
+    return path if path.exists() else None
+
 
 _PROMPT_WITH_DESCRIPTION = """\
 You are writing an approach for the environment is described below.
@@ -172,7 +164,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         output_dir: str = ".",
         load_dir: str | None = None,
         required_primitives: list[str] | None = None,
-        plan_mode: bool = True,
     ) -> None:
         super().__init__(
             action_space,
@@ -186,7 +177,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._required_primitives = required_primitives or []
-        self._plan_mode = plan_mode
         self._generated: Any = None
 
     def train(self) -> None:
@@ -200,30 +190,26 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir = self._output_dir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build the prompt. If we have an env description, inline it so the
-        # agent knows exactly which environment to target.  Otherwise fall
-        # back to asking the agent to read source files.
-        if self._primitives:
-            lines = ["`primitives` is a dict with these callables:\n"]
-            for name in sorted(self._primitives):
-                desc = _PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
-                lines.append(f"- {desc}")
-            primitives_desc = "\n".join(lines)
-            if self._required_primitives:
-                names = ", ".join(f"`{n}`" for n in self._required_primitives)
-                primitives_desc += (
-                    f"\n\nIMPORTANT: Your approach MUST use the following "
-                    f"primitives: {names}. These are essential for solving "
-                    f"this environment. Read their descriptions above and "
-                    f"integrate them into your solution."
-                )
+        # Resolve primitive source files and copy them into the sandbox.
+        init_files: dict[str, Path] = {}
+        for _, obj in self._primitives.items():
+            source_path = _get_primitive_source(obj)
+            if source_path is not None:
+                init_files[f"primitives/{source_path.name}"] = source_path
+
+        if self._required_primitives:
+            names = ", ".join(f"`{n}`" for n in self._required_primitives)
+            required_note = (
+                f"Your approach MUST use these primitives: {names}. "
+                f"They are essential for solving this environment."
+            )
         else:
-            primitives_desc = "`primitives` is an empty dict."
+            required_note = ""
 
         python_exe = sys.executable
         interface_spec = _INTERFACE_SPEC.format(
             python_executable=python_exe,
-            primitives_description=primitives_desc,
+            required_primitives_note=required_note,
         )
 
         if self._env_description_path is not None:
@@ -236,16 +222,17 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
 
         config = SandboxConfig(
             sandbox_dir=sandbox_dir,
+            init_files=init_files,
             output_filename="approach.py",
             prompt=prompt,
             system_prompt=_SYSTEM_PROMPT,
             model=self._model,
             max_budget_usd=self._max_budget_usd,
-            plan_mode=self._plan_mode,
         )
 
         # Write agent logs to a file in the sandbox directory.
         sandbox_logger = logging.getLogger("robocode.utils.sandbox")
+        sandbox_logger.setLevel(logging.DEBUG)
         log_path = sandbox_dir / "agent_log.txt"
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(

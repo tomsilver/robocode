@@ -18,6 +18,7 @@ TODO: Transition to Docker-based sandboxing for full filesystem isolation.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -82,9 +83,6 @@ _SANDBOX_SETTINGS: dict = {
     }
 }
 
-_PLAN_TOOLS = "Bash,Read,Glob,Grep"
-_EXECUTE_TOOLS = "Bash,Read,Write,Edit,Glob,Grep"
-
 
 @dataclass(frozen=True)
 class SandboxConfig:
@@ -97,8 +95,6 @@ class SandboxConfig:
     model: str = "sonnet"
     max_budget_usd: float = 5.0
     system_prompt: str = ""
-    plan_mode: bool = True
-    plan_budget_fraction: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -159,61 +155,6 @@ def _setup_sandbox(config: SandboxConfig) -> None:
     (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
 
 
-def _build_planning_prompt(original_prompt: str) -> str:
-    """Wrap the original prompt with instructions to produce a plan only."""
-    return (
-        "You are in a PLANNING phase. Read the environment source code "
-        "and produce TWO things: a strategy and a test curriculum. "
-        "Do NOT write any files.\n\n"
-        "First, read all relevant source files to understand the state "
-        "type, action space, reward structure, and dynamics. Pay "
-        "special attention to the state class — understand every field "
-        "and how to construct a state object directly.\n\n"
-        "Then output:\n\n"
-        "## Strategy\n"
-        "Briefly describe the algorithm you would implement and why.\n\n"
-        "## Curriculum\n"
-        "This is the most important part. Design 3-5 environment "
-        "states ordered from simple to complex. Each state is "
-        "constructed directly using the environment's state class "
-        "(the state object encodes both the configuration AND the "
-        "goal). For EACH state provide:\n"
-        "1. The exact Python code to construct the state object.\n"
-        "2. What the goal is in this state.\n"
-        "3. What the correct behavior / expected outcome is.\n"
-        "4. What aspect of the approach this tests.\n\n"
-        "Start with the simplest possible state (e.g., agent already "
-        "at the goal, or one step away with no obstacles) and "
-        "progressively increase difficulty.\n\n"
-        "IMPORTANT: Do NOT write any files. Only read and analyze, "
-        "then output your strategy and curriculum as text.\n\n"
-        "The environment you are analyzing is described by the "
-        "following task:\n\n"
-        f"{original_prompt}"
-    )
-
-
-def _build_execution_prompt(original_prompt: str, plan_text: str) -> str:
-    """Wrap the original prompt with the plan for execution."""
-    return (
-        "A planning agent analyzed the environment and produced a "
-        "strategy and test curriculum. Your job is to implement the "
-        "approach.\n\n"
-        "--- Plan ---\n"
-        f"{plan_text}\n\n"
-        "--- Task ---\n"
-        f"{original_prompt}\n\n"
-        "IMPORTANT: Start by writing the curriculum tests from the "
-        "plan above. Create a separate file for each curriculum "
-        "state: `test_curriculum_1.py`, `test_curriculum_2.py`, etc. "
-        "Each file constructs the concrete state object, runs the "
-        "approach on it, and checks the expected behavior. "
-        "Then implement the approach incrementally, getting each "
-        "curriculum test to pass in order (simplest first) before "
-        "moving to the next."
-    )
-
-
 @dataclass
 class _CliRunResult:
     """Internal result from a single CLI invocation."""
@@ -225,12 +166,107 @@ class _CliRunResult:
     total_cost: float | None
 
 
-def _run_cli_in_sandbox(
-    config: SandboxConfig,
-    prompt: str,
-    max_budget_usd: float,
-    tools: str,
-) -> _CliRunResult:
+class _ProgressTracker:
+    """Tracks agent progress through the 3-step workflow and logs updates.
+
+    Monitors the stream-json output for tool_use and tool_result events to detect when
+    curriculum test files are written, when tests pass, and when the integration test
+    runs.
+    """
+
+    def __init__(self) -> None:
+        self._current_stage = ""
+        self._plan_written = False
+        self._curriculum_files: list[str] = []
+        self._tests_passing: set[str] = set()
+        self._approach_written = False
+        self._integration_passed = False
+        # Map tool_use id -> (tool_name, tool_input) for correlating results.
+        self._pending: dict[str, tuple[str, dict]] = {}
+
+    def on_tool_use(self, block: dict) -> None:
+        """Process a tool_use block from an assistant message."""
+        tool_id = block.get("id", "")
+        name = block.get("name", "")
+        input_data = block.get("input", {})
+
+        if tool_id:
+            self._pending[tool_id] = (name, input_data)
+
+        if name in ("Write", "Edit"):
+            self._handle_write(input_data)
+
+    def on_tool_result(self, msg: dict) -> None:
+        """Process a tool_result message to detect test outcomes."""
+        tool_use_id = msg.get("tool_use_id", "")
+        tool_info = self._pending.pop(tool_use_id, None)
+        if tool_info is None:
+            return
+        name, input_data = tool_info
+
+        if name != "Bash":
+            return
+
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict)
+            )
+        is_error = msg.get("is_error", False)
+        self._handle_bash_result(input_data.get("command", ""), str(content), is_error)
+
+    def _handle_write(self, input_data: dict) -> None:
+        file_path = input_data.get("file_path", "")
+        basename = Path(file_path).name
+        if basename == "CLAUDE.md" and not self._plan_written:
+            self._plan_written = True
+            self._enter_stage("PLAN")
+            logger.info("  + Plan written to CLAUDE.md")
+        elif re.match(r"test_curriculum_\d+\.py", basename):
+            if basename not in self._curriculum_files:
+                self._curriculum_files.append(basename)
+                self._enter_stage("CURRICULUM")
+                logger.info("  + %s", basename)
+        elif basename == "approach.py" and not self._approach_written:
+            self._approach_written = True
+            self._enter_stage("IMPLEMENT")
+            logger.info("  + approach.py created")
+
+    def _handle_bash_result(self, cmd: str, content: str, is_error: bool) -> None:
+        if is_error:
+            return
+        has_failure = any(marker in content for marker in ("Traceback", "FAILED"))
+        if has_failure:
+            return
+
+        match = re.search(r"test_curriculum_(\d+)\.py", cmd)
+        if match:
+            test_file = f"test_curriculum_{match.group(1)}.py"
+            if test_file not in self._tests_passing:
+                self._tests_passing.add(test_file)
+                self._enter_stage("IMPLEMENT")
+                logger.info("  + %s passing", test_file)
+            return
+
+        if "integration" in cmd.lower():
+            if not self._integration_passed:
+                self._integration_passed = True
+                self._enter_stage("INTEGRATION")
+                logger.info("  + Integration test passing")
+
+    def _enter_stage(self, stage: str) -> None:
+        if stage != self._current_stage:
+            self._current_stage = stage
+            labels = {
+                "PLAN": "[STEP 0/3] Plan approach",
+                "CURRICULUM": "[STEP 1/3] Design test curriculum",
+                "IMPLEMENT": "[STEP 2/3] Implement approach",
+                "INTEGRATION": "[STEP 3/3] Integration test",
+            }
+            logger.info(labels[stage])
+
+
+def _run_cli_in_sandbox(config: SandboxConfig) -> _CliRunResult:
     """Run a single CLI invocation inside the sandbox directory."""
     claude_cmd = _get_claude_cmd()
     sandbox_abs = str(config.sandbox_dir.resolve())
@@ -238,36 +274,38 @@ def _run_cli_in_sandbox(
     cmd = [
         claude_cmd,
         "-p",
-        prompt,
+        config.prompt,
         "--output-format",
         "stream-json",
         "--verbose",
         "--model",
         config.model,
+        "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--tools",
-        tools,
+        "Bash,Read,Write,Edit,Glob,Grep",
         "--setting-sources",
         "project",
     ]
 
-    cmd.append("--dangerously-skip-permissions")
-
     if config.system_prompt:
         cmd += ["--system-prompt", config.system_prompt]
-    if max_budget_usd > 0:
-        cmd += ["--max-budget-usd", str(max_budget_usd)]
+    if config.max_budget_usd > 0:
+        cmd += ["--max-budget-usd", str(config.max_budget_usd)]
 
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
+
+    stderr_path = config.sandbox_dir / "agent_stderr.log"
+    stderr_file = open(stderr_path, "w", encoding="utf-8")  # noqa: SIM115
 
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         cmd,
         cwd=sandbox_abs,
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr_file,
         text=True,
     )
 
@@ -276,6 +314,7 @@ def _run_cli_in_sandbox(
     result_text = ""
     num_turns = 0
     total_cost: float | None = None
+    tracker = _ProgressTracker()
 
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -299,12 +338,14 @@ def _run_cli_in_sandbox(
                     if len(input_str) > 300:
                         input_str = input_str[:300] + "..."
                     logger.info("Tool call: %s(%s)", block.get("name"), input_str)
+                    tracker.on_tool_use(block)
 
         elif msg_type == "tool_result":
             content = msg.get("content", "")
             if isinstance(content, str) and len(content) > 500:
                 content = content[:500] + "..."
             logger.info("Tool result: %s", content)
+            tracker.on_tool_result(msg)
 
         elif msg_type == "result":
             is_error = msg.get("is_error", False)
@@ -315,11 +356,11 @@ def _run_cli_in_sandbox(
                 error_text = result_text or "Unknown error"
 
     proc.wait()
+    stderr_file.close()
 
-    assert proc.stderr is not None
-    stderr_output = proc.stderr.read()
     if proc.returncode != 0 and not is_error:
         is_error = True
+        stderr_output = stderr_path.read_text(encoding="utf-8")
         error_text = (
             stderr_output[:1000]
             if stderr_output
@@ -347,62 +388,10 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
 
     Initializes the sandbox with files, gives the agent a prompt via the Claude Code
     CLI, and retrieves the specified output file.
-
-    When plan_mode is enabled, runs two phases:
-    1. Plan phase (read-only): analyzes the environment and outputs a plan.
-    2. Execute phase (full tools): follows the plan to write the output file.
-
-    If the plan phase fails, falls back to single-phase execution.
     """
     _setup_sandbox(config)
 
-    if config.plan_mode:
-        plan_budget = config.max_budget_usd * config.plan_budget_fraction
-        execute_budget = config.max_budget_usd - plan_budget
-
-        logger.info(
-            "Plan mode: plan_budget=$%.2f, execute_budget=$%.2f",
-            plan_budget,
-            execute_budget,
-        )
-
-        plan_prompt = _build_planning_prompt(config.prompt)
-        plan_result = _run_cli_in_sandbox(
-            config,
-            plan_prompt,
-            plan_budget,
-            _PLAN_TOOLS,
-        )
-
-        if plan_result.is_error or not plan_result.result_text.strip():
-            logger.warning(
-                "Plan phase failed (error=%s), falling back to single-phase",
-                plan_result.error_text,
-            )
-            cli_result = _run_cli_in_sandbox(
-                config,
-                config.prompt,
-                execute_budget,
-                _EXECUTE_TOOLS,
-            )
-        else:
-            logger.info("Plan phase succeeded, proceeding to execution")
-            exec_prompt = _build_execution_prompt(
-                config.prompt, plan_result.result_text
-            )
-            cli_result = _run_cli_in_sandbox(
-                config,
-                exec_prompt,
-                execute_budget,
-                _EXECUTE_TOOLS,
-            )
-    else:
-        cli_result = _run_cli_in_sandbox(
-            config,
-            config.prompt,
-            config.max_budget_usd,
-            _EXECUTE_TOOLS,
-        )
+    cli_result = _run_cli_in_sandbox(config)
 
     if cli_result.is_error:
         return SandboxResult(

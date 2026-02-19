@@ -40,7 +40,9 @@ def test_env_runs_in_sandbox(tmp_path: Path) -> None:
 
     # Run a script in a subprocess that imports and exercises the env.
     script = sandbox / "run_env.py"
-    script.write_text(textwrap.dedent("""\
+    script.write_text(
+        textwrap.dedent(
+            """\
         import sys
         sys.path.insert(0, ".")
 
@@ -59,7 +61,9 @@ def test_env_runs_in_sandbox(tmp_path: Path) -> None:
         assert next_state_2 is not None
 
         print("OK")
-    """))
+    """
+        )
+    )
 
     result = subprocess.run(
         [sys.executable, "run_env.py"],
