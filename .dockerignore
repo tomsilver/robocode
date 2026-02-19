@@ -1,0 +1,40 @@
+# Exclude large runtime artifacts from the Docker build context.
+# The image installs its own .venv via uv sync --frozen.
+
+# Python virtual environments
+.venv/
+*/.venv/
+**/.venv/
+
+# Python byte-code and caches
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+**/*.egg-info/
+**/dist/
+**/build/
+
+# Experiment outputs
+outputs/
+multirun/
+
+# Git history (not needed in the image)
+.git/
+**/.git/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Integration test artifacts
+integration_tests/
