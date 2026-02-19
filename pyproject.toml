@@ -19,8 +19,10 @@ dependencies = [
    "relational-structs",
    "prpl_utils",
    "tomsgeoms2d",
-   "kinder[geom3d]",
+   "kinder[all]",
    "pybullet_helpers",
+   "types-shapely",
+   "scipy-stubs",
    "imageio",
 ]
 
@@ -64,11 +66,11 @@ warn_unreachable = true
 exclude = ["venv/*", ".venv/*", "outputs/*"]
 
 [tool.uv.sources]
-relational-structs = { path = "prpl-mono/relational-structs" }
-prpl_utils = { path = "prpl-mono/prpl-utils" }
-tomsgeoms2d = { path = "prpl-mono/toms-geoms-2d" }
-kinder = { path = "prpl-mono/kinder" }
-pybullet_helpers = { path = "prpl-mono/pybullet-helpers" }
+relational-structs = { path = "prpl-mono/relational-structs", editable = true }
+prpl_utils = { path = "prpl-mono/prpl-utils", editable = true }
+tomsgeoms2d = { path = "prpl-mono/toms-geoms-2d", editable = true }
+kinder = { path = "prpl-mono/kinder", editable = true }
+pybullet_helpers = { path = "prpl-mono/pybullet-helpers", editable = true }
 
 [[tool.mypy.overrides]]
 module = [
