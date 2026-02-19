@@ -8,7 +8,6 @@ import numpy as np
 from gymnasium.core import RenderFrame
 from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
-from relational_structs.spaces import ObjectCentricBoxSpace
 
 from robocode.environments.base_env import BaseEnv
 
@@ -102,11 +101,8 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         return self._current_obs.copy()
 
     def set_state(self, state: NDArray[Any]) -> None:
-        assert isinstance(self.observation_space, ObjectCentricBoxSpace)
-        obj_state = self.observation_space.devectorize(state)
-        inner = self._kinder_env._object_centric_env  # type: ignore[attr-defined]  # pylint: disable=protected-access
-        inner._current_state = obj_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
-        self._current_obs = state.copy()
+        obs, _ = self._kinder_env.reset(options={"init_state": state})
+        self._current_obs = obs
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
         return self._kinder_env.render()  # type: ignore[no-untyped-call]
