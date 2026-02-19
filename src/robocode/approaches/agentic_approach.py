@@ -27,6 +27,9 @@ _SYSTEM_PROMPT = (
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
     "your best current attempt at all times."
+    "Use the Task tool to explore source code in parallel — e.g. spawn "
+    "subagents to read environment dynamics, reward functions, and object "
+    "types simultaneously rather than sequentially."
 )
 
 _INTERFACE_SPEC = """\

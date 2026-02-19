@@ -175,7 +175,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--tools",
-        "Bash,Read,Write,Edit,Glob,Grep",
+        "Bash,Read,Write,Edit,Glob,Grep,Task",
         "--setting-sources",
         "project",
     ]
@@ -187,6 +187,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     # Strip CLAUDECODE env vars so the subprocess doesn't inherit parent
     # session state.
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
+    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
 
