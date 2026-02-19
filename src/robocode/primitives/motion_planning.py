@@ -10,6 +10,7 @@ import numpy as np
 __all__ = ["BiRRT", "RRT"]
 _RRTState = TypeVar("_RRTState")
 
+
 class RRT(Generic[_RRTState]):
     """Rapidly-exploring random tree."""
 
