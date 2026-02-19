@@ -190,12 +190,15 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
 
+    stderr_path = config.sandbox_dir / "agent_stderr.log"
+    stderr_file = open(stderr_path, "w", encoding="utf-8")  # noqa: SIM115
+
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         cmd,
         cwd=sandbox_abs,
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr_file,
         text=True,
     )
 
@@ -242,12 +245,11 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
                 error_text = msg.get("result", "Unknown error")
 
     proc.wait()
+    stderr_file.close()
 
-    # Check stderr for process-level errors.
-    assert proc.stderr is not None
-    stderr_output = proc.stderr.read()
     if proc.returncode != 0 and not is_error:
         is_error = True
+        stderr_output = stderr_path.read_text(encoding="utf-8")
         error_text = (
             stderr_output[:1000]
             if stderr_output
