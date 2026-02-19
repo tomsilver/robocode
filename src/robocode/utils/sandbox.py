@@ -175,7 +175,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--tools",
-        "Bash,Read,Write,Edit,Glob,Grep",
+        "Bash,Read,Write,Edit,Glob,Grep,Task",
         "--setting-sources",
         "project",
     ]
