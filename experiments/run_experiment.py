@@ -15,6 +15,7 @@ from numpy.typing import NDArray
 from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
 from robocode.primitives.render_state import render_state
@@ -91,10 +92,12 @@ def _main(cfg: DictConfig) -> float:
     all_primitives = {
         "check_action_collision": partial(check_action_collision, env),
         "render_state": partial(render_state, env),
+        "csp": csp_module,
         "BiRRT": BiRRT,
     }
     primitives = {name: all_primitives[name] for name in cfg.primitives}
 
+    required_primitives = list(cfg.get("required_primitives", []))
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
@@ -102,6 +105,7 @@ def _main(cfg: DictConfig) -> float:
         seed=cfg.seed,
         primitives=primitives,
         env_description_path=env_description_path,
+        required_primitives=required_primitives,
     )
 
     task_rng = np.random.default_rng(cfg.seed)
