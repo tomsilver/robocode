@@ -79,7 +79,8 @@ def _get_claude_oauth_token() -> str | None:
     ``CLAUDE_CODE_OAUTH_TOKEN`` environment variable, which the Claude CLI
     checks before any filesystem credential store.
     """
-    if sys.platform != "darwin":
+    platform: str = sys.platform
+    if platform != "darwin":
         return None
     try:
         result = subprocess.run(
