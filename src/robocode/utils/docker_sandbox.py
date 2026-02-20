@@ -46,10 +46,10 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from robocode.utils.sandbox import (
+from robocode.utils.sandbox import _SANDBOX_SETTINGS  # pylint: disable=protected-access
+from robocode.utils.sandbox import (  # pylint: disable=protected-access
+    _VALIDATE_SANDBOX_SCRIPT,
     SandboxResult,
-    _SANDBOX_SETTINGS,  # pylint: disable=protected-access
-    _VALIDATE_SANDBOX_SCRIPT,  # pylint: disable=protected-access
 )
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,7 @@ def _get_claude_oauth_token() -> str | None:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         if result.returncode != 0:
             return None
@@ -359,11 +360,22 @@ async def run_agent_in_docker_sandbox(
                         input_str = input_str[:300] + "..."
                     logger.info("Tool call: %s(%s)", block.get("name"), input_str)
 
-        elif msg_type == "tool_result":
-            content = msg.get("content", "")
-            if isinstance(content, str) and len(content) > 500:
-                content = content[:500] + "..."
-            logger.info("Tool result: %s", content)
+        elif msg_type == "user":
+            # Tool results come back as user-type messages in stream-json.
+            for item in msg.get("message", {}).get("content", []):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "tool_result":
+                    content = item.get("content", "")
+                    if isinstance(content, list):
+                        content = "\n".join(
+                            b.get("text", "")
+                            for b in content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    if isinstance(content, str) and len(content) > 500:
+                        content = content[:500] + "..."
+                    logger.info("Tool result: %s", content)
 
         elif msg_type == "result":
             is_error = msg.get("is_error", False)

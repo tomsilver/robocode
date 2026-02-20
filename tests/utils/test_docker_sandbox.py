@@ -30,9 +30,9 @@ from pathlib import Path
 import pytest
 
 from robocode.utils.docker_sandbox import (
+    _PRIMITIVES_SRC,
     DOCKER_PYTHON,
     DockerSandboxConfig,
-    _PRIMITIVES_SRC,
     _find_repo_root,
     _setup_sandbox_dir,
 )
@@ -52,6 +52,7 @@ def _image_available() -> bool:
             ["docker", "image", "inspect", _DOCKER_IMAGE],
             capture_output=True,
             timeout=10,
+            check=False,
         )
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -96,6 +97,7 @@ def _run_in_container(
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
 
@@ -113,7 +115,7 @@ def test_config_defaults() -> None:
     assert config.system_prompt == ""
     assert config.prompt == ""
     assert config.output_filename == ""
-    assert config.init_files == {}
+    assert not config.init_files
 
 
 def test_find_repo_root_has_pyproject() -> None:
@@ -175,9 +177,7 @@ def test_setup_copies_primitives(tmp_path: Path) -> None:
     primitives_dir = config.sandbox_dir / "primitives"
     assert primitives_dir.is_dir()
     copied = {f.name for f in primitives_dir.glob("*.py")}
-    expected = {
-        f.name for f in _PRIMITIVES_SRC.glob("*.py") if f.name != "__init__.py"
-    }
+    expected = {f.name for f in _PRIMITIVES_SRC.glob("*.py") if f.name != "__init__.py"}
     assert copied == expected
 
 
@@ -257,9 +257,7 @@ def test_container_primitives_files(tmp_path: Path) -> None:
     result = _run_in_container(config.sandbox_dir, "ls /sandbox/primitives/")
     assert result.returncode == 0, result.stderr
     listed = set(result.stdout.split())
-    expected = {
-        f.name for f in _PRIMITIVES_SRC.glob("*.py") if f.name != "__init__.py"
-    }
+    expected = {f.name for f in _PRIMITIVES_SRC.glob("*.py") if f.name != "__init__.py"}
     assert expected == listed
 
 
@@ -276,7 +274,7 @@ def test_container_venv_python_exists(tmp_path: Path) -> None:
 
 @requires_docker
 def test_container_venv_imports_core_packages(tmp_path: Path) -> None:
-    """numpy, gymnasium, and robocode are importable via the venv Python."""
+    """Numpy, gymnasium, and robocode are importable via the venv Python."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
     result = _run_in_container(
@@ -302,7 +300,7 @@ def test_container_prpl_mono_mounted(tmp_path: Path) -> None:
 
 @requires_docker
 def test_container_prpl_mono_importable(tmp_path: Path) -> None:
-    """prpl-mono packages (relational_structs) are importable via the venv."""
+    """Prpl-mono packages (relational_structs) are importable via the venv."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
     result = _run_in_container(
@@ -343,10 +341,11 @@ def test_container_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
     """validate_sandbox.py allows a Write tool call to a path inside /sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
-    result = _run_in_container(
-        config.sandbox_dir,
-        'echo \'{"tool_name": "Write", "tool_input": {"file_path": "/sandbox/approach.py"}}\' '
-        "| python3 /sandbox/.claude/validate_sandbox.py; echo exit=$?",
+    bash_cmd = (
+        'echo \'{"tool_name": "Write", '
+        '"tool_input": {"file_path": "/sandbox/approach.py"}}\''
+        " | python3 /sandbox/.claude/validate_sandbox.py; echo exit=$?"
     )
+    result = _run_in_container(config.sandbox_dir, bash_cmd)
     assert "exit=0" in result.stdout
     assert "deny" not in result.stdout
