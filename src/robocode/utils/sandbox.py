@@ -105,73 +105,67 @@ class SandboxResult:
     error: str | None
 
 
-def _is_path_within_sandbox(path_str: str, sandbox_dir: Path) -> bool:
-    """Check whether a resolved path is within the sandbox directory."""
-    try:
-        resolved = Path(path_str).resolve()
-        sandbox_resolved = sandbox_dir.resolve()
-        return resolved == sandbox_resolved or sandbox_resolved in resolved.parents
-    except (OSError, ValueError):
-        return False
+@dataclass(frozen=True)
+class _StreamParseResult:
+    """Intermediate result from parsing Claude CLI stream-json output."""
+
+    is_error: bool
+    error_text: str | None
+    num_turns: int
+    total_cost: float | None
 
 
-def _get_claude_cmd() -> str:
-    """Return the claude CLI command, respecting ROBOCODE_CLAUDE_CMD."""
-    return os.environ.get("ROBOCODE_CLAUDE_CMD", "claude")
+# ---------------------------------------------------------------------------
+# Shared helpers (used by both sandbox.py and docker_sandbox.py)
+# ---------------------------------------------------------------------------
 
 
-async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
-    """Run a Claude agent in a sandboxed working directory.
+def _setup_sandbox_common(
+    sandbox_dir: Path, init_files: dict[str, Path]
+) -> None:
+    """Create sandbox directory, copy init files, git init, and install hooks.
 
-    Initializes the sandbox with files, gives the agent a prompt via the Claude Code
-    CLI, and retrieves the specified output file.
+    Does NOT write ``CLAUDE.md`` — callers should write their own variant
+    after calling this function.
     """
-    config.sandbox_dir.mkdir(parents=True, exist_ok=True)
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
 
-    for dest_name, source_path in config.init_files.items():
-        dest = config.sandbox_dir / dest_name
+    for dest_name, source_path in init_files.items():
+        dest = sandbox_dir / dest_name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, dest)
 
-    # Initialize a git repo so the CLI treats the sandbox as the project
-    # root and doesn't walk up to the real repo.
-    if not (config.sandbox_dir / ".git" / "HEAD").exists():
+    if not (sandbox_dir / ".git" / "HEAD").exists():
         subprocess.run(
             ["git", "init"],
-            cwd=str(config.sandbox_dir),
+            cwd=str(sandbox_dir),
             check=True,
             capture_output=True,
         )
 
-    # Write a CLAUDE.md that instructs the agent to keep files in the
-    # sandbox.  The CLI automatically reads this from the project root.
-    claude_md = config.sandbox_dir / "CLAUDE.md"
-    if not claude_md.exists():
-        claude_md.write_text(
-            "All files you create MUST use relative paths so they "
-            "stay in the current working directory. Never write files "
-            "using absolute paths.\n"
-        )
-
-    # Install a PreToolUse hook that blocks Write/Edit outside the sandbox.
-    claude_dir = config.sandbox_dir / ".claude"
+    claude_dir = sandbox_dir / ".claude"
     claude_dir.mkdir(exist_ok=True)
     (claude_dir / "settings.json").write_text(
         json.dumps(_SANDBOX_SETTINGS, indent=2) + "\n"
     )
     (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
 
-    claude_cmd = _get_claude_cmd()
-    sandbox_abs = str(config.sandbox_dir.resolve())
-    cmd = [
-        claude_cmd,
+
+def _build_claude_cli_args(
+    prompt: str,
+    model: str,
+    system_prompt: str,
+    max_budget_usd: float,
+) -> list[str]:
+    """Build the common Claude CLI arguments (excluding the binary itself)."""
+    args = [
         "-p",
-        config.prompt,
+        prompt,
         "--output-format",
         "stream-json",
         "--verbose",
         "--model",
-        config.model,
+        model,
         "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--tools",
@@ -179,27 +173,32 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         "--setting-sources",
         "project",
     ]
-    if config.system_prompt:
-        cmd += ["--system-prompt", config.system_prompt]
-    if config.max_budget_usd > 0:
-        cmd += ["--max-budget-usd", str(config.max_budget_usd)]
+    if system_prompt:
+        args += ["--system-prompt", system_prompt]
+    if max_budget_usd > 0:
+        args += ["--max-budget-usd", str(max_budget_usd)]
+    return args
 
-    # Strip CLAUDECODE env vars so the subprocess doesn't inherit parent
-    # session state.
+
+def _build_sandbox_env(
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a clean environment dict, stripping ``CLAUDECODE*`` vars."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
     env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
+    if extra:
+        env.update(extra)
+    return env
 
-    logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
 
-    proc = subprocess.Popen(  # pylint: disable=consider-using-with
-        cmd,
-        cwd=sandbox_abs,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+def _parse_claude_stream(
+    proc: subprocess.Popen[str],
+) -> _StreamParseResult:
+    """Parse ``stream-json`` stdout from a Claude CLI process and wait for exit.
 
+    Logs assistant messages, tool calls, and tool results as they arrive.
+    After the process exits, checks stderr for errors.
+    """
     is_error = False
     error_text: str | None = None
     num_turns = 0
@@ -219,7 +218,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         msg_type = msg.get("type", "")
 
         if msg_type == "assistant":
-            # Log text content from assistant messages.
             for block in msg.get("message", {}).get("content", []):
                 if block.get("type") == "text":
                     logger.info("Agent: %s", block["text"])
@@ -244,7 +242,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
 
     proc.wait()
 
-    # Check stderr for process-level errors.
     assert proc.stderr is not None
     stderr_output = proc.stderr.read()
     if proc.returncode != 0 and not is_error:
@@ -252,28 +249,95 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         error_text = (
             stderr_output[:1000]
             if stderr_output
-            else f"CLI exited with code {proc.returncode}"
+            else f"Process exited with code {proc.returncode}"
         )
 
-    logger.info(
-        "Session done: turns=%d, cost=$%s, error=%s",
-        num_turns,
-        total_cost,
-        is_error,
+    return _StreamParseResult(
+        is_error=is_error,
+        error_text=error_text,
+        num_turns=num_turns,
+        total_cost=total_cost,
     )
 
-    if is_error:
-        return SandboxResult(
-            success=False,
-            output_file=None,
-            error=error_text,
-        )
 
-    output_path = config.sandbox_dir / config.output_filename
+def _stream_result_to_sandbox_result(
+    stream: _StreamParseResult,
+    sandbox_dir: Path,
+    output_filename: str,
+) -> SandboxResult:
+    """Convert a :class:`_StreamParseResult` to a :class:`SandboxResult`."""
+    if stream.is_error:
+        return SandboxResult(success=False, output_file=None, error=stream.error_text)
+
+    output_path = sandbox_dir / output_filename
     if output_path.exists():
         return SandboxResult(success=True, output_file=output_path, error=None)
     return SandboxResult(
         success=False,
         output_file=None,
-        error=f"Output file not found: {config.output_filename}",
+        error=f"Output file not found: {output_filename}",
+    )
+
+
+def _is_path_within_sandbox(path_str: str, sandbox_dir: Path) -> bool:
+    """Check whether a resolved path is within the sandbox directory."""
+    try:
+        resolved = Path(path_str).resolve()
+        sandbox_resolved = sandbox_dir.resolve()
+        return resolved == sandbox_resolved or sandbox_resolved in resolved.parents
+    except (OSError, ValueError):
+        return False
+
+
+def _get_claude_cmd() -> str:
+    """Return the claude CLI command, respecting ROBOCODE_CLAUDE_CMD."""
+    return os.environ.get("ROBOCODE_CLAUDE_CMD", "claude")
+
+
+async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
+    """Run a Claude agent in a sandboxed working directory.
+
+    Initializes the sandbox with files, gives the agent a prompt via the Claude Code
+    CLI, and retrieves the specified output file.
+    """
+    _setup_sandbox_common(config.sandbox_dir, config.init_files)
+
+    # Write a CLAUDE.md that instructs the agent to keep files in the sandbox.
+    claude_md = config.sandbox_dir / "CLAUDE.md"
+    if not claude_md.exists():
+        claude_md.write_text(
+            "All files you create MUST use relative paths so they "
+            "stay in the current working directory. Never write files "
+            "using absolute paths.\n"
+        )
+
+    claude_cmd = _get_claude_cmd()
+    cmd = [claude_cmd] + _build_claude_cli_args(
+        config.prompt, config.model, config.system_prompt, config.max_budget_usd
+    )
+    env = _build_sandbox_env()
+    sandbox_abs = str(config.sandbox_dir.resolve())
+
+    logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
+
+    proc = subprocess.Popen(  # pylint: disable=consider-using-with
+        cmd,
+        cwd=sandbox_abs,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    stream = _parse_claude_stream(proc)
+
+    logger.info(
+        "Session done: turns=%d, cost=$%s, error=%s",
+        stream.num_turns,
+        stream.total_cost,
+        stream.is_error,
+    )
+
+    return _stream_result_to_sandbox_result(
+        stream, config.sandbox_dir, config.output_filename
     )
