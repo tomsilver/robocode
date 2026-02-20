@@ -158,7 +158,7 @@ The `agentic` approach launches a Claude agent during `train()`. The agent reads
 
 By default the agent runs in the Docker sandbox (requires `bash docker/build.sh` once):
 ```bash
-python experiments/run_experiment.py approach=agentic environment=small_maze
+python experiments/run_experiment.py approach=agentic environment=motion2d_easy
 ```
 
 To use the legacy OS-level sandbox instead:
