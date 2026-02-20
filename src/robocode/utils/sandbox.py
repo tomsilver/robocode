@@ -217,7 +217,9 @@ def _parse_claude_stream(
 
         if msg_type == "assistant":
             for block in msg.get("message", {}).get("content", []):
-                if block.get("type") == "text":
+                if block.get("type") == "thinking":
+                    logger.info("Thinking: %s", block.get("thinking", ""))
+                elif block.get("type") == "text":
                     logger.info("Agent: %s", block["text"])
                 elif block.get("type") == "tool_use":
                     input_str = json.dumps(block.get("input", {}))
