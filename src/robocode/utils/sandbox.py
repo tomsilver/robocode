@@ -120,9 +120,7 @@ class _StreamParseResult:
 # ---------------------------------------------------------------------------
 
 
-def _setup_sandbox_common(
-    sandbox_dir: Path, init_files: dict[str, Path]
-) -> None:
+def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> None:
     """Create sandbox directory, copy init files, git init, and install hooks.
 
     Does NOT write ``CLAUDE.md`` — callers should write their own variant
@@ -196,8 +194,8 @@ def _parse_claude_stream(
 ) -> _StreamParseResult:
     """Parse ``stream-json`` stdout from a Claude CLI process and wait for exit.
 
-    Logs assistant messages, tool calls, and tool results as they arrive.
-    After the process exits, checks stderr for errors.
+    Logs assistant messages, tool calls, and tool results as they arrive. After the
+    process exits, checks stderr for errors.
     """
     is_error = False
     error_text: str | None = None
