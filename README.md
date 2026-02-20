@@ -118,6 +118,19 @@ The agent runs inside a Docker container (`robocode-sandbox`) that provides full
 | `/robocode/.venv/bin/python` | Python 3.11 with all robocode dependencies pre-installed |
 | `/robocode/prpl-mono/` | Third-party packages, bind-mounted read-only from the host submodule |
 
+### Start docker
+
+#### Mac OS
+
+Simply open the Docker Desktop application.
+Look for the status indicator in the bottom-left corner of the GUI; it should say "Docker Engine Running".
+
+#### Linux
+```
+sudo systemctl start docker
+sudo systemctl enable docker
+```
+
 ### Building the image
 
 Build once from the repo root (rebuild when `pyproject.toml` / `uv.lock` change; not needed for `prpl-mono` code changes):
