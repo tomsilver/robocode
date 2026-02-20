@@ -7,6 +7,11 @@ provides:
   (the bind-mounted output directory); host paths are unreachable.
 * **Network restriction** — ``init-firewall.sh`` whitelists only
   ``api.anthropic.com``, GitHub, and Claude telemetry endpoints.
+* **Claude Code CLI auth** — on macOS the OAuth access token is extracted
+  from the Keychain (service ``"Claude Code-credentials"``) and forwarded
+  as ``CLAUDE_CODE_OAUTH_TOKEN``; on other platforms the host ``~/.claude``
+  directory is bind-mounted so the CLI authenticates via the existing
+  ``claude login`` session.
 * **Reproducible Python environment** — all robocode dependencies are
   pre-installed in ``/robocode/.venv`` via ``uv sync --frozen``.
 * **Primitive source files** — ``src/robocode/primitives/*.py`` are copied
@@ -36,6 +41,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +62,41 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
+
+
+def _get_claude_oauth_token() -> str | None:
+    """Extract the Claude Code OAuth access token from the macOS Keychain.
+
+    Returns ``None`` on non-macOS platforms or when the token cannot be
+    found or parsed.  On macOS, ``claude login`` stores credentials in the
+    Keychain under the service name ``"Claude Code-credentials"`` as a JSON
+    object with key ``claudeAiOauth.accessToken``.
+
+    The returned token is forwarded to the container via the
+    ``CLAUDE_CODE_OAUTH_TOKEN`` environment variable, which the Claude CLI
+    checks before any filesystem credential store.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        creds = json.loads(result.stdout.strip())
+        return creds.get("claudeAiOauth", {}).get("accessToken")
+    except (subprocess.SubprocessError, json.JSONDecodeError, KeyError):
+        return None
 
 
 def _find_repo_root() -> Path:
@@ -162,6 +203,10 @@ async def run_agent_in_docker_sandbox(
     3. Launches ``docker run`` with:
 
        * ``--cap-add=NET_ADMIN --cap-add=NET_RAW`` for the iptables firewall
+       * ``-e CLAUDE_CODE_OAUTH_TOKEN`` — OAuth access token extracted from
+         the macOS Keychain (``claude login``) so the CLI authenticates
+         without an ``ANTHROPIC_API_KEY``; on non-macOS platforms the host
+         ``~/.claude`` directory is bind-mounted as a fallback
        * ``-v <sandbox_dir>:/sandbox`` (writable bind-mount)
        * ``-v <prpl_mono>:/robocode/prpl-mono:ro`` (read-only bind-mount)
        * ``-w /sandbox`` as the working directory
@@ -197,6 +242,25 @@ async def run_agent_in_docker_sandbox(
     prpl_mono_abs = str(prpl_mono.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
+    # --- Authentication ---
+    # On macOS, claude login stores credentials in the Keychain (not as files).
+    # Extract the OAuth access token and pass it via CLAUDE_CODE_OAUTH_TOKEN,
+    # which the CLI checks before any filesystem credential store.
+    # On other platforms, bind-mount ~/.claude as a fallback.
+    oauth_token = _get_claude_oauth_token()
+    if oauth_token:
+        logger.debug("Using OAuth token from macOS Keychain for container auth.")
+    else:
+        logger.warning(
+            "No Claude OAuth token found in Keychain; "
+            "falling back to ~/.claude bind-mount. "
+            "Run `claude login` on the host if the container cannot authenticate."
+        )
+
+    host_claude_cfg = Path(
+        os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
+    )
+
     docker_cmd = [
         "docker",
         "run",
@@ -205,11 +269,19 @@ async def run_agent_in_docker_sandbox(
         container_name,
         "--cap-add=NET_ADMIN",
         "--cap-add=NET_RAW",
-        # Pass the API key by name so it is not exposed in the process list.
-        "-e",
-        "ANTHROPIC_API_KEY",
         "-e",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000",
+    ]
+
+    if oauth_token:
+        # Pass by env-var name so the token value is not exposed in the
+        # process list (Docker reads it from the inherited environment).
+        docker_cmd += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
+    else:
+        # Non-macOS fallback: bind-mount the host ~/.claude directory.
+        docker_cmd += ["-v", f"{host_claude_cfg}:/home/node/.claude"]
+
+    docker_cmd += [
         "-v",
         f"{sandbox_abs}:/sandbox",
         "-v",
@@ -238,9 +310,11 @@ async def run_agent_in_docker_sandbox(
         docker_cmd += ["--max-budget-usd", str(config.max_budget_usd)]
 
     # Strip CLAUDECODE* vars so the container does not inherit parent-session
-    # state; all other env vars (including ANTHROPIC_API_KEY) are passed
-    # through so that `-e ANTHROPIC_API_KEY` above picks up the value.
+    # state.  If we extracted an OAuth token above, inject it so Docker can
+    # pick it up via `-e CLAUDE_CODE_OAUTH_TOKEN` (pass-by-name).
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
+    if oauth_token:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
 
     logger.info(
         "Starting Docker sandbox: container=%s image=%s sandbox=%s",

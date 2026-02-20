@@ -3,4 +3,4 @@ model: sonnet
 max_budget_usd: 5.0
 output_dir: ${hydra:runtime.output_dir}
 load_dir: null
-use_docker: false
+use_docker: true

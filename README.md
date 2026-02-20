@@ -95,16 +95,42 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 ## TODO
 
 - [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_medium` and understand why it doesn't work that well
-- [ ] Fix sandbox: transition to Docker-based sandboxing for full filesystem isolation (see [Sandbox](#sandbox) for details)
 - [ ] Ensure that experiment seeds cannot be guessed by agent in sandbox
 
 ## Sandbox
 
-The `robocode.sandbox` module runs a Claude agent via the Claude Code CLI in a restricted working directory. The agent can use Bash, Read, Write, Edit, Glob, and Grep tools. The CLI's `--dangerously-skip-permissions` flag enables OS-level sandboxing (macOS Seatbelt / Linux bubblewrap) which restricts filesystem writes to the working directory.
+The agent runs inside a Docker container (`robocode-sandbox`) that provides full filesystem isolation, a restricted network, and a pre-built Python environment.
 
-**Known limitation:** The OS-level sandbox restricts filesystem *writes* but allows *reads* of the entire filesystem. Bash commands like `cat /etc/passwd` or Python's `open()` can read files outside the sandbox. This will be addressed by transitioning to Docker-based sandboxing.
+### Security model
 
-Red team the sandbox:
+| Layer | Mechanism |
+|---|---|
+| Filesystem | Docker bind-mount: agent can only write to `/sandbox` (the run's output dir) |
+| Network | `init-firewall.sh` whitelists `api.anthropic.com`, GitHub IPs, and Claude telemetry; blocks everything else via iptables |
+| Write hook | `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox` |
+
+### What the agent sees
+
+| Path | Contents |
+|---|---|
+| `/sandbox/` | Working directory — agent writes `approach.py`, test scripts, etc. here |
+| `/sandbox/primitives/` | Source files from `src/robocode/primitives/` (read reference) |
+| `/robocode/.venv/bin/python` | Python 3.11 with all robocode dependencies pre-installed |
+| `/robocode/prpl-mono/` | Third-party packages, bind-mounted read-only from the host submodule |
+
+### Building the image
+
+Build once from the repo root (rebuild when `pyproject.toml` / `uv.lock` change; not needed for `prpl-mono` code changes):
+
+```bash
+bash docker/build.sh
+```
+
+### Using the OS-level sandbox (legacy)
+
+The original macOS Seatbelt / Linux bubblewrap sandbox is still available (`use_docker: false` in `agentic.yaml`) but has a known limitation: it restricts filesystem *writes* but allows *reads* of the entire host filesystem.
+
+Red team the OS-level sandbox:
 ```bash
 python integration_tests/red_team_sandbox.py
 ```
@@ -128,11 +154,30 @@ python experiments/analyze_results.py multirun/
 
 ### Agentic approach
 
-The `agentic` approach launches a sandboxed Claude agent during training. The agent reads the environment source code, figures out the state/action space and dynamics, and writes an approach class that is used at evaluation time. The agent can also write and run test scripts to verify its solution.
+The `agentic` approach launches a Claude agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.
 
+By default the agent runs in the Docker sandbox (requires `bash docker/build.sh` once):
 ```bash
 python experiments/run_experiment.py approach=agentic environment=small_maze
 ```
+
+To use the legacy OS-level sandbox instead:
+```bash
+python experiments/run_experiment.py approach=agentic environment=small_maze approach.use_docker=false
+```
+
+To skip re-generation and load a previously generated approach:
+```bash
+python experiments/run_experiment.py approach=agentic environment=small_maze \
+    approach.load_dir=outputs/2026-02-16/16-00-41
+```
+
+Parallel sweeps each get their own container (named `robocode-sandbox-<uuid>`), so multiple runs never interfere:
+```bash
+python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_maze approach=agentic
+```
+
+The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
 
 On `small_maze`, the agent independently discovered A* pathfinding and achieved a **100% solve rate with optimal path lengths** (mean 2.3 steps across 10 episodes):
 
