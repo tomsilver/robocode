@@ -43,10 +43,11 @@ import shutil
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from robocode.utils.sandbox import (
+    SandboxConfig,
     SandboxResult,
     _build_claude_cli_args,
     _build_sandbox_env,
@@ -116,21 +117,13 @@ def _find_repo_root() -> Path:
 
 
 @dataclass(frozen=True)
-class DockerSandboxConfig:
+class DockerSandboxConfig(SandboxConfig):
     """Configuration for a Docker-sandboxed Claude agent run.
 
-    Mirrors :class:`~robocode.utils.sandbox.SandboxConfig` but adds
-    ``docker_image`` and automatically copies primitive source files into the
-    sandbox directory.
+    Extends :class:`~robocode.utils.sandbox.SandboxConfig` with
+    ``docker_image`` for Docker-based sandboxing.
     """
 
-    sandbox_dir: Path
-    init_files: dict[str, Path] = field(default_factory=dict)
-    prompt: str = ""
-    output_filename: str = ""
-    model: str = "sonnet"
-    max_budget_usd: float = 5.0
-    system_prompt: str = ""
     docker_image: str = _DEFAULT_IMAGE
 
 
@@ -213,7 +206,7 @@ async def run_agent_in_docker_sandbox(
     repo_root = _find_repo_root()
     prpl_mono = repo_root / "prpl-mono"
     if not prpl_mono.exists():
-        logger.warning(
+        raise RuntimeError(
             "prpl-mono not found at %s; "
             "run: git submodule update --init --recursive",
             prpl_mono,
@@ -225,9 +218,7 @@ async def run_agent_in_docker_sandbox(
 
     # --- Authentication ---
     oauth_token = _get_claude_oauth_token()
-    if oauth_token:
-        logger.debug("Using OAuth token from macOS Keychain for container auth.")
-    else:
+    if not oauth_token:
         logger.warning(
             "No Claude OAuth token found in Keychain; "
             "falling back to ~/.claude bind-mount. "
