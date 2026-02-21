@@ -188,6 +188,18 @@ def test_setup_no_dunder_init_in_primitives(tmp_path: Path) -> None:
     assert not (config.sandbox_dir / "primitives" / "__init__.py").exists()
 
 
+def test_setup_skips_primitives_when_disabled(tmp_path: Path) -> None:
+    """When copy_primitives=False, no primitives/ directory is created."""
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox", copy_primitives=False
+    )
+    _setup_sandbox_dir(config)
+    assert not (config.sandbox_dir / "primitives").exists()
+    # CLAUDE.md should not mention primitives.
+    claude_md = config.sandbox_dir / "CLAUDE.md"
+    assert "primitives" not in claude_md.read_text()
+
+
 def test_setup_copies_init_files(tmp_path: Path) -> None:
     """Caller-supplied init_files are copied into the sandbox."""
     source = tmp_path / "hello.txt"

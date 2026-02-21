@@ -125,6 +125,7 @@ class DockerSandboxConfig(SandboxConfig):
     """
 
     docker_image: str = _DEFAULT_IMAGE
+    copy_primitives: bool = True
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -144,25 +145,31 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
     """
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
 
-    # Copy primitive source files (always overwrite to stay current).
-    primitives_dest = config.sandbox_dir / "primitives"
-    primitives_dest.mkdir(exist_ok=True)
-    for py_file in _PRIMITIVES_SRC.glob("*.py"):
-        if py_file.name != "__init__.py":
-            shutil.copy2(py_file, primitives_dest / py_file.name)
+    # Copy primitive source files only when requested.
+    if config.copy_primitives:
+        primitives_dest = config.sandbox_dir / "primitives"
+        primitives_dest.mkdir(exist_ok=True)
+        for py_file in _PRIMITIVES_SRC.glob("*.py"):
+            if py_file.name != "__init__.py":
+                shutil.copy2(py_file, primitives_dest / py_file.name)
 
     # CLAUDE.md — written once; describes the Docker environment.
     claude_md = config.sandbox_dir / "CLAUDE.md"
     if not claude_md.exists():
-        claude_md.write_text(
+        claude_md_text = (
             "All files you create MUST use relative paths so they stay in "
             "the current working directory (/sandbox). Never write files "
             "using absolute paths.\n\n"
             f"The Python interpreter is at {DOCKER_PYTHON}\n"
             "Run test scripts with:\n"
-            f"    {DOCKER_PYTHON} test_approach.py\n\n"
-            "Primitive source files (for reference) are in ./primitives/\n"
+            f"    {DOCKER_PYTHON} test_approach.py\n"
         )
+        if config.copy_primitives:
+            claude_md_text += (
+                "\nPrimitive source files (for reference) are in "
+                "./primitives/\n"
+            )
+        claude_md.write_text(claude_md_text)
 
 
 async def run_agent_in_docker_sandbox(

@@ -239,6 +239,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=_SYSTEM_PROMPT,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                copy_primitives=bool(self._primitives),
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         else:
