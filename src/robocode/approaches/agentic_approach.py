@@ -10,6 +10,11 @@ from typing import Any, TypeVar
 from gymnasium.spaces import Space
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.docker_sandbox import (
+    DOCKER_PYTHON,
+    DockerSandboxConfig,
+    run_agent_in_docker_sandbox,
+)
 from robocode.utils.sandbox import SandboxConfig, run_agent_in_sandbox
 
 logger = logging.getLogger(__name__)
@@ -164,6 +169,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         output_dir: str = ".",
         load_dir: str | None = None,
         required_primitives: list[str] | None = None,
+        use_docker: bool = False,
     ) -> None:
         super().__init__(
             action_space,
@@ -177,6 +183,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._required_primitives = required_primitives or []
+        self._use_docker = use_docker
         self._generated: Any = None
 
     def train(self) -> None:
@@ -210,7 +217,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             primitives_desc = "`primitives` is an empty dict."
 
-        python_exe = sys.executable
+        python_exe = DOCKER_PYTHON if self._use_docker else sys.executable
         interface_spec = _INTERFACE_SPEC.format(
             python_executable=python_exe,
             primitives_description=primitives_desc,
@@ -224,17 +231,28 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
 
-        config = SandboxConfig(
-            sandbox_dir=sandbox_dir,
-            output_filename="approach.py",
-            prompt=prompt,
-            system_prompt=_SYSTEM_PROMPT,
-            model=self._model,
-            max_budget_usd=self._max_budget_usd,
-        )
+        if self._use_docker:
+            docker_config = DockerSandboxConfig(
+                sandbox_dir=sandbox_dir,
+                output_filename="approach.py",
+                prompt=prompt,
+                system_prompt=_SYSTEM_PROMPT,
+                model=self._model,
+                max_budget_usd=self._max_budget_usd,
+            )
+            sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
+        else:
+            config = SandboxConfig(
+                sandbox_dir=sandbox_dir,
+                output_filename="approach.py",
+                prompt=prompt,
+                system_prompt=_SYSTEM_PROMPT,
+                model=self._model,
+                max_budget_usd=self._max_budget_usd,
+            )
+            sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
         # Write agent logs to a file in the sandbox directory.
-        sandbox_logger = logging.getLogger("robocode.utils.sandbox")
         log_path = sandbox_dir / "agent_log.txt"
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(
@@ -242,7 +260,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         )
         sandbox_logger.addHandler(file_handler)
         try:
-            result = asyncio.run(run_agent_in_sandbox(config))
+            if self._use_docker:
+                result = asyncio.run(run_agent_in_docker_sandbox(docker_config))
+            else:
+                result = asyncio.run(run_agent_in_sandbox(config))
         finally:
             sandbox_logger.removeHandler(file_handler)
             file_handler.close()
