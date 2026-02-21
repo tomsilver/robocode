@@ -207,9 +207,8 @@ async def run_agent_in_docker_sandbox(
     prpl_mono = repo_root / "prpl-mono"
     if not prpl_mono.exists():
         raise RuntimeError(
-            "prpl-mono not found at %s; "
-            "run: git submodule update --init --recursive",
-            prpl_mono,
+            f"prpl-mono not found at {prpl_mono}; "
+            "run: git submodule update --init --recursive"
         )
 
     sandbox_abs = str(config.sandbox_dir.resolve())
