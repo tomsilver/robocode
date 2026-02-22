@@ -67,6 +67,15 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
 
+# Mapping from primitive name (as used in the primitives dict) to the source
+# file basename (without .py) under ``src/robocode/primitives/``.
+_PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
+    "check_action_collision": "check_action_collision",
+    "render_state": "render_state",
+    "csp": "csp",
+    "BiRRT": "motion_planning",
+}
+
 
 def _get_claude_oauth_token() -> str | None:
     """Extract the Claude Code OAuth access token from the macOS Keychain.
@@ -121,11 +130,12 @@ class DockerSandboxConfig(SandboxConfig):
     """Configuration for a Docker-sandboxed Claude agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with
-    ``docker_image`` for Docker-based sandboxing.
+    ``docker_image`` for Docker-based sandboxing and ``primitive_names``
+    to control which primitive source files are copied into the sandbox.
     """
 
     docker_image: str = _DEFAULT_IMAGE
-    copy_primitives: bool = True
+    primitive_names: tuple[str, ...] = ()
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -145,13 +155,20 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
     """
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
 
-    # Copy primitive source files only when requested.
-    if config.copy_primitives:
+    # Copy only the primitive source files that were provided.
+    if config.primitive_names:
         primitives_dest = config.sandbox_dir / "primitives"
         primitives_dest.mkdir(exist_ok=True)
-        for py_file in _PRIMITIVES_SRC.glob("*.py"):
-            if py_file.name != "__init__.py":
-                shutil.copy2(py_file, primitives_dest / py_file.name)
+        for name in config.primitive_names:
+            file_stem = _PRIMITIVE_NAME_TO_FILE.get(name)
+            if file_stem is None:
+                logger.warning("No source file mapping for primitive %r", name)
+                continue
+            src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
+            if src_file.exists():
+                shutil.copy2(src_file, primitives_dest / src_file.name)
+            else:
+                raise RuntimeError(f"Primitive source file not found: {src_file}")
 
     # CLAUDE.md — written once; describes the Docker environment.
     claude_md = config.sandbox_dir / "CLAUDE.md"
@@ -164,7 +181,7 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
             "Run test scripts with:\n"
             f"    {DOCKER_PYTHON} test_approach.py\n"
         )
-        if config.copy_primitives:
+        if config.primitive_names:
             claude_md_text += (
                 "\nPrimitive source files (for reference) are in " "./primitives/\n"
             )

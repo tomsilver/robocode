@@ -168,7 +168,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         max_budget_usd: float = 5.0,
         output_dir: str = ".",
         load_dir: str | None = None,
-        required_primitives: list[str] | None = None,
         use_docker: bool = False,
     ) -> None:
         super().__init__(
@@ -182,7 +181,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._max_budget_usd = max_budget_usd
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
-        self._required_primitives = required_primitives or []
         self._use_docker = use_docker
         self._generated: Any = None
 
@@ -206,14 +204,13 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 desc = _PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
                 lines.append(f"- {desc}")
             primitives_desc = "\n".join(lines)
-            if self._required_primitives:
-                names = ", ".join(f"`{n}`" for n in self._required_primitives)
-                primitives_desc += (
-                    f"\n\nIMPORTANT: Your approach MUST use the following "
-                    f"primitives: {names}. These are essential for solving "
-                    f"this environment. Read their descriptions above and "
-                    f"integrate them into your solution."
-                )
+            names = ", ".join(f"`{n}`" for n in sorted(self._primitives))
+            primitives_desc += (
+                f"\n\nIMPORTANT: Your approach MUST use the following "
+                f"primitives: {names}. These are essential for solving "
+                f"this environment. Read their descriptions above and "
+                f"integrate them into your solution."
+            )
         else:
             primitives_desc = "`primitives` is an empty dict."
 
@@ -239,7 +236,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=_SYSTEM_PROMPT,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
-                copy_primitives=bool(self._primitives),
+                primitive_names=tuple(self._primitives),
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         else:
