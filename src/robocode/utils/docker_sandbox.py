@@ -166,8 +166,7 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
         )
         if config.copy_primitives:
             claude_md_text += (
-                "\nPrimitive source files (for reference) are in "
-                "./primitives/\n"
+                "\nPrimitive source files (for reference) are in " "./primitives/\n"
             )
         claude_md.write_text(claude_md_text)
 
