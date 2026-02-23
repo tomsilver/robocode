@@ -144,10 +144,17 @@ but it does NOT need to be adaptable to different other environments.
 {env_description}
 
 BEFORE writing any code, you MUST first reason in detail about the geometry of this environment. \
-Think carefully and qualitatively about spatial relationships, shapes, motions, and constraints. \
-Your geometric reasoning must be PURELY QUALITATIVE — NEVER mention any specific numbers, \
-coordinates, distances, angles, dimensions, thresholds, or numeric constants. Instead, reason \
-about the geometric structure in abstract, relational terms.
+Think carefully and qualitatively about spatial relationships, shapes, motions, and constraints.
+
+CRITICAL: Your geometric reasoning must be PURELY QUALITATIVE. Do NOT use any numbers AT ALL — \
+not in your reasoning, not in your thinking, not anywhere in your geometric analysis. This means \
+NO coordinates, NO distances, NO angles, NO dimensions, NO sizes, NO counts of objects, NO \
+thresholds, NO numeric constants, NO array indices, NO velocities, NO ratios, NO percentages. \
+Not even "2D" or "3D" — say "two-dimensional" or "three-dimensional" instead. If you catch \
+yourself about to write a number, stop and rephrase using purely relational, qualitative language. \
+Instead of saying "the object is at position (x, y)" say "the object is near the boundary". \
+Instead of "move 0.1 units" say "move a small step". Instead of "the angle is 90 degrees" say \
+"the surfaces are perpendicular".
 
 Your geometric reasoning should cover topics like:
 - What kinds of geometric shapes are involved (e.g. rectangles, circles, polygons, cuboids, \
@@ -186,7 +193,8 @@ opposite side so that the push direction is aligned with the line from object to
 A cylindrical object may roll unpredictably under pushes that are oblique to its axis."
 
 This qualitative geometric analysis should directly inform your code. Write your reasoning \
-out before you start coding. Do NOT skip this step.
+out before you start coding. Do NOT skip this step. Remember: your geometric reasoning must \
+contain ZERO numbers. If any number appears in your geometric analysis, you have failed the task.
 
 {interface_spec}\
 """
