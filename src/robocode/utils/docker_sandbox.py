@@ -284,6 +284,8 @@ async def run_agent_in_docker_sandbox(
         config.docker_image,
         sandbox_abs,
     )
+    logger.info("System prompt:\n%s", config.system_prompt)
+    logger.info("Prompt:\n%s", config.prompt)
 
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         docker_cmd,
