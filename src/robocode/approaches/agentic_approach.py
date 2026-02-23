@@ -136,12 +136,57 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
 }
 
 _PROMPT_WITH_DESCRIPTION = """\
-You are writing an approach for the environment is described below.
+You are writing an approach for the environment described below.
 
 Your approach should be general enough to solve any instance of this environment (env.reset()), \
 but it does NOT need to be adaptable to different other environments.
 
 {env_description}
+
+BEFORE writing any code, you MUST first reason in detail about the geometry of this environment. \
+Think carefully and qualitatively about spatial relationships, shapes, motions, and constraints. \
+Your geometric reasoning must be PURELY QUALITATIVE — NEVER mention any specific numbers, \
+coordinates, distances, angles, dimensions, thresholds, or numeric constants. Instead, reason \
+about the geometric structure in abstract, relational terms.
+
+Your geometric reasoning should cover topics like:
+- What kinds of geometric shapes are involved (e.g. rectangles, circles, polygons, cuboids, \
+spheres, cylinders, capsules)? How do their shapes affect interactions — for instance, \
+rectangles tile differently than circles, spheres roll while cuboids don't, narrow corridors \
+between rectangular obstacles require precise alignment.
+- What are the key spatial relationships between objects? Reason about relative orientations \
+(parallel, perpendicular, oblique, aligned, tangent, skewed, transverse), relative positions \
+(adjacent, opposite, coplanar, collinear, concentric, coaxial, symmetric), and topological \
+relations (inside, outside, overlapping, enclosing, intersecting, touching, disjoint). Which \
+of these relationships matter for solving the task?
+- What geometric constraints exist? Are there boundaries, obstacles, containment relationships, \
+or clearance requirements? How do the shapes of obstacles create narrow passages, dead ends, \
+or open regions? Are surfaces flush or offset? Are relevant surfaces convex or concave?
+- What kind of motions or transformations are involved? Are objects translating, rotating, or \
+both? Are motions continuous or discrete? Does an object's shape affect how it can move \
+(e.g. a rectangle rotating requires more swept area than a circle of similar size)?
+- What makes a configuration "good" or "bad" geometrically? Think about reachability, \
+collision-freeness, coverage, proximity to goals.
+- What is the overall geometric strategy? For example:
+  - "The agent needs to navigate around obstacles to reach a goal region, so it must find a \
+path that threads between blocked areas while staying within bounds. When two rectangular \
+obstacles have parallel edges with a gap between them, the agent can pass through \
+perpendicular to those edges."
+  - "Objects must be packed tightly without overlapping, so the approach needs to find \
+placements where each new object fits into remaining gaps while respecting clearance from \
+existing objects. Rectangular objects can be aligned with parallel edges flush against each \
+other for dense packing, while circular objects leave unavoidable gaps."
+  - "The robot arm must move its end effector to a grasp pose, which means planning a \
+sequence of joint motions that avoids self-collision and keeps the kinematic chain valid. \
+The shape of the target object determines viable grasp orientations — a sphere can be \
+grasped from any direction, while a flat rectangular object requires approaching \
+perpendicular to one of its faces."
+  - "The agent must push an object toward a target, which requires approaching from the \
+opposite side so that the push direction is aligned with the line from object to goal. \
+A cylindrical object may roll unpredictably under pushes that are oblique to its axis."
+
+This qualitative geometric analysis should directly inform your code. Write your reasoning \
+out before you start coding. Do NOT skip this step.
 
 {interface_spec}\
 """
