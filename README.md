@@ -92,11 +92,6 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 | `packing3d_medium` | `kinder/Packing3D-p2-v0` | Medium (2 parts) |
 | `packing3d_hard` | `kinder/Packing3D-p3-v0` | Hard (3 parts) |
 
-## TODO
-
-- [ ] Dig into `python experiments/run_experiment.py approach=agentic environment=motion2d_medium` and understand why it doesn't work that well
-- [ ] Ensure that experiment seeds cannot be guessed by agent in sandbox
-
 ## Sandbox
 
 The agent runs inside a Docker container (`robocode-sandbox`) that provides full filesystem isolation, a restricted network, and a pre-built Python environment.
@@ -143,9 +138,10 @@ bash docker/build.sh
 
 The original macOS Seatbelt / Linux bubblewrap sandbox is still available (`use_docker: false` in `agentic.yaml`) but has a known limitation: it restricts filesystem *writes* but allows *reads* of the entire host filesystem.
 
-Red team the OS-level sandbox:
+Red team the sandbox:
 ```bash
-python integration_tests/red_team_sandbox.py
+python integration_tests/red_team_sandbox.py           # OS-level
+python integration_tests/red_team_sandbox.py --docker  # Docker
 ```
 
 ## Experiments
@@ -192,6 +188,8 @@ python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_
 
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
 
+#### Example: small_maze
+
 On `small_maze`, the agent independently discovered A* pathfinding and achieved a **100% solve rate with optimal path lengths** (mean 2.3 steps across 10 episodes):
 
 ```json
@@ -202,8 +200,6 @@ On `small_maze`, the agent independently discovered A* pathfinding and achieved 
   "num_eval_tasks": 10
 }
 ```
-
-The generated approach class and full agent log are saved in the run's output directory under `sandbox/`.
 
 <details>
 <summary>Generated <code>approach.py</code> (A* pathfinding)</summary>
