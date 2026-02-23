@@ -46,6 +46,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from robocode.primitives import PRIMITIVE_NAME_TO_FILE
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -121,10 +122,12 @@ class DockerSandboxConfig(SandboxConfig):
     """Configuration for a Docker-sandboxed Claude agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with
-    ``docker_image`` for Docker-based sandboxing.
+    ``docker_image`` for Docker-based sandboxing and ``primitive_names``
+    to control which primitive source files are copied into the sandbox.
     """
 
     docker_image: str = _DEFAULT_IMAGE
+    primitive_names: tuple[str, ...] = ()
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -144,25 +147,37 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
     """
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
 
-    # Copy primitive source files (always overwrite to stay current).
-    primitives_dest = config.sandbox_dir / "primitives"
-    primitives_dest.mkdir(exist_ok=True)
-    for py_file in _PRIMITIVES_SRC.glob("*.py"):
-        if py_file.name != "__init__.py":
-            shutil.copy2(py_file, primitives_dest / py_file.name)
+    # Copy only the primitive source files that were provided.
+    if config.primitive_names:
+        primitives_dest = config.sandbox_dir / "primitives"
+        primitives_dest.mkdir(exist_ok=True)
+        for name in config.primitive_names:
+            file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
+            if file_stem is None:
+                logger.warning("No source file mapping for primitive %r", name)
+                continue
+            src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
+            if src_file.exists():
+                shutil.copy2(src_file, primitives_dest / src_file.name)
+            else:
+                raise RuntimeError(f"Primitive source file not found: {src_file}")
 
     # CLAUDE.md — written once; describes the Docker environment.
     claude_md = config.sandbox_dir / "CLAUDE.md"
     if not claude_md.exists():
-        claude_md.write_text(
+        claude_md_text = (
             "All files you create MUST use relative paths so they stay in "
             "the current working directory (/sandbox). Never write files "
             "using absolute paths.\n\n"
             f"The Python interpreter is at {DOCKER_PYTHON}\n"
             "Run test scripts with:\n"
-            f"    {DOCKER_PYTHON} test_approach.py\n\n"
-            "Primitive source files (for reference) are in ./primitives/\n"
+            f"    {DOCKER_PYTHON} test_approach.py\n"
         )
+        if config.primitive_names:
+            claude_md_text += (
+                "\nPrimitive source files (for reference) are in " "./primitives/\n"
+            )
+        claude_md.write_text(claude_md_text)
 
 
 async def run_agent_in_docker_sandbox(

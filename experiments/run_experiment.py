@@ -97,7 +97,6 @@ def _main(cfg: DictConfig) -> float:
     }
     primitives = {name: all_primitives[name] for name in cfg.primitives}
 
-    required_primitives = list(cfg.get("required_primitives", []))
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
@@ -105,7 +104,6 @@ def _main(cfg: DictConfig) -> float:
         seed=cfg.seed,
         primitives=primitives,
         env_description_path=env_description_path,
-        required_primitives=required_primitives,
     )
 
     task_rng = np.random.default_rng(cfg.seed)
