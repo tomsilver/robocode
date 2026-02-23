@@ -271,14 +271,18 @@ def _stream_result_to_sandbox_result(
 
     if stream.is_error:
         return SandboxResult(
-            success=False, output_file=None, error=stream.error_text,
+            success=False,
+            output_file=None,
+            error=stream.error_text,
             total_cost_usd=cost,
         )
 
     output_path = sandbox_dir / output_filename
     if output_path.exists():
         return SandboxResult(
-            success=True, output_file=output_path, error=None,
+            success=True,
+            output_file=output_path,
+            error=None,
             total_cost_usd=cost,
         )
     return SandboxResult(
