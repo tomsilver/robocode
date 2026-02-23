@@ -30,7 +30,6 @@ from pathlib import Path
 import pytest
 
 from robocode.utils.docker_sandbox import (
-    _PRIMITIVES_SRC,
     DOCKER_PYTHON,
     DockerSandboxConfig,
     _find_repo_root,
@@ -116,6 +115,7 @@ def test_config_defaults() -> None:
     assert config.prompt == ""
     assert config.output_filename == ""
     assert not config.init_files
+    assert not config.primitive_names
 
 
 def test_find_repo_root_has_pyproject() -> None:
@@ -170,22 +170,24 @@ def test_setup_creates_git_repo(tmp_path: Path) -> None:
     assert (config.sandbox_dir / ".git").is_dir()
 
 
-def test_setup_copies_primitives(tmp_path: Path) -> None:
-    """Primitive .py files are copied into sandbox/primitives/."""
-    config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
+def test_setup_copies_only_requested_primitives(tmp_path: Path) -> None:
+    """Only the requested primitive .py files are copied into sandbox/primitives/."""
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        primitive_names=("csp", "render_state"),
+    )
     _setup_sandbox_dir(config)
     primitives_dir = config.sandbox_dir / "primitives"
     assert primitives_dir.is_dir()
     copied = {f.name for f in primitives_dir.glob("*.py")}
-    expected = {f.name for f in _PRIMITIVES_SRC.glob("*.py") if f.name != "__init__.py"}
-    assert copied == expected
+    assert copied == {"csp.py", "render_state.py"}
 
 
-def test_setup_no_dunder_init_in_primitives(tmp_path: Path) -> None:
-    """__init__.py is excluded from the primitives copy."""
+def test_setup_no_primitives_dir_when_none_requested(tmp_path: Path) -> None:
+    """No primitives/ directory is created when primitive_names is empty."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
-    assert not (config.sandbox_dir / "primitives" / "__init__.py").exists()
+    assert not (config.sandbox_dir / "primitives").exists()
 
 
 def test_setup_copies_init_files(tmp_path: Path) -> None:
@@ -231,7 +233,10 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
     Expected entries: primitives/, CLAUDE.md, .claude/, .git/
     Must NOT contain: src/, pyproject.toml, prpl-mono/ (host repo files)
     """
-    config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        primitive_names=("csp", "render_state"),
+    )
     _setup_sandbox_dir(config)
     result = _run_in_container(config.sandbox_dir, "ls -a /sandbox")
     assert result.returncode == 0, result.stderr
@@ -251,14 +256,16 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
 
 @requires_docker
 def test_container_primitives_files(tmp_path: Path) -> None:
-    """The primitive .py files inside /sandbox/primitives/ match the source."""
-    config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
+    """The primitive .py files inside /sandbox/primitives/ match the requested ones."""
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        primitive_names=("check_action_collision", "BiRRT"),
+    )
     _setup_sandbox_dir(config)
     result = _run_in_container(config.sandbox_dir, "ls /sandbox/primitives/")
     assert result.returncode == 0, result.stderr
     listed = set(result.stdout.split())
-    expected = {f.name for f in _PRIMITIVES_SRC.glob("*.py") if f.name != "__init__.py"}
-    assert expected == listed
+    assert listed == {"check_action_collision.py", "motion_planning.py"}
 
 
 @requires_docker
