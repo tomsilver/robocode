@@ -241,6 +241,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
         self._generated: Any = None
+        self.total_cost_usd: float | None = None
 
     def train(self) -> None:
         if self._load_dir is not None:
@@ -326,6 +327,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         finally:
             sandbox_logger.removeHandler(file_handler)
             file_handler.close()
+
+        self.total_cost_usd = result.total_cost_usd
 
         if result.success and result.output_file is not None:
             self._load_generated(result.output_file)
