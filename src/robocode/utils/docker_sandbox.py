@@ -42,6 +42,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,6 +114,15 @@ def _find_repo_root() -> Path:
     raise RuntimeError(
         "Could not find repository root: no pyproject.toml found in any "
         f"parent of {__file__}"
+    )
+
+
+def _copy_prpl_mono_without_tests(prpl_mono: Path, dest: Path) -> None:
+    """Copy ``prpl-mono`` to *dest*, skipping all ``tests/`` directories."""
+    shutil.copytree(
+        prpl_mono,
+        dest,
+        ignore=shutil.ignore_patterns("tests"),
     )
 
 
@@ -212,82 +222,90 @@ async def run_agent_in_docker_sandbox(
         )
 
     sandbox_abs = str(config.sandbox_dir.resolve())
-    prpl_mono_abs = str(prpl_mono.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    # --- Authentication ---
-    oauth_token = _get_claude_oauth_token()
-    if not oauth_token:
-        logger.warning(
-            "No Claude OAuth token found in Keychain; "
-            "falling back to ~/.claude bind-mount. "
-            "Run `claude login` on the host if the container cannot authenticate."
+    # Create a filtered copy of prpl-mono with unit tests removed.
+    tmp_dir = tempfile.mkdtemp(prefix="prpl-mono-notests-")
+    filtered_prpl_mono = Path(tmp_dir) / "prpl-mono"
+    try:
+        _copy_prpl_mono_without_tests(prpl_mono, filtered_prpl_mono)
+        prpl_mono_abs = str(filtered_prpl_mono.resolve())
+
+        # --- Authentication ---
+        oauth_token = _get_claude_oauth_token()
+        if not oauth_token:
+            logger.warning(
+                "No Claude OAuth token found in Keychain; "
+                "falling back to ~/.claude bind-mount. "
+                "Run `claude login` on the host if the container cannot authenticate."
+            )
+
+        host_claude_cfg = Path(
+            os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
         )
 
-    host_claude_cfg = Path(
-        os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
-    )
+        docker_cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--cap-add=NET_ADMIN",
+            "--cap-add=NET_RAW",
+            "-e",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000",
+        ]
 
-    docker_cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "--name",
-        container_name,
-        "--cap-add=NET_ADMIN",
-        "--cap-add=NET_RAW",
-        "-e",
-        "CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000",
-    ]
+        if oauth_token:
+            docker_cmd += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
+        else:
+            docker_cmd += ["-v", f"{host_claude_cfg}:/home/node/.claude"]
 
-    if oauth_token:
-        docker_cmd += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
-    else:
-        docker_cmd += ["-v", f"{host_claude_cfg}:/home/node/.claude"]
+        docker_cmd += [
+            "-v",
+            f"{sandbox_abs}:/sandbox",
+            "-v",
+            f"{prpl_mono_abs}:/robocode/prpl-mono:ro",
+            "-w",
+            "/sandbox",
+            config.docker_image,
+        ]
+        docker_cmd += _build_claude_cli_args(
+            config.prompt, config.model, config.system_prompt, config.max_budget_usd
+        )
 
-    docker_cmd += [
-        "-v",
-        f"{sandbox_abs}:/sandbox",
-        "-v",
-        f"{prpl_mono_abs}:/robocode/prpl-mono:ro",
-        "-w",
-        "/sandbox",
-        config.docker_image,
-    ]
-    docker_cmd += _build_claude_cli_args(
-        config.prompt, config.model, config.system_prompt, config.max_budget_usd
-    )
+        extra_env: dict[str, str] = {}
+        if oauth_token:
+            extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+        env = _build_sandbox_env(extra_env if extra_env else None)
 
-    extra_env: dict[str, str] = {}
-    if oauth_token:
-        extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-    env = _build_sandbox_env(extra_env if extra_env else None)
+        logger.info(
+            "Starting Docker sandbox: container=%s image=%s sandbox=%s",
+            container_name,
+            config.docker_image,
+            sandbox_abs,
+        )
 
-    logger.info(
-        "Starting Docker sandbox: container=%s image=%s sandbox=%s",
-        container_name,
-        config.docker_image,
-        sandbox_abs,
-    )
+        proc = subprocess.Popen(  # pylint: disable=consider-using-with
+            docker_cmd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
-    proc = subprocess.Popen(  # pylint: disable=consider-using-with
-        docker_cmd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+        stream = _parse_claude_stream(proc)
 
-    stream = _parse_claude_stream(proc)
+        logger.info(
+            "Docker session done: container=%s turns=%d cost=$%s error=%s",
+            container_name,
+            stream.num_turns,
+            stream.total_cost,
+            stream.is_error,
+        )
 
-    logger.info(
-        "Docker session done: container=%s turns=%d cost=$%s error=%s",
-        container_name,
-        stream.num_turns,
-        stream.total_cost,
-        stream.is_error,
-    )
-
-    return _stream_result_to_sandbox_result(
-        stream, config.sandbox_dir, config.output_filename
-    )
+        return _stream_result_to_sandbox_result(
+            stream, config.sandbox_dir, config.output_filename
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
