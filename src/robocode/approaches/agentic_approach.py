@@ -135,13 +135,7 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
     ),
 }
 
-_PROMPT_WITH_DESCRIPTION = """\
-You are writing an approach for the environment described below.
-
-Your approach should be general enough to solve any instance of this environment (env.reset()), \
-but it does NOT need to be adaptable to different other environments.
-
-{env_description}
+_GEOMETRY_PROMPT = """\
 
 BEFORE writing any code, you MUST first reason in detail about the geometry of this environment. \
 Think carefully and qualitatively about spatial relationships, shapes, motions, and constraints.
@@ -195,7 +189,16 @@ A cylindrical object may roll unpredictably under pushes that are oblique to its
 This qualitative geometric analysis should directly inform your code. Write your reasoning \
 out before you start coding. Do NOT skip this step. Remember: your geometric reasoning must \
 contain ZERO numbers. If any number appears in your geometric analysis, you have failed the task.
+"""
 
+_PROMPT_WITH_DESCRIPTION = """\
+You are writing an approach for the environment described below.
+
+Your approach should be general enough to solve any instance of this environment (env.reset()), \
+but it does NOT need to be adaptable to different other environments.
+
+{env_description}
+{geometry_prompt}
 {interface_spec}\
 """
 
@@ -222,6 +225,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         output_dir: str = ".",
         load_dir: str | None = None,
         use_docker: bool = False,
+        geometry_prompt: bool = True,
     ) -> None:
         super().__init__(
             action_space,
@@ -235,6 +239,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
+        self._geometry_prompt = geometry_prompt
         self._generated: Any = None
 
     def train(self) -> None:
@@ -275,8 +280,11 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
 
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
+            geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
             prompt = _PROMPT_WITH_DESCRIPTION.format(
-                env_description=env_desc, interface_spec=interface_spec
+                env_description=env_desc,
+                geometry_prompt=geometry,
+                interface_spec=interface_spec,
             )
         else:
             prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
