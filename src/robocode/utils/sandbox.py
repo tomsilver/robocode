@@ -319,6 +319,8 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
+    logger.info("System prompt:\n%s", config.system_prompt)
+    logger.info("Prompt:\n%s", config.prompt)
 
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         cmd,
