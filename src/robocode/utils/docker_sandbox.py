@@ -46,6 +46,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from robocode.primitives import PRIMITIVE_NAME_TO_FILE
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -66,15 +67,6 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
-
-# Mapping from primitive name (as used in the primitives dict) to the source
-# file basename (without .py) under ``src/robocode/primitives/``.
-_PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
-    "check_action_collision": "check_action_collision",
-    "render_state": "render_state",
-    "csp": "csp",
-    "BiRRT": "motion_planning",
-}
 
 
 def _get_claude_oauth_token() -> str | None:
@@ -160,7 +152,7 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
         primitives_dest = config.sandbox_dir / "primitives"
         primitives_dest.mkdir(exist_ok=True)
         for name in config.primitive_names:
-            file_stem = _PRIMITIVE_NAME_TO_FILE.get(name)
+            file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
             if file_stem is None:
                 logger.warning("No source file mapping for primitive %r", name)
                 continue
