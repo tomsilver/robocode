@@ -18,12 +18,17 @@ TODO: Transition to Docker-based sandboxing for full filesystem isolation.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_RE = re.compile(
+    r"out of extra usage.*resets\s+(\d{1,2}(?:am|pm))", re.IGNORECASE
+)
 
 _WRITE_TOOLS: set[str] = {"Write", "Edit"}
 
@@ -104,6 +109,7 @@ class SandboxResult:
     output_file: Path | None
     error: str | None
     total_cost_usd: float | None = None
+    rate_limit_reset: str | None = None  # e.g. "3am" from usage limit message
 
 
 @dataclass(frozen=True)
@@ -114,6 +120,7 @@ class _StreamParseResult:
     error_text: str | None
     num_turns: int
     total_cost: float | None
+    rate_limit_reset: str | None = None  # e.g. "3am" parsed from usage message
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +209,7 @@ def _parse_claude_stream(
     error_text: str | None = None
     num_turns = 0
     total_cost: float | None = None
+    rate_limit_reset: str | None = None
 
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -221,7 +229,11 @@ def _parse_claude_stream(
                 if block.get("type") == "thinking":
                     logger.info("Thinking: %s", block.get("thinking", ""))
                 elif block.get("type") == "text":
-                    logger.info("Agent: %s", block["text"])
+                    text = block["text"]
+                    logger.info("Agent: %s", text)
+                    m = _RATE_LIMIT_RE.search(text)
+                    if m:
+                        rate_limit_reset = m.group(1)  # e.g. "3am"
                 elif block.get("type") == "tool_use":
                     input_str = json.dumps(block.get("input", {}))
                     if len(input_str) > 300:
@@ -240,6 +252,11 @@ def _parse_claude_stream(
             total_cost = msg.get("total_cost_usd")
             if is_error:
                 error_text = msg.get("result", "Unknown error")
+                # Also check the result text for rate-limit info.
+                if not rate_limit_reset:
+                    m = _RATE_LIMIT_RE.search(error_text)
+                    if m:
+                        rate_limit_reset = m.group(1)
 
     proc.wait()
 
@@ -252,12 +269,23 @@ def _parse_claude_stream(
             if stderr_output
             else f"Process exited with code {proc.returncode}"
         )
+        # Check stderr for rate-limit info too.
+        if not rate_limit_reset and stderr_output:
+            m = _RATE_LIMIT_RE.search(stderr_output)
+            if m:
+                rate_limit_reset = m.group(1)
+
+    # If we detected a rate-limit message but no error was flagged, mark it.
+    if rate_limit_reset and not is_error:
+        is_error = True
+        error_text = f"Rate-limited: resets {rate_limit_reset}"
 
     return _StreamParseResult(
         is_error=is_error,
         error_text=error_text,
         num_turns=num_turns,
         total_cost=total_cost,
+        rate_limit_reset=rate_limit_reset,
     )
 
 
@@ -275,6 +303,7 @@ def _stream_result_to_sandbox_result(
             output_file=None,
             error=stream.error_text,
             total_cost_usd=cost,
+            rate_limit_reset=stream.rate_limit_reset,
         )
 
     output_path = sandbox_dir / output_filename

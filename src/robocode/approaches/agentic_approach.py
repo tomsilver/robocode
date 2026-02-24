@@ -2,8 +2,11 @@
 
 import asyncio
 import logging
+import re
 import sys
+import time
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -15,7 +18,7 @@ from robocode.utils.docker_sandbox import (
     DockerSandboxConfig,
     run_agent_in_docker_sandbox,
 )
-from robocode.utils.sandbox import SandboxConfig, run_agent_in_sandbox
+from robocode.utils.sandbox import SandboxConfig, SandboxResult, run_agent_in_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +213,31 @@ type, action space, and dynamics.
 """
 
 
+_DEFAULT_RESET_HOUR = 3  # fallback hour if we can't parse the reset time
+
+
+def _parse_reset_hour(reset_str: str) -> int:
+    """Parse a reset time like '3am' or '11pm' into a 24-hour int."""
+    reset_str = reset_str.strip().lower()
+    match = re.match(r"(\d{1,2})(am|pm)", reset_str)
+    if not match:
+        return _DEFAULT_RESET_HOUR
+    hour = int(match.group(1))
+    period = match.group(2)
+    if period == "am":
+        return 0 if hour == 12 else hour
+    return hour if hour == 12 else hour + 12
+
+
+def _seconds_until_reset(reset_hour: int) -> float:
+    """Return seconds until the given hour (local time), plus a small buffer."""
+    now = datetime.now()
+    target = now.replace(hour=reset_hour, minute=5, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
 class AgenticApproach(BaseApproach[_ObsType, _ActType]):
     """An approach that uses a Claude agent to write approach code."""
 
@@ -290,6 +318,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
 
+        docker_config: DockerSandboxConfig | None = None
+        config: SandboxConfig | None = None
         if self._use_docker:
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
@@ -320,10 +350,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         )
         sandbox_logger.addHandler(file_handler)
         try:
-            if self._use_docker:
-                result = asyncio.run(run_agent_in_docker_sandbox(docker_config))
-            else:
-                result = asyncio.run(run_agent_in_sandbox(config))
+            result = self._run_with_rate_limit_retry(
+                docker_config if self._use_docker else None,
+                config if not self._use_docker else None,
+            )
         finally:
             sandbox_logger.removeHandler(file_handler)
             file_handler.close()
@@ -334,6 +364,34 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             self._load_generated(result.output_file)
         else:
             logger.warning("Agent failed to generate approach: %s", result.error)
+
+    def _run_with_rate_limit_retry(
+        self,
+        docker_config: DockerSandboxConfig | None,
+        local_config: SandboxConfig | None,
+    ) -> SandboxResult:
+        """Run the sandbox, retrying on rate-limit by sleeping until reset."""
+        while True:
+            if docker_config is not None:
+                result = asyncio.run(run_agent_in_docker_sandbox(docker_config))
+            else:
+                assert local_config is not None
+                result = asyncio.run(run_agent_in_sandbox(local_config))
+
+            if result.rate_limit_reset is None:
+                return result
+
+            reset_hour = _parse_reset_hour(result.rate_limit_reset)
+            wait_secs = _seconds_until_reset(reset_hour)
+            hours = wait_secs / 3600
+            logger.warning(
+                "Rate-limited (%s). Sleeping %.1f hours until %d:05 ...",
+                result.error,
+                hours,
+                reset_hour,
+            )
+            time.sleep(wait_secs)
+            logger.info("Woke up after rate-limit sleep, retrying...")
 
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""
