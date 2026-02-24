@@ -310,6 +310,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
 
+        docker_config: DockerSandboxConfig | None = None
+        config: SandboxConfig | None = None
         if self._use_docker:
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
