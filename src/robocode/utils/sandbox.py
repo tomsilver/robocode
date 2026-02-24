@@ -103,6 +103,7 @@ class SandboxResult:
     success: bool
     output_file: Path | None
     error: str | None
+    total_cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -266,16 +267,29 @@ def _stream_result_to_sandbox_result(
     output_filename: str,
 ) -> SandboxResult:
     """Convert a :class:`_StreamParseResult` to a :class:`SandboxResult`."""
+    cost = stream.total_cost
+
     if stream.is_error:
-        return SandboxResult(success=False, output_file=None, error=stream.error_text)
+        return SandboxResult(
+            success=False,
+            output_file=None,
+            error=stream.error_text,
+            total_cost_usd=cost,
+        )
 
     output_path = sandbox_dir / output_filename
     if output_path.exists():
-        return SandboxResult(success=True, output_file=output_path, error=None)
+        return SandboxResult(
+            success=True,
+            output_file=output_path,
+            error=None,
+            total_cost_usd=cost,
+        )
     return SandboxResult(
         success=False,
         output_file=None,
         error=f"Output file not found: {output_filename}",
+        total_cost_usd=cost,
     )
 
 
