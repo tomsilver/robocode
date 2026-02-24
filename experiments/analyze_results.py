@@ -72,7 +72,7 @@ def _main() -> None:
         .agg(seeds=lambda s: sorted(s.astype(str)))
         .reset_index()
     )
-    seed_info["seeds"] = seed_info["seeds"].apply(lambda s: ",".join(s))
+    seed_info["seeds"] = seed_info["seeds"].apply(",".join)
     seed_info["n_seeds"] = seed_info["seeds"].str.count(",") + 1
 
     averaged = (
