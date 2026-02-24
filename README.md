@@ -17,7 +17,7 @@ bash install.sh
 
 The agentic approach requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`). Authenticate via one of:
 
-- **Subscription (free usage):** `claude login`
+- **Subscription (free usage):** `claude auth login`
 - **API key:** set `ANTHROPIC_API_KEY` in your environment
 
 Optionally set `ROBOCODE_CLAUDE_CMD` to point to a specific `claude` binary (defaults to `claude` on `PATH`).
