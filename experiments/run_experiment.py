@@ -97,7 +97,6 @@ def _main(cfg: DictConfig) -> float:
     }
     primitives = {name: all_primitives[name] for name in cfg.primitives}
 
-    required_primitives = list(cfg.get("required_primitives", []))
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
@@ -105,7 +104,6 @@ def _main(cfg: DictConfig) -> float:
         seed=cfg.seed,
         primitives=primitives,
         env_description_path=env_description_path,
-        required_primitives=required_primitives,
     )
 
     task_rng = np.random.default_rng(cfg.seed)
@@ -131,13 +129,16 @@ def _main(cfg: DictConfig) -> float:
     mean_steps = float(np.mean([e["num_steps"] for e in per_episode]))
     solve_rate = float(np.mean([e["solved"] for e in per_episode]))
 
-    results = {
+    results: dict[str, Any] = {
         "mean_eval_reward": mean_reward,
         "mean_eval_steps": mean_steps,
         "solve_rate": solve_rate,
         "num_eval_tasks": num_eval,
         "per_episode": per_episode,
     }
+    agent_cost = getattr(approach, "total_cost_usd", None)
+    if agent_cost is not None:
+        results["agent_cost_usd"] = agent_cost
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

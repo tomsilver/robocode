@@ -5,11 +5,10 @@ defaults:
 
 seed: 42
 max_steps: 1000
-num_eval_tasks: 10
+num_eval_tasks: 100
 render_videos: false
 primitives:
   - check_action_collision
   - render_state
   - csp
   - BiRRT
-required_primitives: []
