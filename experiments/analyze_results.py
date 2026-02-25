@@ -61,10 +61,38 @@ def _main() -> None:
     if dataframe.empty:
         print("No results found.")
         return
+
+    numeric_cols = dataframe.select_dtypes(include="number").columns.tolist()
+    if "seed" in numeric_cols:
+        numeric_cols.remove("seed")
+    group_cols = [c for c in dataframe.columns if c not in numeric_cols and c != "seed"]
+
+    seed_info = (
+        dataframe.groupby(group_cols, sort=False)["seed"]
+        .agg(seeds=lambda s: sorted(s.astype(str)))
+        .reset_index()
+    )
+    seed_info["seeds"] = seed_info["seeds"].apply(",".join)
+    seed_info["n_seeds"] = seed_info["seeds"].str.count(",") + 1
+
+    averaged = (
+        dataframe.drop(columns=["seed"])
+        .groupby(group_cols, sort=False)
+        .mean(numeric_only=True)
+        .reset_index()
+    )
+    averaged = averaged.merge(seed_info, on=group_cols)
+
+    col_order = group_cols + ["n_seeds", "seeds"] + numeric_cols
+    averaged = averaged[[c for c in col_order if c in averaged.columns]]
+
+    sort_cols = ["environment"] + [c for c in group_cols if c != "environment"]
+    averaged = averaged.sort_values(sort_cols).reset_index(drop=True)
+
     with pd.option_context(
         "display.max_rows", None, "display.max_columns", None, "display.width", 200
     ):
-        print(dataframe.to_string(index=False))
+        print(averaged.to_string(index=False))
 
 
 if __name__ == "__main__":
