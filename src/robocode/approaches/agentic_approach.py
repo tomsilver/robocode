@@ -194,6 +194,22 @@ out before you start coding. Do NOT skip this step. Remember: your geometric rea
 contain ZERO numbers. If any number appears in your geometric analysis, you have failed the task.
 """
 
+_MODULAR_CODE_PROMPT = """\
+
+Write MODULAR code, like a skilled software engineer:
+- Break your solution into small, self-contained modules in separate .py files \
+(e.g., `pathfinding.py`, `state_utils.py`, `planning.py`).
+- Each module should be minimal and focused on a single responsibility — small enough to \
+reason about, test, and reuse independently.
+- Write and run a test script for each module BEFORE composing them together. Verify each \
+piece works in isolation.
+- Your final `approach.py` should import from these modules and compose them into the \
+complete solution. Keep `approach.py` itself as thin as possible — it should primarily \
+orchestrate your tested modules.
+- Prefer many small files over one large file. If a function could be useful in multiple \
+contexts, it belongs in its own module.
+"""
+
 _PROMPT_WITH_DESCRIPTION = """\
 You are writing an approach for the environment described below.
 
@@ -201,14 +217,14 @@ Your approach should be general enough to solve any instance of this environment
 but it does NOT need to be adaptable to different other environments.
 
 {env_description}
-{geometry_prompt}
+{geometry_prompt}{modular_code_prompt}
 {interface_spec}\
 """
 
 _PROMPT_WITH_SOURCE = """\
 Read the environment source files in this directory to understand the state \
 type, action space, and dynamics.
-
+{modular_code_prompt}
 {interface_spec}\
 """
 
@@ -254,6 +270,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         load_dir: str | None = None,
         use_docker: bool = False,
         geometry_prompt: bool = True,
+        modular_code_prompt: bool = False,
     ) -> None:
         super().__init__(
             action_space,
@@ -268,6 +285,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
+        self._modular_code_prompt = modular_code_prompt
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -307,16 +325,22 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             primitives_description=primitives_desc,
         )
 
+        modular = _MODULAR_CODE_PROMPT if self._modular_code_prompt else ""
+
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
             geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
             prompt = _PROMPT_WITH_DESCRIPTION.format(
                 env_description=env_desc,
                 geometry_prompt=geometry,
+                modular_code_prompt=modular,
                 interface_spec=interface_spec,
             )
         else:
-            prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
+            prompt = _PROMPT_WITH_SOURCE.format(
+                modular_code_prompt=modular,
+                interface_spec=interface_spec,
+            )
 
         docker_config: DockerSandboxConfig | None = None
         config: SandboxConfig | None = None
