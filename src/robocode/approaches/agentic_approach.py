@@ -435,7 +435,9 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         try:
             source = path.read_text()
             namespace: dict[str, Any] = {}
-            exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
+            exec(  # pylint: disable=exec-used
+                compile(source, str(path), "exec"), namespace
+            )
         finally:
             if added:
                 sys.path.remove(sandbox_dir)

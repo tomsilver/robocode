@@ -100,16 +100,14 @@ def test_load_generated_with_sibling_modules(tmp_path):
 
     # Sibling module.
     (sandbox_dir / "math_tools.py").write_text(
-        "def multiply(a, b):\n" "    return a * b\n"
+        "def multiply(a, b):\n    return a * b\n"
     )
 
     # Nested subpackage.
     utils_dir = sandbox_dir / "utils"
     utils_dir.mkdir()
     (utils_dir / "__init__.py").write_text("")
-    (utils_dir / "helpers.py").write_text(
-        "def add(a, b):\n" "    return a + b\n"
-    )
+    (utils_dir / "helpers.py").write_text("def add(a, b):\n    return a + b\n")
 
     # approach.py imports from both and stores the computed value.
     (sandbox_dir / "approach.py").write_text(
