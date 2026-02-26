@@ -93,6 +93,57 @@ def test_load_dir_skips_agent(tmp_path):
     assert approach.step() == 0
 
 
+def test_load_generated_with_sibling_modules(tmp_path):
+    """approach.py can import sibling modules and subdirectories."""
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+
+    # Sibling module.
+    (sandbox_dir / "math_tools.py").write_text(
+        "def multiply(a, b):\n" "    return a * b\n"
+    )
+
+    # Nested subpackage.
+    utils_dir = sandbox_dir / "utils"
+    utils_dir.mkdir()
+    (utils_dir / "__init__.py").write_text("")
+    (utils_dir / "helpers.py").write_text(
+        "def add(a, b):\n" "    return a + b\n"
+    )
+
+    # approach.py imports from both and stores the computed value.
+    (sandbox_dir / "approach.py").write_text(
+        "from math_tools import multiply\n"
+        "from utils.helpers import add\n"
+        "\n"
+        "COMPUTED = multiply(add(2, 3), 4)\n"
+        "\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._computed = COMPUTED\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return 0\n"
+    )
+
+    env = MazeEnv(5, 8, 5, 8)
+    approach = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=42,
+        primitives={"check_action_collision": partial(check_action_collision, env)},
+        load_dir=str(tmp_path),
+    )
+    approach.train()
+
+    state, info = env.reset(seed=42)
+    approach.reset(state, info)
+    assert approach.step() == 0
+    # Verify the imported modules actually ran correctly.
+    assert approach._generated._computed == 20  # pylint: disable=protected-access
+
+
 def test_load_dir_missing_file_raises(tmp_path):
     """When load_dir points to a directory without approach.py, raise
     FileNotFoundError."""
