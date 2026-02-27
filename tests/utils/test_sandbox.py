@@ -3,9 +3,9 @@
 from pathlib import Path
 
 from robocode.utils.sandbox import (
+    _RATE_LIMIT_RE,
     SandboxConfig,
     SandboxResult,
-    _RATE_LIMIT_RE,
     _is_path_within_sandbox,
 )
 
