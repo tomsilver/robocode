@@ -5,6 +5,7 @@ from pathlib import Path
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
+    _RATE_LIMIT_RE,
     _is_path_within_sandbox,
 )
 
@@ -63,3 +64,32 @@ def test_sandbox_result_failure() -> None:
     assert not result.success
     assert result.output_file is None
     assert result.error == "file not found"
+
+
+class TestRateLimitRegex:
+    """Tests for _RATE_LIMIT_RE matching rate-limit messages."""
+
+    def test_old_format(self) -> None:
+        """Matches the old 'out of extra usage' message."""
+        msg = "You are out of extra usage. Your limit resets 3am"
+        m = _RATE_LIMIT_RE.search(msg)
+        assert m is not None
+        assert m.group(1) == "3am"
+
+    def test_new_format(self) -> None:
+        """Matches the new 'hit your limit' message."""
+        msg = "You've hit your limit \u00b7 resets 2pm (Etc/Unknown)"
+        m = _RATE_LIMIT_RE.search(msg)
+        assert m is not None
+        assert m.group(1) == "2pm"
+
+    def test_new_format_12hr(self) -> None:
+        """Matches 12-hour times like 11pm."""
+        msg = "You've hit your limit \u00b7 resets 11pm (Etc/Unknown)"
+        m = _RATE_LIMIT_RE.search(msg)
+        assert m is not None
+        assert m.group(1) == "11pm"
+
+    def test_no_match(self) -> None:
+        """Does not match unrelated messages."""
+        assert _RATE_LIMIT_RE.search("Everything is fine") is None
