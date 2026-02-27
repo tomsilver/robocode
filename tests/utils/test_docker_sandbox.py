@@ -230,8 +230,8 @@ def test_container_cwd_is_sandbox(tmp_path: Path) -> None:
 def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
     """The sandbox contains exactly the expected top-level entries and no extras.
 
-    Expected entries: primitives/, CLAUDE.md, .claude/, .git/
-    Must NOT contain: src/, pyproject.toml, prpl-mono/ (host repo files)
+    Expected entries: primitives/, CLAUDE.md, .claude/, .git/ Must NOT
+    contain: src/, pyproject.toml, prpl-mono/ (host repo files)
     """
     config = DockerSandboxConfig(
         sandbox_dir=tmp_path / "sandbox",
