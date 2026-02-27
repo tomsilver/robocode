@@ -27,7 +27,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_RE = re.compile(
-    r"out of extra usage.*resets\s+(\d{1,2}(?:am|pm))", re.IGNORECASE
+    r"(?:out of extra usage|hit your limit).*resets\s+(\d{1,2}(?:am|pm))",
+    re.IGNORECASE,
 )
 
 _WRITE_TOOLS: set[str] = {"Write", "Edit"}
