@@ -356,3 +356,27 @@ def test_container_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
     result = _run_in_container(config.sandbox_dir, bash_cmd)
     assert "exit=0" in result.stdout
     assert "deny" not in result.stdout
+
+
+@requires_docker
+def test_container_files_persist_on_host(tmp_path: Path) -> None:
+    """Files written inside /sandbox (including subdirectories) are visible on
+    the host via the bind-mount."""
+    config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
+    _setup_sandbox_dir(config)
+    result = _run_in_container(
+        config.sandbox_dir,
+        "echo 'print(42)' > /sandbox/approach.py && "
+        "mkdir -p /sandbox/utils && "
+        "echo 'X = 1' > /sandbox/helper.py && "
+        "echo 'Y = 2' > /sandbox/utils/lib.py",
+    )
+    assert result.returncode == 0, result.stderr
+
+    sandbox_dir = config.sandbox_dir
+    assert (sandbox_dir / "approach.py").exists()
+    assert (sandbox_dir / "helper.py").exists()
+    assert (sandbox_dir / "utils" / "lib.py").exists()
+    assert "print(42)" in (sandbox_dir / "approach.py").read_text()
+    assert "X = 1" in (sandbox_dir / "helper.py").read_text()
+    assert "Y = 2" in (sandbox_dir / "utils" / "lib.py").read_text()
