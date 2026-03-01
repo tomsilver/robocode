@@ -31,7 +31,7 @@ _SYSTEM_PROMPT = (
     "and write an optimal approach class. "
     "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
     "to the current working directory using RELATIVE paths only. "
-    "Never use absolute paths when writing files."
+    "Never use absolute paths when writing files. "
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
     "your best current attempt at all times."
@@ -196,14 +196,16 @@ contain ZERO numbers. If any number appears in your geometric analysis, you have
 
 _MODULAR_CODE_PROMPT = """\
 
-Write MODULAR code, like a skilled software engineer:
+IMPORTANT: Write MODULAR code, like a skilled software engineer:
 - Break your solution into small, self-contained modules in separate .py files \
 (e.g., `pathfinding.py`, `state_utils.py`, `planning.py`).
 - Each module should be minimal and focused on a single responsibility, small enough to \
 reason about, test, and reuse independently.
 - Write and run a test script for each module BEFORE composing them together. Verify each \
-piece works in isolation. Ensure your tests cover edge cases and typical scenarios. \
-All tests should pass before moving on to the next module or integrating into the final approach.
+piece works in isolation. The tests should play out the modules in the actual environment \
+if possible, verifying the conditions before and after execution and ensuring these match \
+the expectations, under multiple conditions and edge cases, and should not just rely \
+on mock objects or simplified assumptions.
 - Your final `approach.py` should import from these modules and compose them into the \
 complete solution. Keep `approach.py` itself as thin as possible, it should primarily \
 orchestrate your tested modules.
