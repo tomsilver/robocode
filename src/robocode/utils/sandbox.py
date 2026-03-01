@@ -27,7 +27,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_RE = re.compile(
-    r"out of extra usage.*resets\s+(\d{1,2}(?:am|pm))", re.IGNORECASE
+    r"(?:out of extra usage|hit your limit).*resets\s+(\d{1,2}(?:am|pm))",
+    re.IGNORECASE,
 )
 
 _WRITE_TOOLS: set[str] = {"Write", "Edit"}
@@ -131,8 +132,8 @@ class _StreamParseResult:
 def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> None:
     """Create sandbox directory, copy init files, git init, and install hooks.
 
-    Does NOT write ``CLAUDE.md`` — callers should write their own variant
-    after calling this function.
+    Does NOT write ``CLAUDE.md`` — callers should write their own
+    variant after calling this function.
     """
     sandbox_dir.mkdir(parents=True, exist_ok=True)
 

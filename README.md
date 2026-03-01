@@ -186,6 +186,19 @@ Parallel sweeps each get their own container (named `robocode-sandbox-<uuid>`), 
 python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_maze approach=agentic
 ```
 
+Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run jobs in parallel locally:
+```bash
+python experiments/run_experiment.py -m \
+    approach=agentic \
+    approach.use_docker=true \
+    seed=42,24,424,444,222 \
+    'primitives=[]' \
+    environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
+    'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
+    'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}' \
+    hydra/launcher=joblib hydra.launcher.n_jobs=4
+```
+
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
 
 #### Example: small_maze
