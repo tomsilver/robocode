@@ -31,7 +31,7 @@ _SYSTEM_PROMPT = (
     "and write an optimal approach class. "
     "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
     "to the current working directory using RELATIVE paths only. "
-    "Never use absolute paths when writing files."
+    "Never use absolute paths when writing files. "
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
     "your best current attempt at all times."
@@ -194,6 +194,27 @@ out before you start coding. Do NOT skip this step. Remember: your geometric rea
 contain ZERO numbers. If any number appears in your geometric analysis, you have failed the task.
 """
 
+_MODULAR_CODE_PROMPT = """\
+
+IMPORTANT: Write MODULAR code, like a skilled software engineer:
+- Break your solution into small, self-contained modules in separate .py files \
+(e.g., `pathfinding.py`, `state_utils.py`, `planning.py`).
+- Each module should be minimal and focused on a single responsibility, small enough to \
+reason about, test, and reuse independently.
+- Write and run a test script for each module BEFORE composing them together. Verify each \
+piece works in isolation. The tests should play out the modules in the actual environment \
+if possible, verifying the conditions before and after execution and ensuring these match \
+the expectations, under multiple conditions and edge cases, and should not just rely \
+on mock objects or simplified assumptions.
+- Your final `approach.py` should import from these modules and compose them into the \
+complete solution. Keep `approach.py` itself as thin as possible, it should primarily \
+orchestrate your tested modules.
+- Prefer many small files over one large file. If a function could be useful in multiple \
+contexts, it belongs in its own module.
+- Modules should be organized by functionality, and organized in directories if needed. \
+For example, if you have multiple modules related to geometry, put them in a `geometry/` subdirectory. \
+"""
+
 _PROMPT_WITH_DESCRIPTION = """\
 You are writing an approach for the environment described below.
 
@@ -202,14 +223,15 @@ but it does NOT need to be adaptable to different other environments.
 
 {env_description}
 {geometry_prompt}
-{interface_spec}\
+{interface_spec}
+{modular_code_prompt}\
 """
 
 _PROMPT_WITH_SOURCE = """\
 Read the environment source files in this directory to understand the state \
 type, action space, and dynamics.
-
-{interface_spec}\
+{interface_spec}
+{modular_code_prompt}\
 """
 
 
@@ -254,6 +276,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         load_dir: str | None = None,
         use_docker: bool = False,
         geometry_prompt: bool = True,
+        modular_code_prompt: bool = False,
     ) -> None:
         super().__init__(
             action_space,
@@ -268,6 +291,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
+        self._modular_code_prompt = modular_code_prompt
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -307,16 +331,22 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             primitives_description=primitives_desc,
         )
 
+        modular = _MODULAR_CODE_PROMPT if self._modular_code_prompt else ""
+
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
             geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
             prompt = _PROMPT_WITH_DESCRIPTION.format(
                 env_description=env_desc,
                 geometry_prompt=geometry,
+                modular_code_prompt=modular,
                 interface_spec=interface_spec,
             )
         else:
-            prompt = _PROMPT_WITH_SOURCE.format(interface_spec=interface_spec)
+            prompt = _PROMPT_WITH_SOURCE.format(
+                modular_code_prompt=modular,
+                interface_spec=interface_spec,
+            )
 
         docker_config: DockerSandboxConfig | None = None
         config: SandboxConfig | None = None
@@ -394,10 +424,25 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             logger.info("Woke up after rate-limit sleep, retrying...")
 
     def _load_generated(self, path: Path) -> None:
-        """Load a GeneratedApproach class from the given file."""
-        source = path.read_text()
-        namespace: dict[str, Any] = {}
-        exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
+        """Load a GeneratedApproach class from the given file.
+
+        Temporarily adds the parent directory of *path* to ``sys.path`` so
+        that ``approach.py`` can import sibling modules written by the agent,
+        then removes it to avoid polluting the global import path.
+        """
+        sandbox_dir = str(path.parent.resolve())
+        added = sandbox_dir not in sys.path
+        if added:
+            sys.path.insert(0, sandbox_dir)
+        try:
+            source = path.read_text()
+            namespace: dict[str, Any] = {}
+            exec(  # pylint: disable=exec-used
+                compile(source, str(path), "exec"), namespace
+            )
+        finally:
+            if added:
+                sys.path.remove(sandbox_dir)
         cls = namespace["GeneratedApproach"]
         self._generated = cls(
             self._action_space,

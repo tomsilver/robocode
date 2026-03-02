@@ -5,3 +5,4 @@ output_dir: ${hydra:runtime.output_dir}
 load_dir: null
 use_docker: true
 geometry_prompt: true
+modular_code_prompt: false
