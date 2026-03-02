@@ -431,8 +431,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         then removes it to avoid polluting the global import path.
         """
         sandbox_dir = str(path.parent.resolve())
-        added = sandbox_dir not in sys.path
-        if added:
+        if sandbox_dir not in sys.path:
             sys.path.insert(0, sandbox_dir)
         try:
             source = path.read_text()
@@ -441,8 +440,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 compile(source, str(path), "exec"), namespace
             )
         finally:
-            if added:
-                sys.path.remove(sandbox_dir)
+            sys.path.remove(sandbox_dir)  # should always succeed since we just added it
         cls = namespace["GeneratedApproach"]
         self._generated = cls(
             self._action_space,
