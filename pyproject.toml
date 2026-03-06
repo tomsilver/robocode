@@ -15,6 +15,7 @@ dependencies = [
    "pandas",
    "pandas-stubs",
    "hydra-core",
+   "hydra-joblib-launcher",
    "omegaconf",
    "relational-structs",
    "prpl_utils",
