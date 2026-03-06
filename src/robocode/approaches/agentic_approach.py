@@ -18,6 +18,7 @@ from robocode.utils.docker_sandbox import (
     DockerSandboxConfig,
     run_agent_in_docker_sandbox,
 )
+from robocode.utils.episode import load_generated_approach
 from robocode.utils.sandbox import SandboxConfig, SandboxResult, run_agent_in_sandbox
 
 logger = logging.getLogger(__name__)
@@ -122,8 +123,22 @@ _PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "minimize.\n"
         "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
         "threshold)` \u2014 constraint from log probabilities.\n"
-        "Access via `primitives['csp']`, e.g. "
+        "  Access via `primitives['csp']`, e.g. "
         "`primitives['csp'].CSPVariable(...)`."
+    ),
+    "render_policy": (
+        "`render_policy(approach_dir, seed, output_dir, max_steps=1000, "
+        "max_frames=100) -> list[str]` runs a full episode of the approach "
+        "in `approach_dir/approach.py` on the given `seed`, saving every "
+        "rendered frame as an individual PNG in `output_dir`. Returns the "
+        "list of saved filenames. Use `max_frames` to cap the number of "
+        "frames saved (useful when the agent loops). Use it to visually "
+        "debug policy failures.\n"
+        "CRITICAL: You MUST delegate frame reading and analysis to a Task "
+        "subagent — reading images directly will consume too much context. "
+        "The subagent should Read the frame PNGs, analyze the trajectory, "
+        "and return a concise text summary plus indices of important frames. "
+        "Delete the output directory when done."
     ),
     "BiRRT": (
         "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
@@ -213,6 +228,9 @@ orchestrate your tested modules.
 contexts, it belongs in its own module.
 - Modules should be organized by functionality, and organized in directories if needed. \
 For example, if you have multiple modules related to geometry, put them in a `geometry/` subdirectory. \
+IMPORTANT: be careful about repeated behavior! If an action or strategy in your \
+approach fails, you should design your code to avoid repeating that failure. \
+For example, if a grasp fails, your code should not keep trying the same grasp.
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
@@ -424,30 +442,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             logger.info("Woke up after rate-limit sleep, retrying...")
 
     def _load_generated(self, path: Path) -> None:
-        """Load a GeneratedApproach class from the given file.
-
-        Temporarily adds the parent directory of *path* to ``sys.path`` so
-        that ``approach.py`` can import sibling modules written by the agent,
-        then removes it to avoid polluting the global import path.
-        """
-        sandbox_dir = str(path.parent.resolve())
-        if sandbox_dir not in sys.path:
-            sys.path.insert(0, sandbox_dir)
-        try:
-            source = path.read_text()
-            namespace: dict[str, Any] = {}
-            exec(  # pylint: disable=exec-used
-                compile(source, str(path), "exec"), namespace
-            )
-        finally:
-            sys.path.remove(sandbox_dir)  # should always succeed since we just added it
-        cls = namespace["GeneratedApproach"]
-        self._generated = cls(
-            self._action_space,
-            self._state_space,
-            primitives=self._primitives,
+        """Load a GeneratedApproach class from the given file."""
+        self._generated = load_generated_approach(
+            path, self._action_space, self._state_space, self._primitives
         )
-        logger.info("Loaded generated approach from %s", path)
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
         """Start a new episode."""

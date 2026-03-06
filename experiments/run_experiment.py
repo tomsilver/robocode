@@ -25,71 +25,20 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import gymnasium as gym
 import hydra
-import imageio.v3 as iio
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
-from numpy.typing import NDArray
 from omegaconf import DictConfig
 
-from robocode.approaches.base_approach import BaseApproach
 from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
+from robocode.primitives.render_policy import render_policy
 from robocode.primitives.render_state import render_state
+from robocode.utils.episode import run_episode, save_video
 
 logger = logging.getLogger(__name__)
 
-
-def _run_episode(
-    env: gym.Env,
-    approach: BaseApproach,
-    seed: int,
-    max_steps: int,
-    render: bool = False,
-) -> tuple[dict[str, Any], list[NDArray[np.uint8]]]:
-    """Run a single evaluation episode and return metrics + frames."""
-    state, info = env.reset(seed=seed)
-    approach.reset(state, info)
-
-    frames: list[NDArray[np.uint8]] = []
-
-    def _capture() -> None:
-        rendered: Any = env.render()
-        if isinstance(rendered, np.ndarray):
-            frames.append(rendered)
-
-    if render:
-        _capture()
-
-    total_reward = 0.0
-    num_steps = 0
-    terminated = False
-    for _ in range(max_steps):
-        action = approach.step()
-        state, reward, terminated, truncated, info = env.step(action)
-        total_reward += float(reward)
-        num_steps += 1
-        approach.update(state, float(reward), terminated or truncated, info)
-        if render:
-            _capture()
-        if terminated or truncated:
-            break
-
-    metrics = {
-        "total_reward": total_reward,
-        "num_steps": num_steps,
-        "solved": bool(terminated),
-    }
-    return metrics, frames
-
-
-def _save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:
-    """Save a list of RGB frames as a gif."""
-    duration = 1000.0 / fps  # ms per frame
-    iio.imwrite(str(path), frames, duration=duration, loop=0)
-    logger.info("Saved video to %s", path)
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -114,7 +63,14 @@ def _main(cfg: DictConfig) -> float:
         "csp": csp_module,
         "BiRRT": BiRRT,
     }
-    primitives = {name: all_primitives[name] for name in cfg.primitives}
+    # render_policy depends on the assembled primitives, so build it after.
+    primitives = {
+        name: all_primitives[name]
+        for name in cfg.primitives
+        if name != "render_policy"
+    }
+    if "render_policy" in cfg.primitives:
+        primitives["render_policy"] = partial(render_policy, env, primitives)
 
     approach = hydra.utils.instantiate(
         cfg.approach,
@@ -135,14 +91,14 @@ def _main(cfg: DictConfig) -> float:
     render = cfg.render_videos
     per_episode = []
     for i, s in enumerate(eval_seeds):
-        episode_result, frames = _run_episode(
+        episode_result, frames = run_episode(
             env, approach, s, cfg.max_steps, render=render
         )
         per_episode.append(episode_result)
         if frames:
             video_dir = output_dir / "videos"
             video_dir.mkdir(exist_ok=True)
-            _save_video(frames, video_dir / f"episode_{i}.gif")
+            save_video(frames, video_dir / f"episode_{i}.gif")
 
     mean_reward = float(np.mean([e["total_reward"] for e in per_episode]))
     mean_steps = float(np.mean([e["num_steps"] for e in per_episode]))

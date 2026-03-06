@@ -12,3 +12,4 @@ primitives:
   - render_state
   - csp
   - BiRRT
+  - render_policy
