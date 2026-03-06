@@ -191,7 +191,7 @@ def _build_sandbox_env(
 ) -> dict[str, str]:
     """Build a clean environment dict, stripping ``CLAUDECODE*`` vars."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
-    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
+    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "50000")
     if extra:
         env.update(extra)
     return env
