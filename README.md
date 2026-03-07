@@ -75,6 +75,7 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 | `stickbutton2d_medium` | `kinder/StickButton2D-b3-v0` | Medium (3 buttons) |
 | `stickbutton2d_hard` | `kinder/StickButton2D-b5-v0` | Hard (5 buttons) |
 | `pushpullhook2d` | `kinder/PushPullHook2D-v0` | Single variant |
+| `pushpullhook2d_grasp_vertical` | `kinder/PushPullHook2D-GraspVertical-v0` | Easy (grasp vertical hook) |
 
 ### 3D Kinematic (continuous, kinder geom3d)
 
