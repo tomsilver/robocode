@@ -1,6 +1,7 @@
 """An approach that uses a Claude agent to generate approach code."""
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 import sys
@@ -238,6 +239,20 @@ type, action space, and dynamics.
 _DEFAULT_RESET_HOUR = 3  # fallback hour if we can't parse the reset time
 
 
+def _run_async(make_coro: Callable[[], Any]) -> SandboxResult:
+    """Run an async sandbox call, handling an already-running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make_coro())
+
+    def _run() -> SandboxResult:
+        return asyncio.run(make_coro())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_run).result()
+
+
 def _parse_reset_hour(reset_str: str) -> int:
     """Parse a reset time like '3am' or '11pm' into a 24-hour int."""
     reset_str = reset_str.strip().lower()
@@ -403,10 +418,12 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         """Run the sandbox, retrying on rate-limit by sleeping until reset."""
         while True:
             if docker_config is not None:
-                result = asyncio.run(run_agent_in_docker_sandbox(docker_config))
+                result = _run_async(
+                    lambda: run_agent_in_docker_sandbox(docker_config)
+                )
             else:
                 assert local_config is not None
-                result = asyncio.run(run_agent_in_sandbox(local_config))
+                result = _run_async(lambda: run_agent_in_sandbox(local_config))
 
             if result.rate_limit_reset is None:
                 return result
