@@ -20,7 +20,7 @@ dependencies = [
    "relational-structs",
    "prpl_utils",
    "tomsgeoms2d",
-   "kinder[all]",
+   "kinder[geom2d,geom3d]",
    "pybullet_helpers",
    "types-shapely",
    "scipy-stubs",

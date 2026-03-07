@@ -10,6 +10,7 @@ Work in progress.
 ```bash
 git clone https://github.com/tomsilver/robocode.git
 cd robocode
+uv venv --python=3.11
 bash install.sh
 ```
 
