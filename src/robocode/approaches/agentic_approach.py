@@ -418,9 +418,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         """Run the sandbox, retrying on rate-limit by sleeping until reset."""
         while True:
             if docker_config is not None:
-                result = _run_async(
-                    lambda: run_agent_in_docker_sandbox(docker_config)
-                )
+                result = _run_async(lambda: run_agent_in_docker_sandbox(docker_config))
             else:
                 assert local_config is not None
                 result = _run_async(lambda: run_agent_in_sandbox(local_config))

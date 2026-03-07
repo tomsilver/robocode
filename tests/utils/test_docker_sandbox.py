@@ -360,8 +360,8 @@ def test_container_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
 
 @requires_docker
 def test_container_files_persist_on_host(tmp_path: Path) -> None:
-    """Files written inside /sandbox (including subdirectories) are visible on
-    the host via the bind-mount."""
+    """Files written inside /sandbox (including subdirectories) are visible on the host
+    via the bind-mount."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
     result = _run_in_container(
