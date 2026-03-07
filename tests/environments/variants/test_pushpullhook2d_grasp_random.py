@@ -93,6 +93,7 @@ def run_motion_planning_for_crv_robot(
     target_pose: SE2Pose,
     action_space: CRVRobotActionSpace,
     static_object_body_cache: dict[Object, MultiBody2D] | None = None,
+    initial_constant_state: ObjectCentricState | None = None,
     seed: int = 0,
     num_attempts: int = 10,
     num_iters: int = 100,
@@ -105,6 +106,9 @@ def run_motion_planning_for_crv_robot(
     rng = np.random.default_rng(seed)
 
     # Use the object positions in the state to create a rough room boundary.
+    # Include the target pose in the bounds and add padding so the planner
+    # can sample configurations around start/goal even when they sit at the
+    # edge of the object layout.
     x_lb, x_ub, y_lb, y_ub = np.inf, -np.inf, np.inf, -np.inf
     for obj in state:
         pose = get_se2_pose(state, obj)
@@ -112,6 +116,15 @@ def run_motion_planning_for_crv_robot(
         x_ub = max(x_ub, pose.x)
         y_lb = min(y_lb, pose.y)
         y_ub = max(y_ub, pose.y)
+    x_lb = min(x_lb, target_pose.x)
+    x_ub = max(x_ub, target_pose.x)
+    y_lb = min(y_lb, target_pose.y)
+    y_ub = max(y_ub, target_pose.y)
+    padding = 0.5
+    x_lb -= padding
+    x_ub += padding
+    y_lb -= padding
+    y_ub += padding
 
     # Create a static version of the state so that the geoms only need to be
     # instantiated once during motion planning (except for the robot). Make
@@ -120,6 +133,10 @@ def run_motion_planning_for_crv_robot(
     static_object_body_cache = static_object_body_cache.copy()
     moving_objects = {robot}
     static_state = state.copy()
+    # Merge in constant objects (walls, table, etc.) so the collision
+    # checker sees the full environment, matching what env.step() does.
+    if initial_constant_state is not None:
+        static_state.data.update(initial_constant_state.data)
     for o in static_state:
         if o in moving_objects:
             continue
@@ -239,84 +256,71 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
     gripper_w = state.get(robot, "gripper_width")
     base_r = state.get(robot, "base_radius")
 
-    goal_x, goal_y, face_theta = None, None, None
     tcp2robot = SE2Pose(-arm_length - gripper_w - 0.01,
                         0.0, 0.0)  # TCP to robot base when arm extended
     hook_pose = SE2Pose(hx, hy, ht)
+    assert isinstance(env.action_space, CRVRobotActionSpace)
+
+    # Try each candidate goal; for each collision-free config, attempt motion
+    # planning.  Use the first goal that is both collision-free and reachable.
+    pose_plan = None
     for length_rt in [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
         for rel_theta in [np.pi / 2, -np.pi / 2]:
-            
             hook2tcp = SE2Pose(
                 -hl1 * length_rt, 0.0, rel_theta
-            )  # relative pose of robot base to hook center
-            tcp_pose = hook_pose * hook2tcp  # desired TCP pose
+            )
+            tcp_pose = hook_pose * hook2tcp
             robot_pose = tcp_pose * tcp2robot
             gx, gy, ft = robot_pose.x, robot_pose.y, robot_pose.theta
-            # Must be collision-free with arm extended.
-            if _goal_config_is_collision_free(
+            if not _goal_config_is_collision_free(
                 env, state, robot, gx, gy, ft, arm_length
             ):
-                goal_x, goal_y, face_theta = gx, gy, ft
+                continue
+            target_pose = SE2Pose(gx, gy, ft)
+            pose_plan = run_motion_planning_for_crv_robot(
+                state,
+                robot,
+                target_pose,
+                env.action_space,
+                static_object_body_cache=env._static_object_body_cache,
+                initial_constant_state=env.initial_constant_state,
+                num_attempts=20,
+                num_iters=500,
+            )
+            if pose_plan is not None:
                 break
-        if goal_x is not None:
+        if pose_plan is not None:
             break
 
-    if goal_x is None:
+    if pose_plan is None:
         return False, max_steps
 
-    # Phase 1: Navigate to goal (x, y, theta) with arm retracted.
+    action_plan = crv_pose_plan_to_action_plan(pose_plan, env.action_space)
     step_count = 0
-    phase = "navigate"
-    for step_i in range(max_steps):
-        rx = state.get(robot, "x")
-        ry = state.get(robot, "y")
-        rt = state.get(robot, "theta")
-        arm_joint = state.get(robot, "arm_joint")
-
-        dx_t = goal_x - rx
-        dy_t = goal_y - ry
-        dist = np.sqrt(dx_t**2 + dy_t**2)
-        angle_err = (face_theta - rt + np.pi) % (2 * np.pi) - np.pi
-        dtheta = np.clip(
-            angle_err, env.config.min_dtheta, env.config.max_dtheta
-        )
-
-        if phase == "navigate":
-            if dist > 0.02:
-                speed = 1.0 if abs(angle_err) < 0.4 else 0.3
-                move_dx = np.clip(
-                    dx_t * speed, env.config.min_dx, env.config.max_dx
-                )
-                move_dy = np.clip(
-                    dy_t * speed, env.config.min_dy, env.config.max_dy
-                )
-            else:
-                move_dx, move_dy = 0.0, 0.0
-            if dist < 0.03 and abs(angle_err) < 0.2:
-                phase = "extend"
-            action = np.array(
-                [move_dx, move_dy, dtheta, 0.0, 0.0], dtype=np.float32
-            )
-        elif phase == "extend":
-            if arm_joint < arm_length - 0.01:
-                action = np.array(
-                    [0.0, 0.0, 0.0, env.config.max_darm, 0.0],
-                    dtype=np.float32,
-                )
-            else:
-                phase = "vacuum"
-                action = np.array(
-                    [0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32
-                )
-        else:  # vacuum
-            action = np.array(
-                [0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32
-            )
-
+    for action in action_plan:
         state, _, terminated, _, _ = step_env.step(action)
         step_count += 1
         if terminated:
             return True, step_count
+
+    # Phase 2: Extend arm.
+    while state.get(robot, "arm_joint") < arm_length - 0.01:
+        action = np.array(
+            [0.0, 0.0, 0.0, env.config.max_darm, 0.0], dtype=np.float32
+        )
+        state, _, terminated, _, _ = step_env.step(action)
+        step_count += 1
+        if terminated:
+            return True, step_count
+        if step_count >= max_steps:
+            return False, step_count
+
+    # Phase 3: Turn on vacuum.
+    action = np.array([0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    state, _, terminated, _, _ = step_env.step(action)
+    step_count += 1
+    if terminated:
+        return True, step_count
 
     return False, step_count
 
