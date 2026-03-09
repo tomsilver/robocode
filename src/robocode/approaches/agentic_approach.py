@@ -41,6 +41,43 @@ _SYSTEM_PROMPT = (
     "types simultaneously rather than sequentially."
 )
 
+_MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "Start by calling render_state to see the environment before writing code. "
+    "When your approach fails, call render_policy to visually diagnose the "
+    "failure BEFORE guessing at fixes."
+)
+
+_MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "render_state": (
+        "`mcp__robocode-tools__render_state(seed=42)` — renders the "
+        "environment's initial state for a given seed and returns the path to "
+        "a PNG file. Use this to visually understand the spatial layout, "
+        "obstacle placement, and goal positions for a specific seed. Delegate "
+        "image reading to a Task subagent: have it Read the PNG, describe the "
+        "scene, and return a concise summary. Delete the file when done."
+    ),
+    "render_policy": (
+        '`mcp__robocode-tools__render_policy(approach_dir=".", seed=42, '
+        "max_steps=1000, max_frames=100)` — runs a full episode of the "
+        "approach in `approach_dir/approach.py` on the given seed and saves "
+        "each frame as a PNG. Returns a list of file paths. Use this to "
+        "visually debug policy failures: see where the agent gets stuck, "
+        "overshoots, or collides.\n"
+        "  IMPORTANT: Do NOT read the frame images yourself — delegate to a "
+        "Task subagent. The subagent should Read a sample of frames (e.g. "
+        "first, middle, last, and any where behavior changes), describe the "
+        "trajectory, identify failure modes, and return a concise text "
+        "summary. Delete the output directory when done.\n"
+        "  Typical workflow:\n"
+        "  1. Call mcp__robocode-tools__render_policy to generate frames\n"
+        '  2. Spawn a Task subagent: "Read these frame PNGs and describe '
+        "the agent's trajectory. What goes wrong? Return a short summary.\"\n"
+        "  3. Use the summary to fix your approach\n"
+        "  4. Delete the frames directory with Bash"
+    ),
+}
+
 _INTERFACE_SPEC = """\
 Write `approach.py` containing a class `GeneratedApproach` with the following \
 interface:
@@ -295,6 +332,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         use_docker: bool = False,
         geometry_prompt: bool = True,
         modular_code_prompt: bool = False,
+        mcp_tools: tuple[str, ...] = (),
     ) -> None:
         super().__init__(
             action_space,
@@ -310,6 +348,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
         self._modular_code_prompt = modular_code_prompt
+        self._mcp_tools = mcp_tools
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -343,6 +382,16 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             primitives_desc = "`primitives` is an empty dict."
 
+        if self._mcp_tools:
+            mcp_lines = [
+                "\n\nYou also have MCP tools for visual debugging (they do NOT "
+                "affect your test scripts):\n",
+            ]
+            for name in self._mcp_tools:
+                if name in _MCP_TOOL_DESCRIPTIONS:
+                    mcp_lines.append(f"- {_MCP_TOOL_DESCRIPTIONS[name]}")
+            primitives_desc += "\n".join(mcp_lines)
+
         python_exe = DOCKER_PYTHON if self._use_docker else sys.executable
         interface_spec = _INTERFACE_SPEC.format(
             python_executable=python_exe,
@@ -368,15 +417,20 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
 
         docker_config: DockerSandboxConfig | None = None
         config: SandboxConfig | None = None
+        system_prompt = _SYSTEM_PROMPT
+        if self._mcp_tools:
+            system_prompt += _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+
         if self._use_docker:
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
                 output_filename="approach.py",
                 prompt=prompt,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
                 primitive_names=tuple(self._primitives),
+                mcp_tools=self._mcp_tools,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         else:
@@ -384,7 +438,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 sandbox_dir=sandbox_dir,
                 output_filename="approach.py",
                 prompt=prompt,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
             )

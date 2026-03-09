@@ -28,7 +28,7 @@ from typing import Any
 import hydra
 import numpy as np
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
@@ -38,7 +38,6 @@ from robocode.primitives.render_state import render_state
 from robocode.utils.episode import run_episode, save_video
 
 logger = logging.getLogger(__name__)
-
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -65,12 +64,18 @@ def _main(cfg: DictConfig) -> float:
     }
     # render_policy depends on the assembled primitives, so build it after.
     primitives = {
-        name: all_primitives[name]
-        for name in cfg.primitives
-        if name != "render_policy"
+        name: all_primitives[name] for name in cfg.primitives if name != "render_policy"
     }
     if "render_policy" in cfg.primitives:
         primitives["render_policy"] = partial(render_policy, env, primitives)
+
+    # Write env config for MCP server (if mcp_tools are configured).
+    mcp_tools = tuple(cfg.get("mcp_tools", []))
+    if mcp_tools:
+        env_config_path = output_dir / "env_config.json"
+        env_config_path.write_text(
+            json.dumps(OmegaConf.to_container(cfg.environment, resolve=True))
+        )
 
     approach = hydra.utils.instantiate(
         cfg.approach,
@@ -79,6 +84,7 @@ def _main(cfg: DictConfig) -> float:
         seed=cfg.seed,
         primitives=primitives,
         env_description_path=env_description_path,
+        mcp_tools=mcp_tools,
     )
 
     task_rng = np.random.default_rng(cfg.seed)

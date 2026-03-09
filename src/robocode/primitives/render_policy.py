@@ -1,4 +1,4 @@
-"""Render-policy primitive"""
+"""Render-policy primitive."""
 
 from __future__ import annotations
 
@@ -19,16 +19,22 @@ def render_policy(
     max_frames: int = 100,
 ) -> list[str]:
     """Run one episode of the approach and save every frame as a PNG."""
-    
+
     approach_dir = Path(approach_dir)
     output_dir = Path(output_dir)
 
+    # AgenticApproach expects load_dir/sandbox/approach.py.  If approach.py
+    # is directly in approach_dir, go one level up.
+    if (approach_dir / "approach.py").exists():
+        load_dir = str(approach_dir / "..")
+    else:
+        load_dir = str(approach_dir)
     approach = AgenticApproach(
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=seed,
         primitives=primitives,
-        load_dir=str(approach_dir),
+        load_dir=load_dir,
     )
     approach.train()
 
