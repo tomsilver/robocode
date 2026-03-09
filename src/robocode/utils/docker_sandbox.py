@@ -53,7 +53,9 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _build_claude_cli_args,
     _build_sandbox_env,
+    _mcp_tool_names,
     _parse_claude_stream,
+    _setup_mcp_config,
     _setup_sandbox_common,
     _stream_result_to_sandbox_result,
 )
@@ -138,6 +140,7 @@ class DockerSandboxConfig(SandboxConfig):
 
     docker_image: str = _DEFAULT_IMAGE
     primitive_names: tuple[str, ...] = ()
+    mcp_tools: tuple[str, ...] = ()
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -202,6 +205,16 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
                 "\nPrimitive source files (for reference) are in " "./primitives/\n"
             )
         claude_md.write_text(claude_md_text)
+
+    # MCP server config (written when mcp_tools is non-empty).
+    # Expects env_config.json in sandbox_dir's parent (the output dir).
+    if config.mcp_tools:
+        _setup_mcp_config(
+            config.sandbox_dir,
+            config.mcp_tools,
+            python_cmd=DOCKER_PYTHON,
+            env_config_path="/sandbox/.mcp/env_config.json",
+        )
 
 
 async def run_agent_in_docker_sandbox(
@@ -299,9 +312,16 @@ async def run_agent_in_docker_sandbox(
             "/sandbox",
             config.docker_image,
         ]
-        docker_cmd += _build_claude_cli_args(
-            config.prompt, config.model, config.system_prompt, config.max_budget_usd
+        claude_args = _build_claude_cli_args(
+            config.prompt,
+            config.model,
+            config.system_prompt,
+            config.max_budget_usd,
+            extra_tools=_mcp_tool_names(config.mcp_tools),
         )
+        if config.mcp_tools:
+            claude_args += ["--mcp-config", "/sandbox/.mcp/mcp_config.json"]
+        docker_cmd += claude_args
 
         extra_env: dict[str, str] = {}
         if oauth_token:

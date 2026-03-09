@@ -7,4 +7,5 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "render_state": "render_state",
     "csp": "csp",
     "BiRRT": "motion_planning",
+    "render_policy": "render_policy",
 }

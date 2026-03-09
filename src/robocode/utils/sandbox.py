@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -100,6 +101,7 @@ class SandboxConfig:
     model: str = "sonnet"
     max_budget_usd: float = 5.0
     system_prompt: str = ""
+    mcp_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -158,13 +160,66 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
     (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
 
 
+_MCP_SERVER_NAME = "robocode-tools"
+
+
+def _mcp_tool_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
+    """Return Claude CLI tool names for MCP tools (e.g. ``mcp__robocode-
+    tools__render_state``)."""
+    return tuple(f"mcp__{_MCP_SERVER_NAME}__{t}" for t in tool_names)
+
+
+def _setup_mcp_config(
+    sandbox_dir: Path,
+    tool_names: tuple[str, ...],
+    python_cmd: str,
+    env_config_path: str,
+) -> Path:
+    """Write MCP server config into ``sandbox_dir/.mcp/``.
+
+    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
+    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
+    """
+    mcp_dir = sandbox_dir / ".mcp"
+    mcp_dir.mkdir(exist_ok=True)
+
+    shutil.copy2(
+        sandbox_dir.parent / "env_config.json",
+        mcp_dir / "env_config.json",
+    )
+
+    mcp_config = {
+        "mcpServers": {
+            _MCP_SERVER_NAME: {
+                "command": python_cmd,
+                "args": [
+                    "-m",
+                    "robocode.mcp.server",
+                    "--env-config",
+                    env_config_path,
+                    "--tools",
+                    ",".join(tool_names),
+                ],
+            }
+        }
+    }
+    config_path = mcp_dir / "mcp_config.json"
+    config_path.write_text(json.dumps(mcp_config, indent=2))
+    return config_path
+
+
 def _build_claude_cli_args(
     prompt: str,
     model: str,
     system_prompt: str,
     max_budget_usd: float,
+    extra_tools: tuple[str, ...] = (),
 ) -> list[str]:
     """Build the common Claude CLI arguments (excluding the binary itself)."""
+    tools = "Bash,Read,Write,Edit,Glob,Grep,Task"
+    if extra_tools:
+        tools += "," + ",".join(extra_tools)
+    logger.info("Enabled tools: %s", tools)
     args = [
         "-p",
         prompt,
@@ -176,7 +231,7 @@ def _build_claude_cli_args(
         "--dangerously-skip-permissions",
         "--no-session-persistence",
         "--tools",
-        "Bash,Read,Write,Edit,Glob,Grep,Task",
+        tools,
         "--setting-sources",
         "project",
     ]
@@ -225,6 +280,15 @@ def _parse_claude_stream(
 
         msg_type = msg.get("type", "")
 
+        if msg_type == "system" and msg.get("subtype") == "init":
+            for srv in msg.get("mcp_servers", []):
+                status = srv.get("status")
+                name = srv.get("name")
+                if status != "connected":
+                    logger.warning("MCP server %s: %s", name, status)
+                else:
+                    logger.info("MCP server %s: %s", name, status)
+
         if msg_type == "assistant":
             for block in msg.get("message", {}).get("content", []):
                 if block.get("type") == "thinking":
@@ -241,11 +305,18 @@ def _parse_claude_stream(
                         input_str = input_str[:300] + "..."
                     logger.info("Tool call: %s(%s)", block.get("name"), input_str)
 
-        elif msg_type == "tool_result":
-            content = msg.get("content", "")
-            if isinstance(content, str) and len(content) > 500:
-                content = content[:500] + "..."
-            logger.info("Tool result: %s", content)
+        elif msg_type in ("tool_result", "user"):
+            # Log only MCP tool results (contain "mcp_renders") and errors.
+            tool_use_result = msg.get("tool_use_result")
+            if tool_use_result is not None:
+                if len(tool_use_result) > 500:
+                    tool_use_result = tool_use_result[:500] + "..."
+                if "Error" in tool_use_result:
+                    logger.warning("Tool result: %s", tool_use_result)
+                elif "mcp_renders" in tool_use_result:
+                    logger.info("Tool result: %s", tool_use_result)
+                else:
+                    logger.debug("Tool result: %s", tool_use_result)
 
         elif msg_type == "result":
             is_error = msg.get("is_error", False)
@@ -355,10 +426,28 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             "using absolute paths.\n"
         )
 
+    # MCP server config (written when mcp_tools is non-empty).
+    # Expects env_config.json in sandbox_dir's parent (the output dir).
+    if config.mcp_tools:
+        mcp_config_path = _setup_mcp_config(
+            config.sandbox_dir,
+            config.mcp_tools,
+            python_cmd=sys.executable,
+            env_config_path=str(
+                (config.sandbox_dir / ".mcp" / "env_config.json").resolve()
+            ),
+        )
+
     claude_cmd = _get_claude_cmd()
     cmd = [claude_cmd] + _build_claude_cli_args(
-        config.prompt, config.model, config.system_prompt, config.max_budget_usd
+        config.prompt,
+        config.model,
+        config.system_prompt,
+        config.max_budget_usd,
+        extra_tools=_mcp_tool_names(config.mcp_tools),
     )
+    if config.mcp_tools:
+        cmd += ["--mcp-config", str(mcp_config_path.resolve())]
     env = _build_sandbox_env()
     sandbox_abs = str(config.sandbox_dir.resolve())
 
