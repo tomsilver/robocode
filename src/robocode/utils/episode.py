@@ -37,9 +37,7 @@ def load_generated_approach(
         # sibling modules via os.path.dirname(__file__)).  exec() does
         # not set this automatically unlike a normal module import.
         namespace: dict[str, Any] = {"__file__": str(path)}
-        exec(  # pylint: disable=exec-used
-            compile(source, str(path), "exec"), namespace
-        )
+        exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
     finally:
         sys.path.remove(sandbox_dir)
     cls = namespace["GeneratedApproach"]
@@ -91,9 +89,7 @@ def run_episode(
     return metrics, frames
 
 
-def save_video(
-    frames: list[NDArray[np.uint8]], path: Path, fps: int = 10
-) -> None:
+def save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:
     """Save a list of RGB frames as a gif."""
     duration = 1000.0 / fps  # ms per frame
     iio.imwrite(str(path), frames, duration=duration, loop=0)

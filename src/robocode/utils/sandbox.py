@@ -176,11 +176,10 @@ def _setup_mcp_config(
     env_config_path: str,
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
-    
+
     Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
     and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
     """
-    
     mcp_dir = sandbox_dir / ".mcp"
     mcp_dir.mkdir(exist_ok=True)
 
