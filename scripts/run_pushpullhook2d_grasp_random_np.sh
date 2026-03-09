@@ -6,7 +6,7 @@ python experiments/run_experiment.py -m \
     approach.use_docker=true \
     seed=42,24,424 \
     approach.max_budget_usd=25 \
-    'primitives=[check_action_collision,render_state,csp,BiRRT]' \
-    environment=pushpullhook2d_grasp_vertical \
-    'hydra.sweep.dir=multirun/pushpullhook2d_grasp_vertical_3seeds' \
+    'primitives=[]' \
+    environment=pushpullhook2d_grasp_random \
+    'hydra.sweep.dir=multirun/pushpullhook2d_grasp_random_3seeds_np' \
     'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}'
