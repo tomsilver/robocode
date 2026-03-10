@@ -119,11 +119,11 @@ def _find_repo_root() -> Path:
 
 
 def _copy_prpl_mono_without_tests(prpl_mono: Path, dest: Path) -> None:
-    """Copy ``prpl-mono`` to *dest*, skipping all ``tests/`` directories."""
+    """Copy ``prpl-mono`` to *dest*, skipping ``tests/`` and ``docs/``."""
     shutil.copytree(
         prpl_mono,
         dest,
-        ignore=shutil.ignore_patterns("tests"),
+        ignore=shutil.ignore_patterns("tests", "docs"),
     )
 
 
@@ -282,7 +282,9 @@ async def run_agent_in_docker_sandbox(
             "--cap-add=NET_ADMIN",
             "--cap-add=NET_RAW",
             "-e",
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000",
+            f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
+            "-e",
+            f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
         ]
 
         if oauth_token:
@@ -306,7 +308,11 @@ async def run_agent_in_docker_sandbox(
         extra_env: dict[str, str] = {}
         if oauth_token:
             extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-        env = _build_sandbox_env(extra_env if extra_env else None)
+        env = _build_sandbox_env(
+            config.max_output_tokens,
+            config.autocompact_pct,
+            extra_env if extra_env else None,
+        )
 
         logger.info(
             "Starting Docker sandbox: container=%s image=%s sandbox=%s",
@@ -325,7 +331,10 @@ async def run_agent_in_docker_sandbox(
             text=True,
         )
 
-        stream = _parse_claude_stream(proc)
+        stream = _parse_claude_stream(
+            proc,
+            stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+        )
 
         logger.info(
             "Docker session done: container=%s turns=%d cost=$%s error=%s",

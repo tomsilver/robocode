@@ -292,6 +292,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         use_docker: bool = False,
         geometry_prompt: bool = True,
         modular_code_prompt: bool = False,
+        max_output_tokens: int = 16384,
+        autocompact_pct: int = 80,
     ) -> None:
         super().__init__(
             action_space,
@@ -307,6 +309,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
         self._modular_code_prompt = modular_code_prompt
+        self._max_output_tokens = max_output_tokens
+        self._autocompact_pct = autocompact_pct
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -374,6 +378,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
                 primitive_names=tuple(self._primitives),
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         else:
@@ -384,6 +390,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=_SYSTEM_PROMPT,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
