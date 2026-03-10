@@ -1,6 +1,7 @@
 """An approach that uses a Claude agent to generate approach code."""
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 import sys
@@ -238,6 +239,20 @@ type, action space, and dynamics.
 _DEFAULT_RESET_HOUR = 3  # fallback hour if we can't parse the reset time
 
 
+def _run_async(make_coro: Callable[[], Any]) -> SandboxResult:
+    """Run an async sandbox call, handling an already-running event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(make_coro())
+
+    def _run() -> SandboxResult:
+        return asyncio.run(make_coro())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_run).result()
+
+
 def _parse_reset_hour(reset_str: str) -> int:
     """Parse a reset time like '3am' or '11pm' into a 24-hour int."""
     reset_str = reset_str.strip().lower()
@@ -277,6 +292,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         use_docker: bool = False,
         geometry_prompt: bool = True,
         modular_code_prompt: bool = False,
+        max_output_tokens: int = 16384,
+        autocompact_pct: int = 80,
     ) -> None:
         super().__init__(
             action_space,
@@ -292,6 +309,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
         self._modular_code_prompt = modular_code_prompt
+        self._max_output_tokens = max_output_tokens
+        self._autocompact_pct = autocompact_pct
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -359,6 +378,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
                 primitive_names=tuple(self._primitives),
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         else:
@@ -369,6 +390,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=_SYSTEM_PROMPT,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
@@ -403,10 +426,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         """Run the sandbox, retrying on rate-limit by sleeping until reset."""
         while True:
             if docker_config is not None:
-                result = asyncio.run(run_agent_in_docker_sandbox(docker_config))
+                result = _run_async(lambda: run_agent_in_docker_sandbox(docker_config))
             else:
                 assert local_config is not None
-                result = asyncio.run(run_agent_in_sandbox(local_config))
+                result = _run_async(lambda: run_agent_in_sandbox(local_config))
 
             if result.rate_limit_reset is None:
                 return result
