@@ -1,13 +1,13 @@
 """Tests for pushpullhook2d_grasp_vertical.py."""
 
+import kinder
 import numpy as np
 from gymnasium.spaces import Box
 from gymnasium.wrappers import RecordVideo
-
-import kinder
 from kinder.envs.geom2d.pushpullhook2d_grasp_vertical import (
     ObjectCentricPushPullHook2DGraspVerticalEnv,
 )
+
 from tests.conftest import MAKE_VIDEOS
 
 
@@ -50,9 +50,9 @@ def test_hook_always_vertical():
     for seed in range(20):
         state, _ = env.reset(seed=seed)
         hook = next(o for o in state if o.name == "hook")
-        assert np.isclose(state.get(hook, "theta"), np.pi / 2, atol=1e-6), (
-            f"seed={seed}: hook theta={state.get(hook, 'theta')}"
-        )
+        assert np.isclose(
+            state.get(hook, "theta"), np.pi / 2, atol=1e-6
+        ), f"seed={seed}: hook theta={state.get(hook, 'theta')}"
     env.close()
 
 
@@ -103,7 +103,7 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
             target_x = bar_right + standoff_from_bar_right
             face_theta = np.pi  # face left
         else:
-            target_x = (hx - standoff_from_bar_right)
+            target_x = hx - standoff_from_bar_right
             face_theta = 0.0  # face right
 
         # Target a y inside the bar span, below the table.
@@ -124,21 +124,15 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
             # Move toward standoff position with arm retracted.
             if dist_to_target > 0.02:
                 speed = 1.0 if abs(angle_err) < 0.4 else 0.3
-                move_dx = np.clip(
-                    dx_t * speed, -env.config.max_dx, env.config.max_dx
-                )
-                move_dy = np.clip(
-                    dy_t * speed, -env.config.max_dy, env.config.max_dy
-                )
+                move_dx = np.clip(dx_t * speed, -env.config.max_dx, env.config.max_dx)
+                move_dy = np.clip(dy_t * speed, -env.config.max_dy, env.config.max_dy)
             else:
                 move_dx = 0.0
                 move_dy = 0.0
             # Transition when at position and facing correctly.
             if dist_to_target < 0.03 and abs(angle_err) < 0.2:
                 phase = "extend"
-            action = np.array(
-                [move_dx, move_dy, dtheta, 0.0, 0.0], dtype=np.float32
-            )
+            action = np.array([move_dx, move_dy, dtheta, 0.0, 0.0], dtype=np.float32)
 
         elif phase == "extend":
             # Extend arm without moving.
@@ -149,14 +143,10 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
                 )
             else:
                 phase = "vacuum"
-                action = np.array(
-                    [0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32
-                )
+                action = np.array([0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 
         else:  # vacuum
-            action = np.array(
-                [0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32
-            )
+            action = np.array([0.0, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 
         state, _, terminated, _, _ = step_env.step(action)
         if terminated:

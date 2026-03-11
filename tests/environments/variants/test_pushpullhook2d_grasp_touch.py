@@ -2,11 +2,10 @@
 
 from collections.abc import Iterable
 
+import kinder
 import numpy as np
 from gymnasium.spaces import Box
 from gymnasium.wrappers import RecordVideo
-
-import kinder
 from kinder.envs.geom2d.pushpullhook2d_grasp_touch import (
     ObjectCentricPushPullHook2DGraspTouchEnv,
 )
@@ -15,6 +14,7 @@ from kinder.envs.geom2d.utils import CRVRobotActionSpace
 from kinder.envs.utils import get_se2_pose, state_2d_has_collision
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs import Array, Object, ObjectCentricState
+
 from robocode.primitives.motion_planning import BiRRT
 from tests.conftest import MAKE_VIDEOS
 
@@ -60,15 +60,15 @@ def test_hook_theta_varies():
         state, _ = env.reset(seed=seed)
         hook = next(o for o in state if o.name == "hook")
         theta = state.get(hook, "theta")
-        assert np.pi / 4 - 1e-6 <= theta <= 3 * np.pi / 4 + 1e-6, (
-            f"seed={seed}: hook theta={theta} out of bounds"
-        )
+        assert (
+            np.pi / 4 - 1e-6 <= theta <= 3 * np.pi / 4 + 1e-6
+        ), f"seed={seed}: hook theta={theta} out of bounds"
         thetas.append(theta)
     env.close()
     # Check that not all thetas are the same (i.e. orientation is random).
-    assert len(set(round(t, 4) for t in thetas)) > 1, (
-        "Hook theta should vary across seeds"
-    )
+    assert (
+        len(set(round(t, 4) for t in thetas)) > 1
+    ), "Hook theta should vary across seeds"
 
 
 def _goal_config_is_collision_free(env, state, robot, gx, gy, gtheta, arm):
@@ -273,9 +273,7 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
 
     # Phase 2: Extend arm.
     while state.get(robot, "arm_joint") < arm_length - 0.01:
-        action = np.array(
-            [0.0, 0.0, 0.0, env.config.max_darm, 0.0], dtype=np.float32
-        )
+        action = np.array([0.0, 0.0, 0.0, env.config.max_darm, 0.0], dtype=np.float32)
         state, _, terminated, _, _ = step_env.step(action)
         step_count += 1
         if terminated:
@@ -294,8 +292,8 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
 
 
 def _solve_touch(env, state, max_steps=500, step_env=None):
-    """After grasping the hook, navigate so the hook center overlaps
-    the movable button center, causing the button to move via collision."""
+    """After grasping the hook, navigate so the hook center overlaps the movable button
+    center, causing the button to move via collision."""
     if step_env is None:
         step_env = env
     obj_map = {o.name: o for o in state}
@@ -346,9 +344,7 @@ def _solve_touch(env, state, max_steps=500, step_env=None):
         # Clip to action bounds.
         act_dx = np.clip(rem_dx, env.config.min_dx, env.config.max_dx)
         act_dy = np.clip(rem_dy, env.config.min_dy, env.config.max_dy)
-        action = np.array(
-            [act_dx, act_dy, 0.0, 0.0, 1.0], dtype=np.float32
-        )
+        action = np.array([act_dx, act_dy, 0.0, 0.0, 1.0], dtype=np.float32)
         state, _, terminated, _, _ = step_env.step(action)
         step_count += 1
         if terminated:
@@ -371,14 +367,10 @@ def test_grasp_touch_solvable_seed0():
     grasped, grasp_steps, state = _solve_grasp(
         env, state, max_steps=500, step_env=step_env
     )
-    assert grasped or grasp_steps < 500, (
-        f"Grasp phase failed after {grasp_steps} steps"
-    )
+    assert grasped or grasp_steps < 500, f"Grasp phase failed after {grasp_steps} steps"
 
     # Phase 2: Move to touch the movable button with the hook.
-    solved, touch_steps = _solve_touch(
-        env, state, max_steps=500, step_env=step_env
-    )
+    solved, touch_steps = _solve_touch(env, state, max_steps=500, step_env=step_env)
     step_env.close()
     total_steps = grasp_steps + touch_steps
     assert solved, (

@@ -2,11 +2,10 @@
 
 from collections.abc import Iterable
 
+import kinder
 import numpy as np
 from gymnasium.spaces import Box
 from gymnasium.wrappers import RecordVideo
-
-import kinder
 from kinder.envs.geom2d.pushpullhook2d_grasp_random import (
     ObjectCentricPushPullHook2DGraspRandomEnv,
 )
@@ -15,6 +14,7 @@ from kinder.envs.geom2d.utils import CRVRobotActionSpace
 from kinder.envs.utils import get_se2_pose, state_2d_has_collision
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs import Array, Object, ObjectCentricState
+
 from robocode.primitives.motion_planning import BiRRT
 from tests.conftest import MAKE_VIDEOS
 
@@ -60,15 +60,15 @@ def test_hook_theta_varies():
         state, _ = env.reset(seed=seed)
         hook = next(o for o in state if o.name == "hook")
         theta = state.get(hook, "theta")
-        assert np.pi / 4 - 1e-6 <= theta <= 3 * np.pi / 4 + 1e-6, (
-            f"seed={seed}: hook theta={theta} out of bounds"
-        )
+        assert (
+            np.pi / 4 - 1e-6 <= theta <= 3 * np.pi / 4 + 1e-6
+        ), f"seed={seed}: hook theta={theta} out of bounds"
         thetas.append(theta)
     env.close()
     # Check that not all thetas are the same (i.e. orientation is random).
-    assert len(set(round(t, 4) for t in thetas)) > 1, (
-        "Hook theta should vary across seeds"
-    )
+    assert (
+        len(set(round(t, 4) for t in thetas)) > 1
+    ), "Hook theta should vary across seeds"
 
 
 def _goal_config_is_collision_free(env, state, robot, gx, gy, gtheta, arm):
@@ -256,8 +256,9 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
     gripper_w = state.get(robot, "gripper_width")
     base_r = state.get(robot, "base_radius")
 
-    tcp2robot = SE2Pose(-arm_length - gripper_w - 0.01,
-                        0.0, 0.0)  # TCP to robot base when arm extended
+    tcp2robot = SE2Pose(
+        -arm_length - gripper_w - 0.01, 0.0, 0.0
+    )  # TCP to robot base when arm extended
     hook_pose = SE2Pose(hx, hy, ht)
     assert isinstance(env.action_space, CRVRobotActionSpace)
 
@@ -266,9 +267,7 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
     pose_plan = None
     for length_rt in [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
         for rel_theta in [np.pi / 2, -np.pi / 2]:
-            hook2tcp = SE2Pose(
-                -hl1 * length_rt, 0.0, rel_theta
-            )
+            hook2tcp = SE2Pose(-hl1 * length_rt, 0.0, rel_theta)
             tcp_pose = hook_pose * hook2tcp
             robot_pose = tcp_pose * tcp2robot
             gx, gy, ft = robot_pose.x, robot_pose.y, robot_pose.theta
@@ -305,9 +304,7 @@ def _solve_grasp(env, state, max_steps=500, step_env=None):
 
     # Phase 2: Extend arm.
     while state.get(robot, "arm_joint") < arm_length - 0.01:
-        action = np.array(
-            [0.0, 0.0, 0.0, env.config.max_darm, 0.0], dtype=np.float32
-        )
+        action = np.array([0.0, 0.0, 0.0, env.config.max_darm, 0.0], dtype=np.float32)
         state, _, terminated, _, _ = step_env.step(action)
         step_count += 1
         if terminated:
