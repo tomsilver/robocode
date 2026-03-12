@@ -1,0 +1,15 @@
+_target_: robocode.approaches.multi_session_agentic_approach.MultiSessionAgenticApproach
+model: sonnet
+num_sessions: 3
+session_budgets_usd:
+  - 3.0
+  - 2.0
+  - 2.0
+output_dir: ${hydra:runtime.output_dir}
+load_dir: null
+use_docker: true
+geometry_prompt: false
+modular_code_prompt: true
+max_output_tokens: 50000
+autocompact_pct: 80
+start_session: 0

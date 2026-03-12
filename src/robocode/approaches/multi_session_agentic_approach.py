@@ -6,21 +6,19 @@ Session x (x >= 1) loads approach_v(x-1).py, tests it on seeds 0-9,
 identifies a failure, debugs and improves it, and saves approach_vx.py.
 """
 
-import asyncio
-import concurrent.futures
 import logging
 import re
 import shutil
 import sys
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.claude_reset import parse_reset_hour, run_async, seconds_until_reset
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -281,6 +279,15 @@ Follow these steps IN ORDER:
 6. **Verify**: Re-run your test script on ALL seeds 0-9 to confirm the fix \
    helps the failing seed without regressing on others.
 
+7. **Summarize**: If your fix is verified to work, write a brief summary of \
+   the key improvements you made and why they work. If your fix did NOT \
+   improve results or caused regressions, revert `approach.py` back to the \
+   unchanged `approach_v{prev_id}.py` content and instead summarize the \
+   current unsolved failure (what seed fails, what the symptoms are, what \
+   you tried, and why it didn't work). This summary helps the next session \
+   pick up where you left off. Do NOT leave a broken approach — either \
+   improve it or keep it unchanged.
+
 {env_description}
 
 {interface_spec}
@@ -288,49 +295,6 @@ Follow these steps IN ORDER:
 IMPORTANT: Your final `approach.py` must be a COMPLETE, working approach — \
 not a patch or diff. It should be the full improved version.\
 """
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_DEFAULT_RESET_HOUR = 3
-
-
-def _run_async(make_coro: Callable[[], Any]) -> SandboxResult:
-    """Run an async sandbox call, handling an already-running event loop."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(make_coro())
-
-    def _run() -> SandboxResult:
-        return asyncio.run(make_coro())
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(_run).result()
-
-
-def _parse_reset_hour(reset_str: str) -> int:
-    """Parse a reset time like '3am' or '11pm' into a 24-hour int."""
-    reset_str = reset_str.strip().lower()
-    match = re.match(r"(\d{1,2})(am|pm)", reset_str)
-    if not match:
-        return _DEFAULT_RESET_HOUR
-    hour = int(match.group(1))
-    period = match.group(2)
-    if period == "am":
-        return 0 if hour == 12 else hour
-    return hour if hour == 12 else hour + 12
-
-
-def _seconds_until_reset(reset_hour: int) -> float:
-    """Return seconds until the given hour (local time), plus a small buffer."""
-    now = datetime.now()
-    target = now.replace(hour=reset_hour, minute=5, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return (target - now).total_seconds()
-
 
 # ---------------------------------------------------------------------------
 # Main class
@@ -350,12 +314,12 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
         env_description_path: str | None = None,
         model: str = "sonnet",
         num_sessions: int = 3,
-        budget_per_session_usd: float = 2.0,
+        session_budgets_usd: list[float] | None = None,
         output_dir: str = ".",
         load_dir: str | None = None,
         use_docker: bool = False,
-        geometry_prompt: bool = True,
-        modular_code_prompt: bool = False,
+        geometry_prompt: bool = False,
+        modular_code_prompt: bool = True,
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
         start_session: int = 0,
@@ -369,7 +333,11 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
         )
         self._model = model
         self._num_sessions = num_sessions
-        self._budget_per_session_usd = budget_per_session_usd
+        # Per-session budgets: if not provided, default to $2 each.
+        if session_budgets_usd is not None:
+            self._session_budgets_usd = list(session_budgets_usd)
+        else:
+            self._session_budgets_usd = [2.0] * num_sessions
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
@@ -450,6 +418,7 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir: Path,
         prompt: str,
         system_prompt: str,
+        budget_usd: float,
         init_files: dict[str, Path] | None = None,
     ) -> SandboxConfig | DockerSandboxConfig:
         kwargs: dict[str, Any] = {
@@ -458,7 +427,7 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
             "prompt": prompt,
             "system_prompt": system_prompt,
             "model": self._model,
-            "max_budget_usd": self._budget_per_session_usd,
+            "max_budget_usd": budget_usd,
             "max_output_tokens": self._max_output_tokens,
             "autocompact_pct": self._autocompact_pct,
         }
@@ -476,15 +445,15 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
         """Run a single sandbox session with rate-limit retry."""
         while True:
             if isinstance(config, DockerSandboxConfig):
-                result = _run_async(lambda: run_agent_in_docker_sandbox(config))
+                result = run_async(lambda: run_agent_in_docker_sandbox(config))
             else:
-                result = _run_async(lambda: run_agent_in_sandbox(config))
+                result = run_async(lambda: run_agent_in_sandbox(config))
 
             if result.rate_limit_reset is None:
                 return result
 
-            reset_hour = _parse_reset_hour(result.rate_limit_reset)
-            wait_secs = _seconds_until_reset(reset_hour)
+            reset_hour = parse_reset_hour(result.rate_limit_reset)
+            wait_secs = seconds_until_reset(reset_hour)
             hours = wait_secs / 3600
             logger.warning(
                 "Rate-limited (%s). Sleeping %.1f hours until %d:05 ...",
@@ -499,12 +468,12 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
     # Session runners
     # ------------------------------------------------------------------
 
-    def _run_initial_session(self, sandbox_dir: Path) -> SandboxResult:
+    def _run_initial_session(self, sandbox_dir: Path, budget_usd: float) -> SandboxResult:
         """Session 0: generate the initial approach from scratch."""
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         prompt = self._build_initial_prompt()
         config = self._make_sandbox_config(
-            sandbox_dir, prompt, _SYSTEM_PROMPT_INITIAL,
+            sandbox_dir, prompt, _SYSTEM_PROMPT_INITIAL, budget_usd,
         )
 
         sandbox_logger = self._get_sandbox_logger()
@@ -528,6 +497,7 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir: Path,
         prev_approach: Path,
         prev_sandbox_dir: Path,
+        budget_usd: float,
     ) -> SandboxResult:
         """Session x (x >= 1): load previous approach, test, debug, improve."""
         sandbox_dir.mkdir(parents=True, exist_ok=True)
@@ -553,7 +523,7 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
 
         prompt = self._build_improve_prompt(session_id)
         config = self._make_sandbox_config(
-            sandbox_dir, prompt, _SYSTEM_PROMPT_IMPROVE, init_files,
+            sandbox_dir, prompt, _SYSTEM_PROMPT_IMPROVE, budget_usd, init_files,
         )
 
         sandbox_logger = self._get_sandbox_logger()
@@ -596,19 +566,28 @@ class MultiSessionAgenticApproach(BaseApproach[_ObsType, _ActType]):
 
         for session_id in range(self._start_session, self._num_sessions):
             sandbox_dir = self._output_dir / f"sandbox_v{session_id}"
+
+            # Determine budget: use per-session list if available, else last entry.
+            if session_id < len(self._session_budgets_usd):
+                budget = self._session_budgets_usd[session_id]
+            else:
+                budget = self._session_budgets_usd[-1]
+
             logger.info(
-                "=== Starting session %d / %d ===",
+                "=== Starting session %d / %d (budget: $%.2f) ===",
                 session_id,
                 self._num_sessions - 1,
+                budget,
             )
 
             if session_id == 0:
-                result = self._run_initial_session(sandbox_dir)
+                result = self._run_initial_session(sandbox_dir, budget)
             else:
                 assert latest_approach is not None
                 assert latest_sandbox_dir is not None
                 result = self._run_improve_session(
                     session_id, sandbox_dir, latest_approach, latest_sandbox_dir,
+                    budget,
                 )
 
             # Track cost
