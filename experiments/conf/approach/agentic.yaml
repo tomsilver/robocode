@@ -6,3 +6,5 @@ load_dir: null
 use_docker: true
 geometry_prompt: true
 modular_code_prompt: false
+max_output_tokens: 16384
+autocompact_pct: 80
