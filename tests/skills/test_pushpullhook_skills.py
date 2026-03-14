@@ -23,8 +23,14 @@ def _run_controller(controller, env, state, params):
     return state
 
 
-def _pick_hook(env, state, rng, max_attempts=50):
-    """Try to pick the hook, returning (state, success)."""
+def _pick_hook(env, state, rng, init_state=None, max_attempts=50):
+    """Try to pick the hook, returning (state, success).
+
+    Uses set_state to restore on failure so RecordVideo sees one
+    continuous episode instead of splitting on each reset().
+    """
+    if init_state is None:
+        init_state = state
     obj_map = {o.name: o for o in state}
     robot = obj_map["robot"]
     hook = obj_map["hook"]
@@ -41,34 +47,36 @@ def _pick_hook(env, state, rng, max_attempts=50):
         try:
             state = _run_controller(controller, env, state, params)
         except TrajectorySamplingFailure:
-            state, _ = env.reset(seed=0)
+            env.unwrapped.set_state(init_state)
+            state = init_state
             continue
 
         suctioned = get_suctioned_objects(state, robot)
         if any(o.name == "hook" for o, _ in suctioned):
             return state, True
 
-        state, _ = env.reset(seed=0)
+        env.unwrapped.set_state(init_state)
+        state = init_state
 
     return state, False
 
 
 def test_pick_skill_grasps_hook_seed0() -> None:
     """Verify that GroundPickController grasps the hook on seed 0."""
-    env = ObjectCentricPushPullHook2DEnv()
+    env = ObjectCentricPushPullHook2DEnv(allow_state_access=True)
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
 
     state, _ = env.reset(seed=0)
     rng = np.random.default_rng(0)
-    state, grasped = _pick_hook(env, state, rng)
+    state, grasped = _pick_hook(env, state, rng, init_state=state)
     env.close()
     assert grasped, "GroundPickController failed to grasp the hook after 50 attempts"
 
 
 def test_push_skill_moves_button_seed0() -> None:
     """Pick the hook, then push the movable button towards the target."""
-    env = ObjectCentricPushPullHook2DEnv()
+    env = ObjectCentricPushPullHook2DEnv(allow_state_access=True)
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
 
@@ -76,7 +84,7 @@ def test_push_skill_moves_button_seed0() -> None:
     rng = np.random.default_rng(0)
 
     # Phase 1: pick the hook.
-    state, grasped = _pick_hook(env, state, rng)
+    state, grasped = _pick_hook(env, state, rng, init_state=state)
     assert grasped, "Pick phase failed — cannot test push"
 
     # Record initial button-target distance.
