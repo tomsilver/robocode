@@ -21,6 +21,7 @@ dependencies = [
    "prpl_utils",
    "tomsgeoms2d",
    "kinder[all]",
+   "kinder-models",
    "pybullet_helpers",
    "types-shapely",
    "scipy-stubs",
@@ -71,6 +72,7 @@ relational-structs = { path = "prpl-mono/relational-structs", editable = true }
 prpl_utils = { path = "prpl-mono/prpl-utils", editable = true }
 tomsgeoms2d = { path = "prpl-mono/toms-geoms-2d", editable = true }
 kinder = { path = "prpl-mono/kinder", editable = true }
+kinder-models = { path = "prpl-mono/kinder-models", editable = true }
 pybullet_helpers = { path = "prpl-mono/pybullet-helpers", editable = true }
 
 [[tool.mypy.overrides]]

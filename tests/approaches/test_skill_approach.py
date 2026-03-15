@@ -1,99 +1,295 @@
-"""Evaluate an approach on an environment over multiple seeds, saving videos."""
+"""Tests for SkillAgenticApproach sandbox setup.
 
-import os
+Verifies that the sandbox is populated correctly with the skills
+directory, initial approach files, and state directories, and that a
+DummySkill subclass can be instantiated inside the Docker container.
+"""
+
 import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 
 import numpy as np
-from tqdm import tqdm
-from gymnasium.wrappers import RecordVideo
-from kinder.envs.kinematic2d.pushpullhook2d import ObjectCentricPushPullHook2DEnv
-from robocode.skills.pushpullhook2d.approach import GeneratedApproach
+import pytest
 
-NUM_SEEDS = 20
-MAX_STEPS = 500
-VIDEO_DIR = "test_approach_videos"
-INIT_STATE_DIR = "init_states"
+from robocode.utils.docker_sandbox import (
+    DOCKER_PYTHON,
+    DockerSandboxConfig,
+    _find_repo_root,
+    _setup_sandbox_dir,
+)
+
+_DOCKER_IMAGE = "robocode-sandbox"
+
+_SKILLS_SRC = Path(__file__).resolve().parents[2] / "src" / "robocode" / "skills"
+_INITIAL_SKILL_DIR = _SKILLS_SRC / "pushpullhook2d"
 
 
-def _run_approach_on_seed(
-    seed: int,
-    make_videos: bool = False,
-    save_init_state: bool = False,
-) -> tuple[bool, int, float]:
-    """Run the approach on one seed, return (solved, steps, total_reward)."""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _image_available() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", _DOCKER_IMAGE],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+requires_docker = pytest.mark.skipif(
+    not _image_available(),
+    reason=f"Docker image '{_DOCKER_IMAGE}' not available",
+)
+
+
+def _run_in_container(
+    sandbox_dir: Path, bash_cmd: str
+) -> subprocess.CompletedProcess[str]:
+    """Run *bash_cmd* inside the container with sandbox and prpl-mono mounted."""
+    repo_root = _find_repo_root()
+    return subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "/bin/bash",
+            "-v",
+            f"{sandbox_dir.resolve()}:/sandbox",
+            "-v",
+            f"{(repo_root / 'prpl-mono').resolve()}:/robocode/prpl-mono:ro",
+            "-w",
+            "/sandbox",
+            _DOCKER_IMAGE,
+            "-c",
+            bash_cmd,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def _setup_skill_sandbox(tmp_path: Path) -> Path:
+    """Create a sandbox dir populated like SkillAgenticApproach.train() does."""
+    sandbox_dir = tmp_path / "sandbox"
+
+    # Let DockerSandboxConfig create the standard scaffolding.
+    config = DockerSandboxConfig(sandbox_dir=sandbox_dir)
+    _setup_sandbox_dir(config)
+
+    # Copy the entire skills directory (same as train() does).
+    skills_dest = sandbox_dir / "skills"
+    shutil.copytree(
+        _SKILLS_SRC,
+        skills_dest,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+
+    # Copy the initial approach .py files to sandbox root.
+    for py_file in sorted(_INITIAL_SKILL_DIR.glob("*.py")):
+        shutil.copy2(py_file, sandbox_dir / py_file.name)
+
+    return sandbox_dir
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — no Docker needed
+# ---------------------------------------------------------------------------
+
+
+def test_sandbox_has_skills_directory(tmp_path: Path) -> None:
+    """The skills/ directory is copied into the sandbox."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+    skills_dir = sandbox_dir / "skills"
+    assert skills_dir.is_dir()
+    assert (skills_dir / "utils.py").exists()
+    assert (skills_dir / "pushpullhook2d").is_dir()
+    assert (skills_dir / "pushpullhook2d" / "approach.py").exists()
+
+
+def test_sandbox_has_initial_skill_files_at_root(tmp_path: Path) -> None:
+    """Initial skill .py files are copied to the sandbox root."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+    assert (sandbox_dir / "approach.py").exists()
+    assert (sandbox_dir / "pick_skill.py").exists()
+    assert (sandbox_dir / "push_skill.py").exists()
+
+
+def test_sandbox_state_dirs_populated(tmp_path: Path) -> None:
+    """Failed/success state .npy files are copied into the sandbox."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+
+    # Create mock state dirs with dummy .npy files.
+    failed_dir = tmp_path / "failed_states_src"
+    failed_dir.mkdir()
+    np.save(failed_dir / "init_episode_3.npy", {"dummy": 1})
+    np.save(failed_dir / "init_episode_7.npy", {"dummy": 2})
+
+    success_dir = tmp_path / "success_states_src"
+    success_dir.mkdir()
+    np.save(success_dir / "init_episode_0.npy", {"dummy": 3})
+
+    # Mimic what train() does: copy into sandbox.
+    dst_failed = sandbox_dir / "failed_states"
+    dst_failed.mkdir()
+    for f in sorted(failed_dir.glob("*.npy")):
+        shutil.copy2(f, dst_failed / f.name)
+
+    dst_success = sandbox_dir / "success_states"
+    dst_success.mkdir()
+    for f in sorted(success_dir.glob("*.npy")):
+        shutil.copy2(f, dst_success / f.name)
+
+    assert (dst_failed / "init_episode_3.npy").exists()
+    assert (dst_failed / "init_episode_7.npy").exists()
+    assert (dst_success / "init_episode_0.npy").exists()
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — require Docker
+# ---------------------------------------------------------------------------
+
+
+@requires_docker
+def test_container_skills_directory_accessible(tmp_path: Path) -> None:
+    """The skills/ directory is visible inside the container."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+    result = _run_in_container(sandbox_dir, "ls /sandbox/skills/")
+    assert result.returncode == 0, result.stderr
+    listed = set(result.stdout.split())
+    assert "utils.py" in listed
+    assert "pushpullhook2d" in listed
+
+
+@requires_docker
+def test_container_skills_utils_importable(tmp_path: Path) -> None:
+    """skills/utils.py is importable from the sandbox."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+    result = _run_in_container(
+        sandbox_dir,
+        f"{DOCKER_PYTHON} -c '"
+        "import sys; sys.path.insert(0, \"/sandbox\"); "
+        "from skills.utils import TrajectorySamplingFailure, "
+        "run_motion_planning_for_crv_robot; "
+        "print(\"OK\")"
+        "'",
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "OK" in result.stdout
+
+
+@requires_docker
+def test_container_initial_skill_importable(tmp_path: Path) -> None:
+    """The initial pick_skill.py is importable from the sandbox root."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+    result = _run_in_container(
+        sandbox_dir,
+        f"{DOCKER_PYTHON} -c '"
+        "import sys; sys.path.insert(0, \"/sandbox\"); "
+        "from pick_skill import GroundPickController; "
+        "print(GroundPickController.__name__)"
+        "'",
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "GroundPickController" in result.stdout
+
+
+@requires_docker
+def test_container_dummy_skill_works(tmp_path: Path) -> None:
+    """A DummySkill subclass can be defined and instantiated inside Docker."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+
+    # Write a DummySkill that imports from the skills dir and kinder.
+    dummy_script = textwrap.dedent("""\
+        import sys
+        sys.path.insert(0, "/sandbox")
+
+        from kinder_models.kinematic2d.utils import Kinematic2dRobotController
+        from skills.utils import TrajectorySamplingFailure
+        from kinder.envs.kinematic2d.structs import SE2Pose
+
+        class DummySkill(Kinematic2dRobotController):
+            def sample_parameters(self, x, rng):
+                return (0.5,)
+
+            def _get_vacuum_actions(self):
+                return 0.0, 0.0
+
+            def _generate_waypoints(self, state):
+                return [(SE2Pose(0.0, 0.0, 0.0), 0.1)]
+
+        # Verify the class hierarchy works.
+        assert issubclass(DummySkill, Kinematic2dRobotController)
+        print(f"DummySkill MRO: {[c.__name__ for c in DummySkill.__mro__]}")
+        print("PASS")
+    """)
+    (sandbox_dir / "test_dummy_skill.py").write_text(dummy_script)
+
+    result = _run_in_container(
+        sandbox_dir,
+        f"{DOCKER_PYTHON} /sandbox/test_dummy_skill.py",
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "PASS" in result.stdout
+    assert "DummySkill" in result.stdout
+
+
+@requires_docker
+def test_container_npy_state_loadable(tmp_path: Path) -> None:
+    """An ObjectCentricState saved as .npy can be loaded inside Docker."""
+    sandbox_dir = _setup_skill_sandbox(tmp_path)
+
+    # Save a real ObjectCentricState from the env.
+    from kinder.envs.kinematic2d.pushpullhook2d import (  # pylint: disable=import-outside-toplevel
+        ObjectCentricPushPullHook2DEnv,
+    )
+
     env = ObjectCentricPushPullHook2DEnv(render_mode="rgb_array")
-
-    if make_videos:
-        # Each seed gets its own temp folder; we rename after.
-        seed_video_dir = os.path.join(VIDEO_DIR, f"_tmp_seed_{seed}")
-        env = RecordVideo(
-            env,
-            seed_video_dir,
-            episode_trigger=lambda _: True,
-            name_prefix=f"seed_{seed:02d}",
-        )
-
-    state, info = env.reset(seed=seed)
-
-    if save_init_state:
-        Path(INIT_STATE_DIR).mkdir(exist_ok=True)
-        np.save(
-            os.path.join(INIT_STATE_DIR, f"init_episode_{seed}.npy"),
-            state,
-        )
-    approach = GeneratedApproach(env.action_space, env.observation_space, 
-                                 initial_constant_state=env.unwrapped.initial_constant_state)
-    approach.reset(state, info)
-
-    total_reward = 0.0
-    solved = False
-    steps = 0
-    for steps in range(1, MAX_STEPS + 1):
-        action = approach.get_action(state)
-        state, reward, terminated, truncated, info = env.step(action)
-        total_reward += reward
-        if terminated:
-            solved = True
-            break
-        if truncated:
-            break
-
+    state, _ = env.reset(seed=42)
     env.close()
 
-    # Rename video file to include success/failure.
-    if make_videos:
-        tag = "success" if solved else "failed"
-        src_dir = Path(seed_video_dir)
-        for mp4 in src_dir.glob("*.mp4"):
-            dest = Path(VIDEO_DIR) / f"episode_{seed:02d}_{tag}.mp4"
-            shutil.move(str(mp4), str(dest))
-        # Clean up temp dir.
-        shutil.rmtree(seed_video_dir, ignore_errors=True)
+    states_dir = sandbox_dir / "failed_states"
+    states_dir.mkdir()
+    np.save(states_dir / "init_episode_42.npy", state)
 
-    return solved, steps, total_reward
+    load_script = textwrap.dedent("""\
+        import numpy as np
+        state = np.load(
+            "failed_states/init_episode_42.npy", allow_pickle=True
+        ).item()
+        print(f"Type: {type(state).__name__}")
+        print(f"Objects: {[o.name for o in state]}")
 
-
-def test_pushpullhook2d_approach_20_seeds() -> None:
-    """Run the PushPullHook2D approach on 20 seeds and report results."""
-    Path(VIDEO_DIR).mkdir(exist_ok=True)
-
-    results: list[tuple[int, bool, int, float]] = []
-    for seed in tqdm(range(NUM_SEEDS)):
-        solved, steps, reward = _run_approach_on_seed(
-            seed, make_videos=True, save_init_state=True
+        from kinder.envs.kinematic2d.pushpullhook2d import (
+            ObjectCentricPushPullHook2DEnv,
         )
-        results.append((seed, solved, steps, reward))
+        env = ObjectCentricPushPullHook2DEnv(
+            render_mode="rgb_array", allow_state_access=True
+        )
+        env.reset()
+        env.unwrapped.set_state(state)
+        restored = env.unwrapped.get_state()
+        robot = [o for o in restored if o.name == "robot"][0]
+        print(f"Robot x: {restored.get(robot, 'x'):.6f}")
+        env.close()
+        print("PASS")
+    """)
+    (sandbox_dir / "test_load_state.py").write_text(load_script)
 
-    # Print summary table.
-    num_solved = sum(1 for _, s, _, _ in results if s)
-    print(f"\n{'Seed':>4} {'Result':>8} {'Steps':>6} {'Reward':>8}")
-    print("-" * 32)
-    for seed, solved, steps, reward in results:
-        tag = "SOLVED" if solved else "FAILED"
-        print(f"{seed:>4} {tag:>8} {steps:>6} {reward:>8.1f}")
-    print("-" * 32)
-    print(f"Solve rate: {num_solved}/{NUM_SEEDS}")
-
-    # We don't assert a specific solve rate — this test is for evaluation
-    # and video generation, not a pass/fail gate.
+    result = _run_in_container(
+        sandbox_dir,
+        f"{DOCKER_PYTHON} /sandbox/test_load_state.py",
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "PASS" in result.stdout
+    assert "ObjectCentricState" in result.stdout

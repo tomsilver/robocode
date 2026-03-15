@@ -64,7 +64,7 @@ _SKILL_INTERFACE_SPEC = """\
 ## Skill interface
 
 Every skill MUST be a subclass of `Kinematic2dRobotController`.  The base \
-class is already available in the sandbox (see `skill_base.py`).
+class is already available in the sandbox (see `skills/` directory).
 
 A skill subclass must implement:
 
@@ -110,7 +110,7 @@ with new parameters.
 
 ### Utilities available in the sandbox
 
-- `skill_utils.py` — contains `run_motion_planning_for_crv_robot` \
+- `skills/utils.py` — contains `run_motion_planning_for_crv_robot` \
 (BiRRT-based motion planner) and `TrajectorySamplingFailure`.
 - `SE2Pose(x, y, theta)` — rigid-body pose.  `SE2Pose.inverse` is a \
 cached property (NOT a method — no parentheses). Compose with `*`.
@@ -367,18 +367,22 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         # Collect files to seed into the sandbox.
         init_files: dict[str, Path] = {}
 
-        # Copy the Kinematic2dRobotController base class source so the
-        # agent can read the interface it must subclass.
-        import kinder_models.kinematic2d.utils as _kb_mod  # pylint: disable=import-outside-toplevel
+        # Copy the entire src/robocode/skills directory into the sandbox
+        # so the agent has access to all skill utilities and existing
+        # skills.  prpl-mono (kinder, relational_structs, etc.) is
+        # already bind-mounted in Docker mode.
+        skills_src = Path(__file__).parent.parent / "skills"
+        skills_dest = sandbox_dir / "skills"
+        if skills_dest.exists():
+            shutil.rmtree(skills_dest)
+        shutil.copytree(
+            skills_src,
+            skills_dest,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
 
-        init_files["skill_base.py"] = Path(_kb_mod.__file__)
-
-        # Copy skill utility module (motion planning, TrajectorySamplingFailure).
-        from robocode.skills import utils as _su_mod  # pylint: disable=import-outside-toplevel
-
-        init_files["skill_utils.py"] = Path(_su_mod.__file__)
-
-        # Copy every .py file from the initial skill directory.
+        # Copy every .py file from the initial skill directory into the
+        # sandbox root so the agent can directly read and modify them.
         if not self._initial_skill_dir.is_dir():
             raise FileNotFoundError(
                 f"initial_skill_dir not found: {self._initial_skill_dir}"
@@ -578,7 +582,7 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
             Kinematic2dRobotController,
         )
 
-        skip = {"approach.py", "skill_base.py", "skill_utils.py"}
+        skip = {"approach.py"}
         skills: dict[str, type] = {}
 
         for py_file in sorted(sandbox_dir.glob("*.py")):
