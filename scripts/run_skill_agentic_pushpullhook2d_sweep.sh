@@ -9,5 +9,5 @@ python experiments/run_experiment.py -m \
     small_test=true \
     seed=42,24,424 \
     environment=pushpullhook2d \
-    'hydra.sweep.dir=multirun/2026-03-15/skill_agentic_pushpullhook2d_sweep' \
+    'hydra.sweep.dir=multirun/2026-03-16/skill_agentic_pushpullhook2d_sweep' \
     'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}'
