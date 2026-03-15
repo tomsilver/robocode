@@ -16,6 +16,7 @@ import pytest
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
+    _docker_cmd_prefix,
     _find_repo_root,
     _setup_sandbox_dir,
 )
@@ -34,7 +35,7 @@ _INITIAL_SKILL_DIR = _SKILLS_SRC / "pushpullhook2d"
 def _image_available() -> bool:
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", _DOCKER_IMAGE],
+            [*_docker_cmd_prefix(), "image", "inspect", _DOCKER_IMAGE],
             capture_output=True,
             timeout=10,
             check=False,
@@ -57,7 +58,7 @@ def _run_in_container(
     repo_root = _find_repo_root()
     return subprocess.run(
         [
-            "docker",
+            *_docker_cmd_prefix(),
             "run",
             "--rm",
             "--entrypoint",

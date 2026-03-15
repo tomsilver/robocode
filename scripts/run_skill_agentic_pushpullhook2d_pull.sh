@@ -8,5 +8,5 @@ python experiments/run_experiment.py -m \
     approach.success_state_dir=init_states/pushpullhook2d/successful \
     seed=42,24,424 \
     environment=pushpullhook2d \
-    'hydra.sweep.dir=multirun/2026-03-15/skill_agentic_pushpullhook2d' \
+    'hydra.sweep.dir=multirun/2026-03-15/skill_agentic_pushpullhook2d_pull' \
     'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}'

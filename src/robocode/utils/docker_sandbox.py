@@ -70,6 +70,27 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 _DEFAULT_IMAGE: str = "robocode-sandbox"
 
 
+def _needs_sudo_for_docker() -> bool:
+    """Return True if ``docker`` requires ``sudo`` to access the daemon."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode != 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+
+
+def _docker_cmd_prefix() -> list[str]:
+    """Return ``["sudo", "docker"]`` or ``["docker"]`` as appropriate."""
+    if _needs_sudo_for_docker():
+        return ["sudo", "docker"]
+    return ["docker"]
+
+
 def _get_claude_oauth_token() -> str | None:
     """Extract the Claude Code OAuth access token from the macOS Keychain.
 
@@ -274,7 +295,7 @@ async def run_agent_in_docker_sandbox(
         )
 
         docker_cmd = [
-            "docker",
+            *_docker_cmd_prefix(),
             "run",
             "--rm",
             "--name",
