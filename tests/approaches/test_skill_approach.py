@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-import pytest
+from tqdm import tqdm
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.kinematic2d.pushpullhook2d import ObjectCentricPushPullHook2DEnv
 from imageio.v2 import imwrite
@@ -74,7 +74,7 @@ def test_pushpullhook2d_approach_10_seeds() -> None:
         Path(VIDEO_DIR).mkdir(exist_ok=True)
 
     results: list[tuple[int, bool, int, float]] = []
-    for seed in range(NUM_SEEDS):
+    for seed in tqdm(range(NUM_SEEDS)):
         solved, steps, reward = _run_approach_on_seed(
             seed, make_videos=MAKE_VIDEOS
         )

@@ -2,7 +2,11 @@ from collections.abc import Iterable
 
 import numpy as np
 from kinder.envs.kinematic2d.structs import MultiBody2D, SE2Pose
-from kinder.envs.kinematic2d.utils import CRVRobotActionSpace
+from kinder.envs.kinematic2d.utils import (
+    CRVRobotActionSpace, 
+    get_suctioned_objects, 
+    snap_suctioned_objects
+)
 from kinder.envs.utils import get_se2_pose, state_2d_has_collision
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs import Array, Object, ObjectCentricState
@@ -12,6 +16,7 @@ from robocode.primitives.motion_planning import BiRRT
 class TrajectorySamplingFailure(BaseException):
     """Raised when trajectory sampling fails."""
 
+
 def run_motion_planning_for_crv_robot(
     state: ObjectCentricState,
     robot: Object,
@@ -20,8 +25,8 @@ def run_motion_planning_for_crv_robot(
     static_object_body_cache: dict[Object, MultiBody2D] | None = None,
     initial_constant_state: ObjectCentricState | None = None,
     seed: int = 0,
-    num_attempts: int = 10,
-    num_iters: int = 100,
+    num_attempts: int = 1,
+    num_iters: int = 300,
     smooth_amt: int = 50,
 ) -> list[SE2Pose] | None:
     """Run motion planning in an environment with a CRV action space."""
@@ -56,7 +61,8 @@ def run_motion_planning_for_crv_robot(
     # sure to not update the global cache because we don't want to carry over
     # static things that are not actually static.
     static_object_body_cache = static_object_body_cache.copy()
-    moving_objects = {robot}
+    suctioned_objects = get_suctioned_objects(state, robot)
+    moving_objects = {robot} | {o for o, _ in suctioned_objects}
     static_state = state.copy()
     # Merge in constant objects (walls, table, etc.) so the collision
     # checker sees the full environment, matching what env.step() does.
@@ -67,6 +73,7 @@ def run_motion_planning_for_crv_robot(
             continue
         static_state.set(o, "static", 1.0)
 
+    # Uncomment to visualize the scene.
     # import matplotlib.pyplot as plt
     # import imageio.v2 as iio
     # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
@@ -84,6 +91,7 @@ def run_motion_planning_for_crv_robot(
     # ax.set_xlim(-1, 11)
     # ax.set_ylim(-1, 11)
     # img = fig2data(fig)
+    # import ipdb; ipdb.set_trace()
 
     # Set up the RRT methods.
     def sample_fn(_: SE2Pose) -> SE2Pose:
@@ -129,6 +137,7 @@ def run_motion_planning_for_crv_robot(
         static_state.set(robot, "theta", pt.theta)
 
         # Update the suctioned objects in the static state.
+        snap_suctioned_objects(static_state, robot, suctioned_objects)
         obstacle_objects = set(static_state) - moving_objects
 
         return state_2d_has_collision(

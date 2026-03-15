@@ -36,7 +36,7 @@ class GeneratedApproach:
         self._action_queue: list = []
         self._pick_attempts = 0
         self._push_attempts = 0
-        self._max_skill_attempts = 50
+        self._max_skill_attempts = 10
 
     def reset(self, state, info):
         self._phase = "pick"
@@ -116,6 +116,7 @@ class GeneratedApproach:
         controller = self._push_cls(
             objects=[robot, hook, movable, target],
             action_space=self._action_space,
+            init_constant_state=self._init_constant_state,
         )
         params = controller.sample_parameters(state, self._rng)
         self._push_attempts += 1

@@ -184,7 +184,7 @@ class GroundPushController(Kinematic2dRobotController):
         if init_constant_state is not None:
             mp_state.data.update(init_constant_state.data)
         collision_free_waypoints = run_motion_planning_for_crv_robot(
-            mp_state, self._robot, target_robot_pose, self._action_space
+            mp_state, self._robot, target_robot_pose, self._action_space,
         )
         if collision_free_waypoints is None:
             raise TrajectorySamplingFailure(
