@@ -146,17 +146,30 @@ the common failure modes in the failure instances and how could introducing a ne
 Based on the failures, design ONE new skill controller (a subclass of \
 `Kinematic2dRobotController`) that addresses the most impactful failure.
 
+IMPORTANT: The new skill must depend on the successful execution of \
+(variants of) existing skills and it must have an explicit subgoal \
+achieved upon termination. The new skill must NOT overlap with any \
+existing skills — its function must be completely new without \
+consisting of any parts of existing skills. You can feel free to \
+create variants of existing skills that are helpful for the execution \
+of the new skill, e.g., changing the parameter sampling region.
+
 Write the skill to a new file (e.g. `my_new_skill.py`). Follow the \
 conventions in the existing skill files.
 
 ### Step 3 — Write a unit test for the new skill
 
+IMPORTANT: When you test the new skill, you must leverage existing \
+skill(s) to achieve a precondition of the new skill, and then test \
+that the execution of the new skill achieves the desired subgoal.
+
 Write a test script (e.g. `test_my_new_skill.py`) that:
 1. Creates the environment and resets with the provided initial states.
-2. Sets up any preconditions (e.g. if your skill assumes the hook is \
-   grasped, run the pick skill first).
+2. Runs existing skill(s) to set up the preconditions required by \
+   your new skill (e.g. if your skill assumes the hook is grasped, \
+   run the pick skill first).
 3. Instantiates your new skill, samples parameters, and steps it.
-4. Asserts a concrete success condition.
+4. Asserts that the new skill's explicit subgoal is achieved.
 
 Run the test and iterate until it passes. Use `{python_executable}` to \
 run scripts.
@@ -246,19 +259,31 @@ Based on the failure analysis, design a new skill controller called \
 `{skill_name}` (a subclass of `Kinematic2dRobotController`) that \
 addresses the most impactful failure mode.
 
+IMPORTANT: The new skill must depend on the successful execution of \
+(variants of) existing skills and it must have an explicit subgoal \
+achieved upon termination. The new skill must NOT overlap with any \
+existing skills — its function must be completely new without \
+consisting of any parts of existing skills. You can feel free to \
+create variants of existing skills that are helpful for the execution \
+of the new skill, e.g., changing the parameter sampling region.
+
 Write the skill to a new file called `{skill_filename}`. Follow the \
 conventions in the existing skill files.
 
 ### Step 3 — Write a unit test for the new skill
 
+IMPORTANT: When you test the new skill, you must leverage existing \
+skill(s) or their variants to achieve a precondition of the new skill, and then test \
+that the execution of the new skill achieves the desired subgoal.
+
 Write a test script (e.g. `test_{skill_filename}`) that:
 1. Loads a failed state from `failed_states/`.
 2. Resets the environment with that state.
-3. Sets up any preconditions (e.g. if your skill assumes the hook is \
-   grasped, run the pick skill first).
+3. Runs existing skill(s) to set up the preconditions required by \
+   your `{skill_name}` skill.
 4. Instantiates your `{skill_name}` skill, samples parameters, and \
    steps it.
-5. Asserts a concrete success condition.
+5. Asserts that the new skill's explicit subgoal is achieved.
 
 Run the test and iterate until it passes. Use `{python_executable}` to \
 run scripts.
@@ -349,6 +374,7 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
             Path(success_state_dir) if success_state_dir is not None else None
         )
         self._generated: Any = None
+        self._generated_cls: type | None = None
         self._skill_classes: dict[str, type] = {}
         self.total_cost_usd: float | None = None
 
@@ -610,19 +636,20 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         return skills
 
     def _load_approach(self, path: Path) -> None:
-        """Load the GeneratedApproach class from approach.py."""
+        """Load the GeneratedApproach class from approach.py.
+
+        The class is stored but NOT instantiated yet — instantiation is
+        deferred to the first ``reset()`` call so that
+        ``initial_constant_state`` (which comes from the environment) can
+        be passed through.
+        """
         source = path.read_text(encoding="utf-8")
         namespace: dict[str, Any] = {}
         exec(  # pylint: disable=exec-used
             compile(source, str(path), "exec"), namespace
         )
-        cls = namespace["GeneratedApproach"]
-        self._generated = cls(
-            self._action_space,
-            self._state_space,
-            skills=self._skill_classes,
-        )
-        logger.info("Loaded approach from %s", path)
+        self._generated_cls = namespace["GeneratedApproach"]
+        logger.info("Loaded approach class from %s", path)
 
     # ------------------------------------------------------------------
     # Episode execution: delegate to the generated approach
@@ -630,6 +657,15 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
         super().reset(state, info)
+        # Lazy instantiation: deferred from _load_approach so that
+        # initial_constant_state (env-specific) can be provided.
+        if self._generated is None and self._generated_cls is not None:
+            self._generated = self._generated_cls(
+                self._action_space,
+                self._state_space,
+                skills=self._skill_classes,
+                initial_constant_state=info.get("initial_constant_state"),
+            )
         if self._generated is not None:
             self._generated.reset(state, info)
 
