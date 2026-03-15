@@ -15,7 +15,8 @@ from robocode.skills.utils import TrajectorySamplingFailure
 class GeneratedApproach:
     """Two-phase approach: pick the hook, then push the button."""
 
-    def __init__(self, action_space, observation_space, skills=None):
+    def __init__(self, action_space, observation_space, skills=None,
+                    initial_constant_state=None):
         self._action_space = action_space
         self._rng = np.random.default_rng(0)
 
@@ -31,7 +32,7 @@ class GeneratedApproach:
 
         # Runtime state.
         self._phase = "pick"  # "pick" -> "push" -> "done"
-        self._controller = None
+        self._init_constant_state = initial_constant_state
         self._action_queue: list = []
         self._pick_attempts = 0
         self._push_attempts = 0
@@ -39,7 +40,6 @@ class GeneratedApproach:
 
     def reset(self, state, info):
         self._phase = "pick"
-        self._controller = None
         self._action_queue = []
         self._pick_attempts = 0
         self._push_attempts = 0
@@ -81,6 +81,7 @@ class GeneratedApproach:
         controller = self._pick_cls(
             objects=[robot, hook],
             action_space=self._action_space,
+            init_constant_state=self._init_constant_state,
         )
         params = controller.sample_parameters(state, self._rng)
         self._pick_attempts += 1

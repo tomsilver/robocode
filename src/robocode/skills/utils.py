@@ -67,6 +67,24 @@ def run_motion_planning_for_crv_robot(
             continue
         static_state.set(o, "static", 1.0)
 
+    # import matplotlib.pyplot as plt
+    # import imageio.v2 as iio
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    # render_state_on_ax(static_state, ax)
+    # goal_state = static_state.copy()
+    # goal_state.set(robot, "x", target_pose.x)
+    # goal_state.set(robot, "y", target_pose.y)
+    # goal_state.set(robot, "theta", target_pose.theta)
+    # snap_suctioned_objects(goal_state, robot, suctioned_objects)
+    # goal_robot_mb = _robot_to_multibody2d(robot, goal_state)
+    # for body in goal_robot_mb.bodies:
+    #     body.rendering_kwargs["facecolor"] = "pink"
+    #     body.rendering_kwargs["alpha"] = 0.5
+    # goal_robot_mb.plot(ax)
+    # ax.set_xlim(-1, 11)
+    # ax.set_ylim(-1, 11)
+    # img = fig2data(fig)
+
     # Set up the RRT methods.
     def sample_fn(_: SE2Pose) -> SE2Pose:
         """Sample a robot pose."""

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.kinematic2d.pushpullhook2d import ObjectCentricPushPullHook2DEnv
+from imageio.v2 import imwrite
 
 from robocode.skills.pushpullhook2d.approach import GeneratedApproach
 from tests.conftest import MAKE_VIDEOS
@@ -35,7 +36,8 @@ def _run_approach_on_seed(
         )
 
     state, info = env.reset(seed=seed)
-    approach = GeneratedApproach(env.action_space, env.observation_space)
+    approach = GeneratedApproach(env.action_space, env.observation_space, 
+                                 initial_constant_state=env.unwrapped.initial_constant_state)
     approach.reset(state, info)
 
     total_reward = 0.0
