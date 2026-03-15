@@ -1,0 +1,12 @@
+_target_: robocode.approaches.skill_agent_approach.SkillAgenticApproach
+initial_skill_dir: src/robocode/skills/pushpullhook2d
+model: sonnet
+max_budget_usd: 25.0
+output_dir: ${hydra:runtime.output_dir}
+load_dir: null
+geometry_prompt: false
+max_output_tokens: 32000
+autocompact_pct: 80
+use_docker: true
+failed_state_dir: null
+success_state_dir: null

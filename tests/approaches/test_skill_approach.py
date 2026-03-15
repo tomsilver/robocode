@@ -8,19 +8,18 @@ import numpy as np
 from tqdm import tqdm
 from gymnasium.wrappers import RecordVideo
 from kinder.envs.kinematic2d.pushpullhook2d import ObjectCentricPushPullHook2DEnv
-from imageio.v2 import imwrite
-
 from robocode.skills.pushpullhook2d.approach import GeneratedApproach
-from tests.conftest import MAKE_VIDEOS
 
-NUM_SEEDS = 10
+NUM_SEEDS = 20
 MAX_STEPS = 500
 VIDEO_DIR = "test_approach_videos"
+INIT_STATE_DIR = "init_states"
 
 
 def _run_approach_on_seed(
     seed: int,
     make_videos: bool = False,
+    save_init_state: bool = False,
 ) -> tuple[bool, int, float]:
     """Run the approach on one seed, return (solved, steps, total_reward)."""
     env = ObjectCentricPushPullHook2DEnv(render_mode="rgb_array")
@@ -36,6 +35,13 @@ def _run_approach_on_seed(
         )
 
     state, info = env.reset(seed=seed)
+
+    if save_init_state:
+        Path(INIT_STATE_DIR).mkdir(exist_ok=True)
+        np.save(
+            os.path.join(INIT_STATE_DIR, f"init_episode_{seed}.npy"),
+            state,
+        )
     approach = GeneratedApproach(env.action_space, env.observation_space, 
                                  initial_constant_state=env.unwrapped.initial_constant_state)
     approach.reset(state, info)
@@ -68,15 +74,14 @@ def _run_approach_on_seed(
     return solved, steps, total_reward
 
 
-def test_pushpullhook2d_approach_10_seeds() -> None:
-    """Run the PushPullHook2D approach on 10 seeds and report results."""
-    if MAKE_VIDEOS:
-        Path(VIDEO_DIR).mkdir(exist_ok=True)
+def test_pushpullhook2d_approach_20_seeds() -> None:
+    """Run the PushPullHook2D approach on 20 seeds and report results."""
+    Path(VIDEO_DIR).mkdir(exist_ok=True)
 
     results: list[tuple[int, bool, int, float]] = []
     for seed in tqdm(range(NUM_SEEDS)):
         solved, steps, reward = _run_approach_on_seed(
-            seed, make_videos=MAKE_VIDEOS
+            seed, make_videos=True, save_init_state=True
         )
         results.append((seed, solved, steps, reward))
 

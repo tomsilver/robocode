@@ -19,9 +19,8 @@ All ``.py`` files from this directory are copied into the sandbox so the
 agent can read, run, and modify them.
 """
 
-import asyncio
-import concurrent.futures
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -31,10 +30,16 @@ from gymnasium.spaces import Space
 
 from robocode.approaches.agentic_approach import (
     _GEOMETRY_PROMPT,
+    _run_async,
     _parse_reset_hour,
     _seconds_until_reset,
 )
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.docker_sandbox import (
+    DOCKER_PYTHON,
+    DockerSandboxConfig,
+    run_agent_in_docker_sandbox,
+)
 from robocode.utils.sandbox import SandboxConfig, SandboxResult, run_agent_in_sandbox
 
 logger = logging.getLogger(__name__)
@@ -130,11 +135,11 @@ uses them.
 
 ### Step 1 — Evaluate the current approach
 
-Run the initial approach on the environment for several seeds and \
-collect failure cases. Write a test script (e.g. `test_approach.py`) \
-that runs the approach and reports success/failure per seed. Summarize \
-the common failure modes (e.g. "the hook misses the button when they \
-are far apart", "the robot collides with the wall during the push").
+Run the initial approach on the environment with the \
+provided successful initial states and failed initial states. \
+Write a test script (e.g. `test_approach.py`) \
+that runs the approach and reports success/failure. Summarize \
+the common failure modes in the failure instances and how could introducing a new skill help fix them.
 
 ### Step 2 — Design and implement a new skill
 
@@ -147,7 +152,7 @@ conventions in the existing skill files.
 ### Step 3 — Write a unit test for the new skill
 
 Write a test script (e.g. `test_my_new_skill.py`) that:
-1. Creates the environment and resets with a specific seed.
+1. Creates the environment and resets with the provided initial states.
 2. Sets up any preconditions (e.g. if your skill assumes the hook is \
    grasped, run the pick skill first).
 3. Instantiates your new skill, samples parameters, and steps it.
@@ -182,6 +187,115 @@ approach improves over the initial one.
 {skill_interface_spec}
 """
 
+_TARGETED_SKILL_AGENT_PROMPT = """\
+## Your task
+
+You are given a directory with an initial skill library and an \
+`approach.py` that composes them. The approach currently succeeds on \
+some tasks but fails on others. Your job is to analyze the failures, \
+write a new skill named **{skill_name}** to fix them, and make sure \
+the successful tasks still work.
+
+### Initial files in the sandbox
+
+The following files have been provided:
+{initial_file_list}
+
+Read ALL of them to understand the existing skills and how the approach \
+uses them.
+
+### Pre-saved initial states
+
+Initial environment states have been provided as `.npy` files in two \
+directories:
+
+**Failed tasks** (the approach currently fails on these):
+- Directory: `failed_states/`
+{failed_state_files}
+
+**Successful tasks** (the approach currently solves these — do NOT break them):
+- Directory: `success_states/`
+{success_state_files}
+
+IMPORTANT: When creating the environment, you MUST pass \
+`allow_state_access=True` so that `set_state` works:
+
+```python
+env = ObjectCentricPushPullHook2DEnv(render_mode="rgb_array", allow_state_access=True)
+env.reset()  # must call reset once before set_state
+```
+
+To load a saved state and reset the environment with it:
+
+```python
+import numpy as np
+state = np.load("failed_states/init_episode_3.npy", allow_pickle=True).item()
+env.unwrapped.set_state(state)
+```
+
+### Step 1 — Analyze the failures
+
+Write a test script (e.g. `test_failures.py`) that loads EACH failed \
+state from `failed_states/`, runs the current approach, and reports \
+what goes wrong. Visualize or log the object positions to understand \
+why the approach fails. Summarize the common failure modes.
+
+### Step 2 — Design and implement the `{skill_name}` skill
+
+Based on the failure analysis, design a new skill controller called \
+`{skill_name}` (a subclass of `Kinematic2dRobotController`) that \
+addresses the most impactful failure mode.
+
+Write the skill to a new file called `{skill_filename}`. Follow the \
+conventions in the existing skill files.
+
+### Step 3 — Write a unit test for the new skill
+
+Write a test script (e.g. `test_{skill_filename}`) that:
+1. Loads a failed state from `failed_states/`.
+2. Resets the environment with that state.
+3. Sets up any preconditions (e.g. if your skill assumes the hook is \
+   grasped, run the pick skill first).
+4. Instantiates your `{skill_name}` skill, samples parameters, and \
+   steps it.
+5. Asserts a concrete success condition.
+
+Run the test and iterate until it passes. Use `{python_executable}` to \
+run scripts.
+
+### Step 4 — Update the approach
+
+Update `approach.py` to incorporate `{skill_name}` into the existing \
+approach logic. Keep the same `GeneratedApproach` interface:
+
+```python
+class GeneratedApproach:
+    def __init__(self, action_space, observation_space, skills, initial_constant_state):
+        ...
+    def reset(self, state, info):
+        ...
+    def get_action(self, state):
+        ...
+```
+
+`skills` is a dict mapping skill class names to classes. Your approach \
+should instantiate and compose these skills to solve the task.
+
+### Step 5 — Verify
+
+Write a final test script (e.g. `test_all.py`) that:
+1. Loads ALL failed states from `failed_states/` and verifies the \
+   updated approach now solves them.
+2. Loads ALL success states from `success_states/` and verifies the \
+   updated approach still solves them (no regressions).
+
+Report the results. The goal is 100% on both sets.
+
+{env_description}
+{geometry_prompt}
+{skill_interface_spec}
+"""
+
 
 class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
     """An approach that uses a Claude agent to develop new skills.
@@ -207,6 +321,10 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         geometry_prompt: bool = False,
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
+        use_docker: bool = False,
+        failed_state_dir: str | None = None,
+        success_state_dir: str | None = None,
+        primitives: dict[str, Any] | None = None,  # noqa: ARG002
     ) -> None:
         super().__init__(
             action_space,
@@ -223,6 +341,13 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._geometry_prompt = geometry_prompt
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
+        self._use_docker = use_docker
+        self._failed_state_dir = (
+            Path(failed_state_dir) if failed_state_dir is not None else None
+        )
+        self._success_state_dir = (
+            Path(success_state_dir) if success_state_dir is not None else None
+        )
         self._generated: Any = None
         self._skill_classes: dict[str, type] = {}
         self.total_cost_usd: float | None = None
@@ -271,6 +396,34 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         # Build the file listing for the prompt.
         file_list_str = "\n".join(f"- `{name}`" for name in initial_py_files)
 
+        # Copy init state .npy files into the sandbox if provided.
+        failed_state_files_str = ""
+        success_state_files_str = ""
+        use_targeted = (
+            self._failed_state_dir is not None
+            or self._success_state_dir is not None
+        )
+
+        if self._failed_state_dir is not None:
+            dst = sandbox_dir / "failed_states"
+            dst.mkdir(exist_ok=True)
+            npy_files = sorted(self._failed_state_dir.glob("*.npy"))
+            for f in npy_files:
+                shutil.copy2(f, dst / f.name)
+            failed_state_files_str = "\n".join(
+                f"- `failed_states/{f.name}`" for f in npy_files
+            )
+
+        if self._success_state_dir is not None:
+            dst = sandbox_dir / "success_states"
+            dst.mkdir(exist_ok=True)
+            npy_files = sorted(self._success_state_dir.glob("*.npy"))
+            for f in npy_files:
+                shutil.copy2(f, dst / f.name)
+            success_state_files_str = "\n".join(
+                f"- `success_states/{f.name}`" for f in npy_files
+            )
+
         # Build the prompt.
         env_desc = ""
         if self._env_description_path is not None:
@@ -279,27 +432,72 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
             )
         geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
 
-        prompt = _SKILL_AGENT_PROMPT.format(
-            python_executable=sys.executable,
-            initial_file_list=file_list_str,
-            env_description=env_desc,
-            geometry_prompt=geometry,
-            skill_interface_spec=_SKILL_INTERFACE_SPEC,
-        )
+        python_exe = DOCKER_PYTHON if self._use_docker else sys.executable
+        if use_targeted:
+            # Derive skill name from the last component of the failed
+            # state dir (e.g. "failure1" from "init_states/.../failure1").
+            if self._failed_state_dir is not None:
+                raw_name = self._failed_state_dir.name
+            else:
+                raw_name = "new_skill"
+            # Convert folder name to CamelCase class name and snake_case
+            # filename, e.g. "failure1" -> "Failure1Controller" /
+            # "failure1_skill.py".
+            skill_name = (
+                raw_name.replace("_", " ").title().replace(" ", "")
+                + "Controller"
+            )
+            skill_filename = f"{raw_name}_skill.py"
 
-        config = SandboxConfig(
-            sandbox_dir=sandbox_dir,
-            init_files=init_files,
-            output_filename="approach.py",
-            prompt=prompt,
-            system_prompt=_SKILL_AGENT_SYSTEM_PROMPT,
-            model=self._model,
-            max_budget_usd=self._max_budget_usd,
-            max_output_tokens=self._max_output_tokens,
-            autocompact_pct=self._autocompact_pct,
-        )
+            prompt = _TARGETED_SKILL_AGENT_PROMPT.format(
+                python_executable=python_exe,
+                initial_file_list=file_list_str,
+                failed_state_files=failed_state_files_str,
+                success_state_files=success_state_files_str,
+                skill_name=skill_name,
+                skill_filename=skill_filename,
+                env_description=env_desc,
+                geometry_prompt=geometry,
+                skill_interface_spec=_SKILL_INTERFACE_SPEC,
+            )
+        else:
+            prompt = _SKILL_AGENT_PROMPT.format(
+                python_executable=python_exe,
+                initial_file_list=file_list_str,
+                env_description=env_desc,
+                geometry_prompt=geometry,
+                skill_interface_spec=_SKILL_INTERFACE_SPEC,
+            )
 
-        sandbox_logger = logging.getLogger("robocode.utils.sandbox")
+        docker_config: DockerSandboxConfig | None = None
+        config: SandboxConfig | None = None
+        if self._use_docker:
+            docker_config = DockerSandboxConfig(
+                sandbox_dir=sandbox_dir,
+                init_files=init_files,
+                output_filename="approach.py",
+                prompt=prompt,
+                system_prompt=_SKILL_AGENT_SYSTEM_PROMPT,
+                model=self._model,
+                max_budget_usd=self._max_budget_usd,
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
+            )
+            sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
+        else:
+            config = SandboxConfig(
+                sandbox_dir=sandbox_dir,
+                init_files=init_files,
+                output_filename="approach.py",
+                prompt=prompt,
+                system_prompt=_SKILL_AGENT_SYSTEM_PROMPT,
+                model=self._model,
+                max_budget_usd=self._max_budget_usd,
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
+            )
+            sandbox_logger = logging.getLogger("robocode.utils.sandbox")
+
         log_path = sandbox_dir / "agent_log.txt"
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(
@@ -307,7 +505,7 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         )
         sandbox_logger.addHandler(file_handler)
         try:
-            result = self._run_with_rate_limit_retry(config)
+            result = self._run_with_rate_limit_retry(docker_config, config)
         finally:
             sandbox_logger.removeHandler(file_handler)
             file_handler.close()
@@ -322,23 +520,21 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
             )
 
     def _run_with_rate_limit_retry(
-        self, config: SandboxConfig
+        self,
+        docker_config: DockerSandboxConfig | None,
+        local_config: SandboxConfig | None,
     ) -> SandboxResult:
         """Run the sandbox, retrying on rate-limit."""
         while True:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                result = asyncio.run(run_agent_in_sandbox(config))
+            if docker_config is not None:
+                result = _run_async(
+                    lambda: run_agent_in_docker_sandbox(docker_config)
+                )
             else:
-
-                def _run() -> SandboxResult:
-                    return asyncio.run(run_agent_in_sandbox(config))
-
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=1
-                ) as pool:
-                    result = pool.submit(_run).result()
+                assert local_config is not None
+                result = _run_async(
+                    lambda: run_agent_in_sandbox(local_config)
+                )
 
             if result.rate_limit_reset is None:
                 return result
