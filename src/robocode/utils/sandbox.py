@@ -479,7 +479,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     )
     if config.mcp_tools:
         cmd += ["--mcp-config", str(mcp_config_path.resolve())]
-    
+
     env = _build_sandbox_env(config.max_output_tokens, config.autocompact_pct)
     sandbox_abs = str(config.sandbox_dir.resolve())
 
