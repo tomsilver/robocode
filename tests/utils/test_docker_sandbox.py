@@ -174,13 +174,13 @@ def test_setup_copies_only_requested_primitives(tmp_path: Path) -> None:
     """Only the requested primitive .py files are copied into sandbox/primitives/."""
     config = DockerSandboxConfig(
         sandbox_dir=tmp_path / "sandbox",
-        primitive_names=("csp", "render_state"),
+        primitive_names=("csp", "check_action_collision"),
     )
     _setup_sandbox_dir(config)
     primitives_dir = config.sandbox_dir / "primitives"
     assert primitives_dir.is_dir()
     copied = {f.name for f in primitives_dir.glob("*.py")}
-    assert copied == {"csp.py", "render_state.py"}
+    assert copied == {"csp.py", "check_action_collision.py"}
 
 
 def test_setup_no_primitives_dir_when_none_requested(tmp_path: Path) -> None:
@@ -235,7 +235,7 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
     """
     config = DockerSandboxConfig(
         sandbox_dir=tmp_path / "sandbox",
-        primitive_names=("csp", "render_state"),
+        primitive_names=("csp", "check_action_collision"),
     )
     _setup_sandbox_dir(config)
     result = _run_in_container(config.sandbox_dir, "ls -a /sandbox")

@@ -14,6 +14,8 @@ from typing import Any, TypeVar
 from gymnasium.spaces import Space
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.mcp import MCP_TOOL_DESCRIPTIONS
+from robocode.primitives import PRIMITIVE_DESCRIPTIONS
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -48,36 +50,6 @@ _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     "When your approach fails, call render_policy to visually diagnose the "
     "failure BEFORE guessing at fixes."
 )
-
-_MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
-    "render_state": (
-        "`mcp__robocode-tools__render_state(seed=42)` — renders the "
-        "environment's initial state for a given seed and returns the path to "
-        "a PNG file. Use this to visually understand the spatial layout, "
-        "obstacle placement, and goal positions for a specific seed. Delegate "
-        "image reading to a Task subagent: have it Read the PNG, describe the "
-        "scene, and return a concise summary. Delete the file when done."
-    ),
-    "render_policy": (
-        '`mcp__robocode-tools__render_policy(approach_dir=".", seed=42, '
-        "max_steps=1000, max_frames=100)` — runs a full episode of the "
-        "approach in `approach_dir/approach.py` on the given seed and saves "
-        "each frame as a PNG. Returns a list of file paths. Use this to "
-        "visually debug policy failures: see where the agent gets stuck, "
-        "overshoots, or collides.\n"
-        "  IMPORTANT: Do NOT read the frame images yourself — delegate to a "
-        "Task subagent. The subagent should Read a sample of frames (e.g. "
-        "first, middle, last, and any where behavior changes), describe the "
-        "trajectory, identify failure modes, and return a concise text "
-        "summary. Delete the output directory when done.\n"
-        "  Typical workflow:\n"
-        "  1. Call mcp__robocode-tools__render_policy to generate frames\n"
-        '  2. Spawn a Task subagent: "Read these frame PNGs and describe '
-        "the agent's trajectory. What goes wrong? Return a short summary.\"\n"
-        "  3. Use the summary to fix your approach\n"
-        "  4. Delete the frames directory with Bash"
-    ),
-}
 
 _INTERFACE_SPEC = """\
 Write `approach.py` containing a class `GeneratedApproach` with the following \
@@ -123,73 +95,6 @@ termination conditions, etc.). To locate a module's source file:
 ```
 Then read the source to inform your approach.\
 """
-
-_PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
-    "check_action_collision": (
-        "`check_action_collision(state, action) -> bool` returns True when "
-        "taking `action` in `state` would cause a collision (i.e. the agent "
-        "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
-        "planning algorithms, skip actions that collide."
-    ),
-    "render_state": (
-        "`render_state(state, ax_callback=None) -> np.ndarray` renders the "
-        "given `state` as an RGB image (H\u00d7W\u00d73 uint8 numpy array). "
-        "Optionally pass `ax_callback`, a function that takes a matplotlib "
-        "`Axes` and draws on it. Use this to add markers, lines, "
-        "annotations, or any other matplotlib drawing. Examples:\n"
-        "  `render_state(state, ax_callback=lambda ax: ax.plot(1.5, 2.0, 'ro'))`\n"
-        "  `render_state(state, ax_callback=lambda ax: ax.annotate('goal', (3, 1)))`\n"
-        "Save to disk with "
-        '`imageio.imwrite("state.png", render_state(state))` and read the '
-        "file to visually understand the spatial layout."
-    ),
-    "csp": (
-        "`csp` is a module providing a constraint satisfaction problem (CSP) "
-        "solver. Use it to sample configurations (e.g. placements, grasps) "
-        "that satisfy constraints (e.g. collision-free). Key classes:\n"
-        "  - `csp.CSPVariable(name, domain)` \u2014 a variable with a "
-        "`gymnasium.spaces.Space` domain.\n"
-        "  - `csp.FunctionalCSPConstraint(name, variables, fn)` \u2014 a "
-        "constraint where `fn(*vals) -> bool`.\n"
-        "  - `csp.CSP(variables, constraints, cost=None)` \u2014 the problem.\n"
-        "  - `csp.FunctionalCSPSampler(fn, csp, sampled_vars)` \u2014 a "
-        "sampler where `fn(current_vals, rng) -> dict | None`.\n"
-        "  - `csp.RandomWalkCSPSolver(seed)` \u2014 solver; call "
-        "`.solve(csp, initialization, samplers)` to get a satisfying "
-        "assignment or None.\n"
-        "  - `csp.CSPCost(name, variables, cost_fn)` \u2014 optional cost to "
-        "minimize.\n"
-        "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
-        "threshold)` \u2014 constraint from log probabilities.\n"
-        "  Access via `primitives['csp']`, e.g. "
-        "`primitives['csp'].CSPVariable(...)`."
-    ),
-    "render_policy": (
-        "`render_policy(approach_dir, seed, output_dir, max_steps=1000, "
-        "max_frames=100) -> list[str]` runs a full episode of the approach "
-        "in `approach_dir/approach.py` on the given `seed`, saving every "
-        "rendered frame as an individual PNG in `output_dir`. Returns the "
-        "list of saved filenames. Use `max_frames` to cap the number of "
-        "frames saved (useful when the agent loops). Use it to visually "
-        "debug policy failures.\n"
-        "CRITICAL: You MUST delegate frame reading and analysis to a Task "
-        "subagent — reading images directly will consume too much context. "
-        "The subagent should Read the frame PNGs, analyze the trajectory, "
-        "and return a concise text summary plus indices of important frames. "
-        "Delete the output directory when done."
-    ),
-    "BiRRT": (
-        "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
-        "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
-        "planner. Construct one, then call `birrt.query(start, goal)` to get "
-        "a collision-free path (list of states) or None. "
-        "`sample_fn(state) -> state` samples a random state, "
-        "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
-        "`collision_fn(state) -> bool` returns True if state is in collision, "
-        "`distance_fn(s1, s2) -> float` returns distance between states, "
-        "`rng` is a `np.random.Generator`."
-    ),
-}
 
 _GEOMETRY_PROMPT = """\
 
@@ -388,7 +293,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         if self._primitives:
             lines = ["`primitives` is a dict with these callables:\n"]
             for name in sorted(self._primitives):
-                desc = _PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
+                desc = PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
                 lines.append(f"- {desc}")
             primitives_desc = "\n".join(lines)
             names = ", ".join(f"`{n}`" for n in sorted(self._primitives))
@@ -407,8 +312,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 "affect your test scripts):\n",
             ]
             for name in self._mcp_tools:
-                if name in _MCP_TOOL_DESCRIPTIONS:
-                    mcp_lines.append(f"- {_MCP_TOOL_DESCRIPTIONS[name]}")
+                if name in MCP_TOOL_DESCRIPTIONS:
+                    mcp_lines.append(f"- {MCP_TOOL_DESCRIPTIONS[name]}")
             primitives_desc += "\n".join(mcp_lines)
 
         python_exe = DOCKER_PYTHON if self._use_docker else sys.executable

@@ -53,9 +53,7 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _build_claude_cli_args,
     _build_sandbox_env,
-    _mcp_tool_names,
     _parse_claude_stream,
-    _setup_mcp_config,
     _setup_sandbox_common,
     _stream_result_to_sandbox_result,
 )
@@ -206,16 +204,6 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
             )
         claude_md.write_text(claude_md_text)
 
-    # MCP server config (written when mcp_tools is non-empty).
-    # Expects env_config.json in sandbox_dir's parent (the output dir).
-    if config.mcp_tools:
-        _setup_mcp_config(
-            config.sandbox_dir,
-            config.mcp_tools,
-            python_cmd=DOCKER_PYTHON,
-            env_config_path="/sandbox/.mcp/env_config.json",
-        )
-
 
 async def run_agent_in_docker_sandbox(
     config: DockerSandboxConfig,
@@ -319,10 +307,12 @@ async def run_agent_in_docker_sandbox(
             config.model,
             config.system_prompt,
             config.max_budget_usd,
-            extra_tools=_mcp_tool_names(config.mcp_tools),
+            sandbox_dir=config.sandbox_dir,
+            mcp_tools=config.mcp_tools,
+            mcp_python_cmd=DOCKER_PYTHON,
+            mcp_env_config_path="/sandbox/.mcp/env_config.json",
+            mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
         )
-        if config.mcp_tools:
-            claude_args += ["--mcp-config", "/sandbox/.mcp/mcp_config.json"]
         docker_cmd += claude_args
 
         extra_env: dict[str, str] = {}

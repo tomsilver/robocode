@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +23,8 @@ from hydra.utils import instantiate
 from mcp.server.fastmcp import FastMCP
 from omegaconf import OmegaConf
 
-from robocode.primitives import csp as csp_module
-from robocode.primitives.check_action_collision import check_action_collision
-from robocode.primitives.motion_planning import BiRRT
+from robocode.mcp import MCP_SERVER_NAME
+from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
 from robocode.primitives.render_policy import render_policy as _render_policy_fn
 from robocode.primitives.render_state import render_state as _render_state_fn
 
@@ -38,14 +36,7 @@ def _build_env_and_primitives(
     cfg = OmegaConf.create(env_config)
     env = instantiate(cfg)
     env.reset(seed=0)
-
-    primitives = {
-        "check_action_collision": partial(check_action_collision, env),
-        "render_state": partial(_render_state_fn, env),
-        "csp": csp_module,
-        "BiRRT": BiRRT,
-    }
-    return env, primitives
+    return env, build_primitives(env, list(PRIMITIVE_NAME_TO_FILE))
 
 
 def create_server(
@@ -54,7 +45,7 @@ def create_server(
     renders_dir: Path | None = None,
 ) -> FastMCP:
     """Create and configure the MCP server with the requested tools."""
-    server = FastMCP("robocode-tools")
+    server = FastMCP(MCP_SERVER_NAME)
     env, primitives = _build_env_and_primitives(env_config)
     out_dir = renders_dir or Path("mcp_renders")
 

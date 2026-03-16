@@ -21,7 +21,6 @@ Parallel sweep with joblib launcher:
 
 import json
 import logging
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +29,7 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from robocode.primitives import csp as csp_module
-from robocode.primitives.check_action_collision import check_action_collision
-from robocode.primitives.motion_planning import BiRRT
-from robocode.primitives.render_policy import render_policy
-from robocode.primitives.render_state import render_state
+from robocode.primitives import build_primitives
 from robocode.utils.episode import run_episode, save_video
 
 logger = logging.getLogger(__name__)
@@ -56,18 +51,7 @@ def _main(cfg: DictConfig) -> float:
         desc_path.write_text(env.env_description)
         env_description_path = str(desc_path)
 
-    all_primitives = {
-        "check_action_collision": partial(check_action_collision, env),
-        "render_state": partial(render_state, env),
-        "csp": csp_module,
-        "BiRRT": BiRRT,
-    }
-    # render_policy depends on the assembled primitives, so build it after.
-    primitives = {
-        name: all_primitives[name] for name in cfg.primitives if name != "render_policy"
-    }
-    if "render_policy" in cfg.primitives:
-        primitives["render_policy"] = partial(render_policy, env, primitives)
+    primitives = build_primitives(env, cfg.primitives)
 
     # Write env config for MCP server (if mcp_tools are configured).
     mcp_tools = tuple(cfg.get("mcp_tools", []))
