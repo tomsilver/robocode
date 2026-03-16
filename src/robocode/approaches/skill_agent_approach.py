@@ -615,7 +615,7 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
             if py_file.name in skip or py_file.name.startswith("test_"):
                 continue
             try:
-                ns: dict[str, Any] = {}
+                ns: dict[str, Any] = {"__file__": str(py_file)}
                 source = py_file.read_text(encoding="utf-8")
                 exec(  # pylint: disable=exec-used
                     compile(source, str(py_file), "exec"), ns
@@ -644,7 +644,7 @@ class SkillAgenticApproach(BaseApproach[_ObsType, _ActType]):
         be passed through.
         """
         source = path.read_text(encoding="utf-8")
-        namespace: dict[str, Any] = {}
+        namespace: dict[str, Any] = {"__file__": str(path)}
         exec(  # pylint: disable=exec-used
             compile(source, str(path), "exec"), namespace
         )

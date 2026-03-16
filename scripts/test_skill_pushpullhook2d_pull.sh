@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-SWEEP_DIR="$REPO_ROOT/multirun/2026-03-15/skill_agentic_pushpullhook2d_pull"
+SWEEP_DIR="$REPO_ROOT/multirun/2026-03-16/skill_agentic_pushpullhook2d_pull"
 FAILED_STATES="$REPO_ROOT/init_states/pushpullhook2d/pull"
 SUCCESS_STATES="$REPO_ROOT/init_states/pushpullhook2d/successful"
 
