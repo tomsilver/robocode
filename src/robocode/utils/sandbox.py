@@ -102,6 +102,8 @@ class SandboxConfig:
     max_budget_usd: float = 5.0
     system_prompt: str = ""
     mcp_tools: tuple[str, ...] = ()
+    max_output_tokens: int = 16384
+    autocompact_pct: int = 80
 
 
 @dataclass(frozen=True)
@@ -243,11 +245,14 @@ def _build_claude_cli_args(
 
 
 def _build_sandbox_env(
+    max_output_tokens: int = 16384,
+    autocompact_pct: int = 80,
     extra: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Build a clean environment dict, stripping ``CLAUDECODE*`` vars."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
-    env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
+    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
+    env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(autocompact_pct)
     if extra:
         env.update(extra)
     return env
@@ -255,11 +260,15 @@ def _build_sandbox_env(
 
 def _parse_claude_stream(
     proc: subprocess.Popen[str],
+    stream_log_path: Path | None = None,
 ) -> _StreamParseResult:
     """Parse ``stream-json`` stdout from a Claude CLI process and wait for exit.
 
     Logs assistant messages, tool calls, and tool results as they arrive. After the
     process exits, checks stderr for errors.
+
+    If *stream_log_path* is given, every raw JSON line from the stream is appended to
+    that file for post-hoc debugging.
     """
     is_error = False
     error_text: str | None = None
@@ -267,11 +276,19 @@ def _parse_claude_stream(
     total_cost: float | None = None
     rate_limit_reset: str | None = None
 
+    stream_log_fh = (
+        open(stream_log_path, "a", encoding="utf-8")  # noqa: SIM115
+        if stream_log_path
+        else None
+    )
+
     assert proc.stdout is not None
     for line in proc.stdout:
         line = line.strip()
         if not line:
             continue
+        if stream_log_fh is not None:
+            stream_log_fh.write(line + "\n")
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
@@ -280,14 +297,25 @@ def _parse_claude_stream(
 
         msg_type = msg.get("type", "")
 
-        if msg_type == "system" and msg.get("subtype") == "init":
-            for srv in msg.get("mcp_servers", []):
-                status = srv.get("status")
-                name = srv.get("name")
-                if status != "connected":
-                    logger.warning("MCP server %s: %s", name, status)
-                else:
-                    logger.info("MCP server %s: %s", name, status)
+        if msg_type == "system":
+            subtype = msg.get("subtype", "")
+            if subtype == "init":
+                for srv in msg.get("mcp_servers", []):
+                    status = srv.get("status")
+                    name = srv.get("name")
+                    if status != "connected":
+                        logger.warning("MCP server %s: %s", name, status)
+                    else:
+                        logger.info("MCP server %s: %s", name, status)
+            elif subtype == "compact_boundary":
+                meta = msg.get("compact_metadata", {})
+                logger.info(
+                    "Context compaction: trigger=%s, pre_tokens=%s",
+                    meta.get("trigger"),
+                    meta.get("pre_tokens"),
+                )
+            elif subtype != "status":
+                logger.info("System event: subtype=%s", subtype)
 
         if msg_type == "assistant":
             for block in msg.get("message", {}).get("content", []):
@@ -331,6 +359,9 @@ def _parse_claude_stream(
                         rate_limit_reset = m.group(1)
 
     proc.wait()
+
+    if stream_log_fh is not None:
+        stream_log_fh.close()
 
     assert proc.stderr is not None
     stderr_output = proc.stderr.read()
@@ -448,7 +479,8 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     )
     if config.mcp_tools:
         cmd += ["--mcp-config", str(mcp_config_path.resolve())]
-    env = _build_sandbox_env()
+    
+    env = _build_sandbox_env(config.max_output_tokens, config.autocompact_pct)
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
@@ -464,7 +496,10 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         text=True,
     )
 
-    stream = _parse_claude_stream(proc)
+    stream = _parse_claude_stream(
+        proc,
+        stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+    )
 
     logger.info(
         "Session done: turns=%d, cost=$%s, error=%s",
