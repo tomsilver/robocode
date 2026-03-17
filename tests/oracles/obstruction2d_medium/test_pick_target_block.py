@@ -27,8 +27,9 @@ def test_holding_target_after_pick():
     behavior.reset(obs)
     for s in range(MAX_STEPS):
         action = behavior.step(obs)
-        obs, _, _, _ = env.step(action)
+        obs, _, _, _, _ = env.step(action)
         if behavior.terminated(obs):
             print(f"Subgoal achieved in {s+1} steps.")
             break
-    
+
+    assert behavior.terminated(obs), f"Subgoal not achieved within {MAX_STEPS} steps."
