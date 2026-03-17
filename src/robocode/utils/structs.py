@@ -17,7 +17,6 @@ class Behavior(abc.ABC, Generic[_X, _U]):
     precondition: Callable[[_X], bool]
     policy: Callable[[_X], _U]
 
-
     @abc.abstractmethod
     def reset(self, x: _X) -> None:
         """Reset the internal state and current parameters."""

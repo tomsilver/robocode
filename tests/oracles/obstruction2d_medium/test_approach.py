@@ -21,7 +21,10 @@ def _run_episode(
     approach: Obstruction2DOracleApproach,
     seed: int,
 ) -> tuple[bool, int]:
-    """Run a single episode. Return (solved, num_steps)."""
+    """Run a single episode.
+
+    Return (solved, num_steps).
+    """
     state, info = episode_env.reset(seed=seed)
     approach.reset(state, info)
 
