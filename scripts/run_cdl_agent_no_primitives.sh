@@ -9,6 +9,7 @@ python experiments/run_experiment.py \
     approach.use_docker=true \
     approach.max_budget_usd=1.0 \
     seed="$SEED" \
+    num_eval_tasks=10 \
     'primitives=[]' \
     'mcp_tools=[render_state,render_policy]' \
     environment="$ENV" \
