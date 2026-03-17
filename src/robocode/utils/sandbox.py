@@ -73,6 +73,17 @@ json.dump({
 }, sys.stdout)
 """
 
+_SANDBOX_GITIGNORE = """\
+__pycache__/
+*.pyc
+*.png
+*.gif
+*.jpg
+*.jpeg
+*.mp4
+agent_log.txt
+"""
+
 _SANDBOX_SETTINGS: dict = {
     "hooks": {
         "PreToolUse": [
@@ -85,7 +96,7 @@ _SANDBOX_SETTINGS: dict = {
                     }
                 ],
             }
-        ]
+        ],
     }
 }
 
@@ -153,6 +164,13 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
             check=True,
             capture_output=True,
         )
+        for key, val in [("user.email", "agent@robocode"), ("user.name", "agent")]:
+            subprocess.run(
+                ["git", "config", key, val],
+                cwd=str(sandbox_dir),
+                capture_output=True,
+                check=False,
+            )
 
     claude_dir = sandbox_dir / ".claude"
     claude_dir.mkdir(exist_ok=True)
@@ -160,6 +178,31 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
         json.dumps(_SANDBOX_SETTINGS, indent=2) + "\n"
     )
     (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
+
+    gitignore = sandbox_dir / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(_SANDBOX_GITIGNORE)
+
+    # Initial commit so git log works and the agent has a clean baseline.
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(sandbox_dir),
+        capture_output=True,
+        check=False,
+    )
+    subprocess.run(
+        [
+            "git",
+            "commit",
+            "-m",
+            "initial sandbox setup",
+            "--author",
+            "robocode <noreply@robocode>",
+        ],
+        cwd=str(sandbox_dir),
+        capture_output=True,
+        check=False,
+    )
 
 
 _MCP_SERVER_NAME = "robocode-tools"
@@ -440,6 +483,38 @@ def _get_claude_cmd() -> str:
     return os.environ.get("ROBOCODE_CLAUDE_CMD", "claude")
 
 
+def _final_commit(sandbox_dir: Path) -> None:
+    """Commit any uncommitted changes in the sandbox so nothing is lost."""
+    sandbox = str(sandbox_dir)
+    subprocess.run(["git", "add", "-A"], cwd=sandbox, capture_output=True, check=False)
+    # --porcelain check avoids a no-op commit.
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=sandbox,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status.stdout.strip():
+        subprocess.run(
+            [
+                "git",
+                "commit",
+                "-m",
+                "auto-commit uncommitted changes",
+                "--author",
+                "robocode <noreply@robocode>",
+            ],
+            cwd=sandbox,
+            capture_output=True,
+            check=False,
+        )
+        logger.info("Auto-committed uncommitted changes in sandbox:")
+        logger.info(status.stdout.strip())
+    else:
+        logger.info("No uncommitted changes to commit in sandbox.")
+
+
 async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     """Run a Claude agent in a sandboxed working directory.
 
@@ -506,6 +581,9 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         stream.total_cost,
         stream.is_error,
     )
+
+    # Auto-commit any uncommitted changes so nothing is lost.
+    _final_commit(config.sandbox_dir)
 
     return _stream_result_to_sandbox_result(
         stream, config.sandbox_dir, config.output_filename

@@ -15,7 +15,6 @@ from robocode.environments.base_env import BaseEnv
 
 @dataclass(frozen=True)
 class _MazeState:
-
     agent: tuple[int, int]
     obstacles: frozenset[tuple[int, int]]
     height: int

@@ -36,7 +36,12 @@ _SYSTEM_PROMPT = (
     "Never use absolute paths when writing files. "
     "IMPORTANT: Write code often to approach.py as you iterate. You may be "
     "interrupted at any time, so you should make sure that approach.py is "
-    "your best current attempt at all times."
+    "your best current attempt at all times. "
+    "VERSION CONTROL: This directory is a git repo. After each meaningful "
+    "change to approach.py or supporting modules, run "
+    "`git add -A && git commit -m '<describe what you changed and why>'`. "
+    "Commit often, do not batch everything into one final commit. "
+    "You should commit the approach every time before you test it in the environment. "
     "Use the Task tool to explore source code in parallel — e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially."
@@ -250,8 +255,7 @@ contain ZERO numbers. If any number appears in your geometric analysis, you have
 _MODULAR_CODE_PROMPT = """\
 
 IMPORTANT: Write MODULAR code, like a skilled software engineer:
-- Break your solution into small, self-contained modules in separate .py files \
-(e.g., `pathfinding.py`, `state_utils.py`, `planning.py`).
+- Break your solution into small, self-contained modules in separate .py files.
 - Each module should be minimal and focused on a single responsibility, small enough to \
 reason about, test, and reuse independently.
 - Write and run a test script for each module BEFORE composing them together. Verify each \
@@ -264,11 +268,8 @@ complete solution. Keep `approach.py` itself as thin as possible, it should prim
 orchestrate your tested modules.
 - Prefer many small files over one large file. If a function could be useful in multiple \
 contexts, it belongs in its own module.
-- Modules should be organized by functionality, and organized in directories if needed. \
-For example, if you have multiple modules related to geometry, put them in a `geometry/` subdirectory. \
 IMPORTANT: be careful about repeated behavior! If an action or strategy in your \
-approach fails, you should design your code to avoid repeating that failure. \
-For example, if a grasp fails, your code should not keep trying the same grasp.
+approach fails, you should design your code to avoid repeating that failure.
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
