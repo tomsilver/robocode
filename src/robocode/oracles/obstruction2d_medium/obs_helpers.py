@@ -23,13 +23,28 @@ from numpy.typing import NDArray
 # ---------------------------------------------------------------------------
 
 ROBOT_FEATURES = [
-    "x", "y", "theta", "base_radius", "arm_joint",
-    "arm_length", "vacuum", "gripper_height", "gripper_width",
+    "x",
+    "y",
+    "theta",
+    "base_radius",
+    "arm_joint",
+    "arm_length",
+    "vacuum",
+    "gripper_height",
+    "gripper_width",
 ]
 
 RECT_FEATURES = [
-    "x", "y", "theta", "static", "color_r", "color_g",
-    "color_b", "z_order", "width", "height",
+    "x",
+    "y",
+    "theta",
+    "static",
+    "color_r",
+    "color_g",
+    "color_b",
+    "z_order",
+    "width",
+    "height",
 ]
 
 # ---------------------------------------------------------------------------
@@ -37,11 +52,11 @@ RECT_FEATURES = [
 # ---------------------------------------------------------------------------
 
 LAYOUT: dict[str, tuple[int, list[str]]] = {
-    "robot":          (0,  ROBOT_FEATURES),
-    "target_surface": (9,  RECT_FEATURES),
-    "target_block":   (19, RECT_FEATURES),
-    "obstruction0":   (29, RECT_FEATURES),
-    "obstruction1":   (39, RECT_FEATURES),
+    "robot": (0, ROBOT_FEATURES),
+    "target_surface": (9, RECT_FEATURES),
+    "target_block": (19, RECT_FEATURES),
+    "obstruction0": (29, RECT_FEATURES),
+    "obstruction1": (39, RECT_FEATURES),
 }
 
 NUM_OBSTRUCTIONS = 2
@@ -58,6 +73,7 @@ GRIPPER_CLEARANCE = 0.01
 # Generic feature access
 # ---------------------------------------------------------------------------
 
+
 def _base_and_features(name: str) -> tuple[int, list[str]]:
     return LAYOUT[name]
 
@@ -71,6 +87,7 @@ def get_feature(obs: NDArray, name: str, feature: str) -> float:
 # ---------------------------------------------------------------------------
 # Structured extraction
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class RobotPose:
@@ -142,9 +159,10 @@ def extract_rect(obs: NDArray, name: str) -> RectPose:
 # Geometric predicates
 # ---------------------------------------------------------------------------
 
+
 def overlaps_surface_h(obs: NDArray, obstruction_name: str) -> bool:
-    """True if the named obstruction overlaps the target surface horizontally
-    and sits at table level."""
+    """True if the named obstruction overlaps the target surface horizontally and sits
+    at table level."""
     obj = extract_rect(obs, obstruction_name)
     surf = extract_rect(obs, "target_surface")
     h_overlap = min(obj.right, surf.right) - max(obj.x, surf.x)
@@ -166,10 +184,12 @@ def is_on_surface(obs: NDArray, obj_name: str) -> bool:
     surf = extract_rect(obs, "target_surface")
     tol = 0.025
     py = obj.y - tol
-    return (obj.x >= surf.x - 1e-4
-            and obj.right <= surf.right + 1e-4
-            and py >= surf.y - 1e-4
-            and py <= surf.top + 1e-4)
+    return (
+        obj.x >= surf.x - 1e-4
+        and obj.right <= surf.right + 1e-4
+        and py >= surf.y - 1e-4
+        and py <= surf.top + 1e-4
+    )
 
 
 WORLD_WIDTH = 1.618  # golden ratio
@@ -232,8 +252,8 @@ def find_largest_gap(obs: NDArray) -> float:
 def pickup_y(block: RectPose, robot: RobotPose) -> float:
     """Robot y that positions the fully-extended gripper just above *block*.top.
 
-    At this height the suction zone (which extends past the gripper) overlaps
-    the block for pickup, but the gripper itself doesn't collide.
+    At this height the suction zone (which extends past the gripper) overlaps the block
+    for pickup, but the gripper itself doesn't collide.
     """
     return block.top + robot.arm_length + GRIPPER_CLEARANCE
 
@@ -255,6 +275,7 @@ def holding_block(obs: NDArray) -> bool:
     robot = extract_robot(obs)
     block = extract_rect(obs, "target_block")
     return robot.vacuum > 0.5 and block.y > TABLE_TOP + 0.04
+
 
 def holding_obstruction(obs: NDArray) -> bool:
     """True when vacuum is on and any obstruction is lifted off the table."""

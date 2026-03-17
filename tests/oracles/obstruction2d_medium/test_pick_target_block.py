@@ -1,14 +1,14 @@
 """Tests for PickPlaceTargetBlock behavior on Obstruction2D-o2."""
 
 import kinder
-
 from gymnasium.wrappers import RecordVideo
+
 from robocode.oracles.obstruction2d_medium.behaviors import PickPlaceTargetBlock
 from tests.conftest import MAKE_VIDEOS
 
-
 ENV_ID = "kinder/Obstruction2D-o2-v0"
 MAX_STEPS = 500
+
 
 def test_block_on_surface_after_pick_place():
     """After PickPlaceTargetBlock, block should be on the target surface."""
@@ -23,7 +23,9 @@ def test_block_on_surface_after_pick_place():
     # Move obstructions away so the target region is clear.
     obs_init[29] += 0.5
     obs_init[39] += 0.5
-    assert behavior.initializable(obs_init), "Precondition should be satisfied when region is clear."
+    assert behavior.initializable(
+        obs_init
+    ), "Precondition should be satisfied when region is clear."
 
     # Wrap with RecordVideo *after* setup so only the real episode is recorded.
     if MAKE_VIDEOS:

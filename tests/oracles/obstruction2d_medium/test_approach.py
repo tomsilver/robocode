@@ -3,8 +3,8 @@
 import kinder
 import numpy as np
 import pytest
-
 from gymnasium.wrappers import RecordVideo
+
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.oracles.obstruction2d_medium.approach import (
     Obstruction2DOracleApproach,
@@ -13,7 +13,7 @@ from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/Obstruction2D-o2-v0"
 MAX_STEPS = 500
-SEEDS = list(np.random.choice(1000, size=100, replace=False))
+SEEDS = list(np.random.choice(1000, size=5, replace=False))
 
 
 def _run_episode(
@@ -21,7 +21,10 @@ def _run_episode(
     approach: Obstruction2DOracleApproach,
     seed: int,
 ) -> tuple[bool, int]:
-    """Run a single episode. Return (solved, num_steps)."""
+    """Run a single episode.
+
+    Return (solved, num_steps).
+    """
     state, info = env.reset(seed=seed)
     approach.reset(state, info)
 

@@ -23,26 +23,26 @@ from typing import Callable
 import numpy as np
 from numpy.typing import NDArray
 
-from robocode.utils.structs import Behavior
-from robocode.oracles.obstruction2d_medium.obs_helpers import (
-    GRIPPER_CLEARANCE,
-    RobotPose,
-    TABLE_TOP,
-    extract_robot,
-    extract_rect,
-    find_largest_gap,
-    goal_region_clear,
-    holding_obstruction,
-    holding_block,
-    is_on_surface,
-    overlaps_surface_h,
-    pickup_y,
-    place_y as compute_place_y,
-)
 from robocode.oracles.obstruction2d_medium.act_helpers import (
     connecting_waypoints,
     waypoints_to_actions,
 )
+from robocode.oracles.obstruction2d_medium.obs_helpers import (
+    GRIPPER_CLEARANCE,
+    TABLE_TOP,
+    RobotPose,
+    extract_rect,
+    extract_robot,
+    find_largest_gap,
+    goal_region_clear,
+    holding_block,
+    holding_obstruction,
+    is_on_surface,
+    overlaps_surface_h,
+    pickup_y,
+)
+from robocode.oracles.obstruction2d_medium.obs_helpers import place_y as compute_place_y
+from robocode.utils.structs import Behavior
 
 DOWN = -np.pi / 2
 LIFT_Y = 0.8
@@ -50,6 +50,7 @@ LIFT_Y = 0.8
 # ---------------------------------------------------------------------------
 # PickPlaceTargetBlock
 # ---------------------------------------------------------------------------
+
 
 class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
     """Pick up the target block and place it on the target surface.
@@ -70,15 +71,17 @@ class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
         self._generate_waypoints(x)
 
     def _generate_waypoints(self, x: NDArray) -> None:
-        """Generate waypoints for picking the target block then placing it
-        on the target surface."""
+        """Generate waypoints for picking the target block then placing it on the target
+        surface."""
         robot = extract_robot(x)
         block = extract_rect(x, "target_block")
         surf = extract_rect(x, "target_surface")
 
         def wp(x: float, y: float, arm_joint: float, vacuum: float) -> RobotPose:
             return RobotPose(
-                x=x, y=y, theta=DOWN,
+                x=x,
+                y=y,
+                theta=DOWN,
                 base_radius=robot.base_radius,
                 arm_joint=arm_joint,
                 arm_length=robot.arm_length,
@@ -88,7 +91,9 @@ class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
             )
 
         current = RobotPose(
-            x=robot.x, y=robot.y, theta=robot.theta,
+            x=robot.x,
+            y=robot.y,
+            theta=robot.theta,
             base_radius=robot.base_radius,
             arm_joint=robot.arm_joint,
             arm_length=robot.arm_length,
@@ -152,6 +157,7 @@ class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
 # ClearTargetRegion
 # ---------------------------------------------------------------------------
 
+
 class ClearTargetRegion(Behavior[NDArray, NDArray]):
     """Remove all obstructions from the target surface, one at a time.
 
@@ -174,8 +180,8 @@ class ClearTargetRegion(Behavior[NDArray, NDArray]):
         self._generate_waypoints(x)
 
     def _populate_obstructions(self, x: NDArray) -> None:
-        """Identify which obstructions overlap the surface and queue them
-        tallest-first for removal."""
+        """Identify which obstructions overlap the surface and queue them tallest-first
+        for removal."""
         overlapping: list[tuple[float, str]] = []
         for i in range(self._num_obs):
             name = f"obstruction{i}"
@@ -208,7 +214,9 @@ class ClearTargetRegion(Behavior[NDArray, NDArray]):
 
         def wp(x: float, y: float, arm_joint: float, vacuum: float) -> RobotPose:
             return RobotPose(
-                x=x, y=y, theta=DOWN,
+                x=x,
+                y=y,
+                theta=DOWN,
                 base_radius=robot.base_radius,
                 arm_joint=arm_joint,
                 arm_length=robot.arm_length,
@@ -218,7 +226,9 @@ class ClearTargetRegion(Behavior[NDArray, NDArray]):
             )
 
         current = RobotPose(
-            x=robot.x, y=robot.y, theta=robot.theta,
+            x=robot.x,
+            y=robot.y,
+            theta=robot.theta,
             base_radius=robot.base_radius,
             arm_joint=robot.arm_joint,
             arm_length=robot.arm_length,
