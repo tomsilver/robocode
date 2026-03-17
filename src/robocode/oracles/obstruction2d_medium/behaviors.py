@@ -34,6 +34,7 @@ from robocode.oracles.obstruction2d_medium.obs_helpers import (
     goal_region_clear,
     holding_obstruction,
     holding_block,
+    is_on_surface,
     overlaps_surface_h,
     pickup_y,
 )
@@ -46,13 +47,13 @@ DOWN = -np.pi / 2
 LIFT_Y = 0.8
 
 # ---------------------------------------------------------------------------
-# PickTargetBlock
+# PickPlaceTargetBlock
 # ---------------------------------------------------------------------------
 
-class PickTargetBlock(Behavior[NDArray, NDArray]):
-    """Pick up the target block.
+class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
+    """Pick up the target block and place it on the target surface.
 
-    Subgoal  (HoldingTarget): vacuum on and block lifted off the table.
+    Subgoal  (GoalAchieved): block is on the target surface.
     Precond: goal region is clear and robot is not holding any block.
     """
 
@@ -68,10 +69,11 @@ class PickTargetBlock(Behavior[NDArray, NDArray]):
         self._generate_waypoints(x)
 
     def _generate_waypoints(self, x: NDArray) -> None:
-        """Generate key waypoints for picking the target block, then
-        interpolate and convert to an action plan."""
+        """Generate waypoints for picking the target block then placing it
+        on the target surface."""
         robot = extract_robot(x)
         block = extract_rect(x, "target_block")
+        surf = extract_rect(x, "target_surface")
 
         def wp(x: float, y: float, arm_joint: float, vacuum: float) -> RobotPose:
             return RobotPose(
@@ -84,7 +86,6 @@ class PickTargetBlock(Behavior[NDArray, NDArray]):
                 gripper_width=robot.gripper_width,
             )
 
-        # Start from the actual current robot state
         current = RobotPose(
             x=robot.x, y=robot.y, theta=robot.theta,
             base_radius=robot.base_radius,
@@ -96,41 +97,51 @@ class PickTargetBlock(Behavior[NDArray, NDArray]):
         )
 
         grab_y = pickup_y(block, robot)
+        # Place y: arm extended puts block bottom at surface top
+        place_y = surf.top + block.height + robot.arm_length + GRIPPER_CLEARANCE
 
         key_waypoints = [
+            # --- Pick phase ---
             # (0) Current state
             current,
-            # (1) Retract arm, lift to safe height at current x
+            # (1) Retract arm, lift to safe height
             wp(robot.x, LIFT_Y, robot.base_radius, 0.0),
-            # (2) Move horizontally over the target block
+            # (2) Move over the target block
             wp(block.cx, LIFT_Y, robot.base_radius, 0.0),
             # (3) Descend so gripper clears block top when arm extended
             wp(block.cx, grab_y, robot.base_radius, 0.0),
-            # (4) Extend arm fully (gripper just above block top)
+            # (4) Extend arm (gripper just above block top)
             wp(block.cx, grab_y, robot.arm_length, 0.0),
-            # (5) Turn vacuum on (suction zone reaches into block)
+            # (5) Turn vacuum on
             wp(block.cx, grab_y, robot.arm_length, 1.0),
-            # (6) Retract arm and lift to safe height, vacuum stays on
+            # (6) Retract arm and lift
             wp(block.cx, LIFT_Y, robot.base_radius, 1.0),
+            # --- Place phase ---
+            # (7) Travel over target surface center
+            wp(surf.cx, LIFT_Y, robot.base_radius, 1.0),
+            # (8) Descend to place height
+            wp(surf.cx, place_y, robot.base_radius, 1.0),
+            # (9) Extend arm to lower block onto surface
+            wp(surf.cx, place_y, robot.arm_length, 1.0),
+            # (10) Release vacuum
+            wp(surf.cx, place_y, robot.arm_length, 0.0),
+            # (11) Retract arm and lift
+            wp(surf.cx, LIFT_Y, robot.base_radius, 0.0),
         ]
 
         dense = connecting_waypoints(key_waypoints)
         self._actions = waypoints_to_actions(dense)
 
     def initializable(self, x: NDArray) -> bool:
-        """Check that the goal region is clear and robot is not already holding any block."""
+        """Goal region clear and not already holding anything."""
         return goal_region_clear(x) and not holding_block(x)
 
     def terminated(self, x: NDArray) -> bool:
-        """Check if the robot is holding the target block."""
-        return holding_block(x)
+        """Block is on the target surface."""
+        return is_on_surface(x, "target_block")
 
     def step(self, x: NDArray) -> NDArray:
-        """Return the next action to execute.
-
-        If the action plan is exhausted but the subgoal is not yet reached,
-        re-generate waypoints from the current observation.
-        """
+        """Pop next action; re-plan if exhausted but not done."""
         if not self._actions:
             self._generate_waypoints(x)
         return self._actions.popleft()

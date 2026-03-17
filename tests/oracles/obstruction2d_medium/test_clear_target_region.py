@@ -1,9 +1,9 @@
-"""Tests for PickTargetBlock behavior on Obstruction2D-o2."""
+"""Tests for PickPlaceTargetBlock behavior on Obstruction2D-o2."""
 
 import kinder
 
 from gymnasium.wrappers import RecordVideo
-from robocode.oracles.obstruction2d_medium.behaviors import ClearTargetRegion, PickTargetBlock
+from robocode.oracles.obstruction2d_medium.behaviors import ClearTargetRegion, PickPlaceTargetBlock
 from tests.conftest import MAKE_VIDEOS
 
 
@@ -51,7 +51,7 @@ def test_clear_then_pick():
     # Setup: get initial obs and move obstructions out of the way.
     obs, _ = env.reset(seed=0)
     behavior_clear = ClearTargetRegion()
-    behavior_pick = PickTargetBlock()
+    behavior_pick = PickPlaceTargetBlock()
 
     assert behavior_clear.initializable(obs), "Precondition should be satisfied at the start."
 
@@ -72,9 +72,10 @@ def test_clear_then_pick():
     behavior_pick.reset(obs)
     for s in range(MAX_STEPS):
         action = behavior_pick.step(obs)
-        obs, _, _, _, _ = env.step(action)
-        if behavior_pick.terminated(obs):
+        obs, _, terminated, _, _ = env.step(action)
+        if terminated:
             print(f"Pick subgoal achieved in {s+1} steps.")
             break
 
+    assert behavior_pick.terminated(obs), f"Pick subgoal not achieved within {MAX_STEPS} steps."
     env.close()
