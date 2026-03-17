@@ -30,6 +30,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from robocode.primitives import build_primitives
+from robocode.utils.approach_history import get_snapshots, record_episodes
 from robocode.utils.episode import run_episode, save_video
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,21 @@ def _main(cfg: DictConfig) -> float:
     eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
 
     approach.train()
+
+    # Record approach history: replay every sandbox snapshot.
+    if cfg.record_approach_history:
+        load_dir = cfg.approach.get("load_dir", None)
+        sandbox_dir = Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
+        snapshots = get_snapshots(sandbox_dir)
+        record_episodes(
+            snapshots,
+            sandbox_dir,
+            env,
+            primitives,
+            cfg.seed,
+            max_steps=cfg.max_steps,
+            output_dir=output_dir,
+        )
 
     # Evaluate on held-out episodes.
     render = cfg.render_videos
