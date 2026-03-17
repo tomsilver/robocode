@@ -9,6 +9,8 @@ num_eval_tasks: 100
 render_videos: false
 primitives:
   - check_action_collision
-  - render_state
   - csp
   - BiRRT
+mcp_tools:
+  - render_state
+  - render_policy

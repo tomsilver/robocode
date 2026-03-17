@@ -25,6 +25,7 @@ dependencies = [
    "types-shapely",
    "scipy-stubs",
    "imageio",
+   "mcp[cli]",
 ]
 
 [project.optional-dependencies]

@@ -14,11 +14,14 @@ from typing import Any, TypeVar
 from gymnasium.spaces import Space
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.mcp import MCP_TOOL_DESCRIPTIONS
+from robocode.primitives import PRIMITIVE_DESCRIPTIONS
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
     run_agent_in_docker_sandbox,
 )
+from robocode.utils.episode import load_generated_approach
 from robocode.utils.sandbox import SandboxConfig, SandboxResult, run_agent_in_sandbox
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,13 @@ _SYSTEM_PROMPT = (
     "Use the Task tool to explore source code in parallel — e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially."
+)
+
+_MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "Start by calling render_state to see the environment before writing code. "
+    "When your approach fails, call render_policy to visually diagnose the "
+    "failure BEFORE guessing at fixes."
 )
 
 _INTERFACE_SPEC = """\
@@ -85,59 +95,6 @@ termination conditions, etc.). To locate a module's source file:
 ```
 Then read the source to inform your approach.\
 """
-
-_PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
-    "check_action_collision": (
-        "`check_action_collision(state, action) -> bool` returns True when "
-        "taking `action` in `state` would cause a collision (i.e. the agent "
-        "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
-        "planning algorithms, skip actions that collide."
-    ),
-    "render_state": (
-        "`render_state(state, ax_callback=None) -> np.ndarray` renders the "
-        "given `state` as an RGB image (H\u00d7W\u00d73 uint8 numpy array). "
-        "Optionally pass `ax_callback`, a function that takes a matplotlib "
-        "`Axes` and draws on it. Use this to add markers, lines, "
-        "annotations, or any other matplotlib drawing. Examples:\n"
-        "  `render_state(state, ax_callback=lambda ax: ax.plot(1.5, 2.0, 'ro'))`\n"
-        "  `render_state(state, ax_callback=lambda ax: ax.annotate('goal', (3, 1)))`\n"
-        "Save to disk with "
-        '`imageio.imwrite("state.png", render_state(state))` and read the '
-        "file to visually understand the spatial layout."
-    ),
-    "csp": (
-        "`csp` is a module providing a constraint satisfaction problem (CSP) "
-        "solver. Use it to sample configurations (e.g. placements, grasps) "
-        "that satisfy constraints (e.g. collision-free). Key classes:\n"
-        "  - `csp.CSPVariable(name, domain)` \u2014 a variable with a "
-        "`gymnasium.spaces.Space` domain.\n"
-        "  - `csp.FunctionalCSPConstraint(name, variables, fn)` \u2014 a "
-        "constraint where `fn(*vals) -> bool`.\n"
-        "  - `csp.CSP(variables, constraints, cost=None)` \u2014 the problem.\n"
-        "  - `csp.FunctionalCSPSampler(fn, csp, sampled_vars)` \u2014 a "
-        "sampler where `fn(current_vals, rng) -> dict | None`.\n"
-        "  - `csp.RandomWalkCSPSolver(seed)` \u2014 solver; call "
-        "`.solve(csp, initialization, samplers)` to get a satisfying "
-        "assignment or None.\n"
-        "  - `csp.CSPCost(name, variables, cost_fn)` \u2014 optional cost to "
-        "minimize.\n"
-        "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
-        "threshold)` \u2014 constraint from log probabilities.\n"
-        "Access via `primitives['csp']`, e.g. "
-        "`primitives['csp'].CSPVariable(...)`."
-    ),
-    "BiRRT": (
-        "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
-        "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
-        "planner. Construct one, then call `birrt.query(start, goal)` to get "
-        "a collision-free path (list of states) or None. "
-        "`sample_fn(state) -> state` samples a random state, "
-        "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
-        "`collision_fn(state) -> bool` returns True if state is in collision, "
-        "`distance_fn(s1, s2) -> float` returns distance between states, "
-        "`rng` is a `np.random.Generator`."
-    ),
-}
 
 _GEOMETRY_PROMPT = """\
 
@@ -214,6 +171,9 @@ orchestrate your tested modules.
 contexts, it belongs in its own module.
 - Modules should be organized by functionality, and organized in directories if needed. \
 For example, if you have multiple modules related to geometry, put them in a `geometry/` subdirectory. \
+IMPORTANT: be careful about repeated behavior! If an action or strategy in your \
+approach fails, you should design your code to avoid repeating that failure. \
+For example, if a grasp fails, your code should not keep trying the same grasp.
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
@@ -292,6 +252,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         use_docker: bool = False,
         geometry_prompt: bool = True,
         modular_code_prompt: bool = False,
+        mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
     ) -> None:
@@ -309,6 +270,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
         self._modular_code_prompt = modular_code_prompt
+        self._mcp_tools = mcp_tools
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._generated: Any = None
@@ -331,7 +293,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         if self._primitives:
             lines = ["`primitives` is a dict with these callables:\n"]
             for name in sorted(self._primitives):
-                desc = _PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
+                desc = PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
                 lines.append(f"- {desc}")
             primitives_desc = "\n".join(lines)
             names = ", ".join(f"`{n}`" for n in sorted(self._primitives))
@@ -343,6 +305,16 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             )
         else:
             primitives_desc = "`primitives` is an empty dict."
+
+        if self._mcp_tools:
+            mcp_lines = [
+                "\n\nYou also have MCP tools for visual debugging (they do NOT "
+                "affect your test scripts):\n",
+            ]
+            for name in self._mcp_tools:
+                if name in MCP_TOOL_DESCRIPTIONS:
+                    mcp_lines.append(f"- {MCP_TOOL_DESCRIPTIONS[name]}")
+            primitives_desc += "\n".join(mcp_lines)
 
         python_exe = DOCKER_PYTHON if self._use_docker else sys.executable
         interface_spec = _INTERFACE_SPEC.format(
@@ -369,15 +341,20 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
 
         docker_config: DockerSandboxConfig | None = None
         config: SandboxConfig | None = None
+        system_prompt = _SYSTEM_PROMPT
+        if self._mcp_tools:
+            system_prompt += _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+
         if self._use_docker:
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
                 output_filename="approach.py",
                 prompt=prompt,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
                 primitive_names=tuple(self._primitives),
+                mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
             )
@@ -387,7 +364,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 sandbox_dir=sandbox_dir,
                 output_filename="approach.py",
                 prompt=prompt,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
                 max_output_tokens=self._max_output_tokens,
@@ -447,30 +424,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             logger.info("Woke up after rate-limit sleep, retrying...")
 
     def _load_generated(self, path: Path) -> None:
-        """Load a GeneratedApproach class from the given file.
-
-        Temporarily adds the parent directory of *path* to ``sys.path`` so
-        that ``approach.py`` can import sibling modules written by the agent,
-        then removes it to avoid polluting the global import path.
-        """
-        sandbox_dir = str(path.parent.resolve())
-        if sandbox_dir not in sys.path:
-            sys.path.insert(0, sandbox_dir)
-        try:
-            source = path.read_text()
-            namespace: dict[str, Any] = {}
-            exec(  # pylint: disable=exec-used
-                compile(source, str(path), "exec"), namespace
-            )
-        finally:
-            sys.path.remove(sandbox_dir)  # should always succeed since we just added it
-        cls = namespace["GeneratedApproach"]
-        self._generated = cls(
-            self._action_space,
-            self._state_space,
-            primitives=self._primitives,
+        """Load a GeneratedApproach class from the given file."""
+        self._generated = load_generated_approach(
+            path, self._action_space, self._state_space, self._primitives
         )
-        logger.info("Loaded generated approach from %s", path)
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
         """Start a new episode."""
