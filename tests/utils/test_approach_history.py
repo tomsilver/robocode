@@ -9,6 +9,7 @@ import subprocess
 from functools import partial
 from pathlib import Path
 
+import gymnasium
 import numpy as np
 import pytest
 
@@ -60,7 +61,7 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 @pytest.fixture()
-def env() -> KinderGeom2DEnv:
+def env() -> gymnasium.Env:
     """Create a KinderGeom2DEnv for testing."""
     e = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
     e.reset(seed=0)
@@ -68,7 +69,7 @@ def env() -> KinderGeom2DEnv:
 
 
 @pytest.fixture()
-def primitives(env: KinderGeom2DEnv) -> dict:
+def primitives(env: gymnasium.Env) -> dict:
     """Build a minimal primitives dict."""
     return {
         "check_action_collision": partial(check_action_collision, env),
@@ -135,7 +136,7 @@ def test_get_snapshots_skips_commits_without_approach(tmp_path: Path) -> None:
 
 def test_record_episodes(
     sandbox_with_history: Path,
-    env: KinderGeom2DEnv,
+    env: gymnasium.Env,
     primitives: dict,
     tmp_path: Path,
 ) -> None:
@@ -173,7 +174,7 @@ def test_record_episodes(
 
 def test_record_episodes_preserves_env_state(
     sandbox_with_history: Path,
-    env: KinderGeom2DEnv,
+    env: gymnasium.Env,
     primitives: dict,
     tmp_path: Path,
 ) -> None:
@@ -199,7 +200,7 @@ def test_record_episodes_preserves_env_state(
 
 def test_record_episodes_restores_sandbox_head(
     sandbox_with_history: Path,
-    env: KinderGeom2DEnv,
+    env: gymnasium.Env,
     primitives: dict,
     tmp_path: Path,
 ) -> None:
@@ -244,7 +245,7 @@ def test_record_episodes_restores_sandbox_head(
 
 
 def test_record_episodes_handles_broken_snapshot(
-    env: KinderGeom2DEnv,
+    env: gymnasium.Env,
     primitives: dict,
     tmp_path: Path,
 ) -> None:

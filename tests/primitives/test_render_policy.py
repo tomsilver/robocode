@@ -7,6 +7,7 @@ from __future__ import annotations
 from functools import partial
 from pathlib import Path
 
+import gymnasium
 import numpy as np
 import pytest
 
@@ -17,7 +18,7 @@ from robocode.primitives.render_state import render_state
 
 
 @pytest.fixture()
-def env() -> KinderGeom2DEnv:
+def env() -> gymnasium.Env:
     """Create a KinderGeom2DEnv for testing."""
     e = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
     e.reset(seed=0)
@@ -25,7 +26,7 @@ def env() -> KinderGeom2DEnv:
 
 
 @pytest.fixture()
-def primitives(env: KinderGeom2DEnv) -> dict:
+def primitives(env: gymnasium.Env) -> dict:
     """Build a minimal primitives dict."""
     return {
         "check_action_collision": partial(check_action_collision, env),
@@ -51,7 +52,7 @@ def approach_dir(tmp_path: Path) -> Path:
 
 
 def test_returns_frame_files(
-    env: KinderGeom2DEnv, primitives: dict, approach_dir: Path, tmp_path: Path
+    env: gymnasium.Env, primitives: dict, approach_dir: Path, tmp_path: Path
 ) -> None:
     """render_policy returns PNG filenames that exist on disk."""
     output_dir = tmp_path / "frames"
@@ -70,7 +71,7 @@ def test_returns_frame_files(
 
 
 def test_state_preserved(
-    env: KinderGeom2DEnv, primitives: dict, approach_dir: Path, tmp_path: Path
+    env: gymnasium.Env, primitives: dict, approach_dir: Path, tmp_path: Path
 ) -> None:
     """Env state is preserved after render_policy runs."""
     state_before = env.get_state().copy()
@@ -86,7 +87,7 @@ def test_state_preserved(
 
 
 def test_max_frames_limits_output(
-    env: KinderGeom2DEnv, primitives: dict, approach_dir: Path, tmp_path: Path
+    env: gymnasium.Env, primitives: dict, approach_dir: Path, tmp_path: Path
 ) -> None:
     """max_frames caps the number of saved PNGs."""
     files = render_policy(
