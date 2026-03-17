@@ -138,6 +138,7 @@ class DockerSandboxConfig(SandboxConfig):
 
     docker_image: str = _DEFAULT_IMAGE
     primitive_names: tuple[str, ...] = ()
+    mcp_tools: tuple[str, ...] = ()
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -301,9 +302,18 @@ async def run_agent_in_docker_sandbox(
             "/sandbox",
             config.docker_image,
         ]
-        docker_cmd += _build_claude_cli_args(
-            config.prompt, config.model, config.system_prompt, config.max_budget_usd
+        claude_args = _build_claude_cli_args(
+            config.prompt,
+            config.model,
+            config.system_prompt,
+            config.max_budget_usd,
+            sandbox_dir=config.sandbox_dir,
+            mcp_tools=config.mcp_tools,
+            mcp_python_cmd=DOCKER_PYTHON,
+            mcp_env_config_path="/sandbox/.mcp/env_config.json",
+            mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
         )
+        docker_cmd += claude_args
 
         extra_env: dict[str, str] = {}
         if oauth_token:
