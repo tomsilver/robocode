@@ -21,7 +21,10 @@ from typing import Callable
 from numpy.typing import NDArray
 
 from robocode.utils.structs import Behavior
-from robocode.oracles.obstruction2d_medium.obs_helpers import *
+from robocode.oracles.obstruction2d_medium.obs_helpers import (
+    goal_region_clear,
+    holding_block,
+)
 
 # ---------------------------------------------------------------------------
 # PickTargetBlock
@@ -51,11 +54,12 @@ class PickTargetBlock(Behavior[NDArray, NDArray]):
 
     def initializable(self, x: NDArray) -> bool:
         """Check that the goal region is clear and robot is not already holding any block."""
-
+        return goal_region_clear(x) and not holding_block(x)
 
     def terminated(self, x: NDArray) -> bool:
         """Check if the robot is holding the target block."""
-
+        return holding_block(x)
 
     def step(self, x: NDArray) -> NDArray:
         """Return the next action to execute."""
+        raise NotImplementedError
