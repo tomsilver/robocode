@@ -29,13 +29,8 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from robocode.primitives import csp as csp_module
-from robocode.primitives.check_action_collision import check_action_collision
-from robocode.primitives.motion_planning import BiRRT
-from robocode.primitives.render_policy import render_policy
-from robocode.primitives.render_state import render_state
-from robocode.utils.approach_history import get_snapshots, record_episodes
 from robocode.primitives import build_primitives
+from robocode.utils.approach_history import get_snapshots, record_episodes
 from robocode.utils.episode import run_episode, save_video
 
 logger = logging.getLogger(__name__)

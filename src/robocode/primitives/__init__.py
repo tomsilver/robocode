@@ -15,7 +15,6 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "check_action_collision": "check_action_collision",
     "csp": "csp",
     "BiRRT": "motion_planning",
-    "render_policy": "render_policy",
 }
 
 # Descriptions shown to the Claude agent so it knows how to call each

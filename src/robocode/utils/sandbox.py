@@ -207,54 +207,6 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
     )
 
 
-_MCP_SERVER_NAME = "robocode-tools"
-
-
-def _mcp_tool_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
-    """Return Claude CLI tool names for MCP tools (e.g. ``mcp__robocode-
-    tools__render_state``)."""
-    return tuple(f"mcp__{_MCP_SERVER_NAME}__{t}" for t in tool_names)
-
-
-def _setup_mcp_config(
-    sandbox_dir: Path,
-    tool_names: tuple[str, ...],
-    python_cmd: str,
-    env_config_path: str,
-) -> Path:
-    """Write MCP server config into ``sandbox_dir/.mcp/``.
-
-    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
-    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
-    """
-    mcp_dir = sandbox_dir / ".mcp"
-    mcp_dir.mkdir(exist_ok=True)
-
-    shutil.copy2(
-        sandbox_dir.parent / "env_config.json",
-        mcp_dir / "env_config.json",
-    )
-
-    mcp_config = {
-        "mcpServers": {
-            _MCP_SERVER_NAME: {
-                "command": python_cmd,
-                "args": [
-                    "-m",
-                    "robocode.mcp.server",
-                    "--env-config",
-                    env_config_path,
-                    "--tools",
-                    ",".join(tool_names),
-                ],
-            }
-        }
-    }
-    config_path = mcp_dir / "mcp_config.json"
-    config_path.write_text(json.dumps(mcp_config, indent=2))
-    return config_path
-
-
 def _setup_mcp_config(
     sandbox_dir: Path,
     tool_names: tuple[str, ...],
@@ -594,7 +546,7 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
     # MCP server config (written when mcp_tools is non-empty).
     # Expects env_config.json in sandbox_dir's parent (the output dir).
     if config.mcp_tools:
-        mcp_config_path = _setup_mcp_config(
+        _setup_mcp_config(
             config.sandbox_dir,
             config.mcp_tools,
             python_cmd=sys.executable,

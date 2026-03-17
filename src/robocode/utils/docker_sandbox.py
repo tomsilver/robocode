@@ -54,7 +54,6 @@ from robocode.utils.sandbox import (
     _build_claude_cli_args,
     _build_sandbox_env,
     _final_commit,
-    _mcp_tool_names,
     _parse_claude_stream,
     _setup_mcp_config,
     _setup_sandbox_common,
