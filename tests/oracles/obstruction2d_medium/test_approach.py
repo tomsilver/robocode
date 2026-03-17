@@ -17,20 +17,17 @@ SEEDS = list(np.random.choice(1000, size=5, replace=False))
 
 
 def _run_episode(
-    env: KinderGeom2DEnv,
+    episode_env: KinderGeom2DEnv,
     approach: Obstruction2DOracleApproach,
     seed: int,
 ) -> tuple[bool, int]:
-    """Run a single episode.
-
-    Return (solved, num_steps).
-    """
-    state, info = env.reset(seed=seed)
+    """Run a single episode. Return (solved, num_steps)."""
+    state, info = episode_env.reset(seed=seed)
     approach.reset(state, info)
 
     for step in range(MAX_STEPS):
         action = approach.step()
-        state, reward, terminated, truncated, info = env.step(action)
+        state, reward, terminated, truncated, info = episode_env.step(action)
         approach.update(state, float(reward), terminated or truncated, info)
         if terminated or truncated:
             return bool(terminated), step + 1
@@ -38,20 +35,20 @@ def _run_episode(
     return False, MAX_STEPS
 
 
-@pytest.fixture
-def env():
+@pytest.fixture(name="obstruction_env")
+def _obstruction_env():
+    """Create a KinderGeom2DEnv for the Obstruction2D-o2 environment."""
     return KinderGeom2DEnv(ENV_ID)
 
 
-# @pytest.mark.parametrize("seed", SEEDS)
-def test_oracle_solves_episode(env: KinderGeom2DEnv):
+def test_oracle_solves_episode(obstruction_env: KinderGeom2DEnv):
     """The oracle approach should solve the environment for each seed."""
     seed = 636
     approach = Obstruction2DOracleApproach(
-        action_space=env.action_space,
-        observation_space=env.observation_space,
+        action_space=obstruction_env.action_space,
+        observation_space=obstruction_env.observation_space,
     )
-    solved, steps = _run_episode(env, approach, seed)
+    solved, steps = _run_episode(obstruction_env, approach, seed)
     assert solved, f"seed={seed}: not solved in {steps} steps"
     print(f"seed={seed}: solved in {steps} steps")
 
@@ -59,7 +56,7 @@ def test_oracle_solves_episode(env: KinderGeom2DEnv):
 def test_oracle_solve_rate():
     """The oracle should achieve 100% solve rate across seeds."""
     render_mode = "rgb_array" if MAKE_VIDEOS else None
-    env = KinderGeom2DEnv(ENV_ID) if not MAKE_VIDEOS else None
+    shared_env = KinderGeom2DEnv(ENV_ID) if not MAKE_VIDEOS else None
 
     approach = Obstruction2DOracleApproach(
         action_space=KinderGeom2DEnv(ENV_ID).action_space,
@@ -69,9 +66,13 @@ def test_oracle_solve_rate():
     results = []
     for s in SEEDS:
         seed = int(s)
-        ep_env = kinder.make(ENV_ID, render_mode=render_mode) if MAKE_VIDEOS else env
         if MAKE_VIDEOS:
-            ep_env = RecordVideo(ep_env, f"unit_test_videos/approach_seed{seed}")
+            ep_env = RecordVideo(
+                kinder.make(ENV_ID, render_mode=render_mode),
+                f"unit_test_videos/approach_seed{seed}",
+            )
+        else:
+            ep_env = shared_env
         solved, steps = _run_episode(ep_env, approach, seed)
         results.append({"seed": seed, "solved": solved, "steps": steps})
         print(f"seed={seed}: solved={solved} steps={steps}")

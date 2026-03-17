@@ -3,7 +3,8 @@
 Provides named access to object features from the flat observation vector.
 
 Object names and feature layout:
-  robot            [0:9]   x y theta base_radius arm_joint arm_length vacuum gripper_height gripper_width
+  robot            [0:9]   x y theta base_radius arm_joint arm_length
+                           vacuum gripper_height gripper_width
   target_surface   [9:19]  x y theta static cr cg cb z_order width height
   target_block     [19:29] x y theta static cr cg cb z_order width height
   obstruction0     [29:39] x y theta static cr cg cb z_order width height
@@ -91,6 +92,8 @@ def get_feature(obs: NDArray, name: str, feature: str) -> float:
 
 @dataclass(frozen=True)
 class RobotPose:
+    """Robot configuration extracted from the observation vector."""
+
     x: float
     y: float
     theta: float
@@ -104,6 +107,8 @@ class RobotPose:
 
 @dataclass(frozen=True)
 class RectPose:
+    """Axis-aligned rectangle pose extracted from the observation vector."""
+
     x: float
     y: float
     theta: float
@@ -112,18 +117,22 @@ class RectPose:
 
     @property
     def cx(self) -> float:
+        """Centre x."""
         return self.x + self.width / 2
 
     @property
     def cy(self) -> float:
+        """Centre y."""
         return self.y + self.height / 2
 
     @property
     def top(self) -> float:
+        """Top edge y."""
         return self.y + self.height
 
     @property
     def right(self) -> float:
+        """Right edge x."""
         return self.x + self.width
 
 
@@ -187,8 +196,7 @@ def is_on_surface(obs: NDArray, obj_name: str) -> bool:
     return (
         obj.x >= surf.x - 1e-4
         and obj.right <= surf.right + 1e-4
-        and py >= surf.y - 1e-4
-        and py <= surf.top + 1e-4
+        and surf.y - 1e-4 <= py <= surf.top + 1e-4
     )
 
 
