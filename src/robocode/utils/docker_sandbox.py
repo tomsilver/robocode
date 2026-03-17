@@ -320,10 +320,12 @@ async def run_agent_in_docker_sandbox(
             config.model,
             config.system_prompt,
             config.max_budget_usd,
-            extra_tools=_mcp_tool_names(config.mcp_tools),
+            sandbox_dir=config.sandbox_dir,
+            mcp_tools=config.mcp_tools,
+            mcp_python_cmd=DOCKER_PYTHON,
+            mcp_env_config_path="/sandbox/.mcp/env_config.json",
+            mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
         )
-        if config.mcp_tools:
-            claude_args += ["--mcp-config", "/sandbox/.mcp/mcp_config.json"]
         docker_cmd += claude_args
 
         extra_env: dict[str, str] = {}

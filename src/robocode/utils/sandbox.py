@@ -25,6 +25,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from robocode.mcp import MCP_SERVER_NAME, mcp_tool_cli_names
+
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_RE = re.compile(
@@ -253,17 +255,67 @@ def _setup_mcp_config(
     return config_path
 
 
+def _setup_mcp_config(
+    sandbox_dir: Path,
+    tool_names: tuple[str, ...],
+    python_cmd: str,
+    env_config_path: str,
+) -> Path:
+    """Write MCP server config into ``sandbox_dir/.mcp/``.
+
+    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
+    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
+    """
+    mcp_dir = sandbox_dir / ".mcp"
+    mcp_dir.mkdir(exist_ok=True)
+
+    shutil.copy2(
+        sandbox_dir.parent / "env_config.json",
+        mcp_dir / "env_config.json",
+    )
+
+    mcp_config = {
+        "mcpServers": {
+            MCP_SERVER_NAME: {
+                "command": python_cmd,
+                "args": [
+                    "-m",
+                    "robocode.mcp.server",
+                    "--env-config",
+                    env_config_path,
+                    "--tools",
+                    ",".join(tool_names),
+                ],
+            }
+        }
+    }
+    config_path = mcp_dir / "mcp_config.json"
+    config_path.write_text(json.dumps(mcp_config, indent=2))
+    return config_path
+
+
 def _build_claude_cli_args(
     prompt: str,
     model: str,
     system_prompt: str,
     max_budget_usd: float,
-    extra_tools: tuple[str, ...] = (),
+    *,
+    sandbox_dir: Path | None = None,
+    mcp_tools: tuple[str, ...] = (),
+    mcp_python_cmd: str = "",
+    mcp_env_config_path: str = "",
+    mcp_config_cli_path: str | None = None,
 ) -> list[str]:
-    """Build the common Claude CLI arguments (excluding the binary itself)."""
+    """Build the common Claude CLI arguments (excluding the binary itself).
+
+    When mcp_tools is non-empty, also writes the MCP server config into sandbox_dir and
+    appends --mcp-config to the returned args. mcp_config_cli_path overrides the config
+    path passed to the CLI (useful for Docker where the host path differs from the
+    container path).
+    """
     tools = "Bash,Read,Write,Edit,Glob,Grep,Task"
-    if extra_tools:
-        tools += "," + ",".join(extra_tools)
+    if mcp_tools:
+        tools += "," + ",".join(mcp_tool_cli_names(mcp_tools))
     logger.info("Enabled tools: %s", tools)
     args = [
         "-p",
@@ -284,6 +336,13 @@ def _build_claude_cli_args(
         args += ["--system-prompt", system_prompt]
     if max_budget_usd > 0:
         args += ["--max-budget-usd", str(max_budget_usd)]
+    if mcp_tools:
+        assert sandbox_dir is not None
+        config_path = _setup_mcp_config(
+            sandbox_dir, mcp_tools, mcp_python_cmd, mcp_env_config_path
+        )
+        cli_path = mcp_config_cli_path or str(config_path.resolve())
+        args += ["--mcp-config", cli_path]
     return args
 
 
@@ -550,10 +609,14 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         config.model,
         config.system_prompt,
         config.max_budget_usd,
-        extra_tools=_mcp_tool_names(config.mcp_tools),
+        sandbox_dir=config.sandbox_dir,
+        mcp_tools=config.mcp_tools,
+        mcp_python_cmd=sys.executable,
+        mcp_env_config_path=str(
+            (config.sandbox_dir / ".mcp" / "env_config.json").resolve()
+        ),
     )
-    if config.mcp_tools:
-        cmd += ["--mcp-config", str(mcp_config_path.resolve())]
+
     env = _build_sandbox_env(config.max_output_tokens, config.autocompact_pct)
     sandbox_abs = str(config.sandbox_dir.resolve())
 
