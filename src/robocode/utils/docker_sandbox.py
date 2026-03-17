@@ -53,6 +53,7 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _build_claude_cli_args,
     _build_sandbox_env,
+    _final_commit,
     _parse_claude_stream,
     _setup_sandbox_common,
     _stream_result_to_sandbox_result,
@@ -353,6 +354,8 @@ async def run_agent_in_docker_sandbox(
             stream.total_cost,
             stream.is_error,
         )
+
+        _final_commit(config.sandbox_dir)
 
         return _stream_result_to_sandbox_result(
             stream, config.sandbox_dir, config.output_filename
