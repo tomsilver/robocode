@@ -543,18 +543,6 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
             "using absolute paths.\n"
         )
 
-    # MCP server config (written when mcp_tools is non-empty).
-    # Expects env_config.json in sandbox_dir's parent (the output dir).
-    if config.mcp_tools:
-        _setup_mcp_config(
-            config.sandbox_dir,
-            config.mcp_tools,
-            python_cmd=sys.executable,
-            env_config_path=str(
-                (config.sandbox_dir / ".mcp" / "env_config.json").resolve()
-            ),
-        )
-
     claude_cmd = _get_claude_cmd()
     cmd = [claude_cmd] + _build_claude_cli_args(
         config.prompt,
