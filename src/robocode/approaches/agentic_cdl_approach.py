@@ -1,4 +1,15 @@
-"""An approach that uses a Claude agent to generate approach code."""
+"""An approach that uses a Claude agent to generate behavior-based solutions.
+
+Instead of writing a monolithic policy, the agent is guided to decompose the
+task into a fixed sequence of behaviors (CDL-style), each with an explicit
+precondition, subgoal, and a feedforward policy body.  The agent must:
+
+1.  Reason about the high-level behavior decomposition first.
+2.  Implement and test each behavior in isolation before composing them.
+3.  Chain the behaviours into a final ``GeneratedApproach``.
+"""
+
+from __future__ import annotations
 
 import logging
 import sys
@@ -24,10 +35,15 @@ logger = logging.getLogger(__name__)
 _ObsType = TypeVar("_ObsType")
 _ActType = TypeVar("_ActType")
 
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
 _SYSTEM_PROMPT = (
-    "You are an expert at writing policies for gymnasium environments. "
-    "You will read environment source code, understand the dynamics, "
-    "and write an optimal approach class. "
+    "You are an expert at writing purely imperative, feedforward policies for "
+    "gymnasium environments. You decompose tasks into a fixed sequence of "
+    "BEHAVIORS, where each behavior is a small, self-contained module with an "
+    "explicit precondition, subgoal, and a deterministic policy body. "
     "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
     "to the current working directory using RELATIVE paths only. "
     "Never use absolute paths when writing files. "
@@ -51,6 +67,90 @@ _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     "failure BEFORE guessing at fixes."
 )
 
+_CDL_DECOMPOSITION_PROMPT = """\
+
+BEFORE writing any low-level code, you MUST first reason about the HIGH-LEVEL \
+BEHAVIOR DECOMPOSITION of this task. Think of the task as a fixed sequence of \
+phases/behaviors that, when executed in order, solve the environment.
+
+For each behavior, explicitly define:
+1. **Name**: A descriptive name.
+2. **Precondition** (``initializable(state) -> bool``): Under what state conditions can \
+this behavior start? This is a boolean predicate on the observation. This should always \
+be true after the previous behavior's subgoal is achieved. For the initial behavior, \
+it should be satisfied by the initial state of the environment (env.reset()). \
+3. **Subgoal** (``terminated(state) -> bool``): What condition must be true for this \
+behavior to be considered complete? Another boolean predicate.
+4. **Policy body**: A high-level description of the strategy (e.g., "move above the \
+object, lower the arm, activate vacuum, retract arm").
+5. **Why this ordering**: Explain why the previous behavior's subgoal satisfies this \
+behavior's precondition.
+
+Example decomposition for a pick-and-place task with obstructions:
+- **Behavior 1: ClearRegion** — Precondition: obstructions overlap the goal region. \
+Subgoal: no obstructions overlap the goal region. Policy: for each obstruction on the \
+surface, pick it up and place it in an empty area.
+- **Behavior 2: PickAndPlace** — Precondition: goal region is clear. Subgoal: target \
+block is on the goal surface. Policy: pick the block, carry it to the surface, place it.
+
+The approach should determine which behavior to start from by checking preconditions \
+BACKWARDS from the last behavior. If the last behavior's precondition is already \
+satisfied, skip all earlier behaviors.
+
+Write out your full decomposition BEFORE writing any code. This decomposition is the \
+most important part of your solution.
+"""
+
+_BEHAVIOR_IMPLEMENTATION_PROMPT = """\
+
+IMPORTANT: Implement and test each behavior AS A SEPARATE MODULE before composing \
+them together.
+
+A ``Behavior`` base class is provided in your working directory as ``behavior.py``. \
+Every behavior you write MUST inherit from it:
+
+```python
+from behavior import Behavior
+
+class MyBehavior(Behavior):
+    def reset(self, x):
+        \"\"\"Initialize internal state for a new execution of this behavior.\"\"\"
+        ...
+
+    def initializable(self, x) -> bool:
+        \"\"\"Return True if the precondition is met.\"\"\"
+        ...
+
+    def terminated(self, x) -> bool:
+        \"\"\"Return True if the subgoal has been achieved.\"\"\"
+        ...
+
+    def step(self, x):
+        \"\"\"Return the next action. Called each timestep until terminated.\"\"\"
+        ...
+```
+
+The base class is generic: ``Behavior[StateType, ActionType]``. For gymnasium \
+environments with numpy observations and actions, use ``Behavior[NDArray, NDArray]``.
+
+Testing protocol — for EACH behavior, write and run a test script that:
+1. Resets the environment (try multiple seeds: 0, 1, 2, 3, 42).
+2. If needed, manually sets up the state so the behavior's precondition is met \
+(e.g., move obstructions away for a "pick" behavior).
+3. Calls ``behavior.reset(state)``, then loops ``behavior.step(state)`` until \
+``behavior.terminated(state)`` returns True.
+4. **Asserts** that the subgoal is actually achieved and the behavior completes \
+within a reasonable number of steps.
+5. Only after ALL behaviors pass their individual tests, compose them into the \
+final ``approach.py``.
+
+IMPORTANT: be careful about repeated behavior! If an action or strategy in your \
+approach fails, you should design your code to avoid repeating that failure. \
+If a behavior's action plan is exhausted but the subgoal is not reached, \
+re-generate the plan from the current observation instead of repeating the \
+same failed plan.
+"""
+
 _INTERFACE_SPEC = """\
 Write `approach.py` containing a class `GeneratedApproach` with the following \
 interface:
@@ -62,28 +162,35 @@ class GeneratedApproach:
         ...
 
     def reset(self, state, info):
-        \"\"\"Called at the start of each episode with the initial state.\"\"\"
+        \"\"\"Called at the start of each episode with the initial state.
+
+        Determine the behavior sequence by checking preconditions backwards.
+        \"\"\"
         ...
 
     def get_action(self, state):
-        \"\"\"Return a valid action for the given state.\"\"\"
+        \"\"\"Return a valid action for the given state.
+
+        Delegate to the current behavior's step(). When the current
+        behavior's subgoal is reached, advance to the next behavior.
+        \"\"\"
         ...
 ```
 
-The class can maintain internal state between calls (e.g., a computed plan). \
-The `reset` method is called at the start of each episode. The `get_action` \
-method is called each step and must return a valid action.
+The ``reset`` method should determine which behaviors to execute by checking \
+preconditions backwards (last behavior first). The ``get_action`` method should \
+delegate to the current behavior and advance when subgoals are met.
 
 {primitives_description}
 
-Write the best approach you can \u2014 ideally one that solves the environment \
+Write the best approach you can — ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
-current environment. Write test scripts that use the real environment to \
-verify your approach works.
+current environment.
 
 IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:
 ```bash
+{python_executable} test_behavior_[behavior_name].py
 {python_executable} test_approach.py
 ```
 
@@ -98,102 +205,51 @@ Then read the source to inform your approach.\
 
 _GEOMETRY_PROMPT = """\
 
-BEFORE writing any code, you MUST first reason in detail about the geometry of this environment. \
-Think carefully and qualitatively about spatial relationships, shapes, motions, and constraints.
+BEFORE writing any code, you MUST first reason in detail about the geometry \
+of this environment. Think carefully and qualitatively about spatial \
+relationships, shapes, motions, and constraints.
 
-CRITICAL: Your geometric reasoning must be PURELY QUALITATIVE. Do NOT use any numbers AT ALL — \
-not in your reasoning, not in your thinking, not anywhere in your geometric analysis. This means \
-NO coordinates, NO distances, NO angles, NO dimensions, NO sizes, NO counts of objects, NO \
-thresholds, NO numeric constants, NO array indices, NO velocities, NO ratios, NO percentages. \
-Not even "2D" or "3D" — say "two-dimensional" or "three-dimensional" instead. If you catch \
-yourself about to write a number, stop and rephrase using purely relational, qualitative language. \
-Instead of saying "the object is at position (x, y)" say "the object is near the boundary". \
-Instead of "move 0.1 units" say "move a small step". Instead of "the angle is 90 degrees" say \
-"the surfaces are perpendicular".
+CRITICAL: Your geometric reasoning must be PURELY QUALITATIVE. Do NOT use \
+any numbers AT ALL — not in your reasoning, not in your thinking, not \
+anywhere in your geometric analysis. Instead of saying "the object is at \
+position (x, y)" say "the object is near the boundary". Instead of "move \
+0.1 units" say "move a small step".
 
-Your geometric reasoning should cover topics like:
-- What kinds of geometric shapes are involved (e.g. rectangles, circles, polygons, cuboids, \
-spheres, cylinders, capsules)? How do their shapes affect interactions — for instance, \
-rectangles tile differently than circles, spheres roll while cuboids don't, narrow corridors \
-between rectangular obstacles require precise alignment.
-- What are the key spatial relationships between objects? Reason about relative orientations \
-(parallel, perpendicular, oblique, aligned, tangent, skewed, transverse), relative positions \
-(adjacent, opposite, coplanar, collinear, concentric, coaxial, symmetric), and topological \
-relations (inside, outside, overlapping, enclosing, intersecting, touching, disjoint). Which \
-of these relationships matter for solving the task?
-- What geometric constraints exist? Are there boundaries, obstacles, containment relationships, \
-or clearance requirements? How do the shapes of obstacles create narrow passages, dead ends, \
-or open regions? Are surfaces flush or offset? Are relevant surfaces convex or concave?
-- What kind of motions or transformations are involved? Are objects translating, rotating, or \
-both? Are motions continuous or discrete? Does an object's shape affect how it can move \
-(e.g. a rectangle rotating requires more swept area than a circle of similar size)?
-- What makes a configuration "good" or "bad" geometrically? Think about reachability, \
-collision-freeness, coverage, proximity to goals.
-- What is the overall geometric strategy? For example:
-  - "The agent needs to navigate around obstacles to reach a goal region, so it must find a \
-path that threads between blocked areas while staying within bounds. When two rectangular \
-obstacles have parallel edges with a gap between them, the agent can pass through \
-perpendicular to those edges."
-  - "Objects must be packed tightly without overlapping, so the approach needs to find \
-placements where each new object fits into remaining gaps while respecting clearance from \
-existing objects. Rectangular objects can be aligned with parallel edges flush against each \
-other for dense packing, while circular objects leave unavoidable gaps."
-  - "The robot arm must move its end effector to a grasp pose, which means planning a \
-sequence of joint motions that avoids self-collision and keeps the kinematic chain valid. \
-The shape of the target object determines viable grasp orientations — a sphere can be \
-grasped from any direction, while a flat rectangular object requires approaching \
-perpendicular to one of its faces."
-  - "The agent must push an object toward a target, which requires approaching from the \
-opposite side so that the push direction is aligned with the line from object to goal. \
-A cylindrical object may roll unpredictably under pushes that are oblique to its axis."
+Your geometric reasoning should cover:
+- What shapes are involved and how they interact.
+- Key spatial relationships (above, inside, overlapping, adjacent, etc.).
+- What geometric constraints exist (boundaries, clearances, collision).
+- What motions/transformations are needed (translate, rotate, extend arm).
+- What makes a configuration "good" or "bad" geometrically.
 
-This qualitative geometric analysis should directly inform your code. Write your reasoning \
-out before you start coding. Do NOT skip this step. Remember: your geometric reasoning must \
-contain ZERO numbers. If any number appears in your geometric analysis, you have failed the task.
-"""
-
-_MODULAR_CODE_PROMPT = """\
-
-IMPORTANT: Write MODULAR code, like a skilled software engineer:
-- Break your solution into small, self-contained modules in separate .py files.
-- Each module should be minimal and focused on a single responsibility, small enough to \
-reason about, test, and reuse independently.
-- Write and run a test script for each module BEFORE composing them together. Verify each \
-piece works in isolation. The tests should play out the modules in the actual environment \
-if possible, verifying the conditions before and after execution and ensuring these match \
-the expectations, under multiple conditions and edge cases, and should not just rely \
-on mock objects or simplified assumptions.
-- Your final `approach.py` should import from these modules and compose them into the \
-complete solution. Keep `approach.py` itself as thin as possible, it should primarily \
-orchestrate your tested modules.
-- Prefer many small files over one large file. If a function could be useful in multiple \
-contexts, it belongs in its own module.
-IMPORTANT: be careful about repeated behavior! If an action or strategy in your \
-approach fails, you should design your code to avoid repeating that failure.
+This qualitative analysis should directly inform your behavior decomposition \
+and low-level policy design.
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
-You are writing an approach for the environment described below.
+You are writing a behavior-based approach for the environment described below.
 
-Your approach should be general enough to solve any instance of this environment (env.reset()), \
-but it does NOT need to be adaptable to different other environments.
+Your approach should be general enough to solve any instance of this environment \
+(env.reset()), but it does NOT need to be adaptable to different other environments.
 
 {env_description}
 {geometry_prompt}
+{cdl_decomposition_prompt}
 {interface_spec}
-{modular_code_prompt}\
+{behavior_implementation_prompt}\
 """
 
 _PROMPT_WITH_SOURCE = """\
 Read the environment source files in this directory to understand the state \
 type, action space, and dynamics.
+{cdl_decomposition_prompt}
 {interface_spec}
-{modular_code_prompt}\
+{behavior_implementation_prompt}\
 """
 
 
-class AgenticApproach(BaseApproach[_ObsType, _ActType]):
-    """An approach that uses a Claude agent to write approach code."""
+class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
+    """An approach that uses a Claude agent to write behavior-decomposed code."""
 
     def __init__(
         self,
@@ -208,7 +264,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         load_dir: str | None = None,
         use_docker: bool = False,
         geometry_prompt: bool = True,
-        modular_code_prompt: bool = False,
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
@@ -226,14 +281,14 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
         self._geometry_prompt = geometry_prompt
-        self._modular_code_prompt = modular_code_prompt
         self._mcp_tools = mcp_tools
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
-    def train(self) -> None:
+    def train(self) -> None:  # noqa: C901 — mirrors AgenticApproach.train
+        """Generate the behavior-based approach via a sandboxed Claude agent."""
         if self._load_dir is not None:
             approach_file = self._load_dir / "sandbox" / "approach.py"
             if not approach_file.exists():
@@ -244,9 +299,14 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir = self._output_dir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build the prompt. If we have an env description, inline it so the
-        # agent knows exactly which environment to target.  Otherwise fall
-        # back to asking the agent to read source files.
+        # Seed the sandbox with the Behavior base class so the agent can
+        # inherit from it.
+        behavior_src = (
+            Path(__file__).resolve().parent.parent / "primitives" / "behavior.py"
+        )
+        init_files = {"behavior.py": behavior_src}
+
+        # Build primitives description.
         if self._primitives:
             lines = ["`primitives` is a dict with these callables:\n"]
             for name in sorted(self._primitives):
@@ -279,32 +339,34 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             primitives_description=primitives_desc,
         )
 
-        modular = _MODULAR_CODE_PROMPT if self._modular_code_prompt else ""
+        geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
 
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
-            geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
             prompt = _PROMPT_WITH_DESCRIPTION.format(
                 env_description=env_desc,
                 geometry_prompt=geometry,
-                modular_code_prompt=modular,
+                cdl_decomposition_prompt=_CDL_DECOMPOSITION_PROMPT,
                 interface_spec=interface_spec,
+                behavior_implementation_prompt=_BEHAVIOR_IMPLEMENTATION_PROMPT,
             )
         else:
             prompt = _PROMPT_WITH_SOURCE.format(
-                modular_code_prompt=modular,
+                cdl_decomposition_prompt=_CDL_DECOMPOSITION_PROMPT,
                 interface_spec=interface_spec,
+                behavior_implementation_prompt=_BEHAVIOR_IMPLEMENTATION_PROMPT,
             )
 
-        docker_config: DockerSandboxConfig | None = None
-        config: SandboxConfig | None = None
         system_prompt = _SYSTEM_PROMPT
         if self._mcp_tools:
             system_prompt += _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 
+        docker_config: DockerSandboxConfig | None = None
+        config: SandboxConfig | None = None
         if self._use_docker:
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
+                init_files=init_files,
                 output_filename="approach.py",
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -319,6 +381,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             config = SandboxConfig(
                 sandbox_dir=sandbox_dir,
+                init_files=init_files,
                 output_filename="approach.py",
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -329,7 +392,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
-        # Write agent logs to a file in the sandbox directory.
         log_path = sandbox_dir / "agent_log.txt"
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(

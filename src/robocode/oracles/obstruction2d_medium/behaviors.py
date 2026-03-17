@@ -42,7 +42,7 @@ from robocode.oracles.obstruction2d_medium.obs_helpers import (
     pickup_y,
 )
 from robocode.oracles.obstruction2d_medium.obs_helpers import place_y as compute_place_y
-from robocode.utils.structs import Behavior
+from robocode.primitives.behavior import Behavior
 
 DOWN = -np.pi / 2
 LIFT_Y = 0.8
