@@ -49,6 +49,9 @@ NUM_OBSTRUCTIONS = 2
 # Physics constants
 TABLE_TOP = 0.1
 GRIP_OFFSET = 0.015
+# Clearance so the gripper clears the block top when arm is extended.
+# gripper_width/2 (collision extent along arm) + small margin.
+GRIPPER_CLEARANCE = 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +172,85 @@ def is_on_surface(obs: NDArray, obj_name: str) -> bool:
             and py <= surf.top + 1e-4)
 
 
+WORLD_WIDTH = 1.618  # golden ratio
+
+
+def occupied_intervals(obs: NDArray) -> list[tuple[float, float]]:
+    """Return sorted list of (left, right) intervals occupied on the table.
+
+    Includes: target_surface, target_block, and all obstructions that are
+    at table level (y close to TABLE_TOP).
+    """
+    intervals: list[tuple[float, float]] = []
+    for name in ["target_surface", "target_block"] + [
+        f"obstruction{i}" for i in range(NUM_OBSTRUCTIONS)
+    ]:
+        rect = extract_rect(obs, name)
+        # Only count objects sitting on or near the table
+        if rect.y < TABLE_TOP + 0.1:
+            intervals.append((rect.x, rect.right))
+    intervals.sort()
+    return intervals
+
+
+def find_largest_gap(obs: NDArray) -> float:
+    """Return the center-x of the largest free gap on the table."""
+    intervals = occupied_intervals(obs)
+    # Merge overlapping intervals
+    merged: list[tuple[float, float]] = []
+    for left, right in intervals:
+        if merged and left <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], right))
+        else:
+            merged.append((left, right))
+
+    # Find largest gap between [0, WORLD_WIDTH]
+    best_cx = 0.0
+    best_gap = 0.0
+    # Gap before first interval
+    if merged:
+        gap = merged[0][0]
+        if gap > best_gap:
+            best_gap = gap
+            best_cx = gap / 2
+    # Gaps between intervals
+    for i in range(len(merged) - 1):
+        gap = merged[i + 1][0] - merged[i][1]
+        if gap > best_gap:
+            best_gap = gap
+            best_cx = (merged[i][1] + merged[i + 1][0]) / 2
+    # Gap after last interval
+    if merged:
+        gap = WORLD_WIDTH - merged[-1][1]
+        if gap > best_gap:
+            best_gap = gap
+            best_cx = (merged[-1][1] + WORLD_WIDTH) / 2
+
+    return best_cx
+
+
+def pickup_y(block: RectPose, robot: RobotPose) -> float:
+    """Robot y that positions the fully-extended gripper just above *block*.top.
+
+    At this height the suction zone (which extends past the gripper) overlaps
+    the block for pickup, but the gripper itself doesn't collide.
+    """
+    return block.top + robot.arm_length + GRIPPER_CLEARANCE
+
+
 def holding_block(obs: NDArray) -> bool:
     """True when vacuum is on and the target block is lifted off the table."""
     robot = extract_robot(obs)
     block = extract_rect(obs, "target_block")
     return robot.vacuum > 0.5 and block.y > TABLE_TOP + 0.04
+
+def holding_obstruction(obs: NDArray) -> bool:
+    """True when vacuum is on and any obstruction is lifted off the table."""
+    robot = extract_robot(obs)
+    if robot.vacuum <= 0.5:
+        return False
+    for i in range(NUM_OBSTRUCTIONS):
+        obj = extract_rect(obs, f"obstruction{i}")
+        if obj.y > TABLE_TOP + 0.04:
+            return True
+    return False
