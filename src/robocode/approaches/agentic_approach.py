@@ -48,7 +48,10 @@ _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
     "Start by calling render_state to see the environment before writing code. "
     "When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes."
+    "failure BEFORE guessing at fixes. "
+    "CRITICAL: MCP tools are only available to YOU directly — they CANNOT be "
+    "called from inside Task subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a Task subagent."
 )
 
 _INTERFACE_SPEC = """\

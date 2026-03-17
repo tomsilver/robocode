@@ -64,7 +64,10 @@ _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
     "Start by calling render_state to see the environment before writing code. "
     "When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes."
+    "failure BEFORE guessing at fixes. "
+    "CRITICAL: MCP tools are only available to YOU directly — they CANNOT be "
+    "called from inside Task subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a Task subagent."
 )
 
 _CDL_DECOMPOSITION_PROMPT = """\
@@ -103,35 +106,59 @@ most important part of your solution.
 
 _BEHAVIOR_IMPLEMENTATION_PROMPT = """\
 
-IMPORTANT: Implement and test each behavior AS A SEPARATE MODULE before composing \
-them together.
+IMPORTANT: You MUST follow this EXACT file structure. Do NOT put everything in \
+one file. Do NOT put helper functions inside approach.py or behavior files.
 
-A ``Behavior`` base class is provided in your working directory as ``behavior.py``. \
-Every behavior you write MUST inherit from it:
+Required files:
+- ``obs_helpers.py`` — ALL functions that parse/interpret the observation vector. \
+This includes extracting object positions, computing geometric predicates \
+(overlaps, is_on, etc.), and any named constants for observation indices. \
+Every "magic number" related to observation parsing (index offsets, tolerances, \
+physics constants like table height) MUST be a named constant here.
+- ``act_helpers.py`` — ALL functions that help generate actions. This includes \
+waypoint interpolation, action clipping, proportional controllers, etc. \
+Every "magic number" related to action generation (step limits, arm extension \
+rate, etc.) MUST be a named constant here.
+- ``behaviors.py`` — ALL behavior classes. Each behavior inherits from the \
+``Behavior`` base class (provided in ``behavior.py``). Behaviors import from \
+``obs_helpers`` and ``act_helpers`` but contain NO magic numbers themselves.
+- ``approach.py`` — ONLY the ``GeneratedApproach`` class. It imports behaviors \
+from ``behaviors.py`` and does NOTHING except: (1) in ``reset``, determine \
+the behavior sequence by checking ``initializable`` backwards, (2) in \
+``get_action``, delegate to the current behavior's ``step()`` and advance \
+when ``terminated()`` returns True. NO control logic, NO observation parsing, \
+NO action generation in this file.
+
+CRITICAL RULES:
+- NO magic numbers anywhere except as named constants in obs_helpers.py or \
+act_helpers.py. Every numeric literal (tolerances, offsets, indices, limits) \
+must have a descriptive name. ``0.05`` is WRONG; ``DX_LIMIT = 0.05`` is RIGHT.
+- Behaviors must use obs_helpers for ALL observation access. Never index into \
+the observation array directly inside a behavior — use named extraction \
+functions like ``extract_robot(obs)``, ``extract_rect(obs, "target_block")``.
+- approach.py must be THIN. Its reset() only builds a behavior deque using \
+backward precondition checking. Its get_action() only delegates to the \
+current behavior and advances on termination. Nothing else.
+
+A ``Behavior`` base class is provided in your working directory as ``behavior.py``:
 
 ```python
 from behavior import Behavior
 
 class MyBehavior(Behavior):
     def reset(self, x):
-        \"\"\"Initialize internal state for a new execution of this behavior.\"\"\"
+        \"\"\"Initialize internal state for a new execution.\"\"\"
         ...
-
     def initializable(self, x) -> bool:
         \"\"\"Return True if the precondition is met.\"\"\"
         ...
-
     def terminated(self, x) -> bool:
         \"\"\"Return True if the subgoal has been achieved.\"\"\"
         ...
-
     def step(self, x):
-        \"\"\"Return the next action. Called each timestep until terminated.\"\"\"
+        \"\"\"Return the next action.\"\"\"
         ...
 ```
-
-The base class is generic: ``Behavior[StateType, ActionType]``. For gymnasium \
-environments with numpy observations and actions, use ``Behavior[NDArray, NDArray]``.
 
 Testing protocol — for EACH behavior, write and run a test script that:
 1. Resets the environment (try multiple seeds: 0, 1, 2, 3, 42).
@@ -144,11 +171,9 @@ within a reasonable number of steps.
 5. Only after ALL behaviors pass their individual tests, compose them into the \
 final ``approach.py``.
 
-IMPORTANT: be careful about repeated behavior! If an action or strategy in your \
-approach fails, you should design your code to avoid repeating that failure. \
-If a behavior's action plan is exhausted but the subgoal is not reached, \
-re-generate the plan from the current observation instead of repeating the \
-same failed plan.
+IMPORTANT: If a behavior's action plan is exhausted but the subgoal is not \
+reached, re-generate the plan from the current observation instead of \
+repeating the same failed plan.
 """
 
 _INTERFACE_SPEC = """\
@@ -156,30 +181,38 @@ Write `approach.py` containing a class `GeneratedApproach` with the following \
 interface:
 
 ```python
+from collections import deque
+from behaviors import BehaviorA, BehaviorB  # your behavior classes
+
 class GeneratedApproach:
     def __init__(self, action_space, observation_space, primitives):
-        \"\"\"Initialize with the environment's gym spaces.\"\"\"
-        ...
+        self._behaviors = deque()
+        self._current = None
 
     def reset(self, state, info):
-        \"\"\"Called at the start of each episode with the initial state.
-
-        Determine the behavior sequence by checking preconditions backwards.
-        \"\"\"
-        ...
+        # Determine behavior sequence by checking preconditions BACKWARDS.
+        # This is the ONLY logic allowed here.
+        b_last = BehaviorB()
+        b_first = BehaviorA()
+        if b_last.initializable(state):
+            self._behaviors = deque([b_last])
+        else:
+            self._behaviors = deque([b_first, b_last])
+        self._current = self._behaviors.popleft()
+        self._current.reset(state)
 
     def get_action(self, state):
-        \"\"\"Return a valid action for the given state.
-
-        Delegate to the current behavior's step(). When the current
-        behavior's subgoal is reached, advance to the next behavior.
-        \"\"\"
-        ...
+        # Advance to next behavior when subgoal reached.
+        if self._current.terminated(state) and self._behaviors:
+            self._current = self._behaviors.popleft()
+            self._current.reset(state)
+        return self._current.step(state)
 ```
 
-The ``reset`` method should determine which behaviors to execute by checking \
-preconditions backwards (last behavior first). The ``get_action`` method should \
-delegate to the current behavior and advance when subgoals are met.
+The ``reset`` method MUST ONLY build a behavior deque using backward \
+precondition checking. The ``get_action`` method MUST ONLY delegate to the \
+current behavior and advance on termination. No other logic is allowed in \
+approach.py — all intelligence lives in the behaviors and helpers.
 
 {primitives_description}
 
