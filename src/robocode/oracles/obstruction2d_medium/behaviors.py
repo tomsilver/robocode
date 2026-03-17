@@ -37,6 +37,7 @@ from robocode.oracles.obstruction2d_medium.obs_helpers import (
     is_on_surface,
     overlaps_surface_h,
     pickup_y,
+    place_y as compute_place_y,
 )
 from robocode.oracles.obstruction2d_medium.act_helpers import (
     connecting_waypoints,
@@ -98,7 +99,7 @@ class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
 
         grab_y = pickup_y(block, robot)
         # Place y: arm extended puts block bottom at surface top
-        place_y = surf.top + block.height + robot.arm_length + GRIPPER_CLEARANCE
+        drop_y = compute_place_y(surf.top, block, robot)
 
         key_waypoints = [
             # --- Pick phase ---
@@ -120,11 +121,11 @@ class PickPlaceTargetBlock(Behavior[NDArray, NDArray]):
             # (7) Travel over target surface center
             wp(surf.cx, LIFT_Y, robot.base_radius, 1.0),
             # (8) Descend to place height
-            wp(surf.cx, place_y, robot.base_radius, 1.0),
+            wp(surf.cx, drop_y, robot.base_radius, 1.0),
             # (9) Extend arm to lower block onto surface
-            wp(surf.cx, place_y, robot.arm_length, 1.0),
+            wp(surf.cx, drop_y, robot.arm_length, 1.0),
             # (10) Release vacuum
-            wp(surf.cx, place_y, robot.arm_length, 0.0),
+            wp(surf.cx, drop_y, robot.arm_length, 0.0),
             # (11) Retract arm and lift
             wp(surf.cx, LIFT_Y, robot.base_radius, 0.0),
         ]

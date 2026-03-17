@@ -238,6 +238,18 @@ def pickup_y(block: RectPose, robot: RobotPose) -> float:
     return block.top + robot.arm_length + GRIPPER_CLEARANCE
 
 
+def place_y(target_top: float, block: RectPose, robot: RobotPose) -> float:
+    """Robot y that places the held block so its bottom lands at *target_top*.
+
+    The suction zone holds the block at GRIP_OFFSET below the gripper tip.
+    With arm fully extended, gripper tip is at robot_y - arm_length.
+    Block top ≈ robot_y - arm_length - GRIP_OFFSET, so
+    block bottom ≈ robot_y - arm_length - GRIP_OFFSET - block.height.
+    Setting block bottom = target_top and solving for robot_y:
+    """
+    return target_top + block.height + robot.arm_length + GRIP_OFFSET
+
+
 def holding_block(obs: NDArray) -> bool:
     """True when vacuum is on and the target block is lifted off the table."""
     robot = extract_robot(obs)
