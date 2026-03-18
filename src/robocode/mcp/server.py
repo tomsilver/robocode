@@ -8,13 +8,17 @@ Usage::
 
     python -m robocode.mcp.server \
         --env-config /sandbox/.mcp/env_config.json \
-        --tools render_state,render_policy
+        --tools render_state,render_policy \
+        --log-file /path/to/mcp_server.log
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import json
+import logging
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -28,15 +32,51 @@ from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
 from robocode.primitives.render_policy import render_policy as _render_policy_fn
 from robocode.primitives.render_state import render_state as _render_state_fn
 
+logger = logging.getLogger(MCP_SERVER_NAME)
+
+
+def _setup_logging(log_file: Path) -> None:
+    """Configure file-based logging for the MCP server.
+
+    stdout is reserved for the MCP stdio transport, so all diagnostics go to a file.
+    """
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(str(log_file), encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
+    )
+    logger.addHandler(handler)
+
 
 def _build_env_and_primitives(
     env_config: dict[str, Any],
 ) -> tuple[Any, dict[str, Any]]:
     """Instantiate the environment and build the primitives dict."""
+    logger.info("Building environment and primitives from config")
     cfg = OmegaConf.create(env_config)
     env = instantiate(cfg)
     env.reset(seed=0)
+    logger.info("Environment instantiated: %s", type(env).__name__)
     return env, build_primitives(env, list(PRIMITIVE_NAME_TO_FILE))
+
+
+def _logged_tool(fn):  # type: ignore[type-arg]
+    """Decorator that logs tool calls, return values, and exceptions."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        logger.info("%s called with %s %s", fn.__name__, args, kwargs)
+        try:
+            result = fn(*args, **kwargs)
+        except Exception:
+            logger.error("%s failed:\n%s", fn.__name__, traceback.format_exc())
+            raise
+        logger.info("%s returned: %s", fn.__name__, result)
+        return result
+
+    return wrapper
 
 
 def create_server(
@@ -45,6 +85,7 @@ def create_server(
     renders_dir: Path | None = None,
 ) -> FastMCP:
     """Create and configure the MCP server with the requested tools."""
+    logger.info("Creating MCP server, requested tools: %s", tool_names)
     server = FastMCP(MCP_SERVER_NAME)
     env, primitives = _build_env_and_primitives(env_config)
     out_dir = renders_dir or Path("mcp_renders")
@@ -52,6 +93,7 @@ def create_server(
     if "render_state" in tool_names:
 
         @server.tool()
+        @_logged_tool
         def render_state(seed: int = 42) -> str:
             """Render the environment's initial state for a given seed.
 
@@ -66,9 +108,12 @@ def create_server(
             iio.imwrite(str(out), frame)
             return str(out)
 
+        logger.info("Registered tool: render_state")
+
     if "render_policy" in tool_names:
 
         @server.tool()
+        @_logged_tool
         def render_policy(
             approach_dir: str = ".",
             seed: int = 42,
@@ -93,6 +138,9 @@ def create_server(
             )
             return [str(out / f) for f in filenames]
 
+        logger.info("Registered tool: render_policy")
+
+    logger.info("MCP server created successfully")
     return server
 
 
@@ -109,19 +157,34 @@ def main() -> None:
         required=True,
         help="Comma-separated list of tools to expose",
     )
+    parser.add_argument(
+        "--log-file",
+        required=True,
+        help="Path to write server-side log (stdout is reserved for MCP stdio)",
+    )
     args = parser.parse_args()
 
-    env_config_path = Path(args.env_config).resolve()
-    env_config = json.loads(env_config_path.read_text(encoding="utf-8"))
-    tool_names = [t.strip() for t in args.tools.split(",")]
+    _setup_logging(Path(args.log_file))
+    logger.info("MCP server starting: args=%s", vars(args))
 
-    # Place renders next to the sandbox
-    # (env_config is at <sandbox>/.mcp/env_config.json).
-    sandbox_dir = env_config_path.parent.parent
-    renders_dir = sandbox_dir / "mcp_renders"
+    try:
+        env_config_path = Path(args.env_config).resolve()
+        logger.info("Loading env config from %s", env_config_path)
+        env_config = json.loads(env_config_path.read_text(encoding="utf-8"))
+        tool_names = [t.strip() for t in args.tools.split(",")]
 
-    server = create_server(env_config, tool_names, renders_dir=renders_dir)
-    server.run(transport="stdio")
+        # Place renders next to the sandbox
+        # (env_config is at <sandbox>/.mcp/env_config.json).
+        sandbox_dir = env_config_path.parent.parent
+        renders_dir = sandbox_dir / "mcp_renders"
+
+        server = create_server(env_config, tool_names, renders_dir=renders_dir)
+        logger.info("Starting stdio transport")
+        server.run(transport="stdio")
+        logger.info("MCP server shut down")
+    except Exception:
+        logger.critical("MCP server crashed:\n%s", traceback.format_exc())
+        raise
 
 
 if __name__ == "__main__":

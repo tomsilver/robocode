@@ -84,6 +84,8 @@ __pycache__/
 *.jpeg
 *.mp4
 agent_log.txt
+.mcp/
+mcp_renders/
 """
 
 _SANDBOX_SETTINGS: dict = {
@@ -212,6 +214,7 @@ def _setup_mcp_config(
     tool_names: tuple[str, ...],
     python_cmd: str,
     env_config_path: str,
+    log_file_path: str,
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
@@ -226,18 +229,21 @@ def _setup_mcp_config(
         mcp_dir / "env_config.json",
     )
 
+    # Use a shell wrapper so that stderr (import errors, tracebacks) is also
+    # captured in the log file even if the Python process never reaches main().
+    stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
+    server_cmd = (
+        f"{python_cmd} -m robocode.mcp.server"
+        f" --env-config {env_config_path}"
+        f" --tools {','.join(tool_names)}"
+        f" --log-file {log_file_path}"
+        f" 2>>{stderr_log_path}"
+    )
     mcp_config = {
         "mcpServers": {
             MCP_SERVER_NAME: {
-                "command": python_cmd,
-                "args": [
-                    "-m",
-                    "robocode.mcp.server",
-                    "--env-config",
-                    env_config_path,
-                    "--tools",
-                    ",".join(tool_names),
-                ],
+                "command": "bash",
+                "args": ["-c", server_cmd],
             }
         }
     }
@@ -257,6 +263,7 @@ def _build_claude_cli_args(
     mcp_python_cmd: str = "",
     mcp_env_config_path: str = "",
     mcp_config_cli_path: str | None = None,
+    mcp_log_file_path: str = "",
 ) -> list[str]:
     """Build the common Claude CLI arguments (excluding the binary itself).
 
@@ -290,11 +297,14 @@ def _build_claude_cli_args(
         args += ["--max-budget-usd", str(max_budget_usd)]
     if mcp_tools:
         assert sandbox_dir is not None
+        log_path = mcp_log_file_path or str(
+            (sandbox_dir / ".mcp" / "mcp_server.log").resolve()
+        )
         config_path = _setup_mcp_config(
-            sandbox_dir, mcp_tools, mcp_python_cmd, mcp_env_config_path
+            sandbox_dir, mcp_tools, mcp_python_cmd, mcp_env_config_path, log_path
         )
         cli_path = mcp_config_cli_path or str(config_path.resolve())
-        args += ["--mcp-config", cli_path]
+        args += ["--mcp-config", cli_path, "--strict-mcp-config"]
     return args
 
 
@@ -329,6 +339,7 @@ def _parse_claude_stream(
     num_turns = 0
     total_cost: float | None = None
     rate_limit_reset: str | None = None
+    mcp_log: Path | None = None
 
     stream_log_fh = (
         open(stream_log_path, "a", encoding="utf-8")  # noqa: SIM115
@@ -354,11 +365,32 @@ def _parse_claude_stream(
         if msg_type == "system":
             subtype = msg.get("subtype", "")
             if subtype == "init":
-                for srv in msg.get("mcp_servers", []):
+                mcp_servers = msg.get("mcp_servers", [])
+                if mcp_servers:
+                    assert (
+                        stream_log_path is not None
+                    ), "stream_log_path must be set when MCP servers are configured"
+                    mcp_log = (
+                        stream_log_path.parent / "sandbox" / ".mcp" / "mcp_server.log"
+                    )
+                for srv in mcp_servers:
                     status = srv.get("status")
                     name = srv.get("name")
+                    if name != MCP_SERVER_NAME:
+                        continue
                     if status != "connected":
                         logger.warning("MCP server %s: %s", name, status)
+                        logger.warning("MCP server %s full status: %s", name, srv)
+                        logger.warning(
+                            "Check the MCP server log for details: %s",
+                            mcp_log,
+                        )
+                        logger.warning(
+                            "If running in Docker, try rebuilding the image "
+                            "with `bash docker/build.sh`, as the robocode "
+                            "package (including MCP server code) is baked "
+                            "into the image at build time."
+                        )
                     else:
                         logger.info("MCP server %s: %s", name, status)
             elif subtype == "compact_boundary":
@@ -395,6 +427,14 @@ def _parse_claude_stream(
                     tool_use_result = tool_use_result[:500] + "..."
                 if "Error" in tool_use_result:
                     logger.warning("Tool result: %s", tool_use_result)
+                    if "No such tool" in tool_use_result:
+                        logger.warning(
+                            "Tool not found, if running in Docker, try "
+                            "rebuilding the image with "
+                            "`bash docker/build.sh`. "
+                            "Check %s for server-side details.",
+                            mcp_log,
+                        )
                 elif "mcp_renders" in tool_use_result:
                     logger.info("Tool result: %s", tool_use_result)
                 else:
