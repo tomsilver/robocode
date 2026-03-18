@@ -7,10 +7,10 @@ ENV="${2:-obstruction2d_medium}"
 python experiments/run_experiment.py \
     approach=agentic_cdl \
     approach.use_docker=true \
-    approach.max_budget_usd=1.0 \
+    approach.max_budget_usd=20.0 \
     seed="$SEED" \
     num_eval_tasks=10 \
     'primitives=[]' \
-    'mcp_tools=[render_state,render_policy]' \
+    'mcp_tools=[]' \
     environment="$ENV" \
     "hydra.run.dir=outputs/cdl_no_primitives_${ENV}/s${SEED}"

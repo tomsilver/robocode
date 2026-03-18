@@ -57,7 +57,13 @@ _SYSTEM_PROMPT = (
     "You should commit the approach every time before you test it in the environment. "
     "Use the Task tool to explore source code in parallel — e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
-    "types simultaneously rather than sequentially."
+    "types simultaneously rather than sequentially. "
+    "TOKEN BUDGET: You have a limited output-token budget per turn. Be concise. "
+    "Do NOT write lengthy prose reasoning about geometry or arithmetic — put "
+    "all numerical calculations in code (Python scripts or inline print "
+    "statements) and read the results. Your text should be SHORT: state what "
+    "you will do, then immediately write code. Never narrate step-by-step "
+    "arithmetic in text."
 )
 
 _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
@@ -238,25 +244,15 @@ Then read the source to inform your approach.\
 
 _GEOMETRY_PROMPT = """\
 
-BEFORE writing any code, you MUST first reason in detail about the geometry \
-of this environment. Think carefully and qualitatively about spatial \
-relationships, shapes, motions, and constraints.
-
-CRITICAL: Your geometric reasoning must be PURELY QUALITATIVE. Do NOT use \
-any numbers AT ALL — not in your reasoning, not in your thinking, not \
-anywhere in your geometric analysis. Instead of saying "the object is at \
-position (x, y)" say "the object is near the boundary". Instead of "move \
-0.1 units" say "move a small step".
-
-Your geometric reasoning should cover:
-- What shapes are involved and how they interact.
-- Key spatial relationships (above, inside, overlapping, adjacent, etc.).
-- What geometric constraints exist (boundaries, clearances, collision).
+BEFORE writing any code, briefly describe (in 5-10 bullet points) the key \
+geometric relationships in this environment:
+- What shapes are involved and how they interact spatially.
 - What motions/transformations are needed (translate, rotate, extend arm).
-- What makes a configuration "good" or "bad" geometrically.
+- What collision constraints exist (clearances, boundaries).
 
-This qualitative analysis should directly inform your behavior decomposition \
-and low-level policy design.
+Keep this analysis SHORT and QUALITATIVE — no numbers, no arithmetic. \
+If you need to compute specific positions or offsets, write a Python \
+script to do it and print the results. NEVER do arithmetic in text.
 """
 
 _PROMPT_WITH_DESCRIPTION = """\
