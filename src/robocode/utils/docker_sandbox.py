@@ -313,6 +313,7 @@ async def run_agent_in_docker_sandbox(
             mcp_python_cmd=DOCKER_PYTHON,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
+            mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
         )
         docker_cmd += claude_args
 
