@@ -19,7 +19,6 @@ Position convention:
 from __future__ import annotations
 
 import math
-
 from dataclasses import dataclass
 
 from numpy.typing import NDArray
@@ -218,6 +217,7 @@ def has_space_stick_bottom(obs: NDArray) -> bool:
         WORLD_WIDTH - stick.cx > robot.base_radius + MIN_GRASP_CLEARANCE
     )
     return x_ok and y_ok
+
 
 def no_space_stick_bottom(obs: NDArray) -> bool:
     """Negation of :func:`has_space_stick_bottom`."""

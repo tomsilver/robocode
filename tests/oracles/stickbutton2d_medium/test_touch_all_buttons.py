@@ -72,9 +72,11 @@ def test_reposition_grasp_then_touch():
     # Debug: print state before TouchAllButtons
     r = extract_robot(obs)
     s = extract_rect(obs, "stick")
-    print(f"Before touch: robot=({r.x:.2f},{r.y:.2f},th={r.theta:.2f},"
-          f"arm={r.arm_joint:.2f},vac={r.vacuum:.0f}), "
-          f"stick=({s.x:.3f},{s.y:.3f}), stick.top={s.top:.3f}")
+    print(
+        f"Before touch: robot=({r.x:.2f},{r.y:.2f},th={r.theta:.2f},"
+        f"arm={r.arm_joint:.2f},vac={r.vacuum:.0f}), "
+        f"stick=({s.x:.3f},{s.y:.3f}), stick.top={s.top:.3f}"
+    )
 
     # Phase 3: TouchAllButtons
     touch = TouchAllButtons()
@@ -92,8 +94,10 @@ def test_reposition_grasp_then_touch():
             r2 = extract_robot(obs)
             s2 = extract_rect(obs, "stick")
             pressed = [is_button_pressed(obs, f"button{i}") for i in range(3)]
-            print(f"  step {step+1}: robot=({r2.x:.2f},{r2.y:.2f}), "
-                  f"stick=({s2.x:.3f},{s2.y:.3f}), pressed={pressed}")
+            print(
+                f"  step {step+1}: robot=({r2.x:.2f},{r2.y:.2f}), "
+                f"stick=({s2.x:.3f},{s2.y:.3f}), pressed={pressed}"
+            )
 
     assert touch.terminated(obs), f"Not all buttons pressed within {MAX_STEPS} steps."
     env.close()

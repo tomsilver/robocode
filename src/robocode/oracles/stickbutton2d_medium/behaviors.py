@@ -72,14 +72,13 @@ def _current_pose(robot: RobotPose) -> RobotPose:
 class RePositionStick(Behavior[NDArray, NDArray]):
     """Move the stick so the robot can later grasp it at the bottom.
 
-    Used when the stick is too close to a side wall (or its bottom is
-    too low) for the robot to grasp it from below.  The robot finds the
-    closest long side (left or right edge) of the stick, approaches
-    horizontally, grabs it, then slides it toward the world centre
-    before releasing.
+    Used when the stick is too close to a side wall (or its bottom is too low) for the
+    robot to grasp it from below.  The robot finds the closest long side (left or right
+    edge) of the stick, approaches horizontally, grabs it, then slides it toward the
+    world centre before releasing.
 
-    Subgoal  (HasSpaceStickBottom): enough room below the stick bottom.
-    Precond  (NoSpaceStickBottom):  not enough room.
+    Subgoal  (HasSpaceStickBottom): enough room below the stick bottom. Precond
+    (NoSpaceStickBottom):  not enough room.
     """
 
     def __init__(self) -> None:
@@ -195,11 +194,11 @@ class RePositionStick(Behavior[NDArray, NDArray]):
 class GraspStickBottom(Behavior[NDArray, NDArray]):
     """Navigate to the stick bottom and grasp it with the arm pointing up.
 
-    If the robot is already holding the stick (e.g. from RePositionStick),
-    it first releases and then re-grabs at the bottom.
+    If the robot is already holding the stick (e.g. from RePositionStick), it first
+    releases and then re-grabs at the bottom.
 
-    Subgoal  (StickBottomGrasped): vacuum on with grip near stick bottom.
-    Precond  (HasSpaceStickBottom): enough room below the stick.
+    Subgoal  (StickBottomGrasped): vacuum on with grip near stick bottom. Precond
+    (HasSpaceStickBottom): enough room below the stick.
     """
 
     def __init__(self) -> None:
@@ -242,7 +241,9 @@ class GraspStickBottom(Behavior[NDArray, NDArray]):
             ]
 
         waypoints += [
-            wp(robot.x, robot.y, robot.base_radius, robot.theta, 0.0),  # retract in place
+            wp(
+                robot.x, robot.y, robot.base_radius, robot.theta, 0.0
+            ),  # retract in place
             wp(robot.x, grab_y, robot.base_radius, robot.theta, 0.0),
             # Move over stick centre-x at grab height
             wp(stick.cx, grab_y, robot.base_radius, UP, 0.0),
@@ -320,9 +321,7 @@ class TouchAllButtons(Behavior[NDArray, NDArray]):
         max_y = TABLE_Y - robot.base_radius - 0.01
         min_y = robot.base_radius + 0.01
 
-        def wp(
-            px: float, py: float, arm_joint: float, vacuum: float
-        ) -> RobotPose:
+        def wp(px: float, py: float, arm_joint: float, vacuum: float) -> RobotPose:
             return RobotPose(
                 x=px,
                 y=py,

@@ -1,7 +1,7 @@
 """Action helpers for StickButton2D-b3 oracle behaviors.
 
-Converts sparse key-waypoints into dense action sequences that respect the
-environment's action-space limits.
+Converts sparse key-waypoints into dense action sequences that respect the environment's
+action-space limits.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ def connecting_waypoints(
 ) -> list[RobotPose]:
     """Linearly interpolate between consecutive key-waypoints.
 
-    The number of intermediate steps between each pair is determined by the
-    dimension that requires the most steps given *action_limits*.
+    The number of intermediate steps between each pair is determined by the dimension
+    that requires the most steps given *action_limits*.
 
     Vacuum is snapped to the target waypoint value (not interpolated).
     """
