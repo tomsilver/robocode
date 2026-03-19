@@ -95,13 +95,6 @@ object, lower the arm, activate vacuum, retract arm").
 5. **Why this ordering**: Explain why the previous behavior's subgoal satisfies this \
 behavior's precondition.
 
-Example decomposition for a pick-and-place task with obstructions:
-- **Behavior 1: ClearRegion** — Precondition: obstructions overlap the goal region. \
-Subgoal: no obstructions overlap the goal region. Policy: for each obstruction on the \
-surface, pick it up and place it in an empty area.
-- **Behavior 2: PickAndPlace** — Precondition: goal region is clear. Subgoal: target \
-block is on the goal surface. Policy: pick the block, carry it to the surface, place it.
-
 Write out your full decomposition BEFORE writing any code. This decomposition is the \
 most important part of your solution.
 """
