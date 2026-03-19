@@ -19,7 +19,7 @@ from robocode.oracles.obstruction2d_medium.behaviors import (
     ClearTargetRegion,
     PickPlaceTargetBlock,
 )
-from robocode.utils.structs import Behavior
+from robocode.primitives.behavior import Behavior
 
 
 class Obstruction2DOracleApproach(BaseApproach[NDArray, NDArray]):
