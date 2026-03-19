@@ -21,11 +21,10 @@ MAX_STEPS = 500
 def test_reposition_then_grasp():
     """With seed=0 the stick is near the left wall.
 
-    RePositionStick should move it toward the centre so that
-    has_space_stick_bottom becomes True.  Because the behaviour grabs at
-    the stick bottom, it may already satisfy stick_bottom_grasped, in
-    which case GraspStickBottom can be skipped.  If not, GraspStickBottom
-    should succeed afterwards.
+    RePositionStick grabs the stick's closest long side horizontally and
+    slides it toward the world centre.  Because the grasp is horizontal
+    (not bottom-up), stick_bottom_grasped remains False, so
+    GraspStickBottom is initializable and re-grabs at the bottom.
     """
     kinder.register_all_environments()
     render_mode = "rgb_array" if MAKE_VIDEOS else None
@@ -56,28 +55,29 @@ def test_reposition_then_grasp():
     assert has_space_stick_bottom(obs), (
         "After reposition the stick should have clearance."
     )
+    # The side grasp should NOT satisfy stick_bottom_grasped
+    assert not stick_bottom_grasped(obs), (
+        "A horizontal side grasp should not count as a bottom grasp."
+    )
 
-    # Phase 2: the reposition grab may already satisfy stick_bottom_grasped
-    # (the behaviour grabs at the stick bottom).  If so, GraspStickBottom
-    # can be skipped — exactly what the approach does.
-    if stick_bottom_grasped(obs):
-        print("Stick already grasped at bottom after reposition — "
-              "GraspStickBottom can be skipped.")
-    else:
-        grasp = GraspStickBottom()
-        assert grasp.initializable(obs), (
-            "GraspStickBottom precondition should hold after reposition."
-        )
-        grasp.reset(obs)
-        for s in range(MAX_STEPS):
-            action = grasp.step(obs)
-            obs, _, _, _, _ = env.step(action)
-            if grasp.terminated(obs):
-                print(f"GraspStickBottom done in {s + 1} steps.")
-                break
+    # Phase 2: GraspStickBottom should now be initializable
+    grasp = GraspStickBottom()
+    assert grasp.initializable(obs), (
+        "GraspStickBottom precondition should hold after reposition."
+    )
 
-        assert grasp.terminated(obs), (
-            f"GraspStickBottom not done within {MAX_STEPS} steps."
-        )
+    grasp.reset(obs)
+    for s in range(MAX_STEPS):
+        action = grasp.step(obs)
+        obs, _, _, _, _ = env.step(action)
+        if grasp.terminated(obs):
+            print(f"GraspStickBottom done in {s + 1} steps.")
+            break
 
+    assert grasp.terminated(obs), (
+        f"GraspStickBottom not done within {MAX_STEPS} steps."
+    )
+    assert stick_bottom_grasped(obs), (
+        "After GraspStickBottom the stick should be held at its bottom."
+    )
     env.close()

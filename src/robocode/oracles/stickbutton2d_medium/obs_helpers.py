@@ -231,18 +231,24 @@ def holding_stick(obs: NDArray) -> bool:
 
 
 def stick_bottom_grasped(obs: NDArray) -> bool:
-    """True if the stick is held and the grip is near the stick bottom.
+    """True if the stick is held at its bottom with the arm pointing up.
 
-    When grasped at the bottom with the arm pointing up, ``stick.y`` is
-    above ``robot.y`` (the stick sits above the gripper).  When grasped
-    higher up the stick length, ``stick.y`` drops well below ``robot.y``
-    because the bottom hangs down.
+    Two conditions distinguish a bottom grasp from a side grasp:
+
+    1. The arm must be pointing up (``theta ≈ π/2``).  A side grasp
+       performed by :class:`RePositionStick` uses ``theta ≈ 0`` or
+       ``theta ≈ π``, so this excludes it.
+    2. The stick bottom (``stick.y``) must sit above the robot centre,
+       which is the natural geometry when the suction grabbed the very
+       bottom of the stick with the arm extended upward.
     """
     robot = extract_robot(obs)
     stick = extract_rect(obs, "stick")
     if robot.vacuum <= 0.5:
         return False
-    return stick.y > robot.y - 0.05
+    arm_up = abs(robot.theta - math.pi / 2) < 0.3
+    bottom_above = stick.y > robot.y - 0.05
+    return arm_up and bottom_above
 
 
 def is_button_pressed(obs: NDArray, button_name: str) -> bool:

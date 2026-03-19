@@ -216,12 +216,12 @@ class GraspStickBottom(Behavior[NDArray, NDArray]):
         stick = extract_rect(x, "stick")
 
         def wp(
-            px: float, py: float, arm_joint: float, vacuum: float
+            px: float, py: float, arm_joint: float, theta: float, vacuum: float
         ) -> RobotPose:
             return RobotPose(
                 x=px,
                 y=py,
-                theta=UP,
+                theta=theta,
                 base_radius=robot.base_radius,
                 arm_joint=arm_joint,
                 arm_length=robot.arm_length,
@@ -238,21 +238,18 @@ class GraspStickBottom(Behavior[NDArray, NDArray]):
         # If already holding (from RePositionStick), release first.
         if holding_stick(x):
             waypoints += [
-                wp(robot.x, robot.y, robot.arm_joint, 0.0),  # vacuum off
-                wp(robot.x, SAFE_Y, robot.base_radius, 0.0),  # retract + lift
+                wp(robot.x, robot.y, robot.arm_joint, robot.theta, 0.0),  # vacuum off
             ]
 
         waypoints += [
-            # Move over stick centre-x
-            wp(stick.cx, SAFE_Y, robot.base_radius, 0.0),
-            # Lower to grab position
-            wp(stick.cx, grab_y, robot.base_radius, 0.0),
+            wp(robot.x, robot.y, robot.base_radius, robot.theta, 0.0),  # retract in place
+            wp(robot.x, grab_y, robot.base_radius, robot.theta, 0.0),
+            # Move over stick centre-x at grab height
+            wp(stick.cx, grab_y, robot.base_radius, UP, 0.0),
             # Extend arm (suction zone at stick bottom)
-            wp(stick.cx, grab_y, robot.arm_length, 0.0),
+            wp(stick.cx, grab_y, robot.arm_length, UP, 0.0),
             # Vacuum on
-            wp(stick.cx, grab_y, robot.arm_length, 1.0),
-            # Retract arm and lift
-            wp(stick.cx, SAFE_Y, robot.base_radius, 1.0),
+            wp(stick.cx, grab_y, robot.arm_length, UP, 1.0),
         ]
 
         dense = connecting_waypoints(waypoints)
