@@ -18,7 +18,7 @@ def test_stick_grasped_at_bottom():
     if MAKE_VIDEOS:
         env = RecordVideo(env, "unit_test_videos")
 
-    obs, _ = env.reset(seed=0)
+    obs, _ = env.reset(seed=1)
     behavior = GraspStickBottom()
 
     assert behavior.initializable(obs), "Precondition should be satisfied at the start."

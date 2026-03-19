@@ -212,9 +212,12 @@ def has_space_stick_bottom(obs: NDArray) -> bool:
     """
     robot = extract_robot(obs)
     stick = extract_rect(obs, "stick")
-    required_y = stick.y - robot.arm_length
-    return required_y >= robot.base_radius + MIN_GRASP_CLEARANCE
-
+    required_y = stick.y - robot.arm_length - robot.gripper_width
+    y_ok = required_y >= robot.base_radius + MIN_GRASP_CLEARANCE
+    x_ok = stick.cx > robot.base_radius + MIN_GRASP_CLEARANCE and (
+        WORLD_WIDTH - stick.cx > robot.base_radius + MIN_GRASP_CLEARANCE
+    )
+    return x_ok and y_ok
 
 def no_space_stick_bottom(obs: NDArray) -> bool:
     """Negation of :func:`has_space_stick_bottom`."""

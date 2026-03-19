@@ -70,11 +70,13 @@ def _current_pose(robot: RobotPose) -> RobotPose:
 
 
 class RePositionStick(Behavior[NDArray, NDArray]):
-    """Lift the stick so the robot can later grasp it at the bottom.
+    """Move the stick so the robot can later grasp it at the bottom.
 
-    Used when the stick bottom is too close to the floor for the robot
-    to fit beneath it.  The robot grabs the stick at the nearest
-    reachable point, lifts straight up, then releases.
+    Used when the stick is too close to a side wall (or its bottom is
+    too low) for the robot to grasp it from below.  The robot finds the
+    closest long side (left or right edge) of the stick, approaches
+    horizontally, grabs it, then slides it toward the world centre
+    before releasing.
 
     Subgoal  (HasSpaceStickBottom): enough room below the stick bottom.
     Precond  (NoSpaceStickBottom):  not enough room.
@@ -93,13 +95,53 @@ class RePositionStick(Behavior[NDArray, NDArray]):
         robot = extract_robot(x)
         stick = extract_rect(x, "stick")
 
+        margin = 0.02
+        min_x = robot.base_radius + margin
+        max_x = WORLD_WIDTH - robot.base_radius - margin
+        max_y = TABLE_Y - robot.base_radius - margin
+        min_y = robot.base_radius + margin
+        arm_reach = robot.arm_length + 1.5 * robot.gripper_width
+
+        # --- choose the closest reachable long side ---
+        # Left approach: robot to the left of the stick, arm pointing RIGHT
+        #   robot_x = stick.x - arm_reach,  theta = 0
+        # Right approach: robot to the right, arm pointing LEFT
+        #   robot_x = stick.right + arm_reach,  theta = pi
+        left_robot_x = stick.x - arm_reach
+        right_robot_x = stick.right + arm_reach
+
+        left_ok = left_robot_x >= min_x
+        right_ok = right_robot_x <= max_x
+
+        if left_ok and right_ok:
+            if abs(robot.x - left_robot_x) <= abs(robot.x - right_robot_x):
+                grab_x, grab_theta = left_robot_x, 0.0
+            else:
+                grab_x, grab_theta = right_robot_x, float(np.pi)
+        elif left_ok:
+            grab_x, grab_theta = left_robot_x, 0.0
+        else:
+            grab_x, grab_theta = right_robot_x, float(np.pi)
+
+        # y: place the robot where its suction zone overlaps the stick's
+        # vertical extent.  The suction perpendicular half-extent is
+        # gripper_height / 2.  Position just inside the stick bottom.
+        grab_y = max(min_y, min(stick.y + robot.gripper_height / 2, max_y))
+
+        # After grabbing, slide toward the world centre-x.
+        drop_x = max(min_x, min(WORLD_WIDTH / 2, max_x))
+
         def wp(
-            px: float, py: float, arm_joint: float, vacuum: float
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
         ) -> RobotPose:
             return RobotPose(
                 x=px,
                 y=py,
-                theta=UP,
+                theta=theta,
                 base_radius=robot.base_radius,
                 arm_joint=arm_joint,
                 arm_length=robot.arm_length,
@@ -109,29 +151,25 @@ class RePositionStick(Behavior[NDArray, NDArray]):
             )
 
         current = _current_pose(robot)
-        min_robot_y = robot.base_radius + 0.02
-        # Grab y: lowest the robot can go, arm extended → suction hits stick
-        grab_y = min_robot_y
-        lift_y = SAFE_Y + 0.3  # lift target
 
         key_waypoints = [
             current,
-            # (1) Retract arm, point up, safe height
-            wp(robot.x, SAFE_Y, robot.base_radius, 0.0),
-            # (2) Move over stick centre-x
-            wp(stick.cx, SAFE_Y, robot.base_radius, 0.0),
-            # (3) Lower to minimum y
-            wp(stick.cx, grab_y, robot.base_radius, 0.0),
-            # (4) Extend arm to reach stick
-            wp(stick.cx, grab_y, robot.arm_length, 0.0),
+            # (1) Retract arm, set theta, go to safe height
+            wp(robot.x, SAFE_Y, grab_theta, robot.base_radius, 0.0),
+            # (2) Move to grab x
+            wp(grab_x, SAFE_Y, grab_theta, robot.base_radius, 0.0),
+            # (3) Rise to grab y (where suction overlaps stick edge)
+            wp(grab_x, grab_y, grab_theta, robot.base_radius, 0.0),
+            # (4) Extend arm to reach stick edge
+            wp(grab_x, grab_y, grab_theta, robot.arm_length, 0.0),
             # (5) Vacuum on
-            wp(stick.cx, grab_y, robot.arm_length, 1.0),
-            # (6) Lift straight up (stick follows)
-            wp(stick.cx, lift_y, robot.arm_length, 1.0),
+            wp(grab_x, grab_y, grab_theta, robot.arm_length, 1.0),
+            # (6) Slide toward world centre (stick follows)
+            wp(drop_x, grab_y, grab_theta, robot.arm_length, 1.0),
             # (7) Release vacuum
-            wp(stick.cx, lift_y, robot.arm_length, 0.0),
+            wp(drop_x, grab_y, grab_theta, robot.arm_length, 0.0),
             # (8) Retract arm, safe height
-            wp(stick.cx, SAFE_Y, robot.base_radius, 0.0),
+            wp(drop_x, SAFE_Y, grab_theta, robot.base_radius, 0.0),
         ]
 
         dense = connecting_waypoints(key_waypoints)
