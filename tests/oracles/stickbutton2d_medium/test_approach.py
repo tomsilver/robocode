@@ -13,7 +13,7 @@ from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/StickButton2D-b3-v0"
 MAX_STEPS = 500
-SEEDS = list(np.random.choice(1000, size=5, replace=False))
+SEEDS = list(np.random.choice(1000, size=100, replace=False))
 
 
 def _run_episode(
