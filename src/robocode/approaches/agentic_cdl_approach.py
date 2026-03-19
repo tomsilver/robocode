@@ -95,6 +95,17 @@ object, lower the arm, activate vacuum, retract arm").
 5. **Why this ordering**: Explain why the previous behavior's subgoal satisfies this \
 behavior's precondition.
 
+Example decomposition for a pick-and-place task with obstructions:
+- **Behavior 1: ClearRegion** — Precondition: obstructions overlap the goal region. \
+Subgoal: no obstructions overlap the goal region. Policy: for each obstruction on the \
+surface, pick it up and place it in an empty area.
+- **Behavior 2: PickAndPlace** — Precondition: goal region is clear. Subgoal: target \
+block is on the goal surface. Policy: pick the block, carry it to the surface, place it.
+
+The approach should determine which behavior to start from by checking preconditions \
+BACKWARDS from the last behavior. If the last behavior's precondition is already \
+satisfied, skip all earlier behaviors.
+
 Write out your full decomposition BEFORE writing any code. This decomposition is the \
 most important part of your solution.
 """
@@ -118,9 +129,22 @@ rate, etc.) MUST be a named constant here.
 ``Behavior`` base class (provided in ``behavior.py``). Behaviors import from \
 ``obs_helpers`` and ``act_helpers`` but contain NO magic numbers themselves.
 - ``approach.py`` — ONLY the ``GeneratedApproach`` class. It imports behaviors \
-from ``behaviors.py`` and does NOTHING except delegating to behaviors (see \
-the interface spec below). NO control logic, NO observation parsing, \
+from ``behaviors.py`` and does NOTHING except: (1) in ``reset``, determine \
+the behavior sequence by checking ``initializable`` backwards, (2) in \
+``get_action``, delegate to the current behavior's ``step()`` and advance \
+when ``terminated()`` returns True. NO control logic, NO observation parsing, \
 NO action generation in this file.
+
+CRITICAL RULES:
+- NO magic numbers anywhere except as named constants in obs_helpers.py or \
+act_helpers.py. Every numeric literal (tolerances, offsets, indices, limits) \
+must have a descriptive name. ``0.05`` is WRONG; ``DX_LIMIT = 0.05`` is RIGHT.
+- Behaviors must use obs_helpers for ALL observation access. Never index into \
+the observation array directly inside a behavior — use named extraction \
+functions like ``extract_robot(obs)``, ``extract_rect(obs, "target_block")``.
+- approach.py must be THIN. Its reset() only builds a behavior deque using \
+backward precondition checking. Its get_action() only delegates to the \
+current behavior and advances on termination. Nothing else.
 
 A ``Behavior`` base class is provided in your working directory as ``behavior.py``:
 
@@ -190,6 +214,11 @@ class GeneratedApproach:
             self._current.reset(state)
         return self._current.step(state)
 ```
+
+The ``reset`` method MUST ONLY build a behavior deque using backward \
+precondition checking. The ``get_action`` method MUST ONLY delegate to the \
+current behavior and advance on termination. No other logic is allowed in \
+approach.py — all intelligence lives in the behaviors and helpers.
 
 {primitives_description}
 
