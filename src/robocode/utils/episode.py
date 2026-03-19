@@ -70,7 +70,7 @@ def run_episode(
     total_reward = 0.0
     num_steps = 0
     terminated = False
-    for _ in range(max_steps):
+    for step in range(max_steps):
         action = approach.step()
         state, reward, terminated, truncated, info = env.step(action)
         total_reward += float(reward)
