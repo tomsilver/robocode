@@ -22,6 +22,7 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         seed: int,
         primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
+        **kwargs: Any,
     ) -> None:
         self._rng = np.random.default_rng(seed)
         self._state_space = copy.deepcopy(observation_space)
