@@ -369,9 +369,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         has_initial_helpers = False
         if self._env_name is not None:
             helpers_dir = (
-                Path(__file__).resolve().parent.parent
-                / "primitives"
-                / self._env_name
+                Path(__file__).resolve().parent.parent / "primitives" / self._env_name
             )
             for helper_name in ("obs_helpers.py", "act_helpers.py"):
                 helper_path = helpers_dir / helper_name

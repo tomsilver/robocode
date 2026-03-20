@@ -75,7 +75,8 @@ def get_snapshots(sandbox_dir: Path) -> list[Snapshot]:
 
 
 def _export_snapshot(sandbox_dir: Path, commit_hash: str, dest: Path) -> None:
-    """Export the sandbox tree at *commit_hash* into *dest* without modifying the repo."""
+    """Export the sandbox tree at *commit_hash* into *dest* without modifying the
+    repo."""
     dest.mkdir(parents=True, exist_ok=True)
     # git archive exports the tree without .git metadata
     archive = subprocess.run(
@@ -133,8 +134,10 @@ def record_episodes(
         # Purge any cached sandbox modules (obs_helpers, act_helpers, etc.)
         # so the next load picks up files from the new exported copy.
         sandbox_modules = [
-            name for name, mod in sys.modules.items()
-            if hasattr(mod, "__file__") and mod.__file__ is not None
+            name
+            for name, mod in sys.modules.items()
+            if hasattr(mod, "__file__")
+            and mod.__file__ is not None
             and "sandbox" in mod.__file__
         ]
         for name in sandbox_modules:
@@ -165,9 +168,7 @@ def record_episodes(
                 **metrics,
             }
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning(
-                "v%03d (%s) failed: %s", snap.version, short_hash, e
-            )
+            logger.warning("v%03d (%s) failed: %s", snap.version, short_hash, e)
             record = {
                 "version": snap.version,
                 "commit_hash": snap.commit_hash,

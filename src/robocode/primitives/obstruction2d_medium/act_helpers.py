@@ -12,7 +12,7 @@ from collections import deque
 import numpy as np
 from numpy.typing import NDArray
 
-from obs_helpers import RobotPose
+from robocode.oracles.obstruction2d_medium.obs_helpers import RobotPose
 
 # Default per-step limits (matching the Obstruction2D action space).
 DX_LIM = 0.05
