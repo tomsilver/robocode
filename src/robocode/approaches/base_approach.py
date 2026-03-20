@@ -15,7 +15,7 @@ _ActType = TypeVar("_ActType")
 class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
     """Base class for a sequential decision-making agent."""
 
-    def __init__(
+    def __init__(  # pylint: disable=unused-argument
         self,
         action_space: Space[_ActType],
         observation_space: Space[_StateType],

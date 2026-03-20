@@ -118,8 +118,6 @@ def record_episodes(
     records: list[dict[str, Any]] = []
 
     for snap in snapshots:
-        if snap.version != 17:
-            continue
         short_hash = snap.commit_hash[:8]
         version_dir = history_dir / f"v{snap.version:03d}"
         # AgenticApproach expects load_dir/sandbox/approach.py, so we
