@@ -136,7 +136,12 @@ class GraspRotate(Behavior[NDArray, NDArray]):
         max_y = TABLE_Y - robot.base_radius - margin
         arm_reach = robot.arm_length + 1.5 * robot.gripper_width
 
-        # ---- 1. Determine approach side and height -------------------------
+        # ---- 1. Determine safe_y and approach side/height -------------------
+        # Compute a safe lateral-movement height below the hook so the robot
+        # body does not collide with the hook while travelling horizontally.
+        _, hook_min_y, _, _ = _hook_bbox(hook)
+        safe_y = max(min_y, hook_min_y - robot.base_radius - margin)
+
         # Use the centre of the long arm as the primary target.  Then query
         # the actual hook polygon at the (clamped) approach y to find the
         # real left/right edge — the bounding box is misleading for rotated
@@ -144,7 +149,7 @@ class GraspRotate(Behavior[NDArray, NDArray]):
         arm_cx, arm_cy = hook_long_arm_center(hook)
 
         # Search several candidate y values and pick the approach that is
-        # closest to the robot and feasible.
+        # closest to the robot, feasible, and body-collision-free.
         candidate_ys = sorted(
             {
                 max(min_y, min(arm_cy, max_y)),
@@ -164,16 +169,22 @@ class GraspRotate(Behavior[NDArray, NDArray]):
             if extent is None:
                 continue
             left_edge, right_edge = extent
+
             # Left approach (theta=0, arm points right).
             lax = left_edge - arm_reach
-            if lax >= min_x:
+            if lax >= min_x and self._body_clears_hook(
+                lax, safe_y, test_y, robot, hook, margin
+            ):
                 d = (robot.x - lax) ** 2 + (robot.y - test_y) ** 2
                 if d < best_dist:
                     best_dist = d
                     approach_x, approach_y, approach_theta = lax, test_y, 0.0
+
             # Right approach (theta=pi, arm points left).
             rax = right_edge + arm_reach
-            if rax <= max_x:
+            if rax <= max_x and self._body_clears_hook(
+                rax, safe_y, test_y, robot, hook, margin
+            ):
                 d = (robot.x - rax) ** 2 + (robot.y - test_y) ** 2
                 if d < best_dist:
                     best_dist = d
@@ -243,9 +254,9 @@ class GraspRotate(Behavior[NDArray, NDArray]):
             # (0) Current state
             current,
             # (1) Retract arm, go to safe lateral height, set approach theta
-            wp(robot.x, SAFE_Y, approach_theta, robot.base_radius, 0.0),
+            wp(robot.x, safe_y, approach_theta, robot.base_radius, 0.0),
             # (2) Move to approach x
-            wp(approach_x, SAFE_Y, approach_theta, robot.base_radius, 0.0),
+            wp(approach_x, safe_y, approach_theta, robot.base_radius, 0.0),
             # (3) Move to approach y (near hook centre)
             wp(approach_x, approach_y, approach_theta, robot.base_radius, 0.0),
             # (4) Extend arm to reach hook
@@ -264,6 +275,29 @@ class GraspRotate(Behavior[NDArray, NDArray]):
 
         dense = connecting_waypoints(key_waypoints)
         self._actions = waypoints_to_actions(dense)
+
+    @staticmethod
+    def _body_clears_hook(
+        ax: float,
+        safe_y: float,
+        approach_y: float,
+        robot: RobotPose,
+        hook: HookPose,
+        margin: float,
+    ) -> bool:
+        """True if the robot body at *ax* clears the hook along the vertical
+        path from *safe_y* to *approach_y*."""
+        y_lo = min(safe_y, approach_y)
+        y_hi = max(safe_y, approach_y)
+        body_left = ax - robot.base_radius - margin
+        body_right = ax + robot.base_radius + margin
+        for y in np.linspace(y_lo, y_hi, 10):
+            extent = hook_x_extent_at_y(hook, float(y))
+            if extent is None:
+                continue
+            if body_left < extent[1] and body_right > extent[0]:
+                return False
+        return True
 
     def initializable(self, x: NDArray) -> bool:
         """True when the hook is NOT already grasped, horizontal, and centred."""
