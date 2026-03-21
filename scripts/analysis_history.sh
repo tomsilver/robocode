@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SEED="${1:-42}"
-ENV="${2:-obstruction2d_medium}"
-DATE=$(date +%Y-%m-%d)
+SEED=24
+ENV=obstruction2d_medium
 
 python experiments/run_experiment.py \
     approach=agentic_cdl \
     approach.use_docker=true \
     approach.max_budget_usd=20.0 \
+    environment=stickbutton2d_medium \
+    record_approach_history=true \
     seed="$SEED" \
-    num_eval_tasks=100 \
+    approach.load_dir=outputs/cdl_no_primitives_${ENV}/s${SEED} \
     'primitives=[]' \
     'mcp_tools=[]' \
     environment="$ENV" \
-    "hydra.run.dir=outputs/cdl_no_primitives_${ENV}_${DATE}/s${SEED}"
+    "hydra.run.dir=outputs/cdl_no_primitives_visualize_${ENV}/s${SEED}"

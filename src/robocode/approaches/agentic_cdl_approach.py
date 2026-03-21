@@ -120,11 +120,13 @@ Required files:
 This includes extracting object positions, computing geometric predicates \
 (overlaps, is_on, etc.), and any named constants for observation indices. \
 Every "magic number" related to observation parsing (index offsets, tolerances, \
-physics constants like table height) MUST be a named constant here.
+physics constants like table height) MUST be a named constant here. \
+{obs_helpers_note}
 - ``act_helpers.py`` — ALL functions that help generate actions. This includes \
 waypoint interpolation, action clipping, proportional controllers, etc. \
 Every "magic number" related to action generation (step limits, arm extension \
-rate, etc.) MUST be a named constant here.
+rate, etc.) MUST be a named constant here. \
+{act_helpers_note}
 - ``behaviors.py`` — ALL behavior classes. Each behavior inherits from the \
 ``Behavior`` base class (provided in ``behavior.py``). Behaviors import from \
 ``obs_helpers`` and ``act_helpers`` but contain NO magic numbers themselves.
@@ -255,6 +257,28 @@ If you need to compute specific positions or offsets, write a Python \
 script to do it and print the results. NEVER do arithmetic in text.
 """
 
+_INITIAL_HELPERS_PROMPT = """\
+
+IMPORTANT: You have been provided with initial versions of ``obs_helpers.py`` \
+and ``act_helpers.py`` in your working directory. These files contain CORRECT \
+observation parsing (feature indices, object layout, extraction functions) and \
+action generation helpers (waypoint interpolation, action limits) for this \
+environment. You MUST use them as your starting point:
+
+- **DO NOT** rewrite observation parsing from scratch — the provided \
+``obs_helpers.py`` already has the correct feature layout and extraction \
+functions.
+- **DO NOT** rewrite action helpers from scratch — the provided \
+``act_helpers.py`` already has correct action limits and waypoint utilities.
+- You MAY and SHOULD add new helper functions, constants, or geometric \
+predicates to these files as needed for your behaviors.
+- You MAY modify existing functions if you need to extend them, but do not \
+change the core observation layout or action format — they are correct.
+
+Start by reading these files to understand the observation structure and \
+available utilities before writing any behaviors.
+"""
+
 _PROMPT_WITH_DESCRIPTION = """\
 You are writing a behavior-based approach for the environment described below.
 
@@ -262,6 +286,7 @@ Your approach should be general enough to solve any instance of this environment
 (env.reset()), but it does NOT need to be adaptable to different other environments.
 
 {env_description}
+{initial_helpers_prompt}
 {geometry_prompt}
 {cdl_decomposition_prompt}
 {interface_spec}
@@ -271,6 +296,7 @@ Your approach should be general enough to solve any instance of this environment
 _PROMPT_WITH_SOURCE = """\
 Read the environment source files in this directory to understand the state \
 type, action space, and dynamics.
+{initial_helpers_prompt}
 {cdl_decomposition_prompt}
 {interface_spec}
 {behavior_implementation_prompt}\
@@ -296,6 +322,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
+        env_name: str | None = None,
     ) -> None:
         super().__init__(
             action_space,
@@ -313,6 +340,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         self._mcp_tools = mcp_tools
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
+        self._env_name = env_name
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -333,7 +361,21 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         behavior_src = (
             Path(__file__).resolve().parent.parent / "primitives" / "behavior.py"
         )
-        init_files = {"behavior.py": behavior_src}
+        init_files: dict[str, Path] = {"behavior.py": behavior_src}
+
+        # If env-specific helper files exist, copy them into the sandbox so
+        # the agent starts with correct obs/act helpers instead of writing
+        # them from scratch.
+        has_initial_helpers = False
+        if self._env_name is not None:
+            helpers_dir = (
+                Path(__file__).resolve().parent.parent / "primitives" / self._env_name
+            )
+            for helper_name in ("obs_helpers.py", "act_helpers.py"):
+                helper_path = helpers_dir / helper_name
+                if helper_path.exists():
+                    init_files[helper_name] = helper_path
+                    has_initial_helpers = True
 
         # Build primitives description.
         if self._primitives:
@@ -369,6 +411,24 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         )
 
         geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
+        initial_helpers = _INITIAL_HELPERS_PROMPT if has_initial_helpers else ""
+
+        if has_initial_helpers:
+            provided_note = (
+                "This file is ALREADY PROVIDED in your working directory with "
+                "correct parsing logic. Read it first, then extend it with any "
+                "additional helpers you need. Do NOT rewrite it from scratch."
+            )
+            obs_helpers_note = provided_note
+            act_helpers_note = provided_note
+        else:
+            obs_helpers_note = ""
+            act_helpers_note = ""
+
+        behavior_impl_prompt = _BEHAVIOR_IMPLEMENTATION_PROMPT.format(
+            obs_helpers_note=obs_helpers_note,
+            act_helpers_note=act_helpers_note,
+        )
 
         if self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
@@ -377,13 +437,15 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 geometry_prompt=geometry,
                 cdl_decomposition_prompt=_CDL_DECOMPOSITION_PROMPT,
                 interface_spec=interface_spec,
-                behavior_implementation_prompt=_BEHAVIOR_IMPLEMENTATION_PROMPT,
+                behavior_implementation_prompt=behavior_impl_prompt,
+                initial_helpers_prompt=initial_helpers,
             )
         else:
             prompt = _PROMPT_WITH_SOURCE.format(
+                initial_helpers_prompt=initial_helpers,
                 cdl_decomposition_prompt=_CDL_DECOMPOSITION_PROMPT,
                 interface_spec=interface_spec,
-                behavior_implementation_prompt=_BEHAVIOR_IMPLEMENTATION_PROMPT,
+                behavior_implementation_prompt=behavior_impl_prompt,
             )
 
         system_prompt = _SYSTEM_PROMPT

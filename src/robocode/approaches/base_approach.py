@@ -15,13 +15,14 @@ _ActType = TypeVar("_ActType")
 class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
     """Base class for a sequential decision-making agent."""
 
-    def __init__(
+    def __init__(  # pylint: disable=unused-argument
         self,
         action_space: Space[_ActType],
         observation_space: Space[_StateType],
         seed: int,
         primitives: dict[str, Callable[..., Any]],
         env_description_path: str | None = None,
+        **kwargs: Any,
     ) -> None:
         self._rng = np.random.default_rng(seed)
         self._state_space = copy.deepcopy(observation_space)

@@ -62,6 +62,10 @@ def _main(cfg: DictConfig) -> float:
             json.dumps(OmegaConf.to_container(cfg.environment, resolve=True))
         )
 
+    # The Hydra environment choice name (e.g. "obstruction2d_medium") is used
+    # to locate pre-written helper files in src/robocode/primitives/<env_name>/.
+    env_name = HydraConfig.get().runtime.choices.get("environment")
+
     approach = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
@@ -70,6 +74,7 @@ def _main(cfg: DictConfig) -> float:
         primitives=primitives,
         env_description_path=env_description_path,
         mcp_tools=mcp_tools,
+        env_name=env_name,
     )
 
     task_rng = np.random.default_rng(cfg.seed)

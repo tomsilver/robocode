@@ -215,6 +215,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
+        **kwargs: Any,
     ) -> None:
         super().__init__(
             action_space,

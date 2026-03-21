@@ -1,15 +1,17 @@
 """Extract and replay approach.py versions from sandbox git history.
 
 After an agentic run, the sandbox contains a git history with auto-snapshot commits.
-This module walks that history, checks out each version, runs an episode, and saves GIFs
-+ metrics.
+This module walks that history, exports each version to an isolated copy, runs an
+episode, and saves GIFs + metrics.  The original sandbox is never modified.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,11 +74,21 @@ def get_snapshots(sandbox_dir: Path) -> list[Snapshot]:
     return snapshots
 
 
-def _checkout(sandbox_dir: Path, ref: str) -> None:
-    """Checkout *ref* in the sandbox repo."""
-    subprocess.run(
-        ["git", "checkout", ref],
+def _export_snapshot(sandbox_dir: Path, commit_hash: str, dest: Path) -> None:
+    """Export the sandbox tree at *commit_hash* into *dest* without modifying the
+    repo."""
+    dest.mkdir(parents=True, exist_ok=True)
+    # git archive exports the tree without .git metadata
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", commit_hash],
         cwd=str(sandbox_dir),
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["tar", "xf", "-"],
+        cwd=str(dest),
+        input=archive.stdout,
         capture_output=True,
         check=True,
     )
@@ -93,8 +105,9 @@ def record_episodes(
 ) -> list[dict[str, Any]]:
     """Run one episode per snapshot, saving GIFs and metrics.
 
-    Checks out each commit in the sandbox, runs an episode, then restores the sandbox to
-    its original HEAD.  Results go to *output_dir*/approach_history/vNNN/.
+    For each commit, the sandbox tree is exported to an isolated copy under
+    *output_dir*/approach_history/vNNN/sandbox_<hash>/.  The original sandbox
+    is never modified.  Results go to *output_dir*/approach_history/vNNN/.
     """
     history_dir = output_dir / "approach_history"
     history_dir.mkdir(parents=True, exist_ok=True)
@@ -102,33 +115,31 @@ def record_episodes(
     env.reset(seed=seed)
     caller_state = env.get_state()
 
-    # Remember current ref so we can restore it (branch name if on one,
-    # otherwise the raw hash for detached HEAD).
-    ref_result = subprocess.run(
-        ["git", "symbolic-ref", "--short", "HEAD"],
-        cwd=str(sandbox_dir),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if ref_result.returncode == 0:
-        head = ref_result.stdout.strip()
-    else:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(sandbox_dir),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-
     records: list[dict[str, Any]] = []
 
     for snap in snapshots:
+        short_hash = snap.commit_hash[:8]
         version_dir = history_dir / f"v{snap.version:03d}"
-        version_dir.mkdir(parents=True, exist_ok=True)
+        # AgenticApproach expects load_dir/sandbox/approach.py, so we
+        # export into a directory literally named "sandbox".
+        snapshot_sandbox = version_dir / "sandbox"
 
-        _checkout(sandbox_dir, snap.commit_hash)
+        # Export this commit's files into an isolated directory.
+        if snapshot_sandbox.exists():
+            shutil.rmtree(snapshot_sandbox)
+        _export_snapshot(sandbox_dir, snap.commit_hash, snapshot_sandbox)
+
+        # Purge any cached sandbox modules (obs_helpers, act_helpers, etc.)
+        # so the next load picks up files from the new exported copy.
+        sandbox_modules = [
+            name
+            for name, mod in sys.modules.items()
+            if hasattr(mod, "__file__")
+            and mod.__file__ is not None
+            and "sandbox" in mod.__file__
+        ]
+        for name in sandbox_modules:
+            del sys.modules[name]
 
         try:
             approach = AgenticApproach(
@@ -136,7 +147,7 @@ def record_episodes(
                 observation_space=env.observation_space,
                 seed=seed,
                 primitives=primitives,
-                load_dir=str(sandbox_dir / ".."),
+                load_dir=str(version_dir),
             )
             approach.train()
 
@@ -155,9 +166,7 @@ def record_episodes(
                 **metrics,
             }
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning(
-                "v%03d (%s) failed: %s", snap.version, snap.commit_hash[:8], e
-            )
+            logger.warning("v%03d (%s) failed: %s", snap.version, short_hash, e)
             record = {
                 "version": snap.version,
                 "commit_hash": snap.commit_hash,
@@ -181,9 +190,6 @@ def record_episodes(
             record.get("num_steps", 0),
             record["solved"],
         )
-
-    # Restore sandbox to original state.
-    _checkout(sandbox_dir, head)
 
     with open(history_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, default=_json_default)
