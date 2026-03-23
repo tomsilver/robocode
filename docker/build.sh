@@ -4,8 +4,8 @@
 # Run from anywhere inside the repository:
 #   bash docker/build.sh
 #
-# src/ and prpl-mono/ are bind-mounted at runtime, so rebuilds are only
-# needed when system packages or Claude Code version change.
+# Rebuild when PyPI dependencies in pyproject.toml / uv.lock change.
+# No rebuild needed for src/ or prpl-mono/ code changes (bind-mounted at runtime).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -11,11 +11,11 @@
 # (configured in the Dockerfile via /etc/sudoers.d/node-firewall).
 set -e
 
-sudo /usr/local/bin/init-firewall.sh
-
-# Install Python deps using the bind-mounted source trees.
+# Install Python deps BEFORE the firewall locks down network access.
 cd /robocode
 uv sync --frozen --python python3.11
 cd /sandbox
+
+sudo /usr/local/bin/init-firewall.sh
 
 exec claude "$@"

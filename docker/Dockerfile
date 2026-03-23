@@ -5,9 +5,10 @@
 #
 # Adds Python 3.11 + uv on top of the official node:20 base.
 #
-# src/ and prpl-mono/ are NOT baked into the image — they are bind-mounted
-# at runtime and `uv sync` runs in the entrypoint.  This means the image
-# only needs rebuilding when system packages or the Claude Code version change.
+# PyPI deps are pre-installed into .venv during build, but src/ and
+# prpl-mono/ are DELETED from the image after install — they are
+# bind-mounted (filtered) at runtime so oracle/solution code never leaks.
+# A quick `uv sync` in the entrypoint re-creates editable .pth entries.
 #
 # Build from the repository root:
 #   bash docker/build.sh
@@ -85,19 +86,25 @@ RUN mkdir -p /home/node/.claude \
     && chown -R node:node /home/node/.claude
 
 # ---------------------------------------------------------------------------
-# Python environment — /robocode is the project root.
+# Python environment — pre-install all PyPI deps into /robocode/.venv.
 #
-# src/ and prpl-mono/ are NOT baked into the image; they are bind-mounted
-# at runtime.  uv sync runs in the entrypoint so the .venv is created on
-# first launch using the mounted source trees.
-#
-# pyproject.toml and uv.lock are copied so `uv sync` can resolve deps.
+# src/ and prpl-mono/ are copied temporarily so `uv sync` can resolve
+# editable installs, then DELETED so oracle/solution code is never baked
+# into the image.  At runtime they are bind-mounted (filtered) and a
+# quick `uv sync` in the entrypoint re-creates the editable .pth entries.
 # ---------------------------------------------------------------------------
 WORKDIR /robocode
 
 COPY pyproject.toml uv.lock ./
+COPY prpl-mono/ prpl-mono/
+COPY src/ src/
 
-# The `node` user needs write access to create .venv at runtime.
+RUN uv sync --frozen --python python3.11 \
+    && rm -rf src/ prpl-mono/ \
+    && find .venv -maxdepth 3 \( -name '*.egg-info' -o -name '*.dist-info' -o -name '*.pth' \) \
+       -exec rm -rf {} + 2>/dev/null; true
+
+# The `node` user needs write access to update .venv at runtime.
 RUN chown -R node:node /robocode
 
 # ---------------------------------------------------------------------------
