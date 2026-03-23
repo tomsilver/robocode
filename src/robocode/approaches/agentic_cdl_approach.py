@@ -121,6 +121,12 @@ This includes extracting object positions, computing geometric predicates \
 (overlaps, is_on, etc.), and any named constants for observation indices. \
 Every "magic number" related to observation parsing (index offsets, tolerances, \
 physics constants like table height) MUST be a named constant here. \
+BEFORE writing this file, you MUST run: \
+``feats = env.unwrapped.observation_space.devectorize(obs)`` \
+to inspect the observation structure. This returns a dictionary mapping \
+feature names to their values, so you can see exactly what each part of \
+the observation vector represents. Use this to determine the correct \
+indices, feature names, and semantics — do NOT guess the observation layout. \
 {obs_helpers_note}
 - ``act_helpers.py`` — ALL functions that help generate actions. This includes \
 waypoint interpolation, action clipping, proportional controllers, etc. \
