@@ -14,4 +14,4 @@ python experiments/run_experiment.py \
     'primitives=[]' \
     'mcp_tools=[]' \
     environment="$ENV" \
-    "hydra.run.dir=outputs/cdl_no_primitives_w_helpers_${ENV}_${DATE}/s${SEED}"
+    "hydra.run.dir=outputs/cdl_no_primitives_no_helpers_${ENV}_${DATE}/s${SEED}"
