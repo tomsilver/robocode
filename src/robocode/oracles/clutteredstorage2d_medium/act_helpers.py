@@ -84,4 +84,3 @@ def waypoints_to_actions(waypoints: list[RobotPose]) -> deque[NDArray]:
             )
         )
     return actions
-

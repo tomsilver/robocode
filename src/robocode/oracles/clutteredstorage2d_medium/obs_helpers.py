@@ -375,8 +375,12 @@ def rect_pose_from_center(
 def in_world_bounds(robot: RobotPose, x: float, y: float, margin: float) -> bool:
     """Check conservative bounds for the robot base."""
     return (
-        WORLD_MIN_X + robot.base_radius + margin <= x <= WORLD_MAX_X - robot.base_radius - margin
-        and WORLD_MIN_Y + robot.base_radius + margin <= y <= WORLD_MAX_Y - robot.base_radius - margin
+        WORLD_MIN_X + robot.base_radius + margin
+        <= x
+        <= WORLD_MAX_X - robot.base_radius - margin
+        and WORLD_MIN_Y + robot.base_radius + margin
+        <= y
+        <= WORLD_MAX_Y - robot.base_radius - margin
     )
 
 
@@ -386,7 +390,9 @@ def pick_base_pose_candidates(obs: NDArray, block_name: str) -> list[Pose2D]:
     block = extract_block(obs, block_name)
     center_x, center_y = block.center
     face_offset = block.height / 2 + APPROACH_MARGIN
-    radial_offset = robot.arm_length + TOOLTIP_OFFSET_SCALE * robot.gripper_width + face_offset
+    radial_offset = (
+        robot.arm_length + TOOLTIP_OFFSET_SCALE * robot.gripper_width + face_offset
+    )
     candidates: list[Pose2D] = []
     for sign in (1.0, -1.0):
         theta = wrap_angle(block.theta + sign * (np.pi / 2))

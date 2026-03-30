@@ -1,8 +1,7 @@
 """Debug episode test for the ClutteredStorage2D-b3 oracle.
 
-Runs a single episode, stores per-step debug logs, and saves a rollout video.
-This test is intentionally lightweight and does not require the oracle to solve
-the task yet.
+Runs a single episode, stores per-step debug logs, and saves a rollout video. This test
+is intentionally lightweight and does not require the oracle to solve the task yet.
 """
 
 from __future__ import annotations
