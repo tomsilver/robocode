@@ -50,6 +50,7 @@ DEEP_PLACE_Y_TOL = 0.03
 COMPACT_Y_TOL = 0.02
 TRANSPORT_Y_MARGIN = 0.08
 PREINSERT_Y_MARGIN = 0.10
+ROTATION_STAGE_MARGIN = 0.18
 SAFE_VACUUM = 1.0
 VACUUM_OFF = 0.0
 CARRY_ARM_FRACTION = 0.35
@@ -189,12 +190,14 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self,
         x: NDArray,
         robot: RobotPose,
+        mover_radius: float | None = None,
     ) -> tuple[float, float, float, float]:
-        margin = robot.base_radius + APPROACH_MARGIN
+        effective_radius = robot.base_radius if mover_radius is None else mover_radius
+        margin = effective_radius + APPROACH_MARGIN
         shelf = extract_shelf(x)
         max_y = min(
             WORLD_MAX_Y - margin,
-            shelf.y1 - robot.base_radius - 0.02,
+            shelf.y1 - effective_radius - 0.02,
         )
         return (
             WORLD_MIN_X + margin,
@@ -266,6 +269,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         )
         if path is None or len(path) < 2:
             return False
+
         key_waypoints = [_robot_pose(robot)]
         for path_x, path_y in path[1:]:
             key_waypoints.append(
@@ -281,6 +285,117 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         dense = connecting_waypoints(key_waypoints)
         self._holding_actions = waypoints_to_actions(dense)
         self._planned_path_len = path_length(path)
+        return bool(self._holding_actions)
+
+    def _queue_holding_rotation_to_up(
+        self,
+        x: NDArray,
+        block_name: str,
+    ) -> bool:
+        robot = extract_robot(x)
+        block = extract_block(x, block_name)
+        held_radius = 0.5 * float(np.hypot(block.width, block.height))
+        held_offset = (block.center[0] - robot.x, block.center[1] - robot.y)
+        held_reach = float(np.hypot(held_offset[0], held_offset[1])) + held_radius
+        transport_bounds = self._base_path_bounds(x, robot)
+        rotate_bounds = self._base_path_bounds(x, robot, mover_radius=held_reach)
+        transport_obstacles = self._base_path_obstacles(
+            x,
+            ignore_block=block_name,
+            robot=robot,
+            mover_radius=max(robot.base_radius, held_radius),
+        )
+        rotate_obstacles = self._base_path_obstacles(
+            x,
+            ignore_block=block_name,
+            robot=robot,
+            mover_radius=held_reach,
+        )
+
+        def rotation_safe(goal: tuple[float, float]) -> bool:
+            gx, gy = goal
+            if not (
+                rotate_bounds[0] <= gx <= rotate_bounds[1]
+                and rotate_bounds[2] <= gy <= rotate_bounds[3]
+            ):
+                return False
+            return all(
+                np.hypot(gx - cx, gy - cy) >= radius - 1e-6
+                for cx, cy, radius in rotate_obstacles
+            )
+
+        shelf = extract_shelf(x)
+        max_safe_base_y = rotate_bounds[3] - POS_TOL
+        stage_base_y = min(robot.y, max_safe_base_y)
+        if not (transport_bounds[2] <= stage_base_y <= transport_bounds[3]):
+            return False
+        candidate_base_xs = [
+            robot.x,
+            shelf.opening_center_x - held_offset[0],
+        ]
+        candidate_goals: list[tuple[float, float]] = []
+        current_goal = (robot.x, robot.y)
+        if rotation_safe(current_goal):
+            candidate_goals.append(current_goal)
+        for base_x in candidate_base_xs:
+            goal = (base_x, stage_base_y)
+            if (
+                transport_bounds[0] <= goal[0] <= transport_bounds[1]
+                and transport_bounds[2] <= goal[1] <= transport_bounds[3]
+                and rotation_safe(goal)
+            ):
+                candidate_goals.append(goal)
+
+        best_path: list[tuple[float, float]] | None = None
+        best_length = float("inf")
+        for goal in candidate_goals:
+            if abs(goal[0] - robot.x) <= POS_TOL and abs(goal[1] - robot.y) <= POS_TOL:
+                path = [(robot.x, robot.y)]
+                length = 0.0
+            else:
+                path = plan_holding_base_path(
+                    (robot.x, robot.y),
+                    goal,
+                    held_offset,
+                    held_radius,
+                    transport_obstacles,
+                    transport_bounds,
+                )
+                if path is None:
+                    continue
+                length = path_length(path)
+            if length < best_length:
+                best_length = length
+                best_path = path
+
+        if best_path is None:
+            return False
+
+        key_waypoints = [_robot_pose(robot)]
+        for path_x, path_y in best_path[1:]:
+            key_waypoints.append(
+                _waypoint(
+                    robot,
+                    path_x,
+                    path_y,
+                    robot.theta,
+                    robot.arm_joint,
+                    SAFE_VACUUM,
+                )
+            )
+        key_waypoints.append(
+            _waypoint(
+                robot,
+                key_waypoints[-1].x,
+                key_waypoints[-1].y,
+                UP,
+                robot.arm_joint,
+                SAFE_VACUUM,
+            )
+        )
+        dense = connecting_waypoints(key_waypoints)
+        self._holding_actions = waypoints_to_actions(dense)
+        self._planned_path_len = best_length
         return bool(self._holding_actions)
 
     def _select_store_pick(
@@ -534,6 +649,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
 
         angle_error = wrap_angle(UP - robot.theta)
         if abs(angle_error) > ANGLE_TOL:
+            if not self._holding_actions and self._queue_holding_rotation_to_up(x, block_name):
+                return self._holding_actions.popleft()
             action[2] = float(np.clip(angle_error, -DTH_LIM, DTH_LIM))
             return action
 
