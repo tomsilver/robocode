@@ -50,7 +50,7 @@ INSERT_X_TOL = 0.005
 DEEP_PLACE_Y_TOL = 0.03
 COMPACT_Y_TOL = 0.02
 TRANSPORT_Y_MARGIN = 0.08
-PREINSERT_Y_MARGIN = 0.10
+PREINSERT_Y_MARGIN = 0.25
 ROTATION_STAGE_MARGIN = 0.18
 PRE_PICK_RING_MARGIN = 0.12
 SAFE_VACUUM = 1.0
@@ -281,7 +281,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         held_radius = 0.5 * float(np.hypot(block.width, block.height))
         mover_radius = max(robot.base_radius, held_radius)
         held_offset = (block.center[0] - robot.x, block.center[1] - robot.y)
-        transport_block_y = min(
+        transport_block_y = max(
             block.center[1],
             shelf.y1 - 0.5 * block.height - PREINSERT_Y_MARGIN,
         )
@@ -750,7 +750,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         deep_enough = block_y >= target_y - target_y_tol
 
         if not is_block_inside_shelf(x, block_name):
-            transport_block_y = min(
+            transport_block_y = max(
                 block_y,
                 shelf.y1 - 0.5 * block.height - PREINSERT_Y_MARGIN,
             )
@@ -759,8 +759,9 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 and abs(block_y - transport_block_y) <= POS_TOL
             )
             if not at_preinsert:
-                if not self._holding_actions and self._queue_holding_transport(x, block_name):
-                    return self._holding_actions.popleft()
+                if not self._holding_actions:
+                    if self._queue_holding_transport(x, block_name):
+                        return self._holding_actions.popleft()
             if not insert_aligned_x:
                 action[0] = float(np.clip(target_x - block_x, -DX_LIM, DX_LIM))
                 return action
