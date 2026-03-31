@@ -194,6 +194,13 @@ def hook_grasped_and_rotated(obs: NDArray) -> bool:
     return holding_hook(obs) and hook_at_target_theta(obs)
 
 
+def buttons_vertically_aligned(obs: NDArray, tol: float = 0.15) -> bool:
+    """True when the movable button's x is close to the target button's x."""
+    mx = get_feature(obs, "movable_button", "x")
+    tx = get_feature(obs, "target_button", "x")
+    return abs(mx - tx) < tol
+
+
 def both_buttons_pressed(obs: NDArray) -> bool:
     """True when both buttons have turned green (task success)."""
     return (
