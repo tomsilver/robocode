@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import kinder
+import pytest
 from gymnasium.wrappers import RecordVideo
 
 from robocode.oracles.clutteredstorage2d_medium.approach import (
@@ -25,7 +26,7 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
 )
 
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
-SEED = 2
+DEBUG_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 MAX_STEPS = 500
 ARTIFACT_ROOT = Path("unit_test_artifacts/clutteredstorage2d_medium")
 VIDEO_DIR = ARTIFACT_ROOT / "videos"
@@ -46,21 +47,22 @@ def _format_block_state(obs) -> str:
     return " | ".join(entries)
 
 
-def test_debug_episode_writes_log_and_video():
-    """Run one episode and persist debug artifacts for manual inspection."""
+@pytest.mark.parametrize("seed", DEBUG_SEEDS)
+def test_debug_episode_writes_log_and_video(seed: int):
+    """Run one debug episode per seed and persist per-seed artifacts."""
     kinder.register_all_environments()
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
     ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
-    log_path = ARTIFACT_ROOT / f"debug_seed{SEED}.log"
+    log_path = ARTIFACT_ROOT / f"debug_seed{seed}.log"
 
     env = RecordVideo(
         kinder.make(ENV_ID, render_mode="rgb_array"),
         str(VIDEO_DIR),
-        name_prefix=f"debug_seed{SEED}",
+        name_prefix=f"debug_seed{seed}",
     )
     video_files: list[Path] = []
     try:
-        obs, info = env.reset(seed=SEED)
+        obs, info = env.reset(seed=seed)
         approach = ClutteredStorage2DOracleApproach(
             action_space=env.action_space,
             observation_space=env.observation_space,
@@ -69,7 +71,7 @@ def test_debug_episode_writes_log_and_video():
 
         with log_path.open("w", encoding="utf-8") as log_file:
             log_file.write(f"env_id={ENV_ID}\n")
-            log_file.write(f"seed={SEED}\n")
+            log_file.write(f"seed={seed}\n")
             log_file.write(f"max_steps={MAX_STEPS}\n\n")
 
             for step in range(MAX_STEPS):
@@ -113,6 +115,6 @@ def test_debug_episode_writes_log_and_video():
     finally:
         env.close()
 
-    video_files = sorted(VIDEO_DIR.glob(f"debug_seed{SEED}-episode-*.mp4"))
+    video_files = sorted(VIDEO_DIR.glob(f"debug_seed{seed}-episode-*.mp4"))
     assert log_path.exists(), f"Expected debug log at {log_path}"
     assert video_files, f"No video file generated in {VIDEO_DIR}"
