@@ -276,7 +276,11 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             robot,
             block.center[0],
             block.center[1]
+<<<<<<< HEAD
             - (robot.arm_length + 1.8 * robot.gripper_width + APPROACH_MARGIN),
+=======
+            - (robot.arm_length + 1.7 * robot.gripper_width + APPROACH_MARGIN),
+>>>>>>> faaee78 (make some case for stuck issue better (11/20->13/20))
             UP,
             robot.base_radius,
             VACUUM_OFF,
