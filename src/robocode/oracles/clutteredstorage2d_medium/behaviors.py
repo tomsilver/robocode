@@ -18,6 +18,7 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
     path_length,
     plan_base_path,
     plan_holding_base_path,
+    segment_collision_free,
     waypoints_to_actions,
 )
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
@@ -51,6 +52,7 @@ COMPACT_Y_TOL = 0.02
 TRANSPORT_Y_MARGIN = 0.08
 PREINSERT_Y_MARGIN = 0.10
 ROTATION_STAGE_MARGIN = 0.18
+PRE_PICK_RING_MARGIN = 0.12
 SAFE_VACUUM = 1.0
 VACUUM_OFF = 0.0
 CARRY_ARM_FRACTION = 0.35
@@ -401,24 +403,60 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
     def _select_store_pick(
         self,
         x: NDArray,
-    ) -> tuple[str, RobotPose, list[tuple[float, float]]] | None:
+    ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
         robot = extract_robot(x)
         bounds = self._base_path_bounds(x, robot)
-        reachable: list[tuple[tuple[float, float], float, str, RobotPose, list[tuple[float, float]]]] = []
+        reachable: list[
+            tuple[
+                tuple[float, float],
+                float,
+                str,
+                RobotPose,
+                RobotPose,
+                list[tuple[float, float]],
+            ]
+        ] = []
 
         for block_name in outside_blocks(x):
-            obstacles = self._base_path_obstacles(x, block_name, robot)
-            best_candidate: tuple[float, RobotPose, list[tuple[float, float]]] | None = None
+            path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
+            local_obstacles = self._base_path_obstacles(x, block_name, robot)
+            best_candidate: tuple[
+                float, RobotPose, RobotPose, list[tuple[float, float]]
+            ] | None = None
             for candidate in pick_base_pose_candidates(x, block_name):
+                pre_pick_x = candidate.x - PRE_PICK_RING_MARGIN * float(np.cos(candidate.theta))
+                pre_pick_y = candidate.y - PRE_PICK_RING_MARGIN * float(np.sin(candidate.theta))
+                if not (
+                    bounds[0] <= pre_pick_x <= bounds[1]
+                    and bounds[2] <= pre_pick_y <= bounds[3]
+                ):
+                    continue
+                pre_pick = _waypoint(
+                    robot,
+                    pre_pick_x,
+                    pre_pick_y,
+                    candidate.theta,
+                    robot.base_radius,
+                    VACUUM_OFF,
+                )
                 path = plan_base_path(
                     (robot.x, robot.y),
-                    (candidate.x, candidate.y),
-                    obstacles,
+                    (pre_pick.x, pre_pick.y),
+                    path_obstacles,
                     bounds,
                 )
                 if path is None:
                     continue
-                candidate_length = path_length(path)
+                if not segment_collision_free(
+                    (pre_pick.x, pre_pick.y),
+                    (candidate.x, candidate.y),
+                    local_obstacles,
+                    bounds,
+                ):
+                    continue
+                candidate_length = path_length(path) + float(
+                    np.hypot(candidate.x - pre_pick.x, candidate.y - pre_pick.y)
+                )
                 target = _waypoint(
                     robot,
                     candidate.x,
@@ -428,20 +466,29 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                     VACUUM_OFF,
                 )
                 if best_candidate is None or candidate_length < best_candidate[0]:
-                    best_candidate = (candidate_length, target, path)
+                    best_candidate = (candidate_length, target, pre_pick, path)
             if best_candidate is None:
                 continue
-            path_len, target, path = best_candidate
-            reachable.append((self._store_sort_key(x, block_name), path_len, block_name, target, path))
+            path_len, target, pre_pick, path = best_candidate
+            reachable.append(
+                (
+                    self._store_sort_key(x, block_name),
+                    path_len,
+                    block_name,
+                    target,
+                    pre_pick,
+                    path,
+                )
+            )
 
         if not reachable:
             return None
 
-        _, _, block_name, target, path = min(
+        _, _, block_name, target, pre_pick, path = min(
             reachable,
             key=lambda item: (item[0][0], item[0][1], item[1]),
         )
-        return (block_name, target, path)
+        return (block_name, target, pre_pick, path)
 
     def _plan_compact_pick(
         self,
@@ -498,9 +545,10 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             if selection is None:
                 next_block = None
                 target = None
+                pre_pick = None
                 path_points = None
             else:
-                next_block, target, path_points = selection
+                next_block, target, pre_pick, path_points = selection
         if next_block is None:
             self._active_block = None
             self._holding_actions.clear()
@@ -554,6 +602,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                         VACUUM_OFF,
                     )
                 )
+            if self._phase != "compact" and pre_pick is not None:
+                key_waypoints.append(pre_pick)
         else:
             self._planned_path_len = float(
                 np.hypot(target.x - robot.x, target.y - robot.y)
