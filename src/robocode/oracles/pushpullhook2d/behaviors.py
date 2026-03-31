@@ -39,7 +39,6 @@ from robocode.oracles.pushpullhook2d.obs_helpers import (
     extract_robot,
     hook_grasped_and_rotated,
 )
-from robocode.oracles.pushpullhook2d.obs_helpers import hook_bbox as _hook_bbox
 from robocode.primitives.behavior import Behavior
 
 
