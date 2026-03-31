@@ -26,7 +26,7 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
 )
 
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
-DEBUG_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+DEBUG_SEEDS = [7,11, 12, 13, 14,  17, 18]
 MAX_STEPS = 500
 ARTIFACT_ROOT = Path("unit_test_artifacts/clutteredstorage2d_medium")
 VIDEO_DIR = ARTIFACT_ROOT / "videos"

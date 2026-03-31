@@ -95,6 +95,50 @@ def segment_collision_free(
     return True
 
 
+def _holding_point_collision_free(
+    point: Point2D,
+    held_offset: Point2D,
+    held_radius: float,
+    obstacles: list[ObstacleCircle],
+    bounds: tuple[float, float, float, float],
+) -> bool:
+    if not _point_collision_free(point, obstacles, bounds):
+        return False
+    held_point = (point[0] + held_offset[0], point[1] + held_offset[1])
+    min_x, max_x, min_y, max_y = bounds
+    if not (min_x <= held_point[0] <= max_x and min_y <= held_point[1] <= max_y):
+        return False
+    for cx, cy, radius in obstacles:
+        if math.hypot(held_point[0] - cx, held_point[1] - cy) < radius + held_radius:
+            return False
+    return True
+
+
+def holding_segment_collision_free(
+    start: Point2D,
+    end: Point2D,
+    held_offset: Point2D,
+    held_radius: float,
+    obstacles: list[ObstacleCircle],
+    bounds: tuple[float, float, float, float],
+    step: float = SEGMENT_CHECK_STEP,
+) -> bool:
+    """Check whether a held-object base segment stays collision free."""
+    distance = math.hypot(end[0] - start[0], end[1] - start[1])
+    checks = max(1, math.ceil(distance / step))
+    for idx in range(checks + 1):
+        t = idx / checks
+        point = (
+            start[0] + t * (end[0] - start[0]),
+            start[1] + t * (end[1] - start[1]),
+        )
+        if not _holding_point_collision_free(
+            point, held_offset, held_radius, obstacles, bounds
+        ):
+            return False
+    return True
+
+
 def _astar_neighbors(node: Point2D, step: float) -> list[Point2D]:
     neighbors: list[Point2D] = []
     for dx in (-step, 0.0, step):
@@ -171,6 +215,104 @@ def plan_base_path(
     for point in node_path[1:]:
         path.append(point)
     if not segment_collision_free(path[-1], goal, active_obstacles, bounds):
+        return None
+    if path[-1] != goal:
+        path.append(goal)
+    return path
+
+
+def plan_holding_base_path(
+    start: Point2D,
+    goal: Point2D,
+    held_offset: Point2D,
+    held_radius: float,
+    obstacles: list[ObstacleCircle],
+    bounds: tuple[float, float, float, float],
+    step: float = GRID_STEP,
+) -> list[Point2D] | None:
+    """Plan a conservative 2D base path while carrying a held object."""
+    active_obstacles = [
+        (cx, cy, radius)
+        for cx, cy, radius in obstacles
+        if (
+            math.hypot(start[0] - cx, start[1] - cy) >= radius - 1e-6
+            and math.hypot(
+                start[0] + held_offset[0] - cx, start[1] + held_offset[1] - cy
+            )
+            >= radius + held_radius - 1e-6
+        )
+    ]
+
+    if holding_segment_collision_free(
+        start, goal, held_offset, held_radius, active_obstacles, bounds
+    ):
+        return [start, goal]
+
+    start_node = (round(_snap(start[0], step), 6), round(_snap(start[1], step), 6))
+    goal_node = (round(_snap(goal[0], step), 6), round(_snap(goal[1], step), 6))
+    if not _holding_point_collision_free(
+        goal_node, held_offset, held_radius, active_obstacles, bounds
+    ):
+        return None
+    if not holding_segment_collision_free(
+        start, start_node, held_offset, held_radius, active_obstacles, bounds
+    ):
+        return None
+
+    frontier: list[tuple[float, float, Point2D]] = []
+    heapq.heappush(
+        frontier,
+        (
+            math.hypot(goal_node[0] - start_node[0], goal_node[1] - start_node[1]),
+            0.0,
+            start_node,
+        ),
+    )
+    came_from: dict[Point2D, Point2D | None] = {start_node: None}
+    costs: dict[Point2D, float] = {start_node: 0.0}
+
+    while frontier:
+        _, cost_so_far, current = heapq.heappop(frontier)
+        if current == goal_node:
+            break
+        if cost_so_far > costs[current] + 1e-9:
+            continue
+        for neighbor in _astar_neighbors(current, step):
+            if not _holding_point_collision_free(
+                neighbor, held_offset, held_radius, active_obstacles, bounds
+            ):
+                continue
+            if not holding_segment_collision_free(
+                current, neighbor, held_offset, held_radius, active_obstacles, bounds
+            ):
+                continue
+            new_cost = cost_so_far + math.hypot(
+                neighbor[0] - current[0], neighbor[1] - current[1]
+            )
+            if new_cost + 1e-9 < costs.get(neighbor, float("inf")):
+                costs[neighbor] = new_cost
+                came_from[neighbor] = current
+                heuristic = math.hypot(
+                    goal_node[0] - neighbor[0], goal_node[1] - neighbor[1]
+                )
+                heapq.heappush(frontier, (new_cost + heuristic, new_cost, neighbor))
+
+    if goal_node not in came_from:
+        return None
+
+    node_path: list[Point2D] = []
+    current: Point2D | None = goal_node
+    while current is not None:
+        node_path.append(current)
+        current = came_from[current]
+    node_path.reverse()
+
+    path: list[Point2D] = [start]
+    for point in node_path[1:]:
+        path.append(point)
+    if not holding_segment_collision_free(
+        path[-1], goal, held_offset, held_radius, active_obstacles, bounds
+    ):
         return None
     if path[-1] != goal:
         path.append(goal)

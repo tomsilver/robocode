@@ -17,6 +17,7 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
     inflate_block_radius,
     path_length,
     plan_base_path,
+    plan_holding_base_path,
     waypoints_to_actions,
 )
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
@@ -48,6 +49,7 @@ INSERT_X_TOL = 0.005
 DEEP_PLACE_Y_TOL = 0.03
 COMPACT_Y_TOL = 0.02
 TRANSPORT_Y_MARGIN = 0.08
+PREINSERT_Y_MARGIN = 0.10
 SAFE_VACUUM = 1.0
 VACUUM_OFF = 0.0
 CARRY_ARM_FRACTION = 0.35
@@ -107,6 +109,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self.precondition: Callable[[NDArray], bool] = self.initializable
         self.policy: Callable[[NDArray], NDArray] = self.step
         self._actions: deque[NDArray] = deque()
+        self._holding_actions: deque[NDArray] = deque()
         self._phase = "compact"
         self._target_kind = SHELF_TARGET
         self._target_center: tuple[float, float] | None = None
@@ -120,6 +123,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
 
     def reset(self, x: NDArray) -> None:
         self._phase = "compact"
+        self._holding_actions = deque()
         self._target_kind = SHELF_TARGET
         self._target_center = None
         self._active_block = None
@@ -204,8 +208,10 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         x: NDArray,
         ignore_block: str,
         robot: RobotPose,
+        mover_radius: float | None = None,
     ) -> list[tuple[float, float, float]]:
         obstacles: list[tuple[float, float, float]] = []
+        effective_radius = robot.base_radius if mover_radius is None else mover_radius
         for name in outside_blocks(x):
             if name == ignore_block:
                 continue
@@ -215,10 +221,67 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 (
                     center_x,
                     center_y,
-                    inflate_block_radius(block.width, block.height, robot.base_radius),
+                    inflate_block_radius(block.width, block.height, effective_radius),
                 )
             )
         return obstacles
+
+    def _queue_holding_transport(
+        self,
+        x: NDArray,
+        block_name: str,
+    ) -> bool:
+        robot = extract_robot(x)
+        block = extract_block(x, block_name)
+        assert self._target_center is not None
+        target_x, _ = self._target_center
+        shelf = extract_shelf(x)
+        held_radius = 0.5 * float(np.hypot(block.width, block.height))
+        mover_radius = max(robot.base_radius, held_radius)
+        held_offset = (block.center[0] - robot.x, block.center[1] - robot.y)
+        transport_block_y = min(
+            block.center[1],
+            shelf.y1 - 0.5 * block.height - PREINSERT_Y_MARGIN,
+        )
+        goal = (
+            target_x - held_offset[0],
+            transport_block_y - held_offset[1],
+        )
+        bounds = self._base_path_bounds(x, robot)
+        if not (
+            bounds[0] <= goal[0] <= bounds[1]
+            and bounds[2] <= goal[1] <= bounds[3]
+        ):
+            return False
+        obstacles = self._base_path_obstacles(
+            x, ignore_block=block_name, robot=robot, mover_radius=mover_radius
+        )
+        path = plan_holding_base_path(
+            (robot.x, robot.y),
+            goal,
+            held_offset,
+            held_radius,
+            obstacles,
+            bounds,
+        )
+        if path is None or len(path) < 2:
+            return False
+        key_waypoints = [_robot_pose(robot)]
+        for path_x, path_y in path[1:]:
+            key_waypoints.append(
+                _waypoint(
+                    robot,
+                    path_x,
+                    path_y,
+                    robot.theta,
+                    robot.arm_joint,
+                    SAFE_VACUUM,
+                )
+            )
+        dense = connecting_waypoints(key_waypoints)
+        self._holding_actions = waypoints_to_actions(dense)
+        self._planned_path_len = path_length(path)
+        return bool(self._holding_actions)
 
     def _select_store_pick(
         self,
@@ -276,11 +339,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             robot,
             block.center[0],
             block.center[1]
-<<<<<<< HEAD
             - (robot.arm_length + 1.8 * robot.gripper_width + APPROACH_MARGIN),
-=======
-            - (robot.arm_length + 1.7 * robot.gripper_width + APPROACH_MARGIN),
->>>>>>> faaee78 (make some case for stuck issue better (11/20->13/20))
             UP,
             robot.base_radius,
             VACUUM_OFF,
@@ -329,11 +388,13 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 next_block, target, path_points = selection
         if next_block is None:
             self._active_block = None
+            self._holding_actions.clear()
             self._hold_loss_steps = 0
             self._last_active_block_center = None
             self._actions = deque()
             return
         self._active_block = next_block
+        self._holding_actions.clear()
         self._hold_loss_steps = 0
         self._last_active_block_center = None
 
@@ -483,6 +544,17 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         deep_enough = block_y >= target_y - target_y_tol
 
         if not is_block_inside_shelf(x, block_name):
+            transport_block_y = min(
+                block_y,
+                shelf.y1 - 0.5 * block.height - PREINSERT_Y_MARGIN,
+            )
+            at_preinsert = (
+                abs(block_x - target_x) <= POS_TOL
+                and abs(block_y - transport_block_y) <= POS_TOL
+            )
+            if not at_preinsert:
+                if not self._holding_actions and self._queue_holding_transport(x, block_name):
+                    return self._holding_actions.popleft()
             if not insert_aligned_x:
                 action[0] = float(np.clip(target_x - block_x, -DX_LIM, DX_LIM))
                 return action
@@ -529,11 +601,17 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._recent_positions.append((robot.x, robot.y))
         if self._path_is_stuck():
             self._actions.clear()
+            self._holding_actions.clear()
             self._chosen_pick_pose = None
             self._planned_path_len = None
             self._clear_motion_monitor()
             self._recent_positions.append((robot.x, robot.y))
-        if observed_held is None and robot.vacuum <= VACUUM_OFF and not self._actions:
+        if (
+            observed_held is None
+            and robot.vacuum <= VACUUM_OFF
+            and not self._actions
+            and not self._holding_actions
+        ):
             self._active_block = None
         self._sync_phase(x)
         held_name = None
@@ -569,6 +647,10 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         if held_name is not None:
             self._actions.clear()
             self._clear_motion_monitor()
+            if self._holding_actions:
+                action = self._holding_actions.popleft()
+                self._recent_base_commands.append(float(np.hypot(action[0], action[1])))
+                return action
             action = self._place_action(x, held_name)
             self._recent_base_commands.append(float(np.hypot(action[0], action[1])))
             return action
@@ -590,4 +672,5 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             "chosen_pick_pose": self._chosen_pick_pose,
             "path_len": self._planned_path_len,
             "queued_actions": len(self._actions),
+            "queued_holding_actions": len(self._holding_actions),
         }
