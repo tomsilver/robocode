@@ -89,9 +89,9 @@ WORLD_HEIGHT = 2.5
 TABLE_Y = WORLD_HEIGHT / 2  # bottom edge of the table (1.25)
 
 # Target configuration for the GraspRotate behavior.
-# "Horizontal" means hook theta = 0 (long arm going left).
+# "Vertical" means hook theta = -π (short side at bottom).
 # "Center of the bottom half" means bounding-box centre at (1.75, 0.625).
-HOOK_TARGET_THETA = 0.0
+HOOK_TARGET_THETA = -math.pi / 2
 HOOK_TARGET_CX = WORLD_WIDTH / 2      # 1.75
 HOOK_TARGET_CY = TABLE_Y / 2          # 0.625
 
@@ -309,11 +309,17 @@ def holding_hook(obs: NDArray) -> bool:
 
 
 def hook_is_horizontal(obs: NDArray, tol: float = 0.15) -> bool:
-    """True when the hook's theta is close to the target (0)."""
+    """True when the hook's theta is close to 0 (horizontal)."""
     hook = extract_hook(obs)
-    # Normalise to [-pi, pi]
     theta = math.remainder(hook.theta, 2 * math.pi)
-    return abs(theta - HOOK_TARGET_THETA) < tol
+    return abs(theta) < tol
+
+
+def hook_at_target_theta(obs: NDArray, tol: float = 0.15) -> bool:
+    """True when the hook's theta is close to the target (-π)."""
+    hook = extract_hook(obs)
+    diff = math.remainder(hook.theta - HOOK_TARGET_THETA, 2 * math.pi)
+    return abs(diff) < tol
 
 
 def hook_at_center(obs: NDArray, pos_tol: float = 0.3) -> bool:
@@ -326,6 +332,11 @@ def hook_at_center(obs: NDArray, pos_tol: float = 0.3) -> bool:
 def hook_grasped_and_horizontal(obs: NDArray) -> bool:
     """True when the hook is held, horizontal, and roughly centred."""
     return holding_hook(obs) and hook_is_horizontal(obs) and hook_at_center(obs)
+
+
+def hook_grasped_and_rotated(obs: NDArray) -> bool:
+    """True when the hook is held and at the target rotation (-π)."""
+    return holding_hook(obs) and hook_at_target_theta(obs)
 
 
 def both_buttons_pressed(obs: NDArray) -> bool:
