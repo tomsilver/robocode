@@ -63,6 +63,9 @@ SHELF_TARGET = "shelf"
 STUCK_WINDOW = 8
 STUCK_POSITION_EPS = 1e-3
 STUCK_COMMAND_EPS = 1e-3
+INSIDE_PUSH_STUCK_WINDOW = 6
+INSIDE_PUSH_STUCK_POSITION_EPS = 5e-3
+INSIDE_PUSH_COMMAND_EPS = 1e-2
 HOLD_LOSS_PATIENCE = 1
 HOLD_RECOVERY_MOVE_EPS = 0.01
 
@@ -121,6 +124,12 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._planned_path_len: float | None = None
         self._recent_positions: deque[tuple[float, float]] = deque(maxlen=STUCK_WINDOW)
         self._recent_base_commands: deque[float] = deque(maxlen=STUCK_WINDOW)
+        self._recent_inside_push_block_centers: deque[tuple[float, float]] = deque(
+            maxlen=INSIDE_PUSH_STUCK_WINDOW
+        )
+        self._recent_inside_push_commands: deque[float] = deque(
+            maxlen=INSIDE_PUSH_STUCK_WINDOW
+        )
         self._hold_loss_steps = 0
         self._last_active_block_center: tuple[float, float] | None = None
 
@@ -133,6 +142,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._chosen_pick_pose = None
         self._planned_path_len = None
         self._clear_motion_monitor()
+        self._clear_inside_push_monitor()
         self._hold_loss_steps = 0
         self._last_active_block_center = None
         self._generate_pick_plan(x)
@@ -166,6 +176,10 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._recent_positions.clear()
         self._recent_base_commands.clear()
 
+    def _clear_inside_push_monitor(self) -> None:
+        self._recent_inside_push_block_centers.clear()
+        self._recent_inside_push_commands.clear()
+
     def _path_is_stuck(self) -> bool:
         if (
             len(self._recent_positions) < STUCK_WINDOW
@@ -179,6 +193,29 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             np.hypot(x - first_x, y - first_y) for x, y in self._recent_positions
         )
         return bool(max_displacement < STUCK_POSITION_EPS)
+
+    def _inside_push_is_stuck(
+        self,
+        x: NDArray,
+        block_name: str,
+    ) -> bool:
+        if not is_block_inside_shelf(x, block_name):
+            return False
+        if (
+            len(self._recent_inside_push_block_centers) < INSIDE_PUSH_STUCK_WINDOW
+            or len(self._recent_inside_push_commands) < INSIDE_PUSH_STUCK_WINDOW
+        ):
+            return False
+        if not all(
+            command > INSIDE_PUSH_COMMAND_EPS for command in self._recent_inside_push_commands
+        ):
+            return False
+        first_x, first_y = self._recent_inside_push_block_centers[0]
+        max_displacement = max(
+            np.hypot(cx - first_x, cy - first_y)
+            for cx, cy in self._recent_inside_push_block_centers
+        )
+        return bool(max_displacement < INSIDE_PUSH_STUCK_POSITION_EPS)
 
     def _store_sort_key(self, x: NDArray, block_name: str) -> tuple[float, float]:
         robot = extract_robot(x)
@@ -552,12 +589,14 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         if next_block is None:
             self._active_block = None
             self._holding_actions.clear()
+            self._clear_inside_push_monitor()
             self._hold_loss_steps = 0
             self._last_active_block_center = None
             self._actions = deque()
             return
         self._active_block = next_block
         self._holding_actions.clear()
+        self._clear_inside_push_monitor()
         self._hold_loss_steps = 0
         self._last_active_block_center = None
 
@@ -772,6 +811,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             self._chosen_pick_pose = None
             self._planned_path_len = None
             self._clear_motion_monitor()
+            self._clear_inside_push_monitor()
             self._recent_positions.append((robot.x, robot.y))
         if (
             observed_held is None
@@ -819,6 +859,24 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 self._recent_base_commands.append(float(np.hypot(action[0], action[1])))
                 return action
             action = self._place_action(x, held_name)
+            if is_block_inside_shelf(x, held_name):
+                block_center = extract_block(x, held_name).center
+                push_command = max(float(action[1]), float(action[3]), 0.0)
+                self._recent_inside_push_block_centers.append(block_center)
+                self._recent_inside_push_commands.append(push_command)
+                if self._inside_push_is_stuck(x, held_name):
+                    if self._phase == "compact":
+                        self._phase = "store"
+                    self._active_block = None
+                    self._holding_actions.clear()
+                    self._clear_inside_push_monitor()
+                    release_action = NOOP_ACTION.copy()
+                    release_action[4] = VACUUM_OFF
+                    self._queue_retreat(x)
+                    self._recent_base_commands.append(0.0)
+                    return release_action
+            else:
+                self._clear_inside_push_monitor()
             self._recent_base_commands.append(float(np.hypot(action[0], action[1])))
             return action
         if not self._actions:
