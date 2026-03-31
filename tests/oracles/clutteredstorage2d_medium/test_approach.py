@@ -19,7 +19,7 @@ from tests.conftest import MAKE_VIDEOS
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
 MAX_STEPS = 500
 SOLVE_SEEDS = [0, 1]
-REPORT_SEEDS = list(range(20))
+REPORT_SEEDS = list(range(100))
 
 
 def _run_episode(
