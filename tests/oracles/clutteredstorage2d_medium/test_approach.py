@@ -1,6 +1,7 @@
 """Tests for the ClutteredStorage2D oracle approach."""
 
 import kinder
+import numpy as np
 import pytest
 from gymnasium.wrappers import RecordVideo
 
@@ -18,6 +19,7 @@ from tests.conftest import MAKE_VIDEOS
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
 MAX_STEPS = 500
 SOLVE_SEEDS = [0, 1]
+REPORT_SEEDS = list(range(20))
 
 
 def _run_episode(
@@ -94,3 +96,34 @@ def test_oracle_episode_with_optional_video():
         )
     finally:
         env.close()
+
+
+def test_oracle_solve_rate_report():
+    """Report solve rate across a fixed seed set without gating on 100% yet."""
+    render_mode = "rgb_array" if MAKE_VIDEOS else None
+    shared_env = KinderGeom2DEnv(ENV_ID) if not MAKE_VIDEOS else None
+
+    approach = ClutteredStorage2DOracleApproach(
+        action_space=KinderGeom2DEnv(ENV_ID).action_space,
+        observation_space=KinderGeom2DEnv(ENV_ID).observation_space,
+    )
+
+    results = []
+    for seed in REPORT_SEEDS:
+        if MAKE_VIDEOS:
+            ep_env = RecordVideo(
+                kinder.make(ENV_ID, render_mode=render_mode),
+                f"unit_test_videos/approach_seed{seed}",
+            )
+        else:
+            ep_env = shared_env
+        solved, steps, _, outside = _run_episode(ep_env, approach, seed)
+        results.append({"seed": seed, "solved": solved, "steps": steps, "outside": outside})
+        print(f"seed={seed}: solved={solved} steps={steps} outside={outside}")
+        if MAKE_VIDEOS:
+            ep_env.close()
+
+    solve_rate = float(np.mean([result["solved"] for result in results]))
+    mean_steps = float(np.mean([result["steps"] for result in results]))
+    print(f"\nSolve rate: {solve_rate:.0%}, Mean steps: {mean_steps:.0f}")
+    assert len(results) == len(REPORT_SEEDS)

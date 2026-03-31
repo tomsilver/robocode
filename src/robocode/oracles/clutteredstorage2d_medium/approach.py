@@ -69,3 +69,9 @@ class ClutteredStorage2DOracleApproach(BaseApproach[NDArray, NDArray]):
         if self._current.terminated(state) and self._behaviors:
             self._current = self._behaviors.popleft()
             self._current.reset(state)
+
+    def debug_snapshot(self) -> dict[str, Any]:
+        """Return lightweight debug metadata for the active behavior."""
+        if self._current is None or not hasattr(self._current, "debug_snapshot"):
+            return {}
+        return self._current.debug_snapshot()

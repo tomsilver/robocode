@@ -290,7 +290,7 @@ def held_block_name(obs: NDArray) -> str | None:
     for name in BLOCK_NAMES:
         block = extract_block(obs, name)
         center_x, center_y = block.center
-        distance = float(np.hypot(block.x - tip.x, block.y - tip.y))
+        distance = float(np.hypot(center_x - tip.x, center_y - tip.y))
         if center_y > threshold:
             candidates.append((distance, name))
     if not candidates:

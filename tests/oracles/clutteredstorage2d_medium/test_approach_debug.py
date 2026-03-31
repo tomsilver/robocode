@@ -25,11 +25,10 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
 )
 
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
-SEED = 0
+SEED = 2
 MAX_STEPS = 500
 ARTIFACT_ROOT = Path("unit_test_artifacts/clutteredstorage2d_medium")
 VIDEO_DIR = ARTIFACT_ROOT / "videos"
-LOG_PATH = ARTIFACT_ROOT / "debug_seed0.log"
 
 
 def _format_block_state(obs) -> str:
@@ -51,12 +50,13 @@ def test_debug_episode_writes_log_and_video():
     """Run one episode and persist debug artifacts for manual inspection."""
     kinder.register_all_environments()
     VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
+    log_path = ARTIFACT_ROOT / f"debug_seed{SEED}.log"
 
     env = RecordVideo(
         kinder.make(ENV_ID, render_mode="rgb_array"),
         str(VIDEO_DIR),
-        name_prefix="debug_seed0",
+        name_prefix=f"debug_seed{SEED}",
     )
     video_files: list[Path] = []
     try:
@@ -67,7 +67,7 @@ def test_debug_episode_writes_log_and_video():
         )
         approach.reset(obs, info)
 
-        with LOG_PATH.open("w", encoding="utf-8") as log_file:
+        with log_path.open("w", encoding="utf-8") as log_file:
             log_file.write(f"env_id={ENV_ID}\n")
             log_file.write(f"seed={SEED}\n")
             log_file.write(f"max_steps={MAX_STEPS}\n\n")
@@ -77,6 +77,7 @@ def test_debug_episode_writes_log_and_video():
                 outside = outside_blocks(obs)
                 holding = holding_any_block(obs)
                 held_name = held_block_name(obs)
+                debug = approach.debug_snapshot()
                 action = approach.step()
                 log_file.write(
                     f"step={step:03d} "
@@ -85,6 +86,14 @@ def test_debug_episode_writes_log_and_video():
                     f"action=({action[0]:.3f},{action[1]:.3f},{action[2]:.3f},"
                     f"{action[3]:.3f},{action[4]:.1f}) "
                     f"outside={outside} holding={holding} held={held_name}\n"
+                )
+                log_file.write(
+                    "    "
+                    f"phase={debug.get('phase')} active={debug.get('active_block')} "
+                    f"target={debug.get('target_center')} "
+                    f"candidate={debug.get('chosen_pick_pose')} "
+                    f"path_len={debug.get('path_len')} "
+                    f"queued={debug.get('queued_actions')}\n"
                 )
                 log_file.write(f"    {_format_block_state(obs)}\n")
 
@@ -104,6 +113,6 @@ def test_debug_episode_writes_log_and_video():
     finally:
         env.close()
 
-    video_files = sorted(VIDEO_DIR.glob("debug_seed0-episode-*.mp4"))
-    assert LOG_PATH.exists(), f"Expected debug log at {LOG_PATH}"
+    video_files = sorted(VIDEO_DIR.glob(f"debug_seed{SEED}-episode-*.mp4"))
+    assert log_path.exists(), f"Expected debug log at {log_path}"
     assert video_files, f"No video file generated in {VIDEO_DIR}"
