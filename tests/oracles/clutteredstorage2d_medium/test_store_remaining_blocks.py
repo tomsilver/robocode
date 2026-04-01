@@ -29,7 +29,7 @@ def test_store_remaining_blocks_solves_seed0():
         assert not behavior.terminated(obs)
 
         behavior.reset(obs)
-        for step in range(MAX_STEPS):
+        for _ in range(MAX_STEPS):
             action = behavior.step(obs)
             obs, _, terminated, truncated, _ = env.step(action)
             if terminated or truncated:

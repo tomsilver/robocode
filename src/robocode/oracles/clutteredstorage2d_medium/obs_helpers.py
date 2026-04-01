@@ -378,7 +378,7 @@ def _staging_center_clear_of_occ(
     center: tuple[float, float],
     occ: tuple[float, float],
 ) -> bool:
-    """Return True if a staging center is not too close or axis-aligned to an occupied one."""
+    """Return True if a staging center stays clear of an occupied staging pose."""
     dx = abs(center[0] - occ[0])
     dy = abs(center[1] - occ[1])
     return (

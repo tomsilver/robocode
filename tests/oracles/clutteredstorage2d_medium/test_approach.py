@@ -118,7 +118,9 @@ def test_oracle_solve_rate_report():
         else:
             ep_env = shared_env
         solved, steps, _, outside = _run_episode(ep_env, approach, seed)
-        results.append({"seed": seed, "solved": solved, "steps": steps, "outside": outside})
+        results.append(
+            {"seed": seed, "solved": solved, "steps": steps, "outside": outside}
+        )
         print(f"seed={seed}: solved={solved} steps={steps} outside={outside}")
         if MAKE_VIDEOS:
             ep_env.close()

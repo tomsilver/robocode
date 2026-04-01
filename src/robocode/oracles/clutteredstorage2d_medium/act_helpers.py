@@ -177,7 +177,14 @@ def plan_base_path(
         return None
 
     frontier: list[tuple[float, float, Point2D]] = []
-    heapq.heappush(frontier, (math.hypot(goal_node[0] - start_node[0], goal_node[1] - start_node[1]), 0.0, start_node))
+    heapq.heappush(
+        frontier,
+        (
+            math.hypot(goal_node[0] - start_node[0], goal_node[1] - start_node[1]),
+            0.0,
+            start_node,
+        ),
+    )
     came_from: dict[Point2D, Point2D | None] = {start_node: None}
     costs: dict[Point2D, float] = {start_node: 0.0}
 
@@ -198,17 +205,19 @@ def plan_base_path(
             if new_cost + 1e-9 < costs.get(neighbor, float("inf")):
                 costs[neighbor] = new_cost
                 came_from[neighbor] = current
-                heuristic = math.hypot(goal_node[0] - neighbor[0], goal_node[1] - neighbor[1])
+                heuristic = math.hypot(
+                    goal_node[0] - neighbor[0], goal_node[1] - neighbor[1]
+                )
                 heapq.heappush(frontier, (new_cost + heuristic, new_cost, neighbor))
 
     if goal_node not in came_from:
         return None
 
     node_path: list[Point2D] = []
-    current: Point2D | None = goal_node
-    while current is not None:
-        node_path.append(current)
-        current = came_from[current]
+    path_node: Point2D | None = goal_node
+    while path_node is not None:
+        node_path.append(path_node)
+        path_node = came_from[path_node]
     node_path.reverse()
 
     path: list[Point2D] = [start]
@@ -301,10 +310,10 @@ def plan_holding_base_path(
         return None
 
     node_path: list[Point2D] = []
-    current: Point2D | None = goal_node
-    while current is not None:
-        node_path.append(current)
-        current = came_from[current]
+    path_node: Point2D | None = goal_node
+    while path_node is not None:
+        node_path.append(path_node)
+        path_node = came_from[path_node]
     node_path.reverse()
 
     path: list[Point2D] = [start]

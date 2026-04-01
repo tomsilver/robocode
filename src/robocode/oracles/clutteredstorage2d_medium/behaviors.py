@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,11 +24,11 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     APPROACH_MARGIN,
     TOOLTIP_OFFSET_SCALE,
-    RobotPose,
     WORLD_MAX_X,
     WORLD_MAX_Y,
     WORLD_MIN_X,
     WORLD_MIN_Y,
+    RobotPose,
     all_blocks_inside_shelf,
     extract_block,
     extract_robot,
@@ -38,7 +38,6 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     inside_blocks,
     is_block_inside_shelf,
     next_free_slot_center,
-    next_free_staging_center,
     outside_blocks,
     pick_base_pose_candidates,
     slot_centers,
@@ -54,7 +53,6 @@ DEEP_PLACE_Y_TOL = 0.03
 COMPACT_Y_TOL = 0.02
 TRANSPORT_Y_MARGIN = 0.08
 PREINSERT_Y_MARGIN = 0.25
-ROTATION_STAGE_MARGIN = 0.18
 PRE_PICK_RING_MARGIN = 0.0
 SAFE_VACUUM = 1.0
 VACUUM_OFF = 0.0
@@ -274,7 +272,9 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             or len(self._recent_base_commands) < STUCK_WINDOW
         ):
             return False
-        if not all(command > STUCK_COMMAND_EPS for command in self._recent_base_commands):
+        if not all(
+            command > STUCK_COMMAND_EPS for command in self._recent_base_commands
+        ):
             return False
         first_x, first_y = self._recent_positions[0]
         max_displacement = max(
@@ -295,7 +295,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         ):
             return False
         if not all(
-            command > INSIDE_PUSH_COMMAND_EPS for command in self._recent_inside_push_commands
+            command > INSIDE_PUSH_COMMAND_EPS
+            for command in self._recent_inside_push_commands
         ):
             return False
         first_x, first_y = self._recent_inside_push_block_centers[0]
@@ -317,6 +318,19 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         return (
             block.center[1],
             abs(block.center[0] - robot.x),
+        )
+
+    def _pre_pick_pose(self, robot: RobotPose, candidate: Any) -> RobotPose:
+        """Return the short staging pose used just before the final grasp approach."""
+        pre_pick_x = candidate.x - PRE_PICK_RING_MARGIN * float(np.cos(candidate.theta))
+        pre_pick_y = candidate.y - PRE_PICK_RING_MARGIN * float(np.sin(candidate.theta))
+        return _waypoint(
+            robot,
+            pre_pick_x,
+            pre_pick_y,
+            candidate.theta,
+            robot.base_radius,
+            VACUUM_OFF,
         )
 
     def _base_path_bounds(
@@ -388,8 +402,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         )
         bounds = self._base_path_bounds(x, robot)
         if not (
-            bounds[0] <= goal[0] <= bounds[1]
-            and bounds[2] <= goal[1] <= bounds[3]
+            bounds[0] <= goal[0] <= bounds[1] and bounds[2] <= goal[1] <= bounds[3]
         ):
             return False
         obstacles = self._base_path_obstacles(
@@ -463,7 +476,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         shelf = extract_shelf(x)
         max_safe_base_y = rotate_bounds[3] - POS_TOL
         stage_base_y = min(robot.y, max_safe_base_y)
-        if not (transport_bounds[2] <= stage_base_y <= transport_bounds[3]):
+        if not transport_bounds[2] <= stage_base_y <= transport_bounds[3]:
             return False
         candidate_base_xs = [
             robot.x,
@@ -485,6 +498,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         best_path: list[tuple[float, float]] | None = None
         best_length = float("inf")
         for goal in candidate_goals:
+            path: list[tuple[float, float]] | None
             if abs(goal[0] - robot.x) <= POS_TOL and abs(goal[1] - robot.y) <= POS_TOL:
                 path = [(robot.x, robot.y)]
                 length = 0.0
@@ -534,12 +548,66 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._planned_path_len = best_length
         return bool(self._holding_actions)
 
+    def _best_pick_for_block(
+        self,
+        x: NDArray,
+        block_name: str,
+    ) -> tuple[float, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+        """Return the shortest valid pick plan for a single outside block."""
+        robot = extract_robot(x)
+        bounds = self._base_path_bounds(x, robot)
+        path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
+        local_obstacles = self._base_path_obstacles(x, block_name, robot)
+        best_candidate: (
+            tuple[float, RobotPose, RobotPose, list[tuple[float, float]]] | None
+        ) = None
+
+        for candidate in pick_base_pose_candidates(x, block_name):
+            pre_pick = self._pre_pick_pose(robot, candidate)
+            if not (
+                bounds[0] <= pre_pick.x <= bounds[1]
+                and bounds[2] <= pre_pick.y <= bounds[3]
+            ):
+                continue
+            path = plan_base_path(
+                (robot.x, robot.y),
+                (pre_pick.x, pre_pick.y),
+                path_obstacles,
+                bounds,
+            )
+            if path is None:
+                continue
+            if not segment_collision_free(
+                (pre_pick.x, pre_pick.y),
+                (candidate.x, candidate.y),
+                local_obstacles,
+                bounds,
+            ):
+                continue
+
+            target = _waypoint(
+                robot,
+                candidate.x,
+                candidate.y,
+                candidate.theta,
+                robot.base_radius,
+                VACUUM_OFF,
+            )
+            if not self._grasp_extension_collision_free(x, block_name, target):
+                continue
+
+            candidate_length = path_length(path) + float(
+                np.hypot(candidate.x - pre_pick.x, candidate.y - pre_pick.y)
+            )
+            if best_candidate is None or candidate_length < best_candidate[0]:
+                best_candidate = (candidate_length, target, pre_pick, path)
+
+        return best_candidate
+
     def _select_store_pick(
         self,
         x: NDArray,
     ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
-        robot = extract_robot(x)
-        bounds = self._base_path_bounds(x, robot)
         reachable: list[
             tuple[
                 tuple[float, float],
@@ -552,57 +620,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         ] = []
 
         for block_name in outside_blocks(x):
-            path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
-            local_obstacles = self._base_path_obstacles(x, block_name, robot)
-            best_candidate: tuple[
-                float, RobotPose, RobotPose, list[tuple[float, float]]
-            ] | None = None
-            for candidate in pick_base_pose_candidates(x, block_name):
-                pre_pick_x = candidate.x - PRE_PICK_RING_MARGIN * float(np.cos(candidate.theta))
-                pre_pick_y = candidate.y - PRE_PICK_RING_MARGIN * float(np.sin(candidate.theta))
-                if not (
-                    bounds[0] <= pre_pick_x <= bounds[1]
-                    and bounds[2] <= pre_pick_y <= bounds[3]
-                ):
-                    continue
-                pre_pick = _waypoint(
-                    robot,
-                    pre_pick_x,
-                    pre_pick_y,
-                    candidate.theta,
-                    robot.base_radius,
-                    VACUUM_OFF,
-                )
-                path = plan_base_path(
-                    (robot.x, robot.y),
-                    (pre_pick.x, pre_pick.y),
-                    path_obstacles,
-                    bounds,
-                )
-                if path is None:
-                    continue
-                if not segment_collision_free(
-                    (pre_pick.x, pre_pick.y),
-                    (candidate.x, candidate.y),
-                    local_obstacles,
-                    bounds,
-                ):
-                    continue
-                candidate_length = path_length(path) + float(
-                    np.hypot(candidate.x - pre_pick.x, candidate.y - pre_pick.y)
-                )
-                target = _waypoint(
-                    robot,
-                    candidate.x,
-                    candidate.y,
-                    candidate.theta,
-                    robot.base_radius,
-                    VACUUM_OFF,
-                )
-                if not self._grasp_extension_collision_free(x, block_name, target):
-                    continue
-                if best_candidate is None or candidate_length < best_candidate[0]:
-                    best_candidate = (candidate_length, target, pre_pick, path)
+            best_candidate = self._best_pick_for_block(x, block_name)
             if best_candidate is None:
                 continue
             path_len, target, pre_pick, path = best_candidate
@@ -631,59 +649,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         x: NDArray,
         block_name: str,
     ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
-        robot = extract_robot(x)
-        bounds = self._base_path_bounds(x, robot)
-        path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
-        local_obstacles = self._base_path_obstacles(x, block_name, robot)
-        best_candidate: tuple[
-            float, RobotPose, RobotPose, list[tuple[float, float]]
-        ] | None = None
-        for candidate in pick_base_pose_candidates(x, block_name):
-            pre_pick_x = candidate.x - PRE_PICK_RING_MARGIN * float(np.cos(candidate.theta))
-            pre_pick_y = candidate.y - PRE_PICK_RING_MARGIN * float(np.sin(candidate.theta))
-            if not (
-                bounds[0] <= pre_pick_x <= bounds[1]
-                and bounds[2] <= pre_pick_y <= bounds[3]
-            ):
-                continue
-            pre_pick = _waypoint(
-                robot,
-                pre_pick_x,
-                pre_pick_y,
-                candidate.theta,
-                robot.base_radius,
-                VACUUM_OFF,
-            )
-            path = plan_base_path(
-                (robot.x, robot.y),
-                (pre_pick.x, pre_pick.y),
-                path_obstacles,
-                bounds,
-            )
-            if path is None:
-                continue
-            if not segment_collision_free(
-                (pre_pick.x, pre_pick.y),
-                (candidate.x, candidate.y),
-                local_obstacles,
-                bounds,
-            ):
-                continue
-            candidate_length = path_length(path) + float(
-                np.hypot(candidate.x - pre_pick.x, candidate.y - pre_pick.y)
-            )
-            target = _waypoint(
-                robot,
-                candidate.x,
-                candidate.y,
-                candidate.theta,
-                robot.base_radius,
-                VACUUM_OFF,
-            )
-            if not self._grasp_extension_collision_free(x, block_name, target):
-                continue
-            if best_candidate is None or candidate_length < best_candidate[0]:
-                best_candidate = (candidate_length, target, pre_pick, path)
+        best_candidate = self._best_pick_for_block(x, block_name)
         if best_candidate is None:
             return None
         _, target, pre_pick, path = best_candidate
@@ -705,7 +671,6 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
     def _select_compact_blocker_to_clear(
         self,
         x: NDArray,
-        compact_block: str,
     ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
         shelf = extract_shelf(x)
         blocker_names = sorted(
@@ -759,14 +724,14 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 target = None
                 path_points = None
             else:
-                selection = self._plan_compact_pick(x, next_block)
-                if selection is None:
+                compact_selection: (
+                    tuple[RobotPose, list[tuple[float, float]]] | None
+                ) = self._plan_compact_pick(x, next_block)
+                if compact_selection is None:
                     self._phase = "clear_compact"
                     self._target_kind = STAGING_TARGET
                     self._target_center = farthest_free_staging_center(x)
-                    clear_selection = self._select_compact_blocker_to_clear(
-                        x, next_block
-                    )
+                    clear_selection = self._select_compact_blocker_to_clear(x)
                     if clear_selection is None:
                         next_block = None
                         pre_pick = None
@@ -776,7 +741,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                         next_block, target, pre_pick, path_points = clear_selection
                 else:
                     pre_pick = None
-                    target, path_points = selection
+                    target, path_points = compact_selection
         else:
             if self._phase == "clear_compact":
                 self._target_kind = STAGING_TARGET
@@ -784,14 +749,16 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             else:
                 self._target_kind = SHELF_TARGET
                 self._target_center = next_free_slot_center(x)
-            selection = self._select_store_pick(x)
-            if selection is None:
+            store_selection: (
+                tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None
+            ) = self._select_store_pick(x)
+            if store_selection is None:
                 next_block = None
                 target = None
                 pre_pick = None
                 path_points = None
             else:
-                next_block, target, pre_pick, path_points = selection
+                next_block, target, pre_pick, path_points = store_selection
         if next_block is None:
             self._active_block = None
             self._holding_actions.clear()
@@ -813,6 +780,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
 
         self._chosen_pick_pose = (target.x, target.y, target.theta)
 
+        # Keep the pick queue simple: retract, align, navigate, then grasp.
         key_waypoints = [current]
         if robot.arm_joint > robot.base_radius + ARM_TOL:
             key_waypoints.append(
@@ -953,7 +921,9 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
 
         angle_error = wrap_angle(UP - robot.theta)
         if abs(angle_error) > ANGLE_TOL:
-            if not self._holding_actions and self._queue_holding_rotation_to_up(x, block_name):
+            if not self._holding_actions and self._queue_holding_rotation_to_up(
+                x, block_name
+            ):
                 return self._holding_actions.popleft()
             action[2] = float(np.clip(angle_error, -DTH_LIM, DTH_LIM))
             return action
@@ -978,16 +948,20 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             if robot.arm_joint > carry_arm + ARM_TOL and (
                 not self._staging_release_active
                 and (
-                abs(block_x - target_x) > POS_TOL or abs(block_y - target_y) > POS_TOL
+                    abs(block_x - target_x) > POS_TOL
+                    or abs(block_y - target_y) > POS_TOL
                 )
             ):
-                action[3] = float(np.clip(carry_arm - robot.arm_joint, -DARM_LIM, DARM_LIM))
+                action[3] = float(
+                    np.clip(carry_arm - robot.arm_joint, -DARM_LIM, DARM_LIM)
+                )
                 return action
-            if (
-                not self._staging_release_active
-                and (not at_target_x or abs(block_y - target_y) > POS_TOL)
+            if not self._staging_release_active and (
+                not at_target_x or abs(block_y - target_y) > POS_TOL
             ):
-                if not self._holding_actions and self._queue_holding_transport(x, block_name):
+                if not self._holding_actions and self._queue_holding_transport(
+                    x, block_name
+                ):
                     return self._holding_actions.popleft()
                 action[0] = float(np.clip(target_x - block_x, -DX_LIM, DX_LIM))
                 action[1] = float(np.clip(target_y - block_y, -DY_LIM, DY_LIM))
@@ -1002,7 +976,9 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 return action
             action[4] = VACUUM_OFF
             self._staging_release_active = False
-            if self._phase == "clear_compact" and self._clear_blocker_cleared(x, block_name):
+            if self._phase == "clear_compact" and self._clear_blocker_cleared(
+                x, block_name
+            ):
                 self._phase = "compact"
             self._queue_retreat(x)
             return action
@@ -1065,6 +1041,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         robot = extract_robot(x)
         self._recent_positions.append((robot.x, robot.y))
         if self._path_is_stuck():
+            # Stuck means the last planned queue is no longer executable in the
+            # true geometry. Drop it and let the next step fully replan.
             self._actions.clear()
             self._holding_actions.clear()
             self._chosen_pick_pose = None
