@@ -182,7 +182,7 @@ def holding_hook(obs: NDArray) -> bool:
     return robot.vacuum > 0.5
 
 
-def hook_at_target_theta(obs: NDArray, tol: float = 0.15) -> bool:
+def hook_at_target_theta(obs: NDArray, tol: float = 0.05) -> bool:
     """True when the hook's theta is close to the target (-π)."""
     hook = extract_hook(obs)
     diff = math.remainder(hook.theta - HOOK_TARGET_THETA, 2 * math.pi)

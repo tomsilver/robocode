@@ -218,7 +218,6 @@ class Sweep(Behavior[NDArray, NDArray]):
         hook = extract_hook(x)
 
         mov_x = get_feature(x, "movable_button", "x")
-        mov_y = get_feature(x, "movable_button", "y")
         mov_r = get_feature(x, "movable_button", "radius")
         tgt_x = get_feature(x, "target_button", "x")
 
@@ -231,37 +230,26 @@ class Sweep(Behavior[NDArray, NDArray]):
         robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
         hook2robot = hook_pose.inverse * robot_pose
 
-        # Distance from robot to the arm tip (the sweeping end).
-        # In hook local frame the arm tip is at x = -l1, robot is at h2r.x.
-        # current_dist = l1 + h2r.x  (positive when robot is between origin and tip).
-        current_dist = hook.length_side1 + hook2robot.x
-
-        # Minimum distance for the hook end to effectively sweep the button.
-        min_dist = mov_y - TABLE_Y + 2 * mov_r + robot.base_radius
-
-        # Sweep direction: push button toward target.
-        sweep_dir = 1.0 if tgt_x > mov_x else -1.0
-
-        # The hook arm is offset from the robot in x.  At theta ≈ -π/2 the
-        # arm's pushing edge (left for rightward sweep, right for leftward)
-        # is at:  robot_x + pushing_edge_offset.
-        # hook_right_x = robot_x - h2r.y;  hook_left_x = hook_right_x - w.
-        pushing_edge_offset = (
-            -hook2robot.y - hook.width if sweep_dir > 0 else -hook2robot.y
+        # First regrasp the bottom
+        if hook2robot.y > 0:
+            regrasp_h2r = SE2Pose(
+                x=-robot.base_radius,
+                y=robot.arm_length,
+                theta=-np.pi / 2,
+            )
+        else:
+            regrasp_h2r = SE2Pose(
+                x=-robot.base_radius-hook.width-margin,
+                y=-robot.arm_length - hook.width,
+                theta=np.pi / 2,
+            )
+        regrasp_world = hook_pose * regrasp_h2r
+        middle_pose_1 = SE2Pose(
+            x=regrasp_world.x,
+            y=robot_pose.y,
+            theta=robot_pose.theta,
         )
-
-        # Pre-sweep: position pushing edge just behind the button.
-        pre_sweep_x = (
-            mov_x - sweep_dir * (mov_r + margin) - pushing_edge_offset
-        )
-        pre_sweep_x = max(min_x, min(pre_sweep_x, max_x))
-
-        # Sweep end: push the button past the target x.
-        sweep_end_x = (
-            tgt_x + sweep_dir * (mov_r + margin) - pushing_edge_offset
-        )
-        sweep_end_x = max(min_x, min(sweep_end_x, max_x))
-
+        
         def wp(
             px: float,
             py: float,
@@ -283,74 +271,50 @@ class Sweep(Behavior[NDArray, NDArray]):
 
         current = _current_pose(robot)
 
-        if current_dist >= min_dist:
-            # Good distance — move to pre-sweep then sweep.
-            key_waypoints = [
-                current,
-                # Move horizontally to pre-sweep x (keep current y / theta).
-                wp(pre_sweep_x, robot.y, robot.theta, robot.arm_joint, 1.0),
-                # Move up to sweep y.
-                wp(pre_sweep_x, sweep_y, robot.theta, robot.arm_joint, 1.0),
-                # Sweep toward target x.
-                wp(sweep_end_x, sweep_y, robot.theta, robot.arm_joint, 1.0),
-            ]
-        else:
-            # Need to re-grasp closer to the hook origin so more of the
-            # arm extends above the robot toward the button.
-            # Target: l1 + new_h2r_x = min_dist  →  new_h2r_x = min_dist - l1.
-            regrasp_h2r_x = min_dist - hook.length_side1 - margin
+        key_waypoints = [
+            current,
+            # Move horizontally to middle x (keep current y / theta).
+            wp(robot_pose.x, robot_pose.y, robot_pose.theta, robot.arm_joint, 0.0),
+            wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.arm_joint, 0.0),
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_joint, 0.0),
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 0.0),
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 1.0),
+        ]
 
-            # Compute re-grasp pose in hook frame.
-            hook2regrasp = SE2Pose(
-                x=regrasp_h2r_x,
-                y=hook2robot.y,
-                theta=hook2robot.theta,
+        # Sweep direction: push button toward target.
+        sweep_dir = 1.0 if tgt_x > mov_x else -1.0
+        pre_sweep_hook_x = mov_x - (mov_r + margin) if tgt_x > mov_x else mov_x + (mov_r + margin + hook.width)
+        pre_sweep_hook_pose = SE2Pose(pre_sweep_hook_x, hook.y, hook.theta)
+        hook2robot = hook_pose.inverse * robot_pose
+        pre_sweep_robot_pose = pre_sweep_hook_pose * regrasp_h2r
+
+        key_waypoints.append(
+            wp(
+                pre_sweep_robot_pose.x,
+                pre_sweep_robot_pose.y,
+                pre_sweep_robot_pose.theta,
+                robot.arm_length,
+                1.0,
             )
-            regrasp_world = hook_pose * hook2regrasp
-
-            key_waypoints = [
-                current,
-                # 1) Move horizontally to pre-sweep x (still holding hook).
-                wp(pre_sweep_x, robot.y, robot.theta, robot.arm_joint, 1.0),
-                # 2) Release vacuum.
-                wp(pre_sweep_x, robot.y, robot.theta, robot.arm_joint, 0.0),
-                # 3) Move to re-grasp position.
-                wp(
-                    regrasp_world.x,
-                    regrasp_world.y,
-                    regrasp_world.theta,
-                    robot.base_radius,
-                    0.0,
-                ),
-                # 4) Extend arm to hook.
-                wp(
-                    regrasp_world.x,
-                    regrasp_world.y,
-                    regrasp_world.theta,
-                    robot.arm_length,
-                    0.0,
-                ),
-                # 5) Vacuum ON — re-grasp.
-                wp(
-                    regrasp_world.x,
-                    regrasp_world.y,
-                    regrasp_world.theta,
-                    robot.arm_length,
-                    1.0,
-                ),
-                # 6) Retract arm.
-                wp(
-                    regrasp_world.x,
-                    regrasp_world.y,
-                    regrasp_world.theta,
-                    robot.base_radius,
-                    1.0,
-                ),
-                # 7) Move vertically to sweep y.
-                wp(pre_sweep_x, sweep_y, robot.theta, robot.base_radius, 1.0),
-                # 8) Sweep toward target x.
-                wp(sweep_end_x, sweep_y, robot.theta, robot.base_radius, 1.0),
-            ]
+        )
+        key_waypoints.append(
+            wp(
+                pre_sweep_robot_pose.x,
+                sweep_y,
+                pre_sweep_robot_pose.theta,
+                robot.arm_length,
+                1.0,
+            )
+        )
+        key_waypoints.append(
+            wp(
+                min_x if sweep_dir < 0 else max_x,
+                sweep_y,
+                pre_sweep_robot_pose.theta,
+                robot.arm_length,
+                1.0,
+            )
+        )
 
         dense = connecting_waypoints(
             key_waypoints,

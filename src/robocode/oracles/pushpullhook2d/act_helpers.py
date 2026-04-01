@@ -38,15 +38,31 @@ def connecting_waypoints(
     Vacuum is snapped to the target waypoint value (not interpolated).
     """
     dx_lim, dy_lim, dth_lim, darm_lim = action_limits
+
+    # Pre-adjust all waypoint thetas so that every consecutive pair
+    # has a non-negative theta delta (visually-clockwise rotation).
+    adjusted_thetas = [waypoints[0].theta]
+    for i in range(1, len(waypoints)):
+        prev = adjusted_thetas[-1]
+        cur = waypoints[i].theta
+        # Shift cur into [prev, prev + 2π) so the delta is always ≥ 0.
+        while cur < prev:
+            cur += 2 * math.pi
+        adjusted_thetas.append(cur)
+
     dense: list[RobotPose] = [waypoints[0]]
 
     for i in range(len(waypoints) - 1):
         a, b = waypoints[i], waypoints[i + 1]
+        a_theta = adjusted_thetas[i]
+        b_theta = adjusted_thetas[i + 1]
+
+        dtheta = b_theta - a_theta
         steps = max(
             1,
             math.ceil(abs(b.x - a.x) / dx_lim),
             math.ceil(abs(b.y - a.y) / dy_lim),
-            math.ceil(abs(b.theta - a.theta) / dth_lim) if dth_lim > 0 else 1,
+            math.ceil(dtheta / dth_lim) if dth_lim > 0 else 1,
             math.ceil(abs(b.arm_joint - a.arm_joint) / darm_lim),
         )
         for s in range(1, steps + 1):
@@ -55,7 +71,7 @@ def connecting_waypoints(
                 RobotPose(
                     x=a.x + t * (b.x - a.x),
                     y=a.y + t * (b.y - a.y),
-                    theta=a.theta + t * (b.theta - a.theta),
+                    theta=a_theta + t * (b_theta - a_theta),
                     base_radius=a.base_radius,
                     arm_joint=a.arm_joint + t * (b.arm_joint - a.arm_joint),
                     arm_length=a.arm_length,

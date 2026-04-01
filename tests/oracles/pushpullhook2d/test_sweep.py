@@ -9,7 +9,7 @@ from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/PushPullHook2D-v0"
 GRASP_MAX_STEPS = 500
-SWEEP_MAX_STEPS = 1000
+SWEEP_MAX_STEPS = 300
 
 
 def _run_grasp_rotate(env, obs):
@@ -24,7 +24,7 @@ def _run_grasp_rotate(env, obs):
     raise AssertionError(f"GraspRotate did not finish in {GRASP_MAX_STEPS} steps.")
 
 
-@pytest.mark.parametrize("seed", [0])
+@pytest.mark.parametrize("seed", list(range(50)))
 def test_sweep(seed) -> None:
     """After Sweep, the movable button should be aligned with the target."""
     kinder.register_all_environments()
@@ -41,7 +41,10 @@ def test_sweep(seed) -> None:
     # Phase 2: Sweep.
     behavior = Sweep()
     assert behavior.initializable(obs), "Sweep precondition not met."
-    assert not behavior.terminated(obs), "Sweep subgoal already satisfied."
+    if behavior.terminated(obs):
+        print("Sweep already achieved after GraspRotate.")
+        env.close()
+        return
 
     behavior.reset(obs)
     for s in range(SWEEP_MAX_STEPS):
