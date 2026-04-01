@@ -95,13 +95,6 @@ object, lower the arm, activate vacuum, retract arm").
 5. **Why this ordering**: Explain why the previous behavior's subgoal satisfies this \
 behavior's precondition.
 
-Example decomposition for a pick-and-place task with obstructions:
-- **Behavior 1: ClearRegion** — Precondition: obstructions overlap the goal region. \
-Subgoal: no obstructions overlap the goal region. Policy: for each obstruction on the \
-surface, pick it up and place it in an empty area.
-- **Behavior 2: PickAndPlace** — Precondition: goal region is clear. Subgoal: target \
-block is on the goal surface. Policy: pick the block, carry it to the surface, place it.
-
 The approach should determine which behavior to start from by checking preconditions \
 BACKWARDS from the last behavior. If the last behavior's precondition is already \
 satisfied, skip all earlier behaviors.
@@ -117,10 +110,15 @@ one file. Do NOT put helper functions inside approach.py or behavior files.
 
 Required files:
 - ``obs_helpers.py`` — ALL functions that parse/interpret the observation vector. \
-This includes extracting object positions, computing geometric predicates \
-(overlaps, is_on, etc.), and any named constants for observation indices. \
-Every "magic number" related to observation parsing (index offsets, tolerances, \
-physics constants like table height) MUST be a named constant here. \
+This includes extracting object positions, computing geometric predicates, \
+and any named constants for observation indices. \
+Every "magic number" related to observation parsing MUST be a named constant here. \
+BEFORE writing this file, you MUST run: \
+``feats = env.unwrapped.observation_space.devectorize(obs)`` \
+to inspect the observation structure. This returns a dictionary mapping \
+feature names to their values, so you can see exactly what each part of \
+the observation vector represents. Use this to determine the correct \
+indices, feature names, and semantics — do NOT guess the observation layout. \
 {obs_helpers_note}
 - ``act_helpers.py`` — ALL functions that help generate actions. This includes \
 waypoint interpolation, action clipping, proportional controllers, etc. \

@@ -12,13 +12,14 @@ provides:
   as ``CLAUDE_CODE_OAUTH_TOKEN``; on other platforms the host ``~/.claude``
   directory is bind-mounted so the CLI authenticates via the existing
   ``claude login`` session.
-* **Reproducible Python environment** — all robocode dependencies are
-  pre-installed in ``/robocode/.venv`` via ``uv sync --frozen``.
+* **Reproducible Python environment** — ``uv sync --frozen`` runs at
+  container start using the bind-mounted source trees.
 * **Primitive source files** — ``src/robocode/primitives/*.py`` are copied
   into ``/sandbox/primitives/`` so the agent can read their API.
-* **prpl-mono bind-mount** — the current submodule is mounted read-only at
-  ``/robocode/prpl-mono/``, overriding the stale in-image copy without
-  requiring an image rebuild.
+* **src bind-mount** — ``src/`` is mounted read-only at
+  ``/robocode/src/``, with ``oracles/`` stripped to prevent solution leakage.
+* **prpl-mono bind-mount** — ``prpl-mono/`` is mounted read-only at
+  ``/robocode/prpl-mono/``, with ``tests/`` and ``docs/`` stripped.
 
 Usage
 -----
@@ -125,6 +126,20 @@ def _copy_prpl_mono_without_tests(prpl_mono: Path, dest: Path) -> None:
         prpl_mono,
         dest,
         ignore=shutil.ignore_patterns("tests", "docs"),
+    )
+
+
+def _copy_src_without_oracles(src: Path, dest: Path) -> None:
+    """Copy ``src/`` to *dest*, skipping ``oracles/`` and ``primitives/``.
+
+    Both directories contain solution code that must not be exposed to
+    the agent.  Primitive source files are selectively copied into the
+    sandbox via :func:`_setup_sandbox_dir` instead.
+    """
+    shutil.copytree(
+        src,
+        dest,
+        ignore=shutil.ignore_patterns("oracles", "primitives"),
     )
 
 
@@ -251,16 +266,20 @@ async def run_agent_in_docker_sandbox(
             f"prpl-mono not found at {prpl_mono}; "
             "run: git submodule update --init --recursive"
         )
+    src_dir = repo_root / "src"
 
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    # Create a filtered copy of prpl-mono with unit tests removed.
-    tmp_dir = tempfile.mkdtemp(prefix="prpl-mono-notests-")
+    # Create filtered copies: prpl-mono without tests, src without oracles.
+    tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
     filtered_prpl_mono = Path(tmp_dir) / "prpl-mono"
+    filtered_src = Path(tmp_dir) / "src"
     try:
         _copy_prpl_mono_without_tests(prpl_mono, filtered_prpl_mono)
+        _copy_src_without_oracles(src_dir, filtered_src)
         prpl_mono_abs = str(filtered_prpl_mono.resolve())
+        src_abs = str(filtered_src.resolve())
 
         # --- Authentication ---
         oauth_token = _get_claude_oauth_token()
@@ -298,7 +317,9 @@ async def run_agent_in_docker_sandbox(
             "-v",
             f"{sandbox_abs}:/sandbox",
             "-v",
-            f"{prpl_mono_abs}:/robocode/prpl-mono:ro",
+            f"{src_abs}:/robocode/src",
+            "-v",
+            f"{prpl_mono_abs}:/robocode/prpl-mono",
             "-w",
             "/sandbox",
             config.docker_image,
