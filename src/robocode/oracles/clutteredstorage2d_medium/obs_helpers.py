@@ -76,6 +76,7 @@ WORLD_MIN_Y = 0.0
 WORLD_MAX_Y = 3.0
 POSE_EPS = 1e-4
 STAGING_OCCUPANCY_TOL = 0.08
+STAGING_AXIS_SEPARATION_TOL = 0.18
 
 
 def wrap_angle(theta: float) -> float:
@@ -345,19 +346,49 @@ def next_free_slot_center(obs: NDArray) -> tuple[float, float]:
 
 def staging_slot_centers() -> list[tuple[float, float]]:
     """Return temporary staging slot centers outside the shelf."""
-    return [(1.60, 1.55), (2.05, 1.55), (2.50, 1.55)]
+    return [(1.20, 1.20), (2.30, 1.05), (3.45, 1.25)]
 
 
 def next_free_staging_center(obs: NDArray) -> tuple[float, float]:
     """Return the next free staging slot."""
     occupied = [extract_block(obs, name).center for name in outside_blocks(obs)]
     for center in staging_slot_centers():
-        if all(
-            np.hypot(center[0] - occ[0], center[1] - occ[1]) > STAGING_OCCUPANCY_TOL
-            for occ in occupied
-        ):
+        if all(_staging_center_clear_of_occ(center, occ) for occ in occupied):
             return center
     return staging_slot_centers()[-1]
+
+
+def farthest_free_staging_center(obs: NDArray) -> tuple[float, float]:
+    """Return the free staging slot farthest from the shelf opening."""
+    occupied = [extract_block(obs, name).center for name in outside_blocks(obs)]
+    shelf = extract_shelf(obs)
+    free_centers = [
+        center
+        for center in staging_slot_centers()
+        if all(_staging_center_clear_of_occ(center, occ) for occ in occupied)
+    ]
+    if not free_centers:
+        free_centers = staging_slot_centers()
+    return max(
+        free_centers,
+        key=lambda center: float(
+            np.hypot(center[0] - shelf.opening_center_x, center[1] - shelf.y1)
+        ),
+    )
+
+
+def _staging_center_clear_of_occ(
+    center: tuple[float, float],
+    occ: tuple[float, float],
+) -> bool:
+    """Return True if a staging center is not too close or axis-aligned to an occupied one."""
+    dx = abs(center[0] - occ[0])
+    dy = abs(center[1] - occ[1])
+    return (
+        np.hypot(dx, dy) > STAGING_OCCUPANCY_TOL
+        and dx > STAGING_AXIS_SEPARATION_TOL
+        and dy > STAGING_AXIS_SEPARATION_TOL
+    )
 
 
 def rect_pose_from_center(

@@ -17,7 +17,7 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
 from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
-MAX_STEPS = 500
+MAX_STEPS = 800
 SOLVE_SEEDS = [0, 1]
 REPORT_SEEDS = list(range(100))
 

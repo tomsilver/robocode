@@ -32,10 +32,12 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     extract_block,
     extract_robot,
     extract_shelf,
+    farthest_free_staging_center,
     held_block_name,
     inside_blocks,
     is_block_inside_shelf,
     next_free_slot_center,
+    next_free_staging_center,
     outside_blocks,
     pick_base_pose_candidates,
     slot_centers,
@@ -57,9 +59,11 @@ SAFE_VACUUM = 1.0
 VACUUM_OFF = 0.0
 CARRY_ARM_FRACTION = 0.35
 PLACE_ARM_FRACTION = 1.0
+STAGING_RELEASE_ARM_FRACTION = 0.55
 NOOP_ACTION = np.zeros(5, dtype=np.float32)
 UP = np.pi / 2
 SHELF_TARGET = "shelf"
+STAGING_TARGET = "staging"
 STUCK_WINDOW = 8
 STUCK_POSITION_EPS = 1e-3
 STUCK_COMMAND_EPS = 1e-3
@@ -122,6 +126,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._active_block: str | None = None
         self._chosen_pick_pose: tuple[float, float, float] | None = None
         self._planned_path_len: float | None = None
+        self._staging_release_active = False
         self._recent_positions: deque[tuple[float, float]] = deque(maxlen=STUCK_WINDOW)
         self._recent_base_commands: deque[float] = deque(maxlen=STUCK_WINDOW)
         self._recent_inside_push_block_centers: deque[tuple[float, float]] = deque(
@@ -141,6 +146,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._active_block = None
         self._chosen_pick_pose = None
         self._planned_path_len = None
+        self._staging_release_active = False
         self._clear_motion_monitor()
         self._clear_inside_push_monitor()
         self._hold_loss_steps = 0
@@ -276,15 +282,18 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         robot = extract_robot(x)
         block = extract_block(x, block_name)
         assert self._target_center is not None
-        target_x, _ = self._target_center
-        shelf = extract_shelf(x)
+        target_x, target_y = self._target_center
         held_radius = 0.5 * float(np.hypot(block.width, block.height))
         mover_radius = max(robot.base_radius, held_radius)
         held_offset = (block.center[0] - robot.x, block.center[1] - robot.y)
-        transport_block_y = max(
-            block.center[1],
-            shelf.y1 - 0.5 * block.height - PREINSERT_Y_MARGIN,
-        )
+        if self._target_kind == STAGING_TARGET:
+            transport_block_y = target_y
+        else:
+            shelf = extract_shelf(x)
+            transport_block_y = max(
+                block.center[1],
+                shelf.y1 - 0.5 * block.height - PREINSERT_Y_MARGIN,
+            )
         goal = (
             target_x - held_offset[0],
             transport_block_y - held_offset[1],
@@ -527,14 +536,71 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         )
         return (block_name, target, pre_pick, path)
 
-    def _plan_compact_pick(
+    def _select_pick_for_block(
         self,
         x: NDArray,
         block_name: str,
-    ) -> tuple[RobotPose, list[tuple[float, float]]] | None:
+    ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+        robot = extract_robot(x)
+        bounds = self._base_path_bounds(x, robot)
+        path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
+        local_obstacles = self._base_path_obstacles(x, block_name, robot)
+        best_candidate: tuple[
+            float, RobotPose, RobotPose, list[tuple[float, float]]
+        ] | None = None
+        for candidate in pick_base_pose_candidates(x, block_name):
+            pre_pick_x = candidate.x - PRE_PICK_RING_MARGIN * float(np.cos(candidate.theta))
+            pre_pick_y = candidate.y - PRE_PICK_RING_MARGIN * float(np.sin(candidate.theta))
+            if not (
+                bounds[0] <= pre_pick_x <= bounds[1]
+                and bounds[2] <= pre_pick_y <= bounds[3]
+            ):
+                continue
+            pre_pick = _waypoint(
+                robot,
+                pre_pick_x,
+                pre_pick_y,
+                candidate.theta,
+                robot.base_radius,
+                VACUUM_OFF,
+            )
+            path = plan_base_path(
+                (robot.x, robot.y),
+                (pre_pick.x, pre_pick.y),
+                path_obstacles,
+                bounds,
+            )
+            if path is None:
+                continue
+            if not segment_collision_free(
+                (pre_pick.x, pre_pick.y),
+                (candidate.x, candidate.y),
+                local_obstacles,
+                bounds,
+            ):
+                continue
+            candidate_length = path_length(path) + float(
+                np.hypot(candidate.x - pre_pick.x, candidate.y - pre_pick.y)
+            )
+            target = _waypoint(
+                robot,
+                candidate.x,
+                candidate.y,
+                candidate.theta,
+                robot.base_radius,
+                VACUUM_OFF,
+            )
+            if best_candidate is None or candidate_length < best_candidate[0]:
+                best_candidate = (candidate_length, target, pre_pick, path)
+        if best_candidate is None:
+            return None
+        _, target, pre_pick, path = best_candidate
+        return (block_name, target, pre_pick, path)
+
+    def _compact_pick_target(self, x: NDArray, block_name: str) -> RobotPose:
         robot = extract_robot(x)
         block = extract_block(x, block_name)
-        target = _waypoint(
+        return _waypoint(
             robot,
             block.center[0],
             block.center[1]
@@ -543,6 +609,35 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             robot.base_radius,
             VACUUM_OFF,
         )
+
+    def _select_compact_blocker_to_clear(
+        self,
+        x: NDArray,
+        compact_block: str,
+    ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+        shelf = extract_shelf(x)
+        blocker_names = sorted(
+            outside_blocks(x),
+            key=lambda name: float(
+                np.hypot(
+                    extract_block(x, name).center[0] - shelf.opening_center_x,
+                    extract_block(x, name).center[1] - shelf.y1,
+                )
+            ),
+        )
+        for blocker_name in blocker_names:
+            selection = self._select_pick_for_block(x, blocker_name)
+            if selection is not None:
+                return selection
+        return None
+
+    def _plan_compact_pick(
+        self,
+        x: NDArray,
+        block_name: str,
+    ) -> tuple[RobotPose, list[tuple[float, float]]] | None:
+        robot = extract_robot(x)
+        target = self._compact_pick_target(x, block_name)
         obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
         path = plan_base_path(
             (robot.x, robot.y),
@@ -566,18 +661,35 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             self._target_kind = SHELF_TARGET
             self._target_center = slot_centers(x)[0]
             if next_block is None:
+                pre_pick = None
                 target = None
                 path_points = None
             else:
                 selection = self._plan_compact_pick(x, next_block)
                 if selection is None:
-                    target = None
-                    path_points = None
+                    self._phase = "clear_compact"
+                    self._target_kind = STAGING_TARGET
+                    self._target_center = farthest_free_staging_center(x)
+                    clear_selection = self._select_compact_blocker_to_clear(
+                        x, next_block
+                    )
+                    if clear_selection is None:
+                        next_block = None
+                        pre_pick = None
+                        target = None
+                        path_points = None
+                    else:
+                        next_block, target, pre_pick, path_points = clear_selection
                 else:
+                    pre_pick = None
                     target, path_points = selection
         else:
-            self._target_kind = SHELF_TARGET
-            self._target_center = next_free_slot_center(x)
+            if self._phase == "clear_compact":
+                self._target_kind = STAGING_TARGET
+                self._target_center = farthest_free_staging_center(x)
+            else:
+                self._target_kind = SHELF_TARGET
+                self._target_center = next_free_slot_center(x)
             selection = self._select_store_pick(x)
             if selection is None:
                 next_block = None
@@ -599,6 +711,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self._clear_inside_push_monitor()
         self._hold_loss_steps = 0
         self._last_active_block_center = None
+        self._staging_release_active = False
 
         if target is None:
             self._actions = deque()
@@ -736,6 +849,14 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             action[3] = float(np.clip(carry_arm - robot.arm_joint, -DARM_LIM, DARM_LIM))
             return action
 
+        if (
+            self._target_kind == STAGING_TARGET
+            and not self._staging_release_active
+            and robot.arm_joint > carry_arm + ARM_TOL
+        ):
+            action[3] = float(np.clip(carry_arm - robot.arm_joint, -DARM_LIM, DARM_LIM))
+            return action
+
         angle_error = wrap_angle(UP - robot.theta)
         if abs(angle_error) > ANGLE_TOL:
             if not self._holding_actions and self._queue_holding_rotation_to_up(x, block_name):
@@ -748,6 +869,45 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         at_target_x = abs(block_x - target_x) <= POS_TOL
         insert_aligned_x = abs(block_x - target_x) <= INSERT_X_TOL
         deep_enough = block_y >= target_y - target_y_tol
+
+        if self._target_kind == STAGING_TARGET:
+            if (
+                not self._staging_release_active
+                and at_target_x
+                and abs(block_y - target_y) <= POS_TOL
+            ):
+                self._staging_release_active = True
+            if robot.arm_joint > carry_arm + ARM_TOL and (
+                not self._staging_release_active
+                and (
+                abs(block_x - target_x) > POS_TOL or abs(block_y - target_y) > POS_TOL
+                )
+            ):
+                action[3] = float(np.clip(carry_arm - robot.arm_joint, -DARM_LIM, DARM_LIM))
+                return action
+            if (
+                not self._staging_release_active
+                and (not at_target_x or abs(block_y - target_y) > POS_TOL)
+            ):
+                if not self._holding_actions and self._queue_holding_transport(x, block_name):
+                    return self._holding_actions.popleft()
+                action[0] = float(np.clip(target_x - block_x, -DX_LIM, DX_LIM))
+                action[1] = float(np.clip(target_y - block_y, -DY_LIM, DY_LIM))
+                return action
+            staging_release_arm = max(
+                carry_arm, STAGING_RELEASE_ARM_FRACTION * robot.arm_length
+            )
+            if robot.arm_joint < staging_release_arm - ARM_TOL:
+                action[3] = float(
+                    np.clip(staging_release_arm - robot.arm_joint, -DARM_LIM, DARM_LIM)
+                )
+                return action
+            action[4] = VACUUM_OFF
+            self._staging_release_active = False
+            if self._phase == "clear_compact":
+                self._phase = "compact"
+            self._queue_retreat(x)
+            return action
 
         if not is_block_inside_shelf(x, block_name):
             transport_block_y = max(
