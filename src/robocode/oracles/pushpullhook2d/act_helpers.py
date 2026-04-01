@@ -29,6 +29,7 @@ def connecting_waypoints(
         DTH_LIM,
         DARM_LIM,
     ),
+    rotation_direction: str = "clockwise",
 ) -> list[RobotPose]:
     """Linearly interpolate between consecutive key-waypoints.
 
@@ -36,18 +37,28 @@ def connecting_waypoints(
     that requires the most steps given *action_limits*.
 
     Vacuum is snapped to the target waypoint value (not interpolated).
+
+    Args:
+        rotation_direction: ``"clockwise"`` forces visually-clockwise
+            rotation (increasing theta), ``"counterclockwise"`` forces
+            visually-counterclockwise rotation (decreasing theta).
     """
     dx_lim, dy_lim, dth_lim, darm_lim = action_limits
 
     # Pre-adjust all waypoint thetas so that every consecutive pair
-    # has a non-negative theta delta (visually-clockwise rotation).
+    # has a consistent rotation direction.
     adjusted_thetas = [waypoints[0].theta]
     for i in range(1, len(waypoints)):
         prev = adjusted_thetas[-1]
         cur = waypoints[i].theta
-        # Shift cur into [prev, prev + 2π) so the delta is always ≥ 0.
-        while cur < prev:
-            cur += 2 * math.pi
+        if rotation_direction == "clockwise":
+            # Shift cur into [prev, prev + 2π) → delta always ≥ 0.
+            while cur < prev:
+                cur += 2 * math.pi
+        else:
+            # Shift cur into (prev - 2π, prev] → delta always ≤ 0.
+            while cur > prev:
+                cur -= 2 * math.pi
         adjusted_thetas.append(cur)
 
     dense: list[RobotPose] = [waypoints[0]]
@@ -62,7 +73,7 @@ def connecting_waypoints(
             1,
             math.ceil(abs(b.x - a.x) / dx_lim),
             math.ceil(abs(b.y - a.y) / dy_lim),
-            math.ceil(dtheta / dth_lim) if dth_lim > 0 else 1,
+            math.ceil(abs(dtheta) / dth_lim) if dth_lim > 0 else 1,
             math.ceil(abs(b.arm_joint - a.arm_joint) / darm_lim),
         )
         for s in range(1, steps + 1):
