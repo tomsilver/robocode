@@ -35,6 +35,7 @@ from robocode.oracles.pushpullhook2d.obs_helpers import (
     TABLE_Y,
     WORLD_WIDTH,
     RobotPose,
+    both_buttons_pressed,
     buttons_vertically_aligned,
     extract_hook,
     extract_robot,
@@ -329,6 +330,140 @@ class Sweep(Behavior[NDArray, NDArray]):
     def terminated(self, x: NDArray) -> bool:
         """True when the movable button is vertically aligned with target."""
         return buttons_vertically_aligned(x)
+
+    def step(self, x: NDArray) -> NDArray:
+        """Pop next action; re-plan if exhausted but not done."""
+        if not self._actions:
+            self._generate_waypoints(x)
+        return self._actions.popleft()
+
+
+# ---------------------------------------------------------------------------
+# PushPull
+# ---------------------------------------------------------------------------
+
+PUSHPULL_HOOK_THETA = math.pi / 2
+
+
+class PushPull(Behavior[NDArray, NDArray]):
+    """Push or pull the movable button to overlap with the target button.
+
+    Assumes the buttons are already vertically aligned (from Sweep).
+
+    Steps:
+      1. Move vertically down to safe_y, then horizontally to safe_x.
+      2. Rotate counterclockwise until hook theta ≈ π/2.
+      3. Move to pre-push or pre-pull pose.
+      4. Sweep vertically (toward y_min or y_max) to push/pull the button.
+
+    Subgoal:  both buttons pressed (green).
+    Precond:  buttons vertically aligned.
+    """
+
+    def __init__(self) -> None:
+        self.subgoal: Callable[[NDArray], bool] = self.terminated
+        self.precondition: Callable[[NDArray], bool] = self.initializable
+        self.policy: Callable[[NDArray], NDArray] = self.step
+        self._actions: deque[NDArray] = deque()
+
+    def reset(self, x: NDArray) -> None:
+        self._generate_waypoints(x)
+
+    def _generate_waypoints(self, x: NDArray) -> None:
+        robot = extract_robot(x)
+        hook = extract_hook(x)
+
+        mov_y = get_feature(x, "movable_button", "y")
+        tgt_x = get_feature(x, "target_button", "x")
+        tgt_y = get_feature(x, "target_button", "y")
+
+        margin = 0.02
+        min_y = robot.base_radius + margin
+        max_y = TABLE_Y - robot.base_radius - margin
+
+        # ---- 1. Safe position for rotation ----
+        # Centre of the world maximises clearance from walls during rotation.
+        safe_x = WORLD_WIDTH / 2
+        # As high as possible so the hook arm doesn't hit the floor wall.
+        safe_y = max_y
+
+        # ---- 2. Target robot theta for hook at π/2 ----
+        target_robot_theta = robot.theta + (PUSHPULL_HOOK_THETA - hook.theta)
+
+        # ---- 3. Push vs pull ----
+        hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
+        robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
+        hook2robot = hook_pose.inverse * robot_pose
+
+        # After rotation the hook is at θ=π/2.  Compute where the robot
+        # needs to be so the hook arm passes through the button x.
+        # At hook θ=π/2: robot_x = hook_x - h2r.y
+        # We want hook_x ≈ tgt_x  →  robot_x = tgt_x - h2r.y
+        pushpull_robot_x = tgt_x - hook2robot.y
+
+        need_push = mov_y > tgt_y  # button above target → push down
+
+        if need_push:
+            # Pre-push: start near table edge, sweep down.
+            pre_y = max_y
+            sweep_end_y = min_y
+        else:
+            # Pre-pull: start near floor, sweep up.
+            pre_y = min_y
+            sweep_end_y = max_y
+
+        # ---- 4. Build waypoint sequence ----
+        def wp(
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
+        ) -> RobotPose:
+            return RobotPose(
+                x=px,
+                y=py,
+                theta=theta,
+                base_radius=robot.base_radius,
+                arm_joint=arm_joint,
+                arm_length=robot.arm_length,
+                vacuum=vacuum,
+                gripper_height=robot.gripper_height,
+                gripper_width=robot.gripper_width,
+            )
+
+        current = _current_pose(robot)
+
+        key_waypoints = [
+            current,
+            # Move vertically down to safe_y.
+            wp(robot.x, safe_y, robot.theta, robot.arm_joint, 1.0),
+            # Move horizontally to safe_x.
+            wp(safe_x, safe_y, robot.theta, robot.arm_joint, 1.0),
+            # Rotate counterclockwise to target theta (hook → π/2).
+            wp(safe_x, safe_y, target_robot_theta, robot.arm_joint, 1.0),
+            # Move to pre-push/pull x.
+            wp(pushpull_robot_x, safe_y, target_robot_theta, robot.arm_joint, 1.0),
+            # Move to pre-push/pull y.
+            wp(pushpull_robot_x, pre_y, target_robot_theta, robot.arm_joint, 1.0),
+            # Sweep vertically to push/pull the button.
+            wp(pushpull_robot_x, sweep_end_y, target_robot_theta, robot.arm_joint, 1.0),
+        ]
+
+        dense = connecting_waypoints(
+            key_waypoints,
+            action_limits=(DX_LIM, DY_LIM, DTH_LIM, 0.01),
+            rotation_direction="counterclockwise",
+        )
+        self._actions = waypoints_to_actions(dense)
+
+    def initializable(self, x: NDArray) -> bool:
+        """True when the buttons are vertically aligned."""
+        return buttons_vertically_aligned(x)
+
+    def terminated(self, x: NDArray) -> bool:
+        """True when both buttons are pressed (green)."""
+        return both_buttons_pressed(x)
 
     def step(self, x: NDArray) -> NDArray:
         """Pop next action; re-plan if exhausted but not done."""

@@ -190,8 +190,15 @@ def hook_at_target_theta(obs: NDArray, tol: float = 0.05) -> bool:
 
 
 def hook_grasped_and_rotated(obs: NDArray) -> bool:
-    """True when the hook is held and at the target rotation (-π)."""
+    """True when the hook is held and at the target rotation (-π/2)."""
     return holding_hook(obs) and hook_at_target_theta(obs)
+
+
+def hook_at_pushpull_theta(obs: NDArray, tol: float = 0.05) -> bool:
+    """True when the hook's theta is close to π/2 (ready for push/pull)."""
+    hook = extract_hook(obs)
+    diff = math.remainder(hook.theta - math.pi / 2, 2 * math.pi)
+    return abs(diff) < tol
 
 
 def buttons_vertically_aligned(obs: NDArray, tol: float = 0.15) -> bool:
