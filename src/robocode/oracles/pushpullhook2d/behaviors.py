@@ -378,6 +378,67 @@ class PushPull(Behavior[NDArray, NDArray]):
         tgt_y = get_feature(x, "target_button", "y")
 
         margin = 0.02
+        min_x = robot.base_radius + margin
+        max_x = WORLD_WIDTH - robot.base_radius - margin
+
+        hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
+        robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
+        hook2robot = hook_pose.inverse * robot_pose
+
+        # First regrasp the bottom
+        if hook2robot.y > 0:
+            regrasp_h2r = SE2Pose(
+                x=-hook.length_side1 / 2,
+                y=robot.arm_length,
+                theta=-np.pi / 2,
+            )
+        else:
+            regrasp_h2r = SE2Pose(
+                x=-robot.base_radius-hook.width-margin,
+                y=-robot.arm_length - hook.width,
+                theta=np.pi / 2,
+            )
+        regrasp_world = hook_pose * regrasp_h2r
+        middle_pose_1 = SE2Pose(
+            x=regrasp_world.x,
+            y=robot_pose.y,
+            theta=robot_pose.theta,
+        )
+        
+        def wp(
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
+        ) -> RobotPose:
+            return RobotPose(
+                x=px,
+                y=py,
+                theta=theta,
+                base_radius=robot.base_radius,
+                arm_joint=arm_joint,
+                arm_length=robot.arm_length,
+                vacuum=vacuum,
+                gripper_height=robot.gripper_height,
+                gripper_width=robot.gripper_width,
+            )
+
+        current = _current_pose(robot)
+
+        key_waypoints = [
+            current,
+            # Move horizontally to middle x (keep current y / theta).
+            wp(robot_pose.x, robot_pose.y, robot_pose.theta, robot.arm_joint, 0.0),
+            wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.arm_joint, 0.0),
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_joint, 0.0),
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 0.0),
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 1.0),
+        ]
+
+
+
+        margin = 0.02
         min_y = robot.base_radius + margin
         max_y = TABLE_Y - robot.base_radius - margin
 
