@@ -77,6 +77,8 @@ WORLD_MAX_Y = 3.0
 POSE_EPS = 1e-4
 STAGING_OCCUPANCY_TOL = 0.08
 STAGING_AXIS_SEPARATION_TOL = 0.18
+STAGING_RELEASE_SWEEP_X_TOL = 0.32
+STAGING_RELEASE_SWEEP_Y_TOL = 0.32
 
 
 def wrap_angle(theta: float) -> float:
@@ -352,27 +354,22 @@ def staging_slot_centers() -> list[tuple[float, float]]:
 def next_free_staging_center(obs: NDArray) -> tuple[float, float]:
     """Return the next free staging slot."""
     occupied = [extract_block(obs, name).center for name in outside_blocks(obs)]
-    for center in staging_slot_centers():
-        if all(_staging_center_clear_of_occ(center, occ) for occ in occupied):
-            return center
-    return staging_slot_centers()[-1]
+    scored = sorted(
+        staging_slot_centers(),
+        key=lambda center: _staging_center_penalty(center, occupied),
+    )
+    return scored[0]
 
 
 def farthest_free_staging_center(obs: NDArray) -> tuple[float, float]:
     """Return the free staging slot farthest from the shelf opening."""
     occupied = [extract_block(obs, name).center for name in outside_blocks(obs)]
     shelf = extract_shelf(obs)
-    free_centers = [
-        center
-        for center in staging_slot_centers()
-        if all(_staging_center_clear_of_occ(center, occ) for occ in occupied)
-    ]
-    if not free_centers:
-        free_centers = staging_slot_centers()
-    return max(
-        free_centers,
-        key=lambda center: float(
-            np.hypot(center[0] - shelf.opening_center_x, center[1] - shelf.y1)
+    return min(
+        staging_slot_centers(),
+        key=lambda center: (
+            _staging_center_penalty(center, occupied),
+            -float(np.hypot(center[0] - shelf.opening_center_x, center[1] - shelf.y1)),
         ),
     )
 
@@ -389,6 +386,30 @@ def _staging_center_clear_of_occ(
         and dx > STAGING_AXIS_SEPARATION_TOL
         and dy > STAGING_AXIS_SEPARATION_TOL
     )
+
+
+def _staging_center_penalty(
+    center: tuple[float, float],
+    occupied: list[tuple[float, float]],
+) -> float:
+    """Return a penalty for choosing a staging center near occupied blockers."""
+    penalty = 0.0
+    for occ in occupied:
+        dx = abs(center[0] - occ[0])
+        dy = abs(center[1] - occ[1])
+        distance = float(np.hypot(dx, dy))
+        if distance < STAGING_OCCUPANCY_TOL:
+            penalty += 1000.0
+        else:
+            penalty += 1.0 / max(distance, 1e-3)
+        if dx < STAGING_AXIS_SEPARATION_TOL:
+            penalty += 200.0
+        if dy < STAGING_AXIS_SEPARATION_TOL:
+            penalty += 120.0
+        # Avoid choosing a slot whose release sweep would run into an occupied blocker.
+        if dx < STAGING_RELEASE_SWEEP_X_TOL and dy < STAGING_RELEASE_SWEEP_Y_TOL:
+            penalty += 250.0
+    return penalty
 
 
 def rect_pose_from_center(

@@ -73,6 +73,8 @@ INSIDE_PUSH_STUCK_POSITION_EPS = 5e-3
 INSIDE_PUSH_COMMAND_EPS = 1e-2
 HOLD_LOSS_PATIENCE = 1
 HOLD_RECOVERY_MOVE_EPS = 0.01
+STAGING_RELEASE_SAFETY_X = 0.32
+STAGING_RELEASE_SAFETY_Y = 0.32
 
 
 def _robot_pose(robot: RobotPose) -> RobotPose:
@@ -235,6 +237,37 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                     return False
         return True
 
+    def _staging_release_safe(
+        self,
+        x: NDArray,
+        block_name: str,
+        target_center: tuple[float, float],
+    ) -> bool:
+        """Return True when releasing at the staging target should not interfere."""
+        target_x, target_y = target_center
+        for other_name in outside_blocks(x):
+            if other_name == block_name:
+                continue
+            other_x, other_y = extract_block(x, other_name).center
+            if (
+                abs(other_x - target_x) < STAGING_RELEASE_SAFETY_X
+                and abs(other_y - target_y) < STAGING_RELEASE_SAFETY_Y
+            ):
+                return False
+        return True
+
+    def _clear_blocker_cleared(
+        self,
+        x: NDArray,
+        block_name: str,
+    ) -> bool:
+        """Return True when a cleared blocker is far enough from the shelf corridor."""
+        shelf = extract_shelf(x)
+        block_x, block_y = extract_block(x, block_name).center
+        return bool(
+            abs(block_x - shelf.opening_center_x) > 0.6 or block_y < shelf.y1 - 0.35
+        )
+
     def _path_is_stuck(self) -> bool:
         if (
             len(self._recent_positions) < STUCK_WINDOW
@@ -275,6 +308,12 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
     def _store_sort_key(self, x: NDArray, block_name: str) -> tuple[float, float]:
         robot = extract_robot(x)
         block = extract_block(x, block_name)
+        if self._target_kind == SHELF_TARGET and self._target_center is not None:
+            target_x, _ = self._target_center
+            return (
+                abs(block.center[0] - target_x),
+                block.center[1],
+            )
         return (
             block.center[1],
             abs(block.center[0] - robot.x),
@@ -926,6 +965,10 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         deep_enough = block_y >= target_y - target_y_tol
 
         if self._target_kind == STAGING_TARGET:
+            if not self._staging_release_safe(x, block_name, self._target_center):
+                self._target_center = farthest_free_staging_center(x)
+                self._holding_actions.clear()
+                self._staging_release_active = False
             if (
                 not self._staging_release_active
                 and at_target_x
@@ -959,7 +1002,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 return action
             action[4] = VACUUM_OFF
             self._staging_release_active = False
-            if self._phase == "clear_compact":
+            if self._phase == "clear_compact" and self._clear_blocker_cleared(x, block_name):
                 self._phase = "compact"
             self._queue_retreat(x)
             return action
