@@ -23,6 +23,7 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
 )
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     APPROACH_MARGIN,
+    TOOLTIP_OFFSET_SCALE,
     RobotPose,
     WORLD_MAX_X,
     WORLD_MAX_Y,
@@ -185,6 +186,54 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
     def _clear_inside_push_monitor(self) -> None:
         self._recent_inside_push_block_centers.clear()
         self._recent_inside_push_commands.clear()
+
+    def _grasp_extension_collision_free(
+        self,
+        x: NDArray,
+        block_name: str,
+        candidate: RobotPose,
+    ) -> bool:
+        """Return True if arm extension at the grasp pose avoids other outside blocks."""
+        robot = extract_robot(x)
+        sweep_margin = max(0.01, 0.35 * robot.gripper_height) + APPROACH_MARGIN
+
+        def point_in_expanded_block(px: float, py: float, other_name: str) -> bool:
+            other = extract_block(x, other_name)
+            dx = px - other.x
+            dy = py - other.y
+            c = float(np.cos(other.theta))
+            s = float(np.sin(other.theta))
+            local_x = c * dx + s * dy
+            local_y = -s * dx + c * dy
+            return (
+                -sweep_margin <= local_x <= other.width + sweep_margin
+                and -sweep_margin <= local_y <= other.height + sweep_margin
+            )
+
+        theta = candidate.theta
+        start_offset = robot.base_radius + TOOLTIP_OFFSET_SCALE * robot.gripper_width
+        end_offset = robot.arm_length + TOOLTIP_OFFSET_SCALE * robot.gripper_width
+        start = (
+            candidate.x + start_offset * float(np.cos(theta)),
+            candidate.y + start_offset * float(np.sin(theta)),
+        )
+        end = (
+            candidate.x + end_offset * float(np.cos(theta)),
+            candidate.y + end_offset * float(np.sin(theta)),
+        )
+        distance = float(np.hypot(end[0] - start[0], end[1] - start[1]))
+        checks = max(1, int(np.ceil(distance / 0.025)))
+
+        for other_name in outside_blocks(x):
+            if other_name == block_name:
+                continue
+            for idx in range(checks + 1):
+                t = idx / checks
+                px = start[0] + t * (end[0] - start[0])
+                py = start[1] + t * (end[1] - start[1])
+                if point_in_expanded_block(px, py, other_name):
+                    return False
+        return True
 
     def _path_is_stuck(self) -> bool:
         if (
@@ -511,6 +560,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                     robot.base_radius,
                     VACUUM_OFF,
                 )
+                if not self._grasp_extension_collision_free(x, block_name, target):
+                    continue
                 if best_candidate is None or candidate_length < best_candidate[0]:
                     best_candidate = (candidate_length, target, pre_pick, path)
             if best_candidate is None:
@@ -590,6 +641,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 robot.base_radius,
                 VACUUM_OFF,
             )
+            if not self._grasp_extension_collision_free(x, block_name, target):
+                continue
             if best_candidate is None or candidate_length < best_candidate[0]:
                 best_candidate = (candidate_length, target, pre_pick, path)
         if best_candidate is None:
@@ -646,6 +699,8 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             self._base_path_bounds(x, robot),
         )
         if path is None:
+            return None
+        if not self._grasp_extension_collision_free(x, block_name, target):
             return None
         return (target, path)
 
