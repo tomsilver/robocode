@@ -379,7 +379,7 @@ class PrePushPull(Behavior[NDArray, NDArray]):
         hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
         robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
         hook2robot = hook_pose.inverse * robot_pose
-        hook_down_pose = SE2Pose(robot_pose.x, hook_min_y, hook.theta)
+        hook_down_pose = SE2Pose(hook.x, hook_min_y, hook.theta)
         robot_down_pose = hook_down_pose * hook2robot
 
         # First regrasp the bottom
@@ -642,6 +642,178 @@ class Pull(Behavior[NDArray, NDArray]):
             and mov_y > tgt_y
             and hook_ready_for_pushpull(x)
         )
+
+    def terminated(self, x: NDArray) -> bool:
+        """True when both buttons are pressed (green)."""
+        return both_buttons_pressed(x)
+
+    def step(self, x: NDArray) -> NDArray:
+        """Pop next action; switch to sweep or re-plan if exhausted."""
+        if not self._actions:
+            if not self._regrasp_done:
+                self._regrasp_done = True
+                self._generate_sweep_waypoints(x)
+            else:
+                self._generate_sweep_waypoints(x)
+        return self._actions.popleft()
+
+
+# ---------------------------------------------------------------------------
+# Push
+# ---------------------------------------------------------------------------
+
+
+class Push(Behavior[NDArray, NDArray]):
+    """Push the movable button up to overlap with the target button.
+
+    Uses the hook's short arm (at θ=π/2) to push the button upward
+    from below.  The long arm acts as a left wall.
+
+    Steps:
+      1. Re-grasp bottom of hook's long arm.
+      2. Move right (long arm just left of button).
+      3. Move up   (short arm pushes button up to target).
+
+    Subgoal:  both buttons pressed (green).
+    Precond:  buttons vertically aligned, mov_y < tgt_y, hook at θ≈π/2.
+    """
+
+    def __init__(self) -> None:
+        self.subgoal: Callable[[NDArray], bool] = self.terminated
+        self.precondition: Callable[[NDArray], bool] = self.initializable
+        self.policy: Callable[[NDArray], NDArray] = self.step
+        self._actions: deque[NDArray] = deque()
+        self._regrasp_done: bool = False
+
+    def reset(self, x: NDArray) -> None:
+        self._regrasp_done = False
+        self._generate_regrasp_waypoints(x)
+
+    # ------------------------------------------------------------------
+    # phase 1 — re-grasp the bottom of the long arm
+    # ------------------------------------------------------------------
+
+    def _generate_regrasp_waypoints(self, x: NDArray) -> None:
+        robot = extract_robot(x)
+        hook = extract_hook(x)
+
+        margin = 0.05
+        min_y = robot.base_radius + margin
+
+        regrasp_x = hook.x - robot.arm_length
+        regrasp_y = min_y
+
+        def wp(
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
+        ) -> RobotPose:
+            return RobotPose(
+                x=px,
+                y=py,
+                theta=theta,
+                base_radius=robot.base_radius,
+                arm_joint=arm_joint,
+                arm_length=robot.arm_length,
+                vacuum=vacuum,
+                gripper_height=robot.gripper_height,
+                gripper_width=robot.gripper_width,
+            )
+
+        current = _current_pose(robot)
+
+        key_waypoints = [
+            current,
+            # Release vacuum.
+            wp(robot.x, robot.y, robot.theta, robot.arm_joint, 0.0),
+            # Retract arm.
+            wp(robot.x, robot.y, robot.theta, robot.base_radius, 0.0),
+            # Move down to min_y.
+            wp(robot.x, min_y, robot.theta, robot.base_radius, 0.0),
+            # Move to regrasp x (theta → 0).
+            wp(regrasp_x, min_y, 0.0, robot.base_radius, 0.0),
+            # Extend arm to reach hook.
+            wp(regrasp_x, regrasp_y, 0.0, robot.arm_length, 0.0),
+            # Vacuum on — grasp.
+            wp(regrasp_x, regrasp_y, 0.0, robot.arm_length, 1.0),
+        ]
+
+        dense = connecting_waypoints(
+            key_waypoints,
+            action_limits=(DX_LIM, DY_LIM, DTH_LIM, 0.01),
+        )
+        self._actions = waypoints_to_actions(dense)
+
+    # ------------------------------------------------------------------
+    # phase 2 — right, up sweep
+    # ------------------------------------------------------------------
+
+    def _generate_sweep_waypoints(self, x: NDArray) -> None:
+        robot = extract_robot(x)
+        hook = extract_hook(x)
+
+        mov_x = get_feature(x, "movable_button", "x")
+        mov_r = get_feature(x, "movable_button", "radius")
+        tgt_y = get_feature(x, "target_button", "y")
+
+        margin = 0.02
+
+        # Rigid hook–robot offsets (constant while vacuum is on).
+        hook_dx = hook.x - robot.x
+        hook_dy = hook.y - robot.y
+
+        # Step 2: move right (long-arm right edge just left of button).
+        right_hook_x = mov_x - mov_r - margin
+        right_x = right_hook_x - hook_dx
+
+        # Step 3: move up (short arm pushes button to target).
+        up_hook_y = tgt_y
+        up_y = up_hook_y - hook_dy
+
+        def wp(
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
+        ) -> RobotPose:
+            return RobotPose(
+                x=px,
+                y=py,
+                theta=theta,
+                base_radius=robot.base_radius,
+                arm_joint=arm_joint,
+                arm_length=robot.arm_length,
+                vacuum=vacuum,
+                gripper_height=robot.gripper_height,
+                gripper_width=robot.gripper_width,
+            )
+
+        current = _current_pose(robot)
+
+        key_waypoints = [
+            current,
+            # Step 2 — right.
+            wp(right_x, robot.y, robot.theta, robot.arm_joint, 1.0),
+            # Step 3 — up.
+            wp(right_x, up_y, robot.theta, robot.arm_joint, 1.0),
+        ]
+
+        dense = connecting_waypoints(
+            key_waypoints,
+            action_limits=(DX_LIM, DY_LIM, DTH_LIM, 0.01),
+        )
+        self._actions = waypoints_to_actions(dense)
+
+    # ------------------------------------------------------------------
+
+    def initializable(self, x: NDArray) -> bool:
+        """True when mov_y < tgt_y and hook at π/2."""
+        mov_y = get_feature(x, "movable_button", "y")
+        tgt_y = get_feature(x, "target_button", "y")
+        return mov_y < tgt_y and hook_ready_for_pushpull(x)
 
     def terminated(self, x: NDArray) -> bool:
         """True when both buttons are pressed (green)."""
