@@ -374,16 +374,13 @@ class PrePushPull(Behavior[NDArray, NDArray]):
         robot = extract_robot(x)
         hook = extract_hook(x)
 
-        margin = 0.05
-        min_y = robot.base_radius + margin
+        hook_min_y = 0.05
 
         hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
         robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
-        robot2hook = robot_pose.inverse * hook_pose
         hook2robot = hook_pose.inverse * robot_pose
-
-        robot_down_pose = SE2Pose(robot_pose.x, min_y, robot_pose.theta)
-        hook_down_pose = robot_down_pose * robot2hook
+        hook_down_pose = SE2Pose(robot_pose.x, hook_min_y, hook.theta)
+        robot_down_pose = hook_down_pose * hook2robot
 
         # First regrasp the bottom
         if hook2robot.y > 0:
