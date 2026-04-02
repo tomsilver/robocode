@@ -35,6 +35,7 @@ from robocode.oracles.pushpullhook2d.obs_helpers import (
     TABLE_Y,
     WORLD_WIDTH,
     RobotPose,
+    both_buttons_pressed,
     buttons_vertically_aligned,
     extract_hook,
     extract_robot,
@@ -464,4 +465,197 @@ class PrePushPull(Behavior[NDArray, NDArray]):
         """Pop next action; re-plan if exhausted but not done."""
         if not self._actions:
             self._generate_waypoints(x)
+        return self._actions.popleft()
+
+
+# ---------------------------------------------------------------------------
+# Pull
+# ---------------------------------------------------------------------------
+
+
+class Pull(Behavior[NDArray, NDArray]):
+    """Pull the movable button down to overlap with the target button.
+
+    Uses the hook's L-shape at θ=π/2 to catch the movable button from
+    above and pull it downward toward the target.
+
+    Steps:
+      1. Re-grasp bottom of hook's long arm.
+      2. Move left  (robot_x = tgt_x − L2 − arm_length).
+      3. Move up    (hook_y ≥ mov_y + mov_r + hook_width).
+      4. Move right (long arm just left of button as a wall).
+      5. Move down  (short arm pushes button down to target).
+
+    Subgoal:  both buttons pressed (green).
+    Precond:  buttons vertically aligned, mov_y > tgt_y, hook at θ≈π/2.
+    """
+
+    def __init__(self) -> None:
+        self.subgoal: Callable[[NDArray], bool] = self.terminated
+        self.precondition: Callable[[NDArray], bool] = self.initializable
+        self.policy: Callable[[NDArray], NDArray] = self.step
+        self._actions: deque[NDArray] = deque()
+        self._regrasp_done: bool = False
+
+    def reset(self, x: NDArray) -> None:
+        self._regrasp_done = False
+        self._generate_regrasp_waypoints(x)
+
+    # ------------------------------------------------------------------
+    # phase 1 — re-grasp the bottom of the long arm
+    # ------------------------------------------------------------------
+
+    def _generate_regrasp_waypoints(self, x: NDArray) -> None:
+        robot = extract_robot(x)
+        hook = extract_hook(x)
+
+        margin = 0.05
+        min_y = robot.base_radius + margin
+
+        # Target: robot at (hook_x − arm_length, min_y, 0) with arm
+        # extended right so the gripper touches the arm near its bottom.
+        regrasp_x = hook.x - robot.arm_length
+        regrasp_y = min_y
+
+        def wp(
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
+        ) -> RobotPose:
+            return RobotPose(
+                x=px,
+                y=py,
+                theta=theta,
+                base_radius=robot.base_radius,
+                arm_joint=arm_joint,
+                arm_length=robot.arm_length,
+                vacuum=vacuum,
+                gripper_height=robot.gripper_height,
+                gripper_width=robot.gripper_width,
+            )
+
+        current = _current_pose(robot)
+
+        key_waypoints = [
+            current,
+            # Release vacuum.
+            wp(robot.x, robot.y, robot.theta, robot.arm_joint, 0.0),
+            # Retract arm.
+            wp(robot.x, robot.y, robot.theta, robot.base_radius, 0.0),
+            # Move down to min_y.
+            wp(robot.x, min_y, robot.theta, robot.base_radius, 0.0),
+            # Move to regrasp x (theta → 0).
+            wp(regrasp_x, min_y, 0.0, robot.base_radius, 0.0),
+            # Extend arm to reach hook.
+            wp(regrasp_x, regrasp_y, 0.0, robot.arm_length, 0.0),
+            # Vacuum on — grasp.
+            wp(regrasp_x, regrasp_y, 0.0, robot.arm_length, 1.0),
+        ]
+
+        dense = connecting_waypoints(
+            key_waypoints,
+            action_limits=(DX_LIM, DY_LIM, DTH_LIM, 0.01),
+        )
+        self._actions = waypoints_to_actions(dense)
+
+    # ------------------------------------------------------------------
+    # phase 2 — left, up, right, down sweep
+    # ------------------------------------------------------------------
+
+    def _generate_sweep_waypoints(self, x: NDArray) -> None:
+        robot = extract_robot(x)
+        hook = extract_hook(x)
+
+        mov_x = get_feature(x, "movable_button", "x")
+        mov_y = get_feature(x, "movable_button", "y")
+        mov_r = get_feature(x, "movable_button", "radius")
+        tgt_y = get_feature(x, "target_button", "y")
+
+        margin = 0.02
+
+        # Rigid hook–robot offsets (constant while vacuum is on).
+        hook_dx = hook.x - robot.x  # hook_x = robot_x + hook_dx
+        hook_dy = hook.y - robot.y  # hook_y = robot_y + hook_dy
+
+        # Step 2: move left — far enough that the short arm (hook_x + L2)
+        # does NOT reach the button during the upward sweep.
+        left_x = (mov_x - mov_r - margin) - hook.length_side2 - hook_dx
+
+        # Step 3: move up until hook clears button top + width.
+        up_hook_y = mov_y + mov_r + hook.width
+        up_y = up_hook_y - hook_dy
+
+        # Step 4: move right (long-arm right edge just left of button).
+        right_hook_x = mov_x - mov_r - margin
+        right_x = right_hook_x - hook_dx
+
+        # Step 5: move down (short arm pushes button to target).
+        down_hook_y = tgt_y
+        down_y = down_hook_y - hook_dy
+
+        def wp(
+            px: float,
+            py: float,
+            theta: float,
+            arm_joint: float,
+            vacuum: float,
+        ) -> RobotPose:
+            return RobotPose(
+                x=px,
+                y=py,
+                theta=theta,
+                base_radius=robot.base_radius,
+                arm_joint=arm_joint,
+                arm_length=robot.arm_length,
+                vacuum=vacuum,
+                gripper_height=robot.gripper_height,
+                gripper_width=robot.gripper_width,
+            )
+
+        current = _current_pose(robot)
+
+        key_waypoints = [
+            current,
+            # Step 2 — left.
+            wp(left_x, robot.y, robot.theta, robot.arm_joint, 1.0),
+            # Step 3 — up.
+            wp(left_x, up_y, robot.theta, robot.arm_joint, 1.0),
+            # Step 4 — right.
+            wp(right_x, up_y, robot.theta, robot.arm_joint, 1.0),
+            # Step 5 — down.
+            wp(right_x, down_y, robot.theta, robot.arm_joint, 1.0),
+        ]
+
+        dense = connecting_waypoints(
+            key_waypoints,
+            action_limits=(DX_LIM, DY_LIM, DTH_LIM, 0.01),
+        )
+        self._actions = waypoints_to_actions(dense)
+
+    # ------------------------------------------------------------------
+
+    def initializable(self, x: NDArray) -> bool:
+        """True when buttons are aligned, mov_y > tgt_y, hook at π/2."""
+        mov_y = get_feature(x, "movable_button", "y")
+        tgt_y = get_feature(x, "target_button", "y")
+        return (
+            buttons_vertically_aligned(x)
+            and mov_y > tgt_y
+            and hook_ready_for_pushpull(x)
+        )
+
+    def terminated(self, x: NDArray) -> bool:
+        """True when both buttons are pressed (green)."""
+        return both_buttons_pressed(x)
+
+    def step(self, x: NDArray) -> NDArray:
+        """Pop next action; switch to sweep or re-plan if exhausted."""
+        if not self._actions:
+            if not self._regrasp_done:
+                self._regrasp_done = True
+                self._generate_sweep_waypoints(x)
+            else:
+                self._generate_sweep_waypoints(x)
         return self._actions.popleft()
