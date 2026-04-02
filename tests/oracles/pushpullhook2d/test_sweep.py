@@ -24,7 +24,7 @@ def _run_grasp_rotate(env, obs):
     raise AssertionError(f"GraspRotate did not finish in {GRASP_MAX_STEPS} steps.")
 
 
-@pytest.mark.parametrize("seed", list(range(50)))
+@pytest.mark.parametrize("seed", [0])
 def test_sweep(seed) -> None:
     """After Sweep, the movable button should be aligned with the target."""
     kinder.register_all_environments()

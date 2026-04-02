@@ -378,12 +378,16 @@ class PushPull(Behavior[NDArray, NDArray]):
         tgt_y = get_feature(x, "target_button", "y")
 
         margin = 0.02
-        min_x = robot.base_radius + margin
-        max_x = WORLD_WIDTH - robot.base_radius - margin
+        min_y = robot.base_radius + margin
+        max_y = TABLE_Y - robot.base_radius - margin
 
         hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
         robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
+        robot2hook = robot_pose.inverse * hook_pose
         hook2robot = hook_pose.inverse * robot_pose
+
+        robot_down_pose = SE2Pose(robot_pose.x, min_y, robot_pose.theta)
+        hook_down_pose = robot_down_pose * robot2hook
 
         # First regrasp the bottom
         if hook2robot.y > 0:
@@ -394,15 +398,15 @@ class PushPull(Behavior[NDArray, NDArray]):
             )
         else:
             regrasp_h2r = SE2Pose(
-                x=-robot.base_radius-hook.width-margin,
+                x=-hook.length_side1 / 2 - hook.width,
                 y=-robot.arm_length - hook.width,
                 theta=np.pi / 2,
             )
-        regrasp_world = hook_pose * regrasp_h2r
-        middle_pose_1 = SE2Pose(
-            x=regrasp_world.x,
-            y=robot_pose.y,
-            theta=robot_pose.theta,
+        regrasp_world = hook_down_pose * regrasp_h2r
+        middle_pose_1 = robot_down_pose * SE2Pose(
+            x=-robot.arm_length,
+            y=0,
+            theta=0,
         )
         
         def wp(
@@ -430,85 +434,11 @@ class PushPull(Behavior[NDArray, NDArray]):
             current,
             # Move horizontally to middle x (keep current y / theta).
             wp(robot_pose.x, robot_pose.y, robot_pose.theta, robot.arm_joint, 0.0),
+            wp(middle_pose_1.x, robot_pose.y, middle_pose_1.theta, robot.arm_joint, 0.0),
             wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.arm_joint, 0.0),
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_joint, 0.0),
+            wp(middle_pose_1.x, regrasp_world.y, regrasp_world.theta, robot.arm_joint, 0.0),
             wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 0.0),
             wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 1.0),
-        ]
-
-
-
-        margin = 0.02
-        min_y = robot.base_radius + margin
-        max_y = TABLE_Y - robot.base_radius - margin
-
-        # ---- 1. Safe position for rotation ----
-        # Centre of the world maximises clearance from walls during rotation.
-        safe_x = WORLD_WIDTH / 2
-        # As high as possible so the hook arm doesn't hit the floor wall.
-        safe_y = max_y
-
-        # ---- 2. Target robot theta for hook at π/2 ----
-        target_robot_theta = robot.theta + (PUSHPULL_HOOK_THETA - hook.theta)
-
-        # ---- 3. Push vs pull ----
-        hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
-        robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
-        hook2robot = hook_pose.inverse * robot_pose
-
-        # After rotation the hook is at θ=π/2.  Compute where the robot
-        # needs to be so the hook arm passes through the button x.
-        # At hook θ=π/2: robot_x = hook_x - h2r.y
-        # We want hook_x ≈ tgt_x  →  robot_x = tgt_x - h2r.y
-        pushpull_robot_x = tgt_x - hook2robot.y
-
-        need_push = mov_y > tgt_y  # button above target → push down
-
-        if need_push:
-            # Pre-push: start near table edge, sweep down.
-            pre_y = max_y
-            sweep_end_y = min_y
-        else:
-            # Pre-pull: start near floor, sweep up.
-            pre_y = min_y
-            sweep_end_y = max_y
-
-        # ---- 4. Build waypoint sequence ----
-        def wp(
-            px: float,
-            py: float,
-            theta: float,
-            arm_joint: float,
-            vacuum: float,
-        ) -> RobotPose:
-            return RobotPose(
-                x=px,
-                y=py,
-                theta=theta,
-                base_radius=robot.base_radius,
-                arm_joint=arm_joint,
-                arm_length=robot.arm_length,
-                vacuum=vacuum,
-                gripper_height=robot.gripper_height,
-                gripper_width=robot.gripper_width,
-            )
-
-        current = _current_pose(robot)
-
-        key_waypoints = [
-            current,
-            # Move vertically down to safe_y.
-            wp(robot.x, safe_y, robot.theta, robot.arm_joint, 1.0),
-            # Move horizontally to safe_x.
-            wp(safe_x, safe_y, robot.theta, robot.arm_joint, 1.0),
-            # Rotate counterclockwise to target theta (hook → π/2).
-            wp(safe_x, safe_y, target_robot_theta, robot.arm_joint, 1.0),
-            # Move to pre-push/pull x.
-            wp(pushpull_robot_x, safe_y, target_robot_theta, robot.arm_joint, 1.0),
-            # Move to pre-push/pull y.
-            wp(pushpull_robot_x, pre_y, target_robot_theta, robot.arm_joint, 1.0),
-            # Sweep vertically to push/pull the button.
-            wp(pushpull_robot_x, sweep_end_y, target_robot_theta, robot.arm_joint, 1.0),
         ]
 
         dense = connecting_waypoints(
