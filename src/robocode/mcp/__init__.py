@@ -7,11 +7,34 @@ MCP_SERVER_NAME = "robocode-tools"
 # Descriptions shown to the Claude agent so it knows how to call each MCP tool.
 MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
     "render_state": (
-        f"`mcp__{MCP_SERVER_NAME}__render_state(seed=42)` \u2014 renders the "
-        "environment's initial state for a given seed and returns the path to "
-        "a PNG file. Use this to visually understand the spatial layout, "
-        "obstacle placement, and goal positions for a specific seed.\n"
-        "  IMPORTANT: You must call this MCP tool DIRECTLY — MCP tools are "
+        f"`mcp__{MCP_SERVER_NAME}__render_state(seed=42, state=None, "
+        'label="")` \u2014 renders an environment state as a PNG and returns '
+        "the file path.\n"
+        "  Two modes:\n"
+        "  1. **Reset mode** (default): pass `seed` to render the initial "
+        "state after `env.reset(seed=seed)`.\n"
+        "  2. **Arbitrary state mode**: pass `state` as a flat list of floats "
+        "to render any state you want. `seed` is ignored when `state` is "
+        "provided.\n"
+        "  The optional `label` parameter is included in the output filename "
+        'for easier identification (e.g. label="after_grasp").\n'
+        "  Use reset mode to visually understand the spatial layout, obstacle "
+        "placement, and goal positions. Use arbitrary state mode to visualize "
+        "intermediate states during debugging, e.g. after applying actions or "
+        "to verify a planned trajectory.\n"
+        "  How to get a state list:\n"
+        "  - From an existing observation: `obs.tolist()`\n"
+        "  - To inspect/modify named features: use "
+        "`env.observation_space.devectorize(obs)` to get an "
+        "`ObjectCentricState` (a dict of `{Object: feature_array}`), "
+        "modify it, then `env.observation_space.vectorize(ocs).tolist()` "
+        "to convert back.\n"
+        "  - To build a state from scratch: construct an "
+        "`ObjectCentricState(data={obj: np.array([...]), ...}, "
+        "type_features=env.observation_space.type_features)` using the "
+        "objects from `env.observation_space.constant_objects`, then "
+        "vectorize it.\n"
+        "  IMPORTANT: You must call this MCP tool DIRECTLY \u2014 MCP tools are "
         "NOT available inside Task subagents. Call it yourself, then delegate "
         "image reading to a Task subagent: have it Read the PNG, describe the "
         "scene, and return a concise summary. Delete the file when done."
@@ -42,6 +65,20 @@ MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
 
 # List of available MCP tool names.
 MCP_TOOL_NAMES: tuple[str, ...] = tuple(MCP_TOOL_DESCRIPTIONS)
+
+# System prompt suffix appended when MCP tools are available.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "Start by calling render_state to see the environment before writing code. "
+    "When your approach fails, call render_policy to visually diagnose the "
+    "failure BEFORE guessing at fixes. You can also render arbitrary states by "
+    "passing a flat list of floats to render_state's `state` parameter; use "
+    "devectorize/vectorize on env.observation_space to construct or modify "
+    "states with named features. "
+    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
+    "called from inside Task subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a Task subagent."
+)
 
 
 def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
