@@ -206,7 +206,7 @@ def hook_ready_for_pushpull(obs: NDArray) -> bool:
     return holding_hook(obs) and hook_at_pushpull_theta(obs)
 
 
-def buttons_vertically_aligned(obs: NDArray, tol: float = 0.02) -> bool:
+def buttons_vertically_aligned(obs: NDArray, tol: float = 0.1) -> bool:
     """True when the movable button's x is close to the target button's x."""
     mx = get_feature(obs, "movable_button", "x")
     tx = get_feature(obs, "target_button", "x")

@@ -380,7 +380,12 @@ class PrePushPull(Behavior[NDArray, NDArray]):
         robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
         hook2robot = hook_pose.inverse * robot_pose
         hook_down_pose = SE2Pose(hook.x, hook_min_y, hook.theta)
-        robot_down_pose = hook_down_pose * hook2robot
+        robot_down_pose_calculate = hook_down_pose * hook2robot
+        robot_down_pose = SE2Pose(
+            x=robot_down_pose_calculate.x,
+            y=robot_down_pose_calculate.y,
+            theta=robot.theta,
+        )
 
         # First regrasp the bottom
         if hook2robot.y > 0:
