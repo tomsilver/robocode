@@ -1,16 +1,16 @@
-"""Tests for PushPull behavior on PushPullHook2D."""
+"""Tests for PrePushPull behavior on PushPullHook2D."""
 
 import kinder
 import pytest
 from gymnasium.wrappers import RecordVideo
 
-from robocode.oracles.pushpullhook2d.behaviors import GraspRotate, PushPull, Sweep
+from robocode.oracles.pushpullhook2d.behaviors import GraspRotate, PrePushPull, Sweep
 from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/PushPullHook2D-v0"
 GRASP_MAX_STEPS = 500
 SWEEP_MAX_STEPS = 1000
-PUSHPULL_MAX_STEPS = 200
+PREPUSHPULL_MAX_STEPS = 2000
 
 
 def _run_grasp_rotate(env, obs):
@@ -38,8 +38,8 @@ def _run_sweep(env, obs):
 
 
 @pytest.mark.parametrize("seed", [3])
-def test_pushpull(seed) -> None:
-    """After PushPull, both buttons should be pressed."""
+def test_prepushpull(seed) -> None:
+    """After PrePushPull, hook should be held and at theta ~= pi/2."""
     kinder.register_all_environments()
     render_mode = "rgb_array" if MAKE_VIDEOS else None
     env = kinder.make(ENV_ID, render_mode=render_mode)
@@ -54,20 +54,20 @@ def test_pushpull(seed) -> None:
     # Phase 2: Sweep.
     obs = _run_sweep(env, obs)
 
-    # Phase 3: PushPull.
-    behavior = PushPull()
-    assert behavior.initializable(obs), "PushPull precondition not met."
-    assert not behavior.terminated(obs), "PushPull subgoal already satisfied."
+    # Phase 3: PrePushPull.
+    behavior = PrePushPull()
+    assert behavior.initializable(obs), "PrePushPull precondition not met."
+    assert not behavior.terminated(obs), "PrePushPull subgoal already satisfied."
 
     behavior.reset(obs)
-    for s in range(PUSHPULL_MAX_STEPS):
+    for s in range(PREPUSHPULL_MAX_STEPS):
         action = behavior.step(obs)
         obs, _, _, _, _ = env.step(action)
         if behavior.terminated(obs):
-            print(f"PushPull achieved in {s + 1} steps.")
+            print(f"PrePushPull achieved in {s + 1} steps.")
             break
 
-    # assert behavior.terminated(obs), (
-    #     f"PushPull not achieved within {PUSHPULL_MAX_STEPS} steps."
-    # )
+    assert behavior.terminated(obs), (
+        f"PrePushPull not achieved within {PREPUSHPULL_MAX_STEPS} steps."
+    )
     env.close()

@@ -35,12 +35,12 @@ from robocode.oracles.pushpullhook2d.obs_helpers import (
     TABLE_Y,
     WORLD_WIDTH,
     RobotPose,
-    both_buttons_pressed,
     buttons_vertically_aligned,
     extract_hook,
     extract_robot,
     get_feature,
     hook_grasped_and_rotated,
+    hook_ready_for_pushpull,
 )
 from robocode.primitives.behavior import Behavior
 
@@ -345,7 +345,7 @@ class Sweep(Behavior[NDArray, NDArray]):
 PUSHPULL_HOOK_THETA = math.pi / 2
 
 
-class PushPull(Behavior[NDArray, NDArray]):
+class PrePushPull(Behavior[NDArray, NDArray]):
     """Push or pull the movable button to overlap with the target button.
 
     Assumes the buttons are already vertically aligned (from Sweep).
@@ -373,13 +373,8 @@ class PushPull(Behavior[NDArray, NDArray]):
         robot = extract_robot(x)
         hook = extract_hook(x)
 
-        mov_y = get_feature(x, "movable_button", "y")
-        tgt_x = get_feature(x, "target_button", "x")
-        tgt_y = get_feature(x, "target_button", "y")
-
-        margin = 0.02
+        margin = 0.05
         min_y = robot.base_radius + margin
-        max_y = TABLE_Y - robot.base_radius - margin
 
         hook_pose = SE2Pose(hook.x, hook.y, hook.theta)
         robot_pose = SE2Pose(robot.x, robot.y, robot.theta)
@@ -429,16 +424,25 @@ class PushPull(Behavior[NDArray, NDArray]):
             )
 
         current = _current_pose(robot)
+        target_theta = regrasp_world.theta - math.pi  # CCW by π → hook to π/2
 
         key_waypoints = [
             current,
-            # Move horizontally to middle x (keep current y / theta).
-            wp(robot_pose.x, robot_pose.y, robot_pose.theta, robot.arm_joint, 0.0),
-            wp(middle_pose_1.x, robot_pose.y, middle_pose_1.theta, robot.arm_joint, 0.0),
-            wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.arm_joint, 0.0),
-            wp(middle_pose_1.x, regrasp_world.y, regrasp_world.theta, robot.arm_joint, 0.0),
+            # Move down, still holding.
+            wp(robot_down_pose.x, robot_down_pose.y, robot_down_pose.theta, robot.arm_joint, 1.0),
+            # Release hook.
+            wp(robot_down_pose.x, robot_down_pose.y, robot_down_pose.theta, robot.arm_joint, 0.0),
+            # Move to intermediate position.
+            wp(middle_pose_1.x, robot_down_pose.y, middle_pose_1.theta, robot.base_radius, 0.0),
+            wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.base_radius, 0.0),
+            wp(middle_pose_1.x, regrasp_world.y, regrasp_world.theta, robot.base_radius, 0.0),
+            # Extend arm and regrasp.
             wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 0.0),
             wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 1.0),
+            # Retract arm.
+            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.base_radius, 1.0),
+            # Move to safe position and rotate hook to π/2.
+            wp(regrasp_world.x, regrasp_world.y, target_theta, robot.base_radius, 1.0)
         ]
 
         dense = connecting_waypoints(
@@ -453,8 +457,8 @@ class PushPull(Behavior[NDArray, NDArray]):
         return buttons_vertically_aligned(x)
 
     def terminated(self, x: NDArray) -> bool:
-        """True when both buttons are pressed (green)."""
-        return both_buttons_pressed(x)
+        """True when hook is held and at θ≈π/2."""
+        return hook_ready_for_pushpull(x)
 
     def step(self, x: NDArray) -> NDArray:
         """Pop next action; re-plan if exhausted but not done."""
