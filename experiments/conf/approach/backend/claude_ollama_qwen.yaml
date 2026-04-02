@@ -1,0 +1,4 @@
+backend: claude
+model: qwen3.5
+base_url: http://localhost:11434
+auth_token: ollama

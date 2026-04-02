@@ -1,5 +1,9 @@
 """MCP server for robocode debugging tools."""
 
+import json
+import shutil
+from pathlib import Path
+
 # Server name used by FastMCP and to build Claude CLI tool names
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
@@ -47,3 +51,46 @@ MCP_TOOL_NAMES: tuple[str, ...] = tuple(MCP_TOOL_DESCRIPTIONS)
 def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
     """Return Claude CLI tool names (e.g. ``mcp__robocode-tools__render_state``)."""
     return tuple(f"mcp__{MCP_SERVER_NAME}__{t}" for t in tool_names)
+
+
+def setup_mcp_config(
+    sandbox_dir: Path,
+    tool_names: tuple[str, ...],
+    python_cmd: str,
+    env_config_path: str,
+    log_file_path: str,
+) -> Path:
+    """Write MCP server config into ``sandbox_dir/.mcp/``.
+
+    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
+    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
+    """
+    mcp_dir = sandbox_dir / ".mcp"
+    mcp_dir.mkdir(exist_ok=True)
+
+    shutil.copy2(
+        sandbox_dir.parent / "env_config.json",
+        mcp_dir / "env_config.json",
+    )
+
+    # Use a shell wrapper so that stderr (import errors, tracebacks) is also
+    # captured in the log file even if the Python process never reaches main().
+    stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
+    server_cmd = (
+        f"{python_cmd} -m robocode.mcp.server"
+        f" --env-config {env_config_path}"
+        f" --tools {','.join(tool_names)}"
+        f" --log-file {log_file_path}"
+        f" 2>>{stderr_log_path}"
+    )
+    mcp_config = {
+        "mcpServers": {
+            MCP_SERVER_NAME: {
+                "command": "bash",
+                "args": ["-c", server_cmd],
+            }
+        }
+    }
+    config_path = mcp_dir / "mcp_config.json"
+    config_path.write_text(json.dumps(mcp_config, indent=2))
+    return config_path

@@ -1,5 +1,6 @@
 #!/bin/bash
-# Container entrypoint: initialize the network firewall, then run claude.
+# Container entrypoint: initialize the network firewall, then run the
+# agent CLI passed as arguments (claude, opencode, etc.).
 #
 # The firewall requires NET_ADMIN / NET_RAW capabilities:
 #   docker run --cap-add=NET_ADMIN --cap-add=NET_RAW ...
@@ -10,4 +11,4 @@ set -e
 
 sudo /usr/local/bin/init-firewall.sh
 
-exec claude "$@"
+exec "$@"

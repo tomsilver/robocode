@@ -26,6 +26,7 @@ ARG TZ
 ENV TZ="$TZ"
 
 ARG CLAUDE_CODE_VERSION=latest
+ARG OPENCODE_VERSION=latest
 
 # ---------------------------------------------------------------------------
 # System packages
@@ -67,7 +68,8 @@ ENV PATH="$PATH:/usr/local/share/npm-global/bin"
 # ---------------------------------------------------------------------------
 # Claude Code CLI
 # ---------------------------------------------------------------------------
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && npm install -g opencode-ai@${OPENCODE_VERSION}
 
 # ---------------------------------------------------------------------------
 # Firewall script — node user gets passwordless sudo for this one script only
@@ -102,7 +104,7 @@ COPY src/ src/
 RUN uv sync --frozen --python python3.11
 
 # ---------------------------------------------------------------------------
-# Entrypoint: init firewall → exec claude
+# Entrypoint: init firewall, then exec the agent CLI passed as arguments
 # ---------------------------------------------------------------------------
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

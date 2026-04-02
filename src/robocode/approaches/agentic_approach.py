@@ -1,4 +1,4 @@
-"""An approach that uses a Claude agent to generate approach code."""
+"""An approach that uses an LLM coding agent to generate approach code."""
 
 import logging
 import sys
@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
+from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
 from robocode.mcp import MCP_TOOL_DESCRIPTIONS
 from robocode.primitives import PRIMITIVE_DESCRIPTIONS
+from robocode.utils.backends import TOOL_NAMES_PROMPT_SUFFIX, create_backend
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -196,7 +198,7 @@ type, action space, and dynamics.
 
 
 class AgenticApproach(BaseApproach[_ObsType, _ActType]):
-    """An approach that uses a Claude agent to write approach code."""
+    """An approach that uses an LLM coding agent to write approach code."""
 
     def __init__(
         self,
@@ -204,9 +206,10 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         observation_space: Space[_ObsType],
         seed: int,
         primitives: dict[str, Callable[..., Any]],
+        backend: DictConfig,  # Hydra backend config (backend name, model, etc.)
         env_description_path: str | None = None,
-        model: str = "sonnet",
         max_budget_usd: float = 5.0,
+        max_turns: int = 0,
         output_dir: str = ".",
         load_dir: str | None = None,
         use_docker: bool = False,
@@ -224,8 +227,11 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             primitives,
             env_description_path,
         )
-        self._model = model
+        self._backend_cfg = backend
+        self._backend = create_backend(backend)
+        self._model = backend["model"]
         self._max_budget_usd = max_budget_usd
+        self._max_turns = max_turns
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
@@ -303,6 +309,8 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         docker_config: DockerSandboxConfig | None = None
         config: SandboxConfig | None = None
         system_prompt = _SYSTEM_PROMPT
+        if self._backend_cfg.get("base_url"):
+            system_prompt += TOOL_NAMES_PROMPT_SUFFIX
         if self._mcp_tools:
             system_prompt += _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 
@@ -314,6 +322,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                max_turns=self._max_turns,
                 primitive_names=tuple(self._primitives),
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
@@ -328,6 +337,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                max_turns=self._max_turns,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
             )
@@ -344,6 +354,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             result = run_with_rate_limit_retry(
                 docker_config if self._use_docker else None,
                 config if not self._use_docker else None,
+                backend=self._backend,
             )
         finally:
             sandbox_logger.removeHandler(file_handler)

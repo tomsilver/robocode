@@ -1,0 +1,2 @@
+backend: opencode
+model: ollama/qwen3:0.6b
