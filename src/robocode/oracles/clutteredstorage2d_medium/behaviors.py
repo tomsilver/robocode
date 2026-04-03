@@ -1038,22 +1038,91 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self,
         x: NDArray,
         block_name: str,
-    ) -> tuple[RobotPose, list[tuple[float, float]]] | None:
+    ) -> (
+        tuple[RobotPose, list[tuple[float, float]] | None, list[RobotPose] | None]
+        | None
+    ):
         planning_state = extract_planning_state(x)
         robot = extract_robot(x)
         target = self._compact_pick_target(x, block_name)
+        bounds = self._base_path_bounds(x, robot)
         obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
+        start_cfg = self._robot_config(planning_state)
+        active_obstacles = [
+            (cx, cy, radius)
+            for cx, cy, radius in obstacles
+            if np.hypot(start_cfg.x - cx, start_cfg.y - cy) >= radius - 1e-6
+        ]
+        block = extract_block(x, block_name)
+        block_center_x, block_center_y = block.center
+        block_center_pose = Pose2D(block_center_x, block_center_y, block.theta)
+        target_pose = Pose2D(target.x, target.y, target.theta)
+        relative_pose = compose_pose(invert_pose(block_center_pose), target_pose)
+        try:
+            grasp_waypoints = self._grasp_motion_planner.plan_crv_grasp(
+                planning_state,
+                block_name,
+                self._grasp_motion_planner.RelativeGraspPose(
+                    relative_pose.x,
+                    relative_pose.y,
+                    relative_pose.theta,
+                ),
+                robot.arm_length,
+                action_limits=self._planner_action_limits(),
+                bounds=bounds,
+                collision_fn=lambda cfg: not self._point_collision_free(
+                    (cfg.x, cfg.y), active_obstacles, bounds
+                ),
+                segment_collision_free_fn=lambda _start, _end: True,
+                extension_collision_free_fn=lambda target_name, grasp_pose: (
+                    self._grasp_extension_collision_free(
+                        x,
+                        target_name,
+                        _waypoint(
+                            robot,
+                            grasp_pose.x,
+                            grasp_pose.y,
+                            grasp_pose.theta,
+                            grasp_pose.arm_joint,
+                            grasp_pose.vacuum,
+                        ),
+                    )
+                ),
+                suction_success_fn=lambda target_name, grasp_pose, arm_length: (
+                    self._grasp_hits_target(
+                        x,
+                        target_name,
+                        grasp_pose.x,
+                        grasp_pose.y,
+                        grasp_pose.theta,
+                        arm_length,
+                    )
+                ),
+                pre_grasp_margin=0.0,
+                seed=self._planner_seed(),
+            )
+            return (
+                target,
+                None,
+                self._grasp_waypoints_to_robot_poses(robot, grasp_waypoints),
+            )
+        except (
+            self._grasp_motion_planner.SuctionFailedEmptySpaceError,
+            self._grasp_motion_planner.SuctionFailedNoCollisionFreePathError,
+        ):
+            pass
+
         path = self._plan_base_configs(
             planning_state,
             self._config_from_pose(target.x, target.y, target.theta),
             obstacles,
-            self._base_path_bounds(x, robot),
+            bounds,
         )
         if path is None:
             return None
         if not self._grasp_extension_collision_free(x, block_name, target):
             return None
-        return (target, [(cfg.x, cfg.y) for cfg in path])
+        return (target, [(cfg.x, cfg.y) for cfg in path], None)
 
     def _generate_pick_plan(self, x: NDArray) -> None:
         self._sync_phase(x)
@@ -1072,7 +1141,12 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 path_points = None
             else:
                 compact_selection: (
-                    tuple[RobotPose, list[tuple[float, float]]] | None
+                    tuple[
+                        RobotPose,
+                        list[tuple[float, float]] | None,
+                        list[RobotPose] | None,
+                    ]
+                    | None
                 ) = self._plan_compact_pick(x, next_block)
                 if compact_selection is None:
                     self._phase = "clear_compact"
@@ -1088,8 +1162,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                         next_block, target, grasp_waypoints = clear_selection
                         path_points = None
                 else:
-                    target, path_points = compact_selection
-                    grasp_waypoints = None
+                    target, path_points, grasp_waypoints = compact_selection
         else:
             if self._phase == "clear_compact":
                 self._target_kind = STAGING_TARGET
