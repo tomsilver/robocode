@@ -1,8 +1,11 @@
 """Tests for Pull behavior on PushPullHook2D."""
 
+from typing import Any
+
 import kinder
 import pytest
 from gymnasium.wrappers import RecordVideo
+from numpy.typing import NDArray
 
 from robocode.oracles.pushpullhook2d.behaviors import (
     GraspRotate,
@@ -19,7 +22,9 @@ PREPUSHPULL_MAX_STEPS = 2000
 PULL_MAX_STEPS = 2000
 
 
-def _run_behavior(env, obs, behavior, max_steps, name):
+def _run_behavior(
+    env: Any, obs: NDArray, behavior: Any, max_steps: int, name: str
+) -> NDArray:
     """Run a behavior until terminated or max_steps."""
     assert behavior.initializable(obs), f"{name} precondition not met."
     behavior.reset(obs)
@@ -48,9 +53,7 @@ def test_pull(seed) -> None:
     obs = _run_behavior(env, obs, Sweep(), SWEEP_MAX_STEPS, "Sweep")
 
     # Phase 3: PrePushPull.
-    obs = _run_behavior(
-        env, obs, PrePushPull(), PREPUSHPULL_MAX_STEPS, "PrePushPull"
-    )
+    obs = _run_behavior(env, obs, PrePushPull(), PREPUSHPULL_MAX_STEPS, "PrePushPull")
 
     # Phase 4: Pull.
     behavior = Pull()
@@ -65,7 +68,5 @@ def test_pull(seed) -> None:
             print(f"Pull achieved in {s + 1} steps.")
             break
 
-    assert behavior.terminated(obs), (
-        f"Pull not achieved within {PULL_MAX_STEPS} steps."
-    )
+    assert behavior.terminated(obs), f"Pull not achieved within {PULL_MAX_STEPS} steps."
     env.close()

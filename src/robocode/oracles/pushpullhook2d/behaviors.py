@@ -21,13 +21,13 @@ from collections import deque
 from typing import Callable
 
 import numpy as np
-from numpy.typing import NDArray
 from kinder.envs.geom2d.structs import SE2Pose
+from numpy.typing import NDArray
 
 from robocode.oracles.pushpullhook2d.act_helpers import (
+    DTH_LIM,
     DX_LIM,
     DY_LIM,
-    DTH_LIM,
     connecting_waypoints,
     waypoints_to_actions,
 )
@@ -148,15 +148,32 @@ class GraspRotate(Behavior[NDArray, NDArray]):
 
         travel_waypoints = [
             current,
-            wp(desired_pose.x, desired_pose.y, desired_pose.theta, robot.arm_joint, robot.vacuum)
+            wp(
+                desired_pose.x,
+                desired_pose.y,
+                desired_pose.theta,
+                robot.arm_joint,
+                robot.vacuum,
+            ),
         ]
-
 
         key_waypoints = travel_waypoints + [
             # Extend arm to reach hook
-            wp(desired_pose.x, desired_pose.y, desired_pose.theta, robot.arm_length, 0.0),
+            wp(
+                desired_pose.x,
+                desired_pose.y,
+                desired_pose.theta,
+                robot.arm_length,
+                0.0,
+            ),
             # Vacuum ON — grasp hook
-            wp(desired_pose.x, desired_pose.y, desired_pose.theta, robot.arm_length, 1.0),
+            wp(
+                desired_pose.x,
+                desired_pose.y,
+                desired_pose.theta,
+                robot.arm_length,
+                1.0,
+            ),
             # Retract arm (pull hook close)
             wp(safe_pose.x, safe_pose.y, desired_pose.theta, robot.arm_length, 1.0),
             # Move to rotation height
@@ -241,7 +258,7 @@ class Sweep(Behavior[NDArray, NDArray]):
             )
         else:
             regrasp_h2r = SE2Pose(
-                x=-robot.base_radius-hook.width-margin,
+                x=-robot.base_radius - hook.width - margin,
                 y=-robot.arm_length - hook.width,
                 theta=np.pi / 2,
             )
@@ -251,7 +268,7 @@ class Sweep(Behavior[NDArray, NDArray]):
             y=robot_pose.y,
             theta=robot_pose.theta,
         )
-        
+
         def wp(
             px: float,
             py: float,
@@ -277,15 +294,43 @@ class Sweep(Behavior[NDArray, NDArray]):
             current,
             # Move horizontally to middle x (keep current y / theta).
             wp(robot_pose.x, robot_pose.y, robot_pose.theta, robot.arm_joint, 0.0),
-            wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.arm_joint, 0.0),
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_joint, 0.0),
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 0.0),
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 1.0),
+            wp(
+                middle_pose_1.x,
+                middle_pose_1.y,
+                middle_pose_1.theta,
+                robot.arm_joint,
+                0.0,
+            ),
+            wp(
+                regrasp_world.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.arm_joint,
+                0.0,
+            ),
+            wp(
+                regrasp_world.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.arm_length,
+                0.0,
+            ),
+            wp(
+                regrasp_world.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.arm_length,
+                1.0,
+            ),
         ]
 
         # Sweep direction: push button toward target.
         sweep_dir = 1.0 if tgt_x > mov_x else -1.0
-        pre_sweep_hook_x = mov_x - (mov_r + margin) if tgt_x > mov_x else mov_x + (mov_r + margin + hook.width)
+        pre_sweep_hook_x = (
+            mov_x - (mov_r + margin)
+            if tgt_x > mov_x
+            else mov_x + (mov_r + margin + hook.width)
+        )
         pre_sweep_hook_pose = SE2Pose(pre_sweep_hook_x, hook.y, hook.theta)
         hook2robot = hook_pose.inverse * robot_pose
         pre_sweep_robot_pose = pre_sweep_hook_pose * regrasp_h2r
@@ -406,7 +451,7 @@ class PrePushPull(Behavior[NDArray, NDArray]):
             y=0,
             theta=0,
         )
-        
+
         def wp(
             px: float,
             py: float,
@@ -432,20 +477,68 @@ class PrePushPull(Behavior[NDArray, NDArray]):
         key_waypoints = [
             current,
             # Move down, still holding.
-            wp(robot_down_pose.x, robot_down_pose.y, robot_down_pose.theta, robot.arm_joint, 1.0),
+            wp(
+                robot_down_pose.x,
+                robot_down_pose.y,
+                robot_down_pose.theta,
+                robot.arm_joint,
+                1.0,
+            ),
             # Release hook.
-            wp(robot_down_pose.x, robot_down_pose.y, robot_down_pose.theta, robot.arm_joint, 0.0),
+            wp(
+                robot_down_pose.x,
+                robot_down_pose.y,
+                robot_down_pose.theta,
+                robot.arm_joint,
+                0.0,
+            ),
             # Move to intermediate position.
-            wp(middle_pose_1.x, robot_down_pose.y, middle_pose_1.theta, robot.base_radius, 0.0),
-            wp(middle_pose_1.x, middle_pose_1.y, middle_pose_1.theta, robot.base_radius, 0.0),
-            wp(middle_pose_1.x, regrasp_world.y, regrasp_world.theta, robot.base_radius, 0.0),
+            wp(
+                middle_pose_1.x,
+                robot_down_pose.y,
+                middle_pose_1.theta,
+                robot.base_radius,
+                0.0,
+            ),
+            wp(
+                middle_pose_1.x,
+                middle_pose_1.y,
+                middle_pose_1.theta,
+                robot.base_radius,
+                0.0,
+            ),
+            wp(
+                middle_pose_1.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.base_radius,
+                0.0,
+            ),
             # Extend arm and regrasp.
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 0.0),
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.arm_length, 1.0),
+            wp(
+                regrasp_world.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.arm_length,
+                0.0,
+            ),
+            wp(
+                regrasp_world.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.arm_length,
+                1.0,
+            ),
             # Retract arm.
-            wp(regrasp_world.x, regrasp_world.y, regrasp_world.theta, robot.base_radius, 1.0),
+            wp(
+                regrasp_world.x,
+                regrasp_world.y,
+                regrasp_world.theta,
+                robot.base_radius,
+                1.0,
+            ),
             # Move to safe position and rotate hook to π/2.
-            wp(regrasp_world.x, regrasp_world.y, target_theta, robot.base_radius, 1.0)
+            wp(regrasp_world.x, regrasp_world.y, target_theta, robot.base_radius, 1.0),
         ]
 
         dense = connecting_waypoints(

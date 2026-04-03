@@ -1,8 +1,11 @@
 """Tests for Sweep behavior on PushPullHook2D."""
 
+from typing import Any
+
 import kinder
 import pytest
 from gymnasium.wrappers import RecordVideo
+from numpy.typing import NDArray
 
 from robocode.oracles.pushpullhook2d.behaviors import GraspRotate, Sweep
 from tests.conftest import MAKE_VIDEOS
@@ -12,7 +15,7 @@ GRASP_MAX_STEPS = 500
 SWEEP_MAX_STEPS = 300
 
 
-def _run_grasp_rotate(env, obs):
+def _run_grasp_rotate(env: Any, obs: NDArray) -> NDArray:
     """Run GraspRotate to set up the hook for sweeping."""
     behavior = GraspRotate()
     assert behavior.initializable(obs), "GraspRotate precondition not met."
@@ -54,5 +57,7 @@ def test_sweep(seed) -> None:
             print(f"Sweep achieved in {s + 1} steps.")
             break
 
-    assert behavior.terminated(obs), f"Sweep not achieved within {SWEEP_MAX_STEPS} steps."
+    assert behavior.terminated(
+        obs
+    ), f"Sweep not achieved within {SWEEP_MAX_STEPS} steps."
     env.close()

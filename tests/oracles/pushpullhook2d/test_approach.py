@@ -12,7 +12,9 @@ ENV_ID = "kinder/PushPullHook2D-v0"
 MAX_STEPS = 2500
 
 
-@pytest.mark.parametrize("seed", list(range(3)))  # Test on multiple seeds for robustness.
+@pytest.mark.parametrize(
+    "seed", list(range(3))
+)  # Test on multiple seeds for robustness.
 def test_approach(seed) -> None:
     """The oracle approach should press both buttons."""
     kinder.register_all_environments()
@@ -33,7 +35,7 @@ def test_approach(seed) -> None:
     for s in range(MAX_STEPS):
         action = approach.step()
         obs, reward, terminated, truncated, info = env.step(action)
-        approach.update(obs, reward, terminated or truncated, info)
+        approach.update(obs, float(reward), terminated or truncated, info)
 
         if both_buttons_pressed(obs):
             print(f"seed={seed}: solved in {s + 1} steps.")
