@@ -574,6 +574,7 @@ class Pull(Behavior[NDArray, NDArray]):
         mov_y = get_feature(x, "movable_button", "y")
         mov_r = get_feature(x, "movable_button", "radius")
         tgt_y = get_feature(x, "target_button", "y")
+        tgt_x = get_feature(x, "target_button", "x")
 
         margin = 0.02
 
@@ -590,7 +591,7 @@ class Pull(Behavior[NDArray, NDArray]):
         up_y = up_hook_y - hook_dy
 
         # Step 4: move right (long-arm right edge just left of button).
-        right_hook_x = mov_x - mov_r - margin
+        right_hook_x = tgt_x - mov_r - margin - hook.width
         right_x = right_hook_x - hook_dx
 
         # Step 5: move down (short arm pushes button to target).
