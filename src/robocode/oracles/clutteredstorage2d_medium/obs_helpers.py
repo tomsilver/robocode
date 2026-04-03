@@ -212,12 +212,6 @@ def _base_and_features(name: str) -> tuple[int, list[str]]:
     return LAYOUT[name]
 
 
-def get_feature(obs: NDArray, name: str, feature: str) -> float:
-    """Get a feature value by object name and feature name."""
-    base, features = _base_and_features(name)
-    return float(obs[base + features.index(feature)])
-
-
 def rotate_vector(x: float, y: float, theta: float) -> tuple[float, float]:
     """Rotate a vector by *theta*."""
     return (
@@ -405,47 +399,6 @@ def extract_planning_state(obs: NDArray) -> CRVOraclePlanningState:
     )
 
 
-def planning_outside_blocks(state: CRVOraclePlanningState) -> list[str]:
-    """Return block names outside the shelf in the planning view."""
-    return [name for name, block in state.blocks.items() if not block.inside_shelf]
-
-
-def planning_inside_blocks(state: CRVOraclePlanningState) -> list[str]:
-    """Return block names already inside the shelf in the planning view."""
-    return [name for name, block in state.blocks.items() if block.inside_shelf]
-
-
-def planning_block_center(
-    state: CRVOraclePlanningState, block_name: str
-) -> tuple[float, float]:
-    """Return a block center from the planning view."""
-    return state.blocks[block_name].center
-
-
-def planning_tool_tip_pose(state: CRVOraclePlanningState) -> Pose2D:
-    """Return the tool-tip pose from the planning view."""
-    robot = state.robot
-    offset = robot.arm_joint + TOOLTIP_OFFSET_SCALE * robot.gripper_width
-    dx = offset * float(np.cos(robot.theta))
-    dy = offset * float(np.sin(robot.theta))
-    return Pose2D(robot.x + dx, robot.y + dy, robot.theta)
-
-
-def choose_next_block(obs: NDArray) -> str | None:
-    """Choose the next outside block to store."""
-    candidates = outside_blocks(obs)
-    if not candidates:
-        return None
-    robot = extract_robot(obs)
-    return min(
-        candidates,
-        key=lambda name: (
-            extract_block(obs, name).center[1],
-            abs(extract_block(obs, name).center[0] - robot.x),
-        ),
-    )
-
-
 def slot_centers(obs: NDArray) -> list[tuple[float, float]]:
     """Return deep shelf slot centers ordered from deepest to shallowest."""
     shelf = extract_shelf(obs)
@@ -476,16 +429,6 @@ def next_free_slot_center(obs: NDArray) -> tuple[float, float]:
 def staging_slot_centers() -> list[tuple[float, float]]:
     """Return temporary staging slot centers outside the shelf."""
     return [(1.20, 1.20), (2.30, 1.05), (3.45, 1.25)]
-
-
-def next_free_staging_center(obs: NDArray) -> tuple[float, float]:
-    """Return the next free staging slot."""
-    occupied = [extract_block(obs, name).center for name in outside_blocks(obs)]
-    scored = sorted(
-        staging_slot_centers(),
-        key=lambda center: _staging_center_penalty(center, occupied),
-    )
-    return scored[0]
 
 
 def farthest_free_staging_center(obs: NDArray) -> tuple[float, float]:
@@ -581,13 +524,3 @@ def pick_base_pose_candidates(obs: NDArray, block_name: str) -> list[Pose2D]:
         if in_world_bounds(robot, pose.x, pose.y, APPROACH_MARGIN):
             candidates.append(pose)
     return candidates
-
-
-def desired_place_block_pose(obs: NDArray, block_name: str) -> RectPose:
-    """Return the target pose for the held block inside the shelf."""
-    robot = extract_robot(obs)
-    held = extract_block(obs, block_name)
-    slot_x, slot_y = next_free_slot_center(obs)
-    relative_theta = wrap_angle(held.theta - tool_tip_pose(robot).theta)
-    target_theta = wrap_angle((np.pi / 2) + relative_theta)
-    return rect_pose_from_center(slot_x, slot_y, held.width, held.height, target_theta)
