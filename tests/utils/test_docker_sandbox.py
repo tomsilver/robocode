@@ -85,7 +85,7 @@ def _run_in_container(
     repo_root = _find_repo_root()
 
     # Create a filtered copy of src/ (oracles stripped).
-    import tempfile
+    import tempfile  # pylint: disable=import-outside-toplevel
 
     tmp_dir = tempfile.mkdtemp(prefix="robocode-test-src-")
     filtered_src = Path(tmp_dir) / "src"
@@ -122,7 +122,7 @@ def _run_in_container(
             check=False,
         )
     finally:
-        import shutil
+        import shutil  # pylint: disable=import-outside-toplevel
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

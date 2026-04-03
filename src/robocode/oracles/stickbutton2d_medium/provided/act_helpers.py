@@ -11,8 +11,7 @@ from collections import deque
 
 import numpy as np
 from numpy.typing import NDArray
-
-from obs_helpers import RobotPose
+from obs_helpers import RobotPose  # type: ignore[import-not-found]
 
 # Default per-step limits (matching the StickButton2D action space).
 DX_LIM = 0.05
