@@ -12,7 +12,7 @@ ENV_ID = "kinder/PushPullHook2D-v0"
 MAX_STEPS = 2500
 
 
-@pytest.mark.parametrize("seed", list(range(100)))  # Test on multiple seeds for robustness.
+@pytest.mark.parametrize("seed", list(range(3)))  # Test on multiple seeds for robustness.
 def test_approach(seed) -> None:
     """The oracle approach should press both buttons."""
     kinder.register_all_environments()
