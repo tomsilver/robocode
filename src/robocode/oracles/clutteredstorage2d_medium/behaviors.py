@@ -22,6 +22,7 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     APPROACH_MARGIN,
     TOOLTIP_OFFSET_SCALE,
+    Pose2D,
     WORLD_MAX_X,
     WORLD_MAX_Y,
     WORLD_MIN_X,
@@ -29,6 +30,7 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     CRVOraclePlanningState,
     RobotPose,
     all_blocks_inside_shelf,
+    compose_pose,
     extract_block,
     extract_planning_state,
     extract_robot,
@@ -42,8 +44,12 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     pick_base_pose_candidates,
     slot_centers,
     wrap_angle,
+    invert_pose,
 )
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
+from robocode.primitives import (
+    crv_motion_planning_grasp as crv_motion_planning_grasp_module,
+)
 from robocode.primitives.behavior import Behavior
 
 ANGLE_TOL = 0.05
@@ -126,6 +132,9 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self.policy: Callable[[NDArray], NDArray] = self.step
         self._motion_planner = (primitives or {}).get(
             "crv_motion_planning", crv_motion_planning_module
+        )
+        self._grasp_motion_planner = (primitives or {}).get(
+            "crv_motion_planning_grasp", crv_motion_planning_grasp_module
         )
         self._planner_rng = np.random.default_rng(seed)
         self._actions: deque[NDArray] = deque()
@@ -382,6 +391,52 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             )
             for cfg in path
         ]
+
+    def _grasp_waypoints_to_robot_poses(
+        self,
+        robot: RobotPose,
+        waypoints: list[Any],
+    ) -> list[RobotPose]:
+        """Convert generic grasp-planner waypoints into oracle robot poses."""
+        return [
+            _waypoint(
+                robot,
+                waypoint.x,
+                waypoint.y,
+                waypoint.theta,
+                waypoint.arm_joint,
+                waypoint.vacuum,
+            )
+            for waypoint in waypoints
+        ]
+
+    def _grasp_waypoint_path_length(self, waypoints: list[Any]) -> float:
+        """Return the base-motion path length of a grasp waypoint sequence."""
+        if len(waypoints) < 2:
+            return 0.0
+        return float(
+            sum(
+                np.hypot(
+                    waypoints[idx].x - waypoints[idx - 1].x,
+                    waypoints[idx].y - waypoints[idx - 1].y,
+                )
+                for idx in range(1, len(waypoints))
+            )
+        )
+
+    def _robot_waypoint_path_length(self, waypoints: list[RobotPose]) -> float:
+        """Return the base-motion path length of robot waypoints."""
+        if len(waypoints) < 2:
+            return 0.0
+        return float(
+            sum(
+                np.hypot(
+                    waypoints[idx].x - waypoints[idx - 1].x,
+                    waypoints[idx].y - waypoints[idx - 1].y,
+                )
+                for idx in range(1, len(waypoints))
+            )
+        )
 
     def _base_path_bounds(
         self,
@@ -668,17 +723,103 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         self,
         x: NDArray,
         block_name: str,
-    ) -> tuple[float, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+    ) -> tuple[float, RobotPose, list[RobotPose]] | None:
         """Return the shortest valid pick plan for a single outside block."""
         planning_state = extract_planning_state(x)
         robot = extract_robot(x)
         bounds = self._base_path_bounds(x, robot)
         path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
         local_obstacles = self._base_path_obstacles(x, block_name, robot)
-        best_candidate: (
-            tuple[float, RobotPose, RobotPose, list[tuple[float, float]]] | None
-        ) = None
+        start_cfg = self._robot_config(planning_state)
+        active_path_obstacles = [
+            (cx, cy, radius)
+            for cx, cy, radius in path_obstacles
+            if np.hypot(start_cfg.x - cx, start_cfg.y - cy) >= radius - 1e-6
+        ]
+        best_candidate: tuple[float, RobotPose, list[RobotPose]] | None = None
 
+        for candidate in pick_base_pose_candidates(x, block_name):
+            target = _waypoint(
+                robot,
+                candidate.x,
+                candidate.y,
+                candidate.theta,
+                robot.base_radius,
+                VACUUM_OFF,
+            )
+            block = extract_block(x, block_name)
+            block_center_x, block_center_y = block.center
+            block_center_pose = Pose2D(block_center_x, block_center_y, block.theta)
+            target_pose = Pose2D(candidate.x, candidate.y, candidate.theta)
+            relative_pose = compose_pose(invert_pose(block_center_pose), target_pose)
+            try:
+                grasp_waypoints = self._grasp_motion_planner.plan_crv_grasp(
+                    planning_state,
+                    block_name,
+                    self._grasp_motion_planner.RelativeGraspPose(
+                        relative_pose.x,
+                        relative_pose.y,
+                        relative_pose.theta,
+                    ),
+                    robot.arm_length,
+                    action_limits=self._planner_action_limits(),
+                    bounds=bounds,
+                    collision_fn=lambda cfg: not self._point_collision_free(
+                        (cfg.x, cfg.y), active_path_obstacles, bounds
+                    ),
+                    segment_collision_free_fn=lambda start, end: segment_collision_free(
+                        start,
+                        end,
+                        local_obstacles,
+                        bounds,
+                    ),
+                    extension_collision_free_fn=lambda target_name, grasp_pose: (
+                        self._grasp_extension_collision_free(
+                            x,
+                            target_name,
+                            _waypoint(
+                                robot,
+                                grasp_pose.x,
+                                grasp_pose.y,
+                                grasp_pose.theta,
+                                grasp_pose.arm_joint,
+                                grasp_pose.vacuum,
+                            ),
+                        )
+                    ),
+                    suction_success_fn=lambda target_name, grasp_pose, arm_length: (
+                        self._grasp_hits_target(
+                            x,
+                            target_name,
+                            grasp_pose.x,
+                            grasp_pose.y,
+                            grasp_pose.theta,
+                            arm_length,
+                        )
+                    ),
+                    pre_grasp_margin=PRE_PICK_RING_MARGIN,
+                    seed=self._planner_seed(),
+                )
+            except (
+                self._grasp_motion_planner.SuctionFailedEmptySpaceError,
+                self._grasp_motion_planner.SuctionFailedNoCollisionFreePathError,
+            ):
+                continue
+
+            robot_waypoints = self._grasp_waypoints_to_robot_poses(
+                robot, grasp_waypoints
+            )
+            candidate_length = self._grasp_waypoint_path_length(grasp_waypoints)
+            if best_candidate is None or candidate_length < best_candidate[0]:
+                best_candidate = (candidate_length, target, robot_waypoints)
+
+        if best_candidate is not None:
+            return best_candidate
+
+        # Fallback to the legacy in-behavior grasp construction when the new
+        # grasp primitive rejects every candidate. This preserves existing
+        # oracle coverage while still preferring the primitive whenever it can
+        # produce a safe plan.
         for candidate in pick_base_pose_candidates(x, block_name):
             pre_pick = self._pre_pick_pose(robot, candidate)
             if not (
@@ -716,28 +857,112 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             candidate_length = path_length([(cfg.x, cfg.y) for cfg in path]) + float(
                 np.hypot(candidate.x - pre_pick.x, candidate.y - pre_pick.y)
             )
-            if best_candidate is None or candidate_length < best_candidate[0]:
-                best_candidate = (
-                    candidate_length,
-                    target,
-                    pre_pick,
-                    [(cfg.x, cfg.y) for cfg in path],
+            carry_arm = max(robot.base_radius, CARRY_ARM_FRACTION * robot.arm_length)
+            key_waypoints = [_robot_pose(robot)]
+            if robot.arm_joint > robot.base_radius + ARM_TOL:
+                key_waypoints.append(
+                    _waypoint(
+                        robot,
+                        robot.x,
+                        robot.y,
+                        robot.theta,
+                        robot.base_radius,
+                        VACUUM_OFF,
+                    )
                 )
+            key_waypoints.append(
+                _waypoint(
+                    robot,
+                    key_waypoints[-1].x,
+                    key_waypoints[-1].y,
+                    target.theta,
+                    robot.base_radius,
+                    VACUUM_OFF,
+                )
+            )
+            for path_x, path_y in [(cfg.x, cfg.y) for cfg in path][1:]:
+                key_waypoints.append(
+                    _waypoint(
+                        robot,
+                        path_x,
+                        path_y,
+                        target.theta,
+                        robot.base_radius,
+                        VACUUM_OFF,
+                    )
+                )
+            key_waypoints.extend(
+                [
+                    pre_pick,
+                    _waypoint(
+                        robot,
+                        target.x,
+                        target.y,
+                        target.theta,
+                        robot.arm_length,
+                        VACUUM_OFF,
+                    ),
+                    _waypoint(
+                        robot,
+                        target.x,
+                        target.y,
+                        target.theta,
+                        robot.arm_length,
+                        SAFE_VACUUM,
+                    ),
+                    _waypoint(
+                        robot,
+                        target.x,
+                        target.y,
+                        target.theta,
+                        carry_arm,
+                        SAFE_VACUUM,
+                    ),
+                ]
+            )
+            if best_candidate is None or candidate_length < best_candidate[0]:
+                best_candidate = (candidate_length, target, key_waypoints)
 
         return best_candidate
+
+    def _grasp_hits_target(
+        self,
+        x: NDArray,
+        block_name: str,
+        grasp_x: float,
+        grasp_y: float,
+        grasp_theta: float,
+        arm_length: float,
+    ) -> bool:
+        """Return True when the final suction point lands on the target block."""
+        robot = extract_robot(x)
+        block = extract_block(x, block_name)
+        tip_offset = arm_length + TOOLTIP_OFFSET_SCALE * robot.gripper_width
+        tip_x = grasp_x + tip_offset * float(np.cos(grasp_theta))
+        tip_y = grasp_y + tip_offset * float(np.sin(grasp_theta))
+        dx = tip_x - block.x
+        dy = tip_y - block.y
+        c = float(np.cos(block.theta))
+        s = float(np.sin(block.theta))
+        local_x = c * dx + s * dy
+        local_y = -s * dx + c * dy
+        margin = 0.01
+        return bool(
+            -margin <= local_x <= block.width + margin
+            and -margin <= local_y <= block.height + margin
+        )
 
     def _select_store_pick(
         self,
         x: NDArray,
-    ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+    ) -> tuple[str, RobotPose, list[RobotPose]] | None:
         reachable: list[
             tuple[
                 tuple[float, float],
                 float,
                 str,
                 RobotPose,
-                RobotPose,
-                list[tuple[float, float]],
+                list[RobotPose],
             ]
         ] = []
 
@@ -745,37 +970,36 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             best_candidate = self._best_pick_for_block(x, block_name)
             if best_candidate is None:
                 continue
-            path_len, target, pre_pick, path = best_candidate
+            path_len, target, grasp_plan = best_candidate
             reachable.append(
                 (
                     self._store_sort_key(x, block_name),
                     path_len,
                     block_name,
                     target,
-                    pre_pick,
-                    path,
+                    grasp_plan,
                 )
             )
 
         if not reachable:
             return None
 
-        _, _, block_name, target, pre_pick, path = min(
+        _, _, block_name, target, grasp_plan = min(
             reachable,
             key=lambda item: (item[0][0], item[0][1], item[1]),
         )
-        return (block_name, target, pre_pick, path)
+        return (block_name, target, grasp_plan)
 
     def _select_pick_for_block(
         self,
         x: NDArray,
         block_name: str,
-    ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+    ) -> tuple[str, RobotPose, list[RobotPose]] | None:
         best_candidate = self._best_pick_for_block(x, block_name)
         if best_candidate is None:
             return None
-        _, target, pre_pick, path = best_candidate
-        return (block_name, target, pre_pick, path)
+        _, target, grasp_plan = best_candidate
+        return (block_name, target, grasp_plan)
 
     def _compact_pick_target(self, x: NDArray, block_name: str) -> RobotPose:
         robot = extract_robot(x)
@@ -793,7 +1017,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
     def _select_compact_blocker_to_clear(
         self,
         x: NDArray,
-    ) -> tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None:
+    ) -> tuple[str, RobotPose, list[RobotPose]] | None:
         shelf = extract_shelf(x)
         blocker_names = sorted(
             outside_blocks(x),
@@ -838,12 +1062,12 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         carry_arm = max(robot.base_radius, CARRY_ARM_FRACTION * robot.arm_length)
         self._chosen_pick_pose = None
         self._planned_path_len = None
+        grasp_waypoints: list[RobotPose] | None = None
         if self._phase == "compact":
             next_block = self._choose_compact_block(x)
             self._target_kind = SHELF_TARGET
             self._target_center = slot_centers(x)[0]
             if next_block is None:
-                pre_pick = None
                 target = None
                 path_points = None
             else:
@@ -857,14 +1081,15 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                     clear_selection = self._select_compact_blocker_to_clear(x)
                     if clear_selection is None:
                         next_block = None
-                        pre_pick = None
                         target = None
                         path_points = None
+                        grasp_waypoints = None
                     else:
-                        next_block, target, pre_pick, path_points = clear_selection
+                        next_block, target, grasp_waypoints = clear_selection
+                        path_points = None
                 else:
-                    pre_pick = None
                     target, path_points = compact_selection
+                    grasp_waypoints = None
         else:
             if self._phase == "clear_compact":
                 self._target_kind = STAGING_TARGET
@@ -873,15 +1098,16 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                 self._target_kind = SHELF_TARGET
                 self._target_center = next_free_slot_center(x)
             store_selection: (
-                tuple[str, RobotPose, RobotPose, list[tuple[float, float]]] | None
+                tuple[str, RobotPose, list[RobotPose]] | None
             ) = self._select_store_pick(x)
             if store_selection is None:
                 next_block = None
                 target = None
-                pre_pick = None
                 path_points = None
+                grasp_waypoints = None
             else:
-                next_block, target, pre_pick, path_points = store_selection
+                next_block, target, grasp_waypoints = store_selection
+                path_points = None
         if next_block is None:
             self._active_block = None
             self._holding_actions.clear()
@@ -905,28 +1131,31 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
 
         # Keep the pick queue simple: retract, align, navigate, then grasp.
         key_waypoints = [current]
-        if robot.arm_joint > robot.base_radius + ARM_TOL:
+        if grasp_waypoints is not None:
+            key_waypoints = grasp_waypoints
+            self._planned_path_len = self._robot_waypoint_path_length(key_waypoints)
+        elif path_points is not None:
+            if robot.arm_joint > robot.base_radius + ARM_TOL:
+                key_waypoints.append(
+                    _waypoint(
+                        robot,
+                        robot.x,
+                        robot.y,
+                        robot.theta,
+                        robot.base_radius,
+                        VACUUM_OFF,
+                    )
+                )
             key_waypoints.append(
                 _waypoint(
                     robot,
-                    robot.x,
-                    robot.y,
-                    robot.theta,
+                    key_waypoints[-1].x,
+                    key_waypoints[-1].y,
+                    target.theta,
                     robot.base_radius,
                     VACUUM_OFF,
                 )
             )
-        key_waypoints.append(
-            _waypoint(
-                robot,
-                key_waypoints[-1].x,
-                key_waypoints[-1].y,
-                target.theta,
-                robot.base_radius,
-                VACUUM_OFF,
-            )
-        )
-        if path_points is not None:
             self._planned_path_len = path_length(path_points)
             for path_x, path_y in path_points[1:]:
                 key_waypoints.append(
@@ -939,8 +1168,6 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                         VACUUM_OFF,
                     )
                 )
-            if self._phase != "compact" and pre_pick is not None:
-                key_waypoints.append(pre_pick)
         else:
             self._planned_path_len = float(
                 np.hypot(target.x - robot.x, target.y - robot.y)
@@ -955,33 +1182,36 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                     VACUUM_OFF,
                 )
             )
-        key_waypoints.extend(
-            [
-                _waypoint(
-                    robot,
-                    target.x,
-                    target.y,
-                    target.theta,
-                    robot.arm_length,
-                    VACUUM_OFF,
-                ),
-                _waypoint(
-                    robot,
-                    target.x,
-                    target.y,
-                    target.theta,
-                    robot.arm_length,
-                    SAFE_VACUUM,
-                ),
-                _waypoint(
-                    robot,
-                    target.x,
-                    target.y,
-                    target.theta,
-                    carry_arm,
-                    SAFE_VACUUM,
-                ),
-            ]
+        if grasp_waypoints is None:
+            key_waypoints.extend(
+                [
+                    _waypoint(
+                        robot,
+                        target.x,
+                        target.y,
+                        target.theta,
+                        robot.arm_length,
+                        VACUUM_OFF,
+                    ),
+                    _waypoint(
+                        robot,
+                        target.x,
+                        target.y,
+                        target.theta,
+                        robot.arm_length,
+                        SAFE_VACUUM,
+                    ),
+                ]
+            )
+        key_waypoints.append(
+            _waypoint(
+                robot,
+                target.x,
+                target.y,
+                target.theta,
+                carry_arm,
+                SAFE_VACUUM,
+            )
         )
 
         dense = connecting_waypoints(key_waypoints)

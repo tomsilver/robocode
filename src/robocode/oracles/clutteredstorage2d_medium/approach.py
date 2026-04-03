@@ -14,6 +14,9 @@ from robocode.oracles.clutteredstorage2d_medium.behaviors import (
     StoreRemainingBlocks,
 )
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
+from robocode.primitives import (
+    crv_motion_planning_grasp as crv_motion_planning_grasp_module,
+)
 from robocode.primitives.behavior import Behavior
 
 
@@ -36,7 +39,10 @@ class ClutteredStorage2DOracleApproach(BaseApproach[NDArray, NDArray]):
             or {
                 "crv_motion_planning": cast(
                     Callable[..., Any], crv_motion_planning_module
-                )
+                ),
+                "crv_motion_planning_grasp": cast(
+                    Callable[..., Any], crv_motion_planning_grasp_module
+                ),
             },
             env_description_path,
         )

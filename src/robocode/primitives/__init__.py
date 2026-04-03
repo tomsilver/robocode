@@ -6,6 +6,9 @@ from functools import partial
 from typing import Any
 
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
+from robocode.primitives import (
+    crv_motion_planning_grasp as crv_motion_planning_grasp_module,
+)
 from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
@@ -16,6 +19,7 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "check_action_collision": "check_action_collision",
     "csp": "csp",
     "crv_motion_planning": "crv_motion_planning",
+    "crv_motion_planning_grasp": "crv_motion_planning_grasp",
     "BiRRT": "motion_planning",
 }
 
@@ -56,6 +60,12 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "action limits, bounds, and a caller-provided collision callback. "
         "The module also exports `CRVConfig` and `CRVActionLimits`."
     ),
+    "crv_motion_planning_grasp": (
+        "`crv_motion_planning_grasp` is a module that plans one CRV grasp "
+        "maneuver from an object-centric state, a target object, and a "
+        "relative grasp pose. Use `plan_crv_grasp(...)` to get collision-free "
+        "grasp waypoints, and handle the explicit suction failure errors."
+    ),
     "BiRRT": (
         "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
         "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
@@ -76,6 +86,7 @@ def _all_primitives(env: Any) -> dict[str, Any]:
         "check_action_collision": partial(check_action_collision, env),
         "csp": csp_module,
         "crv_motion_planning": crv_motion_planning_module,
+        "crv_motion_planning_grasp": crv_motion_planning_grasp_module,
         "BiRRT": BiRRT,
     }
 
