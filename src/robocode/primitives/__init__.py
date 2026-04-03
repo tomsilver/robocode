@@ -55,11 +55,12 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
     ),
     "crv_motion_planning": (
         "`crv_motion_planning` is a module with generic CRV robot motion "
-        "planners. Use `plan_crv_base_actions(...)` or "
-        "`plan_crv_holding_actions(...)` with object-centric state and a "
-        "target `CRVConfig` to get collision-free action sequences. The module "
-        "also exports `CRVConfig`, `CRVActionLimits`, and helpers to convert "
-        "between pose plans and action plans."
+        "planners. Use `plan_crv_actions(...)` with object-centric state and a "
+        "target `CRVConfig` to get collision-free action sequences, and set "
+        "`carrying=True` for holding-aware planning. Compatibility wrappers "
+        "`plan_crv_base_actions(...)` and `plan_crv_holding_actions(...)` are "
+        "also available. The module exports `CRVConfig`, `CRVActionLimits`, and "
+        "helpers to convert between pose plans and action plans."
     ),
     "crv_motion_planning_grasp": (
         "`crv_motion_planning_grasp` is a module that plans one CRV grasp "

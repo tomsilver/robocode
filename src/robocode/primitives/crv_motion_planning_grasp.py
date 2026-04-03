@@ -16,7 +16,7 @@ from robocode.primitives.crv_motion_planning import (
     CRVConfig,
     crv_action_plan_to_pose_plan,
     get_suctioned_objects,
-    plan_crv_base_actions,
+    plan_crv_actions,
     snap_suctioned_objects,
 )
 
@@ -243,11 +243,12 @@ def plan_crv_grasp(
         theta=float(grasp_pose.theta),
     )
 
-    actions = plan_crv_base_actions(
+    actions = plan_crv_actions(
         current_state,
         pre_grasp_pose,
         action_limits=limits,
         ignore_object_names={target.name},
+        carrying=False,
         seed=seed,
         num_attempts=num_attempts,
         num_iters=num_iters,

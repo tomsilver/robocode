@@ -435,33 +435,18 @@ def plan_crv_base_actions(
     sample_goal_eps: float = 0.0,
     **_: Any,
 ) -> list[NDArray[np.float32]] | None:
-    """Plan collision-free base actions from current state to target pose."""
-    robot = _find_robot_object(current_state)
-    ignored = set()
-    if ignore_object_names is not None:
-        ignored = {
-            obj
-            for obj in current_state
-            if obj.name in ignore_object_names and obj != robot
-        }
-    action_space = _default_action_space(action_limits)
-    pose_plan = _run_motion_planning_for_crv_robot(
+    """Compatibility wrapper for callers expecting base-only planning."""
+    return plan_crv_actions(
         current_state,
-        robot,
-        SE2Pose(target_pose.x, target_pose.y, target_pose.theta),
-        action_space,
+        target_pose,
+        action_limits=action_limits,
+        ignore_object_names=ignore_object_names,
+        carrying=False,
         seed=seed,
         num_attempts=num_attempts,
         num_iters=num_iters,
         smooth_amt=smooth_amt,
         sample_goal_eps=sample_goal_eps,
-        enable_contact_propagation=False,
-        ignored_obstacles=ignored,
-    )
-    if pose_plan is None:
-        return None
-    return crv_pose_plan_to_action_plan(
-        pose_plan, action_space, vacuum_while_moving=False
     )
 
 
@@ -478,9 +463,40 @@ def plan_crv_holding_actions(
     sample_goal_eps: float = 0.0,
     **_: Any,
 ) -> list[NDArray[np.float32]] | None:
-    """Plan collision-free holding actions with suctioned-object propagation."""
+    """Compatibility wrapper for callers expecting holding planning."""
+    return plan_crv_actions(
+        current_state,
+        target_pose,
+        action_limits=action_limits,
+        ignore_object_names=ignore_object_names,
+        carrying=True,
+        seed=seed,
+        num_attempts=num_attempts,
+        num_iters=num_iters,
+        smooth_amt=smooth_amt,
+        sample_goal_eps=sample_goal_eps,
+    )
+
+
+def plan_crv_actions(
+    current_state: ObjectCentricState,
+    target_pose: CRVConfig,
+    *,
+    action_limits: CRVActionLimits | None = None,
+    ignore_object_names: set[str] | None = None,
+    carrying: bool | None = None,
+    seed: int = 0,
+    num_attempts: int = 10,
+    num_iters: int = 100,
+    smooth_amt: int = 50,
+    sample_goal_eps: float = 0.0,
+    **_: Any,
+) -> list[NDArray[np.float32]] | None:
+    """Plan collision-free CRV actions; set `carrying` for holding-aware planning."""
     robot = _find_robot_object(current_state)
-    ignored = set()
+    if carrying is None:
+        carrying = bool(get_suctioned_objects(current_state, robot))
+    ignored: set[Object] = set()
     if ignore_object_names is not None:
         ignored = {
             obj
@@ -498,13 +514,13 @@ def plan_crv_holding_actions(
         num_iters=num_iters,
         smooth_amt=smooth_amt,
         sample_goal_eps=sample_goal_eps,
-        enable_contact_propagation=True,
+        enable_contact_propagation=carrying,
         ignored_obstacles=ignored,
     )
     if pose_plan is None:
         return None
     return crv_pose_plan_to_action_plan(
-        pose_plan, action_space, vacuum_while_moving=True
+        pose_plan, action_space, vacuum_while_moving=carrying
     )
 
 

@@ -498,10 +498,11 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             float(state.get(robot_obj, "y")),
             float(state.get(robot_obj, "theta")),
         )
-        actions = self._motion_planner.plan_crv_base_actions(
+        actions = self._motion_planner.plan_crv_actions(
             state,
             goal,
             action_limits=self._planner_action_limits(),
+            carrying=False,
             seed=self._planner_seed(),
         )
         if actions is None:
@@ -527,10 +528,11 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             float(state.get(robot_obj, "y")),
             float(state.get(robot_obj, "theta")),
         )
-        actions = self._motion_planner.plan_crv_holding_actions(
+        actions = self._motion_planner.plan_crv_actions(
             state,
             goal,
             action_limits=self._planner_action_limits(),
+            carrying=True,
             seed=self._planner_seed(),
         )
         if actions is None:

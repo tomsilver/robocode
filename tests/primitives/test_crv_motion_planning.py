@@ -14,8 +14,7 @@ from robocode.primitives.crv_motion_planning import (
     CRVConfig,
     create_walls_from_world_boundaries,
     crv_action_plan_to_pose_plan,
-    plan_crv_base_actions,
-    plan_crv_holding_actions,
+    plan_crv_actions,
 )
 
 WORLD_MIN_X = 0.0
@@ -119,7 +118,7 @@ def test_plan_crv_base_actions_direct() -> None:
     """The planner should return a direct action plan in free space."""
     state = _state()
     goal = CRVConfig(0.55, 0.55, np.pi / 4)
-    actions = plan_crv_base_actions(state, goal, seed=0)
+    actions = plan_crv_actions(state, goal, carrying=False, seed=0)
     assert actions is not None
     assert actions
     path = _integrate(state, actions)
@@ -132,7 +131,7 @@ def test_plan_crv_base_actions_avoid_obstacle() -> None:
     """The planner should route around a blocking object."""
     state = _state(block_specs={"blocker": (0.50, 0.50, 0.18, 0.18)})
     goal = CRVConfig(0.75, 0.75, 0.0)
-    actions = plan_crv_base_actions(state, goal, seed=1, num_iters=200)
+    actions = plan_crv_actions(state, goal, carrying=False, seed=1, num_iters=200)
     assert actions is not None
     path = _integrate(state, actions)
     for cfg in path:
@@ -143,7 +142,7 @@ def test_plan_crv_base_actions_returns_none_when_goal_blocked() -> None:
     """The planner should fail cleanly when the goal region is blocked."""
     state = _state(block_specs={"wall": (0.8, 0.8, 0.30, 0.30)})
     goal = CRVConfig(0.8, 0.8, 0.0)
-    actions = plan_crv_base_actions(state, goal, seed=2, num_iters=80)
+    actions = plan_crv_actions(state, goal, carrying=False, seed=2, num_iters=80)
     assert actions is None
 
 
@@ -156,7 +155,7 @@ def test_plan_crv_holding_actions_produces_vacuum_on_motion() -> None:
         block_specs={"held": (0.52, 0.2, 0.08, 0.08)},
     )
     goal = CRVConfig(0.7, 0.22, 0.0)
-    actions = plan_crv_holding_actions(state, goal, seed=3, num_iters=220)
+    actions = plan_crv_actions(state, goal, carrying=True, seed=3, num_iters=220)
     assert actions is not None
     assert actions
     assert all(float(action[4]) == 1.0 for action in actions)
