@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from gymnasium.spaces import Space
 from numpy.typing import NDArray
@@ -13,6 +13,7 @@ from robocode.approaches.base_approach import BaseApproach
 from robocode.oracles.clutteredstorage2d_medium.behaviors import (
     StoreRemainingBlocks,
 )
+from robocode.primitives import crv_motion_planning as crv_motion_planning_module
 from robocode.primitives.behavior import Behavior
 
 
@@ -31,16 +32,22 @@ class ClutteredStorage2DOracleApproach(BaseApproach[NDArray, NDArray]):
             action_space,
             observation_space,
             seed,
-            primitives or {},
+            primitives
+            or {
+                "crv_motion_planning": cast(
+                    Callable[..., Any], crv_motion_planning_module
+                )
+            },
             env_description_path,
         )
+        self._seed = seed
         self._behaviors: deque[Behavior[NDArray, NDArray]] = deque()
         self._current: Behavior[NDArray, NDArray] | None = None
 
     def reset(self, state: NDArray, info: dict[str, Any]) -> None:
         super().reset(state, info)
 
-        store = StoreRemainingBlocks()
+        store = StoreRemainingBlocks(self._primitives, self._seed)
         if store.initializable(state):
             self._behaviors = deque([store])
             self._current = self._behaviors.popleft()

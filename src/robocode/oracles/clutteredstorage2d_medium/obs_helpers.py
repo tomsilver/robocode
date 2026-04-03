@@ -148,6 +148,66 @@ class ShelfPose:
         return self.x1 + self.width1 / 2
 
 
+@dataclass(frozen=True)
+class PlanningRobot:
+    """Object-centric planning view of the CRV robot."""
+
+    x: float
+    y: float
+    theta: float
+    base_radius: float
+    arm_joint: float
+    arm_length: float
+    vacuum: float
+    gripper_height: float
+    gripper_width: float
+
+
+@dataclass(frozen=True)
+class PlanningBlock:
+    """Object-centric planning view of a block."""
+
+    name: str
+    x: float
+    y: float
+    theta: float
+    width: float
+    height: float
+    inside_shelf: bool
+
+    @property
+    def center(self) -> tuple[float, float]:
+        """Return the rectangle center."""
+        offset = rotate_vector(self.width / 2, self.height / 2, self.theta)
+        return (self.x + offset[0], self.y + offset[1])
+
+
+@dataclass(frozen=True)
+class PlanningShelf:
+    """Object-centric planning view of the shelf opening."""
+
+    x1: float
+    y1: float
+    width1: float
+    height1: float
+
+    @property
+    def opening_center_x(self) -> float:
+        """Return the opening center x position."""
+        return self.x1 + self.width1 / 2
+
+
+@dataclass(frozen=True)
+class CRVOraclePlanningState:
+    """Oracle-side object-centric state consumed by motion-planning callers."""
+
+    robot: PlanningRobot
+    shelf: PlanningShelf
+    blocks: dict[str, PlanningBlock]
+    held_block_name: str | None
+    world_bounds: tuple[float, float, float, float]
+
+
 def _base_and_features(name: str) -> tuple[int, list[str]]:
     return LAYOUT[name]
 
@@ -302,6 +362,73 @@ def held_block_name(obs: NDArray) -> str | None:
     if distance > HELD_BLOCK_DISTANCE_MAX:
         return None
     return name
+
+
+def extract_planning_state(obs: NDArray) -> CRVOraclePlanningState:
+    """Build an object-centric planning view from the flat observation."""
+    robot = extract_robot(obs)
+    shelf = extract_shelf(obs)
+    held_name = held_block_name(obs)
+    planning_blocks = {
+        name: PlanningBlock(
+            name=name,
+            x=extract_block(obs, name).x,
+            y=extract_block(obs, name).y,
+            theta=extract_block(obs, name).theta,
+            width=extract_block(obs, name).width,
+            height=extract_block(obs, name).height,
+            inside_shelf=is_block_inside_shelf(obs, name),
+        )
+        for name in BLOCK_NAMES
+    }
+    return CRVOraclePlanningState(
+        robot=PlanningRobot(
+            x=robot.x,
+            y=robot.y,
+            theta=robot.theta,
+            base_radius=robot.base_radius,
+            arm_joint=robot.arm_joint,
+            arm_length=robot.arm_length,
+            vacuum=robot.vacuum,
+            gripper_height=robot.gripper_height,
+            gripper_width=robot.gripper_width,
+        ),
+        shelf=PlanningShelf(
+            x1=shelf.x1,
+            y1=shelf.y1,
+            width1=shelf.width1,
+            height1=shelf.height1,
+        ),
+        blocks=planning_blocks,
+        held_block_name=held_name,
+        world_bounds=(WORLD_MIN_X, WORLD_MAX_X, WORLD_MIN_Y, WORLD_MAX_Y),
+    )
+
+
+def planning_outside_blocks(state: CRVOraclePlanningState) -> list[str]:
+    """Return block names outside the shelf in the planning view."""
+    return [name for name, block in state.blocks.items() if not block.inside_shelf]
+
+
+def planning_inside_blocks(state: CRVOraclePlanningState) -> list[str]:
+    """Return block names already inside the shelf in the planning view."""
+    return [name for name, block in state.blocks.items() if block.inside_shelf]
+
+
+def planning_block_center(
+    state: CRVOraclePlanningState, block_name: str
+) -> tuple[float, float]:
+    """Return a block center from the planning view."""
+    return state.blocks[block_name].center
+
+
+def planning_tool_tip_pose(state: CRVOraclePlanningState) -> Pose2D:
+    """Return the tool-tip pose from the planning view."""
+    robot = state.robot
+    offset = robot.arm_joint + TOOLTIP_OFFSET_SCALE * robot.gripper_width
+    dx = offset * float(np.cos(robot.theta))
+    dy = offset * float(np.sin(robot.theta))
+    return Pose2D(robot.x + dx, robot.y + dy, robot.theta)
 
 
 def choose_next_block(obs: NDArray) -> str | None:

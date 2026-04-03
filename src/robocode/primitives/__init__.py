@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+from robocode.primitives import crv_motion_planning as crv_motion_planning_module
 from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
@@ -14,6 +15,7 @@ from robocode.primitives.motion_planning import BiRRT
 PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "check_action_collision": "check_action_collision",
     "csp": "csp",
+    "crv_motion_planning": "crv_motion_planning",
     "BiRRT": "motion_planning",
 }
 
@@ -47,6 +49,13 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "  Access via `primitives['csp']`, e.g. "
         "`primitives['csp'].CSPVariable(...)`."
     ),
+    "crv_motion_planning": (
+        "`crv_motion_planning` is a module with generic CRV robot motion "
+        "planners. Use `plan_crv_base_path(...)` or "
+        "`plan_crv_holding_path(...)` with SE(2) start/goal configs, "
+        "action limits, bounds, and a caller-provided collision callback. "
+        "The module also exports `CRVConfig` and `CRVActionLimits`."
+    ),
     "BiRRT": (
         "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
         "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
@@ -66,6 +75,7 @@ def _all_primitives(env: Any) -> dict[str, Any]:
     return {
         "check_action_collision": partial(check_action_collision, env),
         "csp": csp_module,
+        "crv_motion_planning": crv_motion_planning_module,
         "BiRRT": BiRRT,
     }
 
