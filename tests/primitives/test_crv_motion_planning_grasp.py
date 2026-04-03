@@ -1,11 +1,16 @@
-"""Tests for the CRV grasp motion-planning primitive."""
+"""Tests for the CRV geometric grasp-planning primitive."""
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+import numpy as np
+from kinder.envs.geom2d.object_types import (
+    CRVRobotType,
+    Geom2DRobotEnvTypeFeatures,
+    RectangleType,
+)
+from relational_structs import Object, ObjectCentricState
 
-from robocode.primitives.crv_motion_planning import CRVActionLimits, CRVConfig
+from robocode.primitives.crv_motion_planning import create_walls_from_world_boundaries
 from robocode.primitives.crv_motion_planning_grasp import (
     RelativeGraspPose,
     SuctionFailedEmptySpaceError,
@@ -13,93 +18,106 @@ from robocode.primitives.crv_motion_planning_grasp import (
     plan_crv_grasp,
 )
 
+WORLD_MIN_X = 0.0
+WORLD_MAX_X = 1.0
+WORLD_MIN_Y = 0.0
+WORLD_MAX_Y = 1.0
+DX_LIM = 0.05
+DY_LIM = 0.05
 
-@dataclass(frozen=True)
-class _Robot:
-    x: float
-    y: float
-    theta: float
-    base_radius: float
-    arm_joint: float
-    arm_length: float
-    vacuum: float
-    gripper_height: float
-    gripper_width: float
-
-
-@dataclass(frozen=True)
-class _Block:
-    theta: float
-    width: float
-    height: float
-    center: tuple[float, float]
+_ROBOT = Object("robot", CRVRobotType)
+_TYPE_FEATURES = {
+    CRVRobotType: Geom2DRobotEnvTypeFeatures[CRVRobotType],
+    RectangleType: Geom2DRobotEnvTypeFeatures[RectangleType],
+}
 
 
-@dataclass(frozen=True)
-class _State:
-    robot: _Robot
-    blocks: dict[str, _Block]
-
-
-ACTION_LIMITS = CRVActionLimits(max_dx=0.05, max_dy=0.05, max_dtheta=math.pi / 16)
-BOUNDS = (0.0, 1.0, 0.0, 1.0)
-
-
-def _state() -> _State:
-    return _State(
-        robot=_Robot(
-            x=0.1,
-            y=0.1,
-            theta=0.0,
-            base_radius=0.2,
-            arm_joint=0.2,
-            arm_length=0.5,
-            vacuum=0.0,
-            gripper_height=0.1,
-            gripper_width=0.1,
-        ),
-        blocks={"target": _Block(theta=0.0, width=0.28, height=0.04, center=(0.7, 0.3))},
+def _rect_from_center(
+    center_x: float,
+    center_y: float,
+    width: float,
+    height: float,
+) -> np.ndarray:
+    return np.array(
+        [
+            center_x - width / 2,
+            center_y - height / 2,
+            0.0,
+            0.0,
+            0.2,
+            0.2,
+            0.2,
+            100.0,
+            width,
+            height,
+        ],
+        dtype=np.float32,
     )
 
 
-def test_plan_crv_grasp_success():
-    """The grasp planner should produce a grasp sequence in free space."""
+def _state(
+    *,
+    robot_xy: tuple[float, float] = (0.25, 0.2),
+    target_center: tuple[float, float] = (0.78, 0.32),
+    extra_blocks: dict[str, tuple[float, float, float, float]] | None = None,
+) -> ObjectCentricState:
+    data: dict[Object, np.ndarray] = {
+        _ROBOT: np.array(
+            [robot_xy[0], robot_xy[1], 0.0, 0.12, 0.12, 0.5, 0.0, 0.06, 0.04],
+            dtype=np.float32,
+        ),
+        Object("target", RectangleType): _rect_from_center(
+            target_center[0], target_center[1], 0.24, 0.06
+        ),
+    }
+    for name, (cx, cy, width, height) in (extra_blocks or {}).items():
+        data[Object(name, RectangleType)] = _rect_from_center(cx, cy, width, height)
+
+    rect_features = Geom2DRobotEnvTypeFeatures[RectangleType]
+    walls = create_walls_from_world_boundaries(
+        WORLD_MIN_X,
+        WORLD_MAX_X,
+        WORLD_MIN_Y,
+        WORLD_MAX_Y,
+        min_dx=-DX_LIM,
+        max_dx=DX_LIM,
+        min_dy=-DY_LIM,
+        max_dy=DY_LIM,
+    )
+    for wall_obj, wall_dict in walls.items():
+        data[wall_obj] = np.array(
+            [float(wall_dict[feature]) for feature in rect_features],
+            dtype=np.float32,
+        )
+    return ObjectCentricState(data, _TYPE_FEATURES)
+
+
+def test_plan_crv_grasp_success() -> None:
+    """The grasp planner should produce a valid suction sequence."""
     state = _state()
-    relative_pose = RelativeGraspPose(x=-0.45, y=0.0, theta=0.0)
     waypoints = plan_crv_grasp(
         state,
         "target",
-        relative_pose,
+        RelativeGraspPose(x=-0.56, y=0.0, theta=0.0),
         0.5,
-        action_limits=ACTION_LIMITS,
-        bounds=BOUNDS,
-        collision_fn=lambda _: False,
-        segment_collision_free_fn=lambda _start, _end: True,
-        extension_collision_free_fn=lambda _name, _waypoint: True,
-        suction_success_fn=lambda _name, _waypoint, _arm: True,
+        pre_grasp_margin=0.02,
         seed=0,
     )
     assert waypoints
     assert waypoints[-1].vacuum == 1.0
-    assert waypoints[-1].arm_joint == 0.5
+    assert np.isclose(waypoints[-1].arm_joint, 0.5)
 
 
-def test_plan_crv_grasp_raises_empty_space():
+def test_plan_crv_grasp_raises_empty_space() -> None:
     """The grasp planner should report empty-space suction explicitly."""
     state = _state()
-    relative_pose = RelativeGraspPose(x=-0.45, y=0.0, theta=0.0)
     try:
         plan_crv_grasp(
             state,
             "target",
-            relative_pose,
+            RelativeGraspPose(x=-0.56, y=0.0, theta=np.pi / 2),
             0.5,
-            action_limits=ACTION_LIMITS,
-            bounds=BOUNDS,
-            collision_fn=lambda _: False,
-            segment_collision_free_fn=lambda _start, _end: True,
-            extension_collision_free_fn=lambda _name, _waypoint: True,
-            suction_success_fn=lambda _name, _waypoint, _arm: False,
+            pre_grasp_margin=0.02,
             seed=1,
         )
     except SuctionFailedEmptySpaceError:
@@ -107,46 +125,33 @@ def test_plan_crv_grasp_raises_empty_space():
     assert False, "Expected SuctionFailedEmptySpaceError"
 
 
-def test_plan_crv_grasp_raises_no_path():
+def test_plan_crv_grasp_raises_no_path() -> None:
     """The grasp planner should fail when no collision-free path exists."""
-    state = _state()
-    relative_pose = RelativeGraspPose(x=-0.45, y=0.0, theta=0.0)
+    state = _state(extra_blocks={"blocker": (0.22, 0.32, 0.20, 0.20)})
     try:
         plan_crv_grasp(
             state,
             "target",
-            relative_pose,
+            RelativeGraspPose(x=-0.56, y=0.0, theta=0.0),
             0.5,
-            action_limits=ACTION_LIMITS,
-            bounds=BOUNDS,
-            collision_fn=lambda cfg: cfg.x > 0.2,
-            segment_collision_free_fn=lambda _start, _end: True,
-            extension_collision_free_fn=lambda _name, _waypoint: True,
-            suction_success_fn=lambda _name, _waypoint, _arm: True,
             seed=2,
-            num_iters=20,
+            num_iters=40,
         )
     except SuctionFailedNoCollisionFreePathError:
         return
     assert False, "Expected SuctionFailedNoCollisionFreePathError"
 
 
-def test_plan_crv_grasp_obeys_segment_check():
-    """The final short grasp approach should respect the segment validity check."""
-    state = _state()
-    relative_pose = RelativeGraspPose(x=-0.45, y=0.0, theta=0.0)
+def test_plan_crv_grasp_raises_when_final_approach_blocked() -> None:
+    """A blocked pre-grasp to grasp segment should raise no-path error."""
+    state = _state(extra_blocks={"blocker": (0.15, 0.30, 0.03, 0.03)})
     try:
         plan_crv_grasp(
             state,
             "target",
-            relative_pose,
+            RelativeGraspPose(x=-0.56, y=0.0, theta=0.0),
             0.5,
-            action_limits=ACTION_LIMITS,
-            bounds=BOUNDS,
-            collision_fn=lambda _cfg: False,
-            segment_collision_free_fn=lambda _start, _end: False,
-            extension_collision_free_fn=lambda _name, _waypoint: True,
-            suction_success_fn=lambda _name, _waypoint, _arm: True,
+            pre_grasp_margin=0.02,
             seed=3,
         )
     except SuctionFailedNoCollisionFreePathError:

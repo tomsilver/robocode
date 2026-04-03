@@ -22,29 +22,30 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     APPROACH_MARGIN,
     TOOLTIP_OFFSET_SCALE,
-    Pose2D,
     WORLD_MAX_X,
     WORLD_MAX_Y,
     WORLD_MIN_X,
     WORLD_MIN_Y,
     CRVOraclePlanningState,
+    Pose2D,
     RobotPose,
     all_blocks_inside_shelf,
     compose_pose,
     extract_block,
+    extract_object_centric_state,
     extract_planning_state,
     extract_robot,
     extract_shelf,
     farthest_free_staging_center,
     held_block_name,
     inside_blocks,
+    invert_pose,
     is_block_inside_shelf,
     next_free_slot_center,
     outside_blocks,
     pick_base_pose_candidates,
     slot_centers,
     wrap_angle,
-    invert_pose,
 )
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
 from robocode.primitives import (
@@ -481,66 +482,35 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             )
         return obstacles
 
-    def _point_collision_free(
-        self,
-        point: tuple[float, float],
-        obstacles: list[tuple[float, float, float]],
-        bounds: tuple[float, float, float, float],
-    ) -> bool:
-        px, py = point
-        min_x, max_x, min_y, max_y = bounds
-        if not (min_x <= px <= max_x and min_y <= py <= max_y):
-            return False
-        return all(np.hypot(px - cx, py - cy) >= radius for cx, cy, radius in obstacles)
-
-    def _holding_collision_free(
-        self,
-        cfg: Any,
-        *,
-        held_offset: tuple[float, float],
-        held_radius: float,
-        obstacles: list[tuple[float, float, float]],
-        bounds: tuple[float, float, float, float],
-    ) -> bool:
-        base_point = (cfg.x, cfg.y)
-        if not self._point_collision_free(base_point, obstacles, bounds):
-            return False
-        held_point = (cfg.x + held_offset[0], cfg.y + held_offset[1])
-        if not self._point_collision_free(held_point, [], bounds):
-            return False
-        return all(
-            np.hypot(held_point[0] - cx, held_point[1] - cy) >= radius + held_radius
-            for cx, cy, radius in obstacles
-        )
-
     def _plan_base_configs(
         self,
-        state: CRVOraclePlanningState,
+        state: Any,
         goal: Any,
         obstacles: list[tuple[float, float, float]],
         bounds: tuple[float, float, float, float],
     ) -> list[Any] | None:
         """Plan a base-only SE(2) path through the generic primitive."""
-        start = self._robot_config(state)
-        active_obstacles = [
-            (cx, cy, radius)
-            for cx, cy, radius in obstacles
-            if np.hypot(start.x - cx, start.y - cy) >= radius - 1e-6
-        ]
-        return self._motion_planner.plan_crv_base_path(
-            start,
+        del obstacles, bounds
+        robot_obj = state.get_object_from_name("robot")
+        assert robot_obj is not None
+        start = self._config_from_pose(
+            float(state.get(robot_obj, "x")),
+            float(state.get(robot_obj, "y")),
+            float(state.get(robot_obj, "theta")),
+        )
+        actions = self._motion_planner.plan_crv_base_actions(
+            state,
             goal,
             action_limits=self._planner_action_limits(),
-            bounds=bounds,
-            collision_fn=lambda cfg: not self._point_collision_free(
-                (cfg.x, cfg.y), active_obstacles, bounds
-            ),
             seed=self._planner_seed(),
         )
+        if actions is None:
+            return None
+        return self._motion_planner.crv_action_plan_to_pose_plan(start, actions)
 
     def _plan_holding_configs(
         self,
-        state: CRVOraclePlanningState,
+        state: Any,
         goal: Any,
         *,
         held_offset: tuple[float, float],
@@ -549,33 +519,23 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         bounds: tuple[float, float, float, float],
     ) -> list[Any] | None:
         """Plan a carrying path through the generic primitive."""
-        start = self._robot_config(state)
-        active_obstacles = [
-            (cx, cy, radius)
-            for cx, cy, radius in obstacles
-            if (
-                np.hypot(start.x - cx, start.y - cy) >= radius - 1e-6
-                and np.hypot(
-                    start.x + held_offset[0] - cx,
-                    start.y + held_offset[1] - cy,
-                )
-                >= radius + held_radius - 1e-6
-            )
-        ]
-        return self._motion_planner.plan_crv_holding_path(
-            start,
+        del held_offset, held_radius, obstacles, bounds
+        robot_obj = state.get_object_from_name("robot")
+        assert robot_obj is not None
+        start = self._config_from_pose(
+            float(state.get(robot_obj, "x")),
+            float(state.get(robot_obj, "y")),
+            float(state.get(robot_obj, "theta")),
+        )
+        actions = self._motion_planner.plan_crv_holding_actions(
+            state,
             goal,
             action_limits=self._planner_action_limits(),
-            bounds=bounds,
-            collision_fn=lambda cfg: not self._holding_collision_free(
-                cfg,
-                held_offset=held_offset,
-                held_radius=held_radius,
-                obstacles=active_obstacles,
-                bounds=bounds,
-            ),
             seed=self._planner_seed(),
         )
+        if actions is None:
+            return None
+        return self._motion_planner.crv_action_plan_to_pose_plan(start, actions)
 
     def _queue_holding_transport(
         self,
@@ -583,6 +543,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         block_name: str,
     ) -> bool:
         planning_state = extract_planning_state(x)
+        object_state = extract_object_centric_state(x)
         robot = extract_robot(x)
         block = planning_state.blocks[block_name]
         assert self._target_center is not None
@@ -611,7 +572,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             x, ignore_block=block_name, robot=robot, mover_radius=mover_radius
         )
         path = self._plan_holding_configs(
-            planning_state,
+            object_state,
             self._config_from_pose(goal[0], goal[1], robot.theta),
             held_offset=held_offset,
             held_radius=held_radius,
@@ -635,6 +596,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         block_name: str,
     ) -> bool:
         planning_state = extract_planning_state(x)
+        object_state = extract_object_centric_state(x)
         robot = extract_robot(x)
         block = planning_state.blocks[block_name]
         held_radius = 0.5 * float(np.hypot(block.width, block.height))
@@ -694,7 +656,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         for goal in candidate_goals:
             goal_cfg = self._config_from_pose(goal[0], goal[1], UP)
             path = self._plan_holding_configs(
-                planning_state,
+                object_state,
                 goal_cfg,
                 held_offset=held_offset,
                 held_radius=held_radius,
@@ -726,16 +688,11 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
     ) -> tuple[float, RobotPose, list[RobotPose]] | None:
         """Return the shortest valid pick plan for a single outside block."""
         planning_state = extract_planning_state(x)
+        object_state = extract_object_centric_state(x)
         robot = extract_robot(x)
         bounds = self._base_path_bounds(x, robot)
         path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
         local_obstacles = self._base_path_obstacles(x, block_name, robot)
-        start_cfg = self._robot_config(planning_state)
-        active_path_obstacles = [
-            (cx, cy, radius)
-            for cx, cy, radius in path_obstacles
-            if np.hypot(start_cfg.x - cx, start_cfg.y - cy) >= radius - 1e-6
-        ]
         best_candidate: tuple[float, RobotPose, list[RobotPose]] | None = None
 
         for candidate in pick_base_pose_candidates(x, block_name):
@@ -754,7 +711,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             relative_pose = compose_pose(invert_pose(block_center_pose), target_pose)
             try:
                 grasp_waypoints = self._grasp_motion_planner.plan_crv_grasp(
-                    planning_state,
+                    object_state,
                     block_name,
                     self._grasp_motion_planner.RelativeGraspPose(
                         relative_pose.x,
@@ -762,41 +719,6 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                         relative_pose.theta,
                     ),
                     robot.arm_length,
-                    action_limits=self._planner_action_limits(),
-                    bounds=bounds,
-                    collision_fn=lambda cfg: not self._point_collision_free(
-                        (cfg.x, cfg.y), active_path_obstacles, bounds
-                    ),
-                    segment_collision_free_fn=lambda start, end: segment_collision_free(
-                        start,
-                        end,
-                        local_obstacles,
-                        bounds,
-                    ),
-                    extension_collision_free_fn=lambda target_name, grasp_pose: (
-                        self._grasp_extension_collision_free(
-                            x,
-                            target_name,
-                            _waypoint(
-                                robot,
-                                grasp_pose.x,
-                                grasp_pose.y,
-                                grasp_pose.theta,
-                                grasp_pose.arm_joint,
-                                grasp_pose.vacuum,
-                            ),
-                        )
-                    ),
-                    suction_success_fn=lambda target_name, grasp_pose, arm_length: (
-                        self._grasp_hits_target(
-                            x,
-                            target_name,
-                            grasp_pose.x,
-                            grasp_pose.y,
-                            grasp_pose.theta,
-                            arm_length,
-                        )
-                    ),
                     pre_grasp_margin=PRE_PICK_RING_MARGIN,
                     seed=self._planner_seed(),
                 )
@@ -828,7 +750,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             ):
                 continue
             path = self._plan_base_configs(
-                planning_state,
+                object_state,
                 self._config_from_pose(pre_pick.x, pre_pick.y, pre_pick.theta),
                 path_obstacles,
                 bounds,
@@ -1043,16 +965,11 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         | None
     ):
         planning_state = extract_planning_state(x)
+        object_state = extract_object_centric_state(x)
         robot = extract_robot(x)
         target = self._compact_pick_target(x, block_name)
         bounds = self._base_path_bounds(x, robot)
         obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
-        start_cfg = self._robot_config(planning_state)
-        active_obstacles = [
-            (cx, cy, radius)
-            for cx, cy, radius in obstacles
-            if np.hypot(start_cfg.x - cx, start_cfg.y - cy) >= radius - 1e-6
-        ]
         block = extract_block(x, block_name)
         block_center_x, block_center_y = block.center
         block_center_pose = Pose2D(block_center_x, block_center_y, block.theta)
@@ -1060,7 +977,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
         relative_pose = compose_pose(invert_pose(block_center_pose), target_pose)
         try:
             grasp_waypoints = self._grasp_motion_planner.plan_crv_grasp(
-                planning_state,
+                object_state,
                 block_name,
                 self._grasp_motion_planner.RelativeGraspPose(
                     relative_pose.x,
@@ -1068,36 +985,6 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
                     relative_pose.theta,
                 ),
                 robot.arm_length,
-                action_limits=self._planner_action_limits(),
-                bounds=bounds,
-                collision_fn=lambda cfg: not self._point_collision_free(
-                    (cfg.x, cfg.y), active_obstacles, bounds
-                ),
-                segment_collision_free_fn=lambda _start, _end: True,
-                extension_collision_free_fn=lambda target_name, grasp_pose: (
-                    self._grasp_extension_collision_free(
-                        x,
-                        target_name,
-                        _waypoint(
-                            robot,
-                            grasp_pose.x,
-                            grasp_pose.y,
-                            grasp_pose.theta,
-                            grasp_pose.arm_joint,
-                            grasp_pose.vacuum,
-                        ),
-                    )
-                ),
-                suction_success_fn=lambda target_name, grasp_pose, arm_length: (
-                    self._grasp_hits_target(
-                        x,
-                        target_name,
-                        grasp_pose.x,
-                        grasp_pose.y,
-                        grasp_pose.theta,
-                        arm_length,
-                    )
-                ),
                 pre_grasp_margin=0.0,
                 seed=self._planner_seed(),
             )
@@ -1113,7 +1000,7 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             pass
 
         path = self._plan_base_configs(
-            planning_state,
+            object_state,
             self._config_from_pose(target.x, target.y, target.theta),
             obstacles,
             bounds,
@@ -1170,9 +1057,9 @@ class StoreRemainingBlocks(Behavior[NDArray, NDArray]):
             else:
                 self._target_kind = SHELF_TARGET
                 self._target_center = next_free_slot_center(x)
-            store_selection: (
-                tuple[str, RobotPose, list[RobotPose]] | None
-            ) = self._select_store_pick(x)
+            store_selection: tuple[str, RobotPose, list[RobotPose]] | None = (
+                self._select_store_pick(x)
+            )
             if store_selection is None:
                 next_block = None
                 target = None

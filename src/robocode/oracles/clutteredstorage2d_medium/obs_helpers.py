@@ -5,7 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from kinder.envs.geom2d.object_types import (
+    CRVRobotType,
+    DoubleRectType,
+    Geom2DRobotEnvTypeFeatures,
+    RectangleType,
+)
+from kinder.envs.geom2d.utils import create_walls_from_world_boundaries
 from numpy.typing import NDArray
+from relational_structs import Object, ObjectCentricState
 
 ROBOT_FEATURES = [
     "x",
@@ -63,6 +71,7 @@ LAYOUT: dict[str, tuple[int, list[str]]] = {
 }
 
 BLOCK_NAMES = ["block0", "block1", "block2"]
+BLOCK_OBJECT_NAMES = {"block0": "block0", "block1": "block1", "block2": "block2"}
 NUM_STORAGE_SLOTS = 3
 VACUUM_ON_THRESHOLD = 0.5
 TOOLTIP_OFFSET_SCALE = 0.5
@@ -79,6 +88,36 @@ STAGING_OCCUPANCY_TOL = 0.08
 STAGING_AXIS_SEPARATION_TOL = 0.18
 STAGING_RELEASE_SWEEP_X_TOL = 0.32
 STAGING_RELEASE_SWEEP_Y_TOL = 0.32
+
+_ROBOT_OBJECT = Object("robot", CRVRobotType)
+_SHELF_OBJECT = Object("shelf", DoubleRectType)
+_BLOCK_OBJECTS = {name: Object(name, RectangleType) for name in BLOCK_NAMES}
+
+_OBJECT_CENTRIC_TYPE_FEATURES = {
+    CRVRobotType: Geom2DRobotEnvTypeFeatures[CRVRobotType],
+    DoubleRectType: Geom2DRobotEnvTypeFeatures[DoubleRectType],
+    RectangleType: Geom2DRobotEnvTypeFeatures[RectangleType],
+}
+
+
+def _normalized_angle(value: float) -> float:
+    """Normalize an angle for geometry constructors that require [-pi, pi]."""
+    wrapped = wrap_angle(float(value))
+    return float(np.clip(wrapped, -np.pi, np.pi))
+
+
+def _slice_with_normalized_angles(
+    obs: NDArray,
+    start: int,
+    end: int,
+    features: list[str],
+) -> np.ndarray:
+    """Extract an observation slice and normalize all theta-like entries."""
+    values = np.array(obs[start:end], dtype=np.float32)
+    for idx, feature in enumerate(features):
+        if feature.startswith("theta"):
+            values[idx] = np.float32(_normalized_angle(values[idx]))
+    return values
 
 
 def wrap_angle(theta: float) -> float:
@@ -397,6 +436,45 @@ def extract_planning_state(obs: NDArray) -> CRVOraclePlanningState:
         held_block_name=held_name,
         world_bounds=(WORLD_MIN_X, WORLD_MAX_X, WORLD_MIN_Y, WORLD_MAX_Y),
     )
+
+
+def extract_object_centric_state(obs: NDArray) -> ObjectCentricState:
+    """Build a CRV geom2d ObjectCentricState from the flat observation."""
+    state_data: dict[Object, np.ndarray] = {
+        _ROBOT_OBJECT: _slice_with_normalized_angles(obs, 0, 9, ROBOT_FEATURES),
+        _SHELF_OBJECT: _slice_with_normalized_angles(obs, 9, 28, SHELF_FEATURES),
+        _BLOCK_OBJECTS["block0"]: _slice_with_normalized_angles(
+            obs, 28, 38, RECT_FEATURES
+        ),
+        _BLOCK_OBJECTS["block1"]: _slice_with_normalized_angles(
+            obs, 38, 48, RECT_FEATURES
+        ),
+        _BLOCK_OBJECTS["block2"]: _slice_with_normalized_angles(
+            obs, 48, 58, RECT_FEATURES
+        ),
+    }
+    walls = create_walls_from_world_boundaries(
+        WORLD_MIN_X,
+        WORLD_MAX_X,
+        WORLD_MIN_Y,
+        WORLD_MAX_Y,
+        min_dx=-0.05,
+        max_dx=0.05,
+        min_dy=-0.05,
+        max_dy=0.05,
+    )
+    rect_features = Geom2DRobotEnvTypeFeatures[RectangleType]
+    for wall_obj, wall_feat_dict in walls.items():
+        state_data[wall_obj] = np.array(
+            [float(wall_feat_dict[feat]) for feat in rect_features],
+            dtype=np.float32,
+        )
+    return ObjectCentricState(state_data, _OBJECT_CENTRIC_TYPE_FEATURES)
+
+
+def get_object_centric_robot_object() -> Object:
+    """Return the canonical object-centric robot object used by this oracle."""
+    return _ROBOT_OBJECT
 
 
 def slot_centers(obs: NDArray) -> list[tuple[float, float]]:

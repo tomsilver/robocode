@@ -55,16 +55,18 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
     ),
     "crv_motion_planning": (
         "`crv_motion_planning` is a module with generic CRV robot motion "
-        "planners. Use `plan_crv_base_path(...)` or "
-        "`plan_crv_holding_path(...)` with SE(2) start/goal configs, "
-        "action limits, bounds, and a caller-provided collision callback. "
-        "The module also exports `CRVConfig` and `CRVActionLimits`."
+        "planners. Use `plan_crv_base_actions(...)` or "
+        "`plan_crv_holding_actions(...)` with object-centric state and a "
+        "target `CRVConfig` to get collision-free action sequences. The module "
+        "also exports `CRVConfig`, `CRVActionLimits`, and helpers to convert "
+        "between pose plans and action plans."
     ),
     "crv_motion_planning_grasp": (
         "`crv_motion_planning_grasp` is a module that plans one CRV grasp "
-        "maneuver from an object-centric state, a target object, and a "
-        "relative grasp pose. Use `plan_crv_grasp(...)` to get collision-free "
-        "grasp waypoints, and handle the explicit suction failure errors."
+        "maneuver from an object-centric state, a target object, a relative "
+        "grasp pose, and a grasp arm length. Use `plan_crv_grasp(...)` to get "
+        "collision-free grasp waypoints, and handle the explicit suction "
+        "failure errors."
     ),
     "BiRRT": (
         "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "

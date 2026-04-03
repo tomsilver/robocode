@@ -1,24 +1,33 @@
-"""Generic CRV grasp-planning helpers built on top of CRV motion planning."""
+"""CRV grasp planning built on top of geometric CRV motion planning."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
 
 import numpy as np
+from kinder.envs.geom2d.object_types import RectangleType
+from kinder.envs.geom2d.structs import MultiBody2D, SE2Pose
+from kinder.envs.utils import rectangle_object_to_geom, state_2d_has_collision
+from prpl_utils.utils import get_signed_angle_distance, wrap_angle
+from relational_structs import Object, ObjectCentricState
 
 from robocode.primitives.crv_motion_planning import (
     CRVActionLimits,
     CRVConfig,
-    PlannerBounds,
-    plan_crv_base_path,
-    wrap_angle,
+    crv_action_plan_to_pose_plan,
+    get_suctioned_objects,
+    plan_crv_base_actions,
+    snap_suctioned_objects,
 )
+
+_COLLISION_CACHE: dict[Object, MultiBody2D] = {}
+_POSE_EPS = 1e-6
+_ARM_EPS = 1e-6
 
 
 @dataclass(frozen=True)
 class RelativeGraspPose:
-    """A grasp pose expressed in the target object's center frame."""
+    """A grasp pose expressed in the target-object center frame."""
 
     x: float
     y: float
@@ -44,43 +53,156 @@ class SuctionFailedNoCollisionFreePathError(RuntimeError):
     """Raised when no collision-free grasp path can be constructed."""
 
 
-SegmentCollisionFn = Callable[[tuple[float, float], tuple[float, float]], bool]
-ExtensionCollisionFn = Callable[[str, CRVGraspWaypoint], bool]
-SuctionSuccessFn = Callable[[str, CRVGraspWaypoint, float], bool]
+def _find_robot_object(state: ObjectCentricState) -> Object:
+    return state.get_object_from_name("robot")
 
 
-def _compose_grasp_pose(block: Any, relative_grasp_pose: RelativeGraspPose) -> CRVConfig:
-    """Compose a target-relative grasp pose into a world-frame base pose."""
-    center_x, center_y = block.center
-    c = float(np.cos(block.theta))
-    s = float(np.sin(block.theta))
-    dx = c * relative_grasp_pose.x - s * relative_grasp_pose.y
-    dy = s * relative_grasp_pose.x + c * relative_grasp_pose.y
+def _resolve_target_object(state: ObjectCentricState, target: str | Object) -> Object:
+    if isinstance(target, Object):
+        return target
+    resolved = state.get_object_from_name(target)
+    if resolved is None:
+        raise ValueError(f"ObjectCentricState has no object named '{target}'.")
+    return resolved
+
+
+def _compose_grasp_config(
+    state: ObjectCentricState,
+    target: Object,
+    relative: RelativeGraspPose,
+) -> CRVConfig:
+    target_geom = rectangle_object_to_geom(state, target, _COLLISION_CACHE)
+    center_x, center_y = target_geom.center
+    target_theta = state.get(target, "theta")
+    world_from_center = SE2Pose(center_x, center_y, target_theta)
+    center_from_grasp = SE2Pose(relative.x, relative.y, relative.theta)
+    world_from_grasp = world_from_center * center_from_grasp
     return CRVConfig(
-        x=center_x + dx,
-        y=center_y + dy,
-        theta=wrap_angle(block.theta + relative_grasp_pose.theta),
+        x=float(world_from_grasp.x),
+        y=float(world_from_grasp.y),
+        theta=float(world_from_grasp.theta),
     )
 
 
-def _point_in_bounds(point: tuple[float, float], bounds: PlannerBounds) -> bool:
-    min_x, max_x, min_y, max_y = bounds
-    return bool(min_x <= point[0] <= max_x and min_y <= point[1] <= max_y)
+def _set_robot_pose(
+    state: ObjectCentricState,
+    robot: Object,
+    pose: CRVConfig,
+    arm_joint: float,
+    vacuum: float,
+) -> None:
+    state.set(robot, "x", float(pose.x))
+    state.set(robot, "y", float(pose.y))
+    state.set(robot, "theta", float(pose.theta))
+    state.set(robot, "arm_joint", float(arm_joint))
+    state.set(robot, "vacuum", float(vacuum))
+
+
+def _robot_state_in_collision(
+    state: ObjectCentricState,
+    robot: Object,
+    pose: CRVConfig,
+    arm_joint: float,
+    vacuum: float,
+    ignored_objects: set[Object] | None = None,
+) -> bool:
+    candidate = state.copy()
+    _set_robot_pose(candidate, robot, pose, arm_joint, vacuum)
+    suctioned = get_suctioned_objects(candidate, robot)
+    moving_objects = {robot} | {obj for obj, _ in suctioned}
+    snap_suctioned_objects(candidate, robot, suctioned)
+    obstacle_objects = set(candidate) - moving_objects
+    if ignored_objects is not None:
+        obstacle_objects = obstacle_objects - ignored_objects
+    return state_2d_has_collision(
+        candidate,
+        moving_objects,
+        obstacle_objects,
+        _COLLISION_CACHE,
+    )
+
+
+def _segment_collision_free(
+    state: ObjectCentricState,
+    robot: Object,
+    start_pose: CRVConfig,
+    end_pose: CRVConfig,
+    arm_joint: float,
+    action_limits: CRVActionLimits,
+    ignored_objects: set[Object] | None = None,
+) -> bool:
+    dx = end_pose.x - start_pose.x
+    dy = end_pose.y - start_pose.y
+    dtheta = get_signed_angle_distance(end_pose.theta, start_pose.theta)
+    steps = max(
+        int(np.ceil(abs(dx) / action_limits.max_dx)),
+        int(np.ceil(abs(dy) / action_limits.max_dy)),
+        int(np.ceil(abs(dtheta) / action_limits.max_dtheta)),
+        1,
+    )
+    for idx in range(1, steps + 1):
+        ratio = idx / steps
+        pose = CRVConfig(
+            x=float(start_pose.x + ratio * dx),
+            y=float(start_pose.y + ratio * dy),
+            theta=float(wrap_angle(start_pose.theta + ratio * dtheta)),
+        )
+        if _robot_state_in_collision(
+            state,
+            robot,
+            pose,
+            arm_joint,
+            vacuum=0.0,
+            ignored_objects=ignored_objects,
+        ):
+            return False
+    return True
+
+
+def _extension_collision_free(
+    state: ObjectCentricState,
+    robot: Object,
+    pose: CRVConfig,
+    start_arm: float,
+    end_arm: float,
+    ignored_objects: set[Object] | None = None,
+) -> bool:
+    steps = max(int(np.ceil(abs(end_arm - start_arm) / 0.01)), 2)
+    for arm in np.linspace(start_arm, end_arm, steps):
+        if _robot_state_in_collision(
+            state,
+            robot,
+            pose,
+            float(arm),
+            vacuum=0.0,
+            ignored_objects=ignored_objects,
+        ):
+            return False
+    return True
+
+
+def _suction_hits_target(
+    state: ObjectCentricState,
+    robot: Object,
+    target: Object,
+    pose: CRVConfig,
+    arm_joint: float,
+    vacuum_on: float,
+) -> bool:
+    candidate = state.copy()
+    _set_robot_pose(candidate, robot, pose, arm_joint, vacuum_on)
+    suctioned = get_suctioned_objects(candidate, robot)
+    return any(obj == target for obj, _ in suctioned)
 
 
 def plan_crv_grasp(
-    current_state: Any,
-    grasp_target_object: str,
+    current_state: ObjectCentricState,
+    grasp_target_object: str | Object,
     relative_grasp_pose: RelativeGraspPose,
     grasping_arm_length: float,
     *,
-    action_limits: CRVActionLimits,
-    bounds: PlannerBounds,
-    collision_fn: Callable[[CRVConfig], bool],
-    segment_collision_free_fn: SegmentCollisionFn,
-    extension_collision_free_fn: ExtensionCollisionFn,
-    suction_success_fn: SuctionSuccessFn,
     pre_grasp_margin: float = 0.0,
+    action_limits: CRVActionLimits | None = None,
     seed: int = 0,
     num_attempts: int = 10,
     num_iters: int = 100,
@@ -89,106 +211,162 @@ def plan_crv_grasp(
     vacuum_on: float = 1.0,
     vacuum_off: float = 0.0,
 ) -> list[CRVGraspWaypoint]:
-    """Plan a collision-free base path and final suction sequence for one grasp."""
-    robot = current_state.robot
-    target = current_state.blocks[grasp_target_object]
-    current_cfg = CRVConfig(robot.x, robot.y, robot.theta)
-    grasp_cfg = _compose_grasp_pose(target, relative_grasp_pose)
-    pre_grasp_cfg = CRVConfig(
-        x=grasp_cfg.x - pre_grasp_margin * float(np.cos(grasp_cfg.theta)),
-        y=grasp_cfg.y - pre_grasp_margin * float(np.sin(grasp_cfg.theta)),
-        theta=grasp_cfg.theta,
-    )
-    if not _point_in_bounds((pre_grasp_cfg.x, pre_grasp_cfg.y), bounds):
-        raise SuctionFailedNoCollisionFreePathError(
-            "Sucting failed, no collision free path found."
-        )
+    """Plan a collision-free grasp and finish with extend+suction.
 
-    path = plan_crv_base_path(
-        current_cfg,
-        pre_grasp_cfg,
-        action_limits=action_limits,
-        bounds=bounds,
-        collision_fn=collision_fn,
+    Raises:
+        SuctionFailedEmptySpaceError: suction misses the target object.
+        SuctionFailedNoCollisionFreePathError: no collision-free path exists.
+    """
+    robot = _find_robot_object(current_state)
+    target = _resolve_target_object(current_state, grasp_target_object)
+    if not target.is_instance(RectangleType):
+        raise ValueError("grasp_target_object must be a rectangle object.")
+
+    limits = action_limits or CRVActionLimits(
+        max_dx=0.05,
+        max_dy=0.05,
+        max_dtheta=np.pi / 16,
+    )
+
+    start_pose = CRVConfig(
+        x=float(current_state.get(robot, "x")),
+        y=float(current_state.get(robot, "y")),
+        theta=float(current_state.get(robot, "theta")),
+    )
+    current_arm = float(current_state.get(robot, "arm_joint"))
+    retract_arm = float(current_state.get(robot, "base_radius"))
+
+    grasp_pose = _compose_grasp_config(current_state, target, relative_grasp_pose)
+    pre_grasp_pose = CRVConfig(
+        x=float(grasp_pose.x - pre_grasp_margin * np.cos(grasp_pose.theta)),
+        y=float(grasp_pose.y - pre_grasp_margin * np.sin(grasp_pose.theta)),
+        theta=float(grasp_pose.theta),
+    )
+
+    actions = plan_crv_base_actions(
+        current_state,
+        pre_grasp_pose,
+        action_limits=limits,
+        ignore_object_names={target.name},
         seed=seed,
         num_attempts=num_attempts,
         num_iters=num_iters,
         smooth_amt=smooth_amt,
         sample_goal_eps=sample_goal_eps,
     )
-    if path is None:
+    if actions is None:
         raise SuctionFailedNoCollisionFreePathError(
             "Sucting failed, no collision free path found."
         )
-    if not segment_collision_free_fn(
-        (pre_grasp_cfg.x, pre_grasp_cfg.y),
-        (grasp_cfg.x, grasp_cfg.y),
+
+    if not _segment_collision_free(
+        current_state,
+        robot,
+        pre_grasp_pose,
+        grasp_pose,
+        retract_arm,
+        limits,
+        ignored_objects={target},
     ):
         raise SuctionFailedNoCollisionFreePathError(
             "Sucting failed, no collision free path found."
         )
 
-    retract_arm = robot.base_radius
+    if not _extension_collision_free(
+        current_state,
+        robot,
+        grasp_pose,
+        retract_arm,
+        float(grasping_arm_length),
+        ignored_objects={target},
+    ):
+        raise SuctionFailedNoCollisionFreePathError(
+            "Sucting failed, no collision free path found."
+        )
+
+    if _robot_state_in_collision(
+        current_state,
+        robot,
+        grasp_pose,
+        float(grasping_arm_length),
+        vacuum_on,
+        ignored_objects={target},
+    ):
+        raise SuctionFailedNoCollisionFreePathError(
+            "Sucting failed, no collision free path found."
+        )
+
+    if not _suction_hits_target(
+        current_state,
+        robot,
+        target,
+        grasp_pose,
+        float(grasping_arm_length),
+        vacuum_on,
+    ):
+        raise SuctionFailedEmptySpaceError(
+            "Sucting failed, trying to suction empty space."
+        )
+
+    path = crv_action_plan_to_pose_plan(start_pose, actions)
     waypoints = [
         CRVGraspWaypoint(
-            x=current_cfg.x,
-            y=current_cfg.y,
-            theta=current_cfg.theta,
-            arm_joint=robot.arm_joint,
-            vacuum=robot.vacuum,
+            x=float(start_pose.x),
+            y=float(start_pose.y),
+            theta=float(start_pose.theta),
+            arm_joint=current_arm,
+            vacuum=float(current_state.get(robot, "vacuum")),
         )
     ]
-    if robot.arm_joint > retract_arm:
+    if current_arm > retract_arm + _ARM_EPS:
         waypoints.append(
             CRVGraspWaypoint(
-                x=current_cfg.x,
-                y=current_cfg.y,
-                theta=current_cfg.theta,
+                x=float(start_pose.x),
+                y=float(start_pose.y),
+                theta=float(start_pose.theta),
                 arm_joint=retract_arm,
                 vacuum=vacuum_off,
             )
         )
     waypoints.extend(
         CRVGraspWaypoint(
-            x=cfg.x,
-            y=cfg.y,
-            theta=cfg.theta,
+            x=float(pose.x),
+            y=float(pose.y),
+            theta=float(pose.theta),
             arm_joint=retract_arm,
             vacuum=vacuum_off,
         )
-        for cfg in path[1:]
+        for pose in path[1:]
     )
-    grasp_waypoint = CRVGraspWaypoint(
-        x=grasp_cfg.x,
-        y=grasp_cfg.y,
-        theta=grasp_cfg.theta,
-        arm_joint=retract_arm,
-        vacuum=vacuum_off,
-    )
-    if not extension_collision_free_fn(grasp_target_object, grasp_waypoint):
-        raise SuctionFailedNoCollisionFreePathError(
-            "Sucting failed, no collision free path found."
+    if (
+        abs(pre_grasp_pose.x - grasp_pose.x) > _POSE_EPS
+        or abs(pre_grasp_pose.y - grasp_pose.y) > _POSE_EPS
+        or abs(get_signed_angle_distance(grasp_pose.theta, pre_grasp_pose.theta))
+        > _POSE_EPS
+    ):
+        waypoints.append(
+            CRVGraspWaypoint(
+                x=float(grasp_pose.x),
+                y=float(grasp_pose.y),
+                theta=float(grasp_pose.theta),
+                arm_joint=retract_arm,
+                vacuum=vacuum_off,
+            )
         )
-    if not suction_success_fn(grasp_target_object, grasp_waypoint, grasping_arm_length):
-        raise SuctionFailedEmptySpaceError(
-            "Sucting failed, trying to suction empty space."
-        )
-
     waypoints.extend(
         [
-            grasp_waypoint,
             CRVGraspWaypoint(
-                x=grasp_cfg.x,
-                y=grasp_cfg.y,
-                theta=grasp_cfg.theta,
-                arm_joint=grasping_arm_length,
+                x=float(grasp_pose.x),
+                y=float(grasp_pose.y),
+                theta=float(grasp_pose.theta),
+                arm_joint=float(grasping_arm_length),
                 vacuum=vacuum_off,
             ),
             CRVGraspWaypoint(
-                x=grasp_cfg.x,
-                y=grasp_cfg.y,
-                theta=grasp_cfg.theta,
-                arm_joint=grasping_arm_length,
+                x=float(grasp_pose.x),
+                y=float(grasp_pose.y),
+                theta=float(grasp_pose.theta),
+                arm_joint=float(grasping_arm_length),
                 vacuum=vacuum_on,
             ),
         ]
