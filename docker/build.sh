@@ -5,7 +5,7 @@
 #   bash docker/build.sh
 #
 # Rebuild when PyPI dependencies in pyproject.toml / uv.lock change.
-# No rebuild needed for prpl-mono code changes (bind-mounted at runtime).
+# No rebuild needed for src/ or prpl-mono/ code changes (bind-mounted at runtime).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
