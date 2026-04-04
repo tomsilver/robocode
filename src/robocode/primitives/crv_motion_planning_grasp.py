@@ -247,7 +247,6 @@ def plan_crv_grasp(
         current_state,
         pre_grasp_pose,
         action_limits=limits,
-        ignore_object_names={target.name},
         carrying=False,
         seed=seed,
         num_attempts=num_attempts,
@@ -267,7 +266,6 @@ def plan_crv_grasp(
         grasp_pose,
         retract_arm,
         limits,
-        ignored_objects={target},
     ):
         raise SuctionFailedNoCollisionFreePathError(
             "Sucting failed, no collision free path found."
