@@ -5,6 +5,8 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+from robocode.primitives import crv_motion_planning as crv_motion_planning_module
+from robocode.primitives import crv_motion_planning_grasp as crv_grasp_module
 from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
@@ -14,6 +16,8 @@ from robocode.primitives.motion_planning import BiRRT
 PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "check_action_collision": "check_action_collision",
     "csp": "csp",
+    "crv_motion_planning": "crv_motion_planning",
+    "crv_motion_planning_grasp": "crv_motion_planning_grasp",
     "BiRRT": "motion_planning",
 }
 
@@ -47,6 +51,22 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "  Access via `primitives['csp']`, e.g. "
         "`primitives['csp'].CSPVariable(...)`."
     ),
+    "crv_motion_planning": (
+        "`crv_motion_planning` is a module with generic CRV robot motion "
+        "planners. Use `plan_crv_actions(...)` with object-centric state and a "
+        "target `CRVConfig` to get collision-free action sequences, and set "
+        "`carrying=True` for holding-aware planning. Compatibility wrappers "
+        "`plan_crv_base_actions(...)` and `plan_crv_holding_actions(...)` are "
+        "also available. The module exports `CRVConfig`, `CRVActionLimits`, and "
+        "helpers to convert between pose plans and action plans."
+    ),
+    "crv_motion_planning_grasp": (
+        "`crv_motion_planning_grasp` is a module that plans one CRV grasp "
+        "maneuver from an object-centric state, a target object, a relative "
+        "grasp pose, and a grasp arm length. Use `plan_crv_grasp(...)` to get "
+        "collision-free grasp waypoints, and handle the explicit suction "
+        "failure errors."
+    ),
     "BiRRT": (
         "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
         "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
@@ -66,6 +86,8 @@ def _all_primitives(env: Any) -> dict[str, Any]:
     return {
         "check_action_collision": partial(check_action_collision, env),
         "csp": csp_module,
+        "crv_motion_planning": crv_motion_planning_module,
+        "crv_motion_planning_grasp": crv_grasp_module,
         "BiRRT": BiRRT,
     }
 
