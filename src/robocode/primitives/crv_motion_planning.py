@@ -1,4 +1,17 @@
-"""Generic CRV motion planning based on geometric collision checking."""
+"""Generic CRV motion planning based on exact geometric collision checking.
+
+This module exposes a small public API for planning collision-free SE(2) motion
+for the 2D CRV robot. Callers provide an ``ObjectCentricState`` together with a
+goal base pose, and the planner returns a list of bounded CRV actions.
+
+The public entry points are intentionally generic:
+
+- ``plan_crv_actions()``: main interface for base motion planning.
+- ``plan_crv_base_actions()``: compatibility wrapper for base-only planning.
+- ``plan_crv_holding_actions()``: compatibility wrapper for holding-aware planning.
+- ``crv_action_plan_to_pose_plan()`` / ``crv_pose_plan_to_action_plan()``:
+  utility conversions between discrete pose plans and action plans.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +42,10 @@ from robocode.primitives.motion_planning import BiRRT
 
 @dataclass(frozen=True)
 class CRVConfig:
-    """A minimal SE(2) configuration for the CRV robot base."""
+    """A minimal SE(2) configuration for the CRV robot base.
+
+    This is the pose-level representation used by the public planner API.
+    """
 
     x: float
     y: float
@@ -38,7 +54,11 @@ class CRVConfig:
 
 @dataclass(frozen=True)
 class CRVActionLimits:
-    """Relative action limits used to discretize CRV interpolation."""
+    """Relative action limits used to discretize CRV interpolation.
+
+    These limits define the maximum per-step change in base translation and
+    rotation when converting a continuous path into executable CRV actions.
+    """
 
     max_dx: float
     max_dy: float
@@ -46,7 +66,10 @@ class CRVActionLimits:
 
 
 class CRVRobotActionSpace(RobotActionSpace):
-    """An action space for a CRV robot."""
+    """Action bounds for the 2D CRV robot.
+
+    The action layout is ``[dx, dy, dtheta, darm, vacuum]``.
+    """
 
     def __init__(
         self,
@@ -100,7 +123,11 @@ def create_walls_from_world_boundaries(
     min_dy: float,
     max_dy: float,
 ) -> dict[Object, dict[str, float]]:
-    """Create wall objects and feature dicts based on world boundaries."""
+    """Create synthetic wall objects from workspace boundaries.
+
+    The returned objects can be inserted into an ``ObjectCentricState`` so the
+    planner treats workspace limits as ordinary geometric obstacles.
+    """
     state_dict: dict[Object, dict[str, float]] = {}
     right_wall = Object("right_wall", RectangleType)
     side_wall_height = world_max_y - world_min_y
@@ -162,7 +189,7 @@ def create_walls_from_world_boundaries(
 def get_tool_tip_position(
     state: ObjectCentricState, robot: Object
 ) -> tuple[float, float]:
-    """Get the tool tip position (center of the bottom gripper edge)."""
+    """Return the gripper tool-tip position in world coordinates."""
     multibody = crv_robot_to_multibody2d(robot, state)
     gripper_geom = multibody.get_body("gripper").geom
     assert isinstance(gripper_geom, Rectangle)
@@ -178,7 +205,11 @@ def get_tool_tip_position(
 def get_suctioned_objects(
     state: ObjectCentricState, robot: Object
 ) -> list[tuple[Object, SE2Pose]]:
-    """Find objects currently suctioned by the CRV robot."""
+    """Return movable objects currently attached to the robot suction zone.
+
+    Each result also includes the relative transform from the gripper tool-tip
+    frame to the attached object pose.
+    """
     if state.get(robot, "vacuum") <= 0.5:
         return []
     robot_multibody = crv_robot_to_multibody2d(robot, state)
@@ -203,7 +234,7 @@ def snap_suctioned_objects(
     robot: Object,
     suctioned_objs: list[tuple[Object, SE2Pose]],
 ) -> None:
-    """Update suctioned object poses to follow the current gripper pose."""
+    """Update attached-object poses so they rigidly follow the current gripper."""
     gripper_x, gripper_y = get_tool_tip_position(state, robot)
     gripper_theta = state.get(robot, "theta")
     world_to_gripper = SE2Pose(gripper_x, gripper_y, gripper_theta)
@@ -219,7 +250,11 @@ def move_objects_in_contact(
     robot: Object,
     suctioned_objs: list[tuple[Object, SE2Pose]],
 ) -> tuple[ObjectCentricState, set[tuple[Object, SE2Pose]]]:
-    """Move objects that are in contact with suctioned objects."""
+    """Propagate contact from suctioned objects to nearby movable objects.
+
+    This is a conservative approximation used during holding-aware planning so
+    the planner can reject motions that would shove other movable objects.
+    """
     moved_objects: list[tuple[Object, SE2Pose]] = []
     moving_objects = {robot} | {o for o, _ in suctioned_objs}
     nonstatic_objects = {
@@ -393,7 +428,16 @@ def crv_pose_plan_to_action_plan(
     action_space: CRVRobotActionSpace,
     vacuum_while_moving: bool = False,
 ) -> list[Array]:
-    """Convert a CRV pose plan into action deltas."""
+    """Convert a CRV pose plan into bounded CRV action deltas.
+
+    Args:
+        pose_plan: Discrete sequence of SE(2) robot poses.
+        action_space: Action bounds used to shape the returned arrays.
+        vacuum_while_moving: Whether motion actions should keep vacuum on.
+
+    Returns:
+        A list of CRV actions with layout ``[dx, dy, dtheta, darm, vacuum]``.
+    """
     action_plan: list[Array] = []
     for pt1, pt2 in zip(pose_plan[:-1], pose_plan[1:]):
         action = np.zeros_like(action_space.high)
@@ -409,7 +453,16 @@ def crv_action_plan_to_pose_plan(
     start: CRVConfig,
     actions: list[NDArray[np.float32]],
 ) -> list[CRVConfig]:
-    """Integrate action deltas into a CRV pose path."""
+    """Integrate CRV base actions into a discrete pose path.
+
+    Args:
+        start: Starting base pose.
+        actions: Sequence of CRV actions whose first three entries are interpreted
+            as ``dx``, ``dy``, and ``dtheta``.
+
+    Returns:
+        The corresponding pose path, including the start configuration.
+    """
     path = [start]
     current = start
     for action in actions:
@@ -435,7 +488,11 @@ def plan_crv_base_actions(
     sample_goal_eps: float = 0.0,
     **_: Any,
 ) -> list[NDArray[np.float32]] | None:
-    """Compatibility wrapper for callers expecting base-only planning."""
+    """Plan a collision-free base-only action sequence.
+
+    This is a compatibility wrapper around :func:`plan_crv_actions` with
+    ``carrying=False``.
+    """
     return plan_crv_actions(
         current_state,
         target_pose,
@@ -463,7 +520,11 @@ def plan_crv_holding_actions(
     sample_goal_eps: float = 0.0,
     **_: Any,
 ) -> list[NDArray[np.float32]] | None:
-    """Compatibility wrapper for callers expecting holding planning."""
+    """Plan a collision-free action sequence while transporting an attached object.
+
+    This is a compatibility wrapper around :func:`plan_crv_actions` with
+    ``carrying=True``.
+    """
     return plan_crv_actions(
         current_state,
         target_pose,
@@ -492,7 +553,28 @@ def plan_crv_actions(
     sample_goal_eps: float = 0.0,
     **_: Any,
 ) -> list[NDArray[np.float32]] | None:
-    """Plan collision-free CRV actions; set `carrying` for holding-aware planning."""
+    """Plan a collision-free CRV action sequence to a target base pose.
+
+    Args:
+        current_state: Object-centric world state containing a CRV robot named
+            ``"robot"``.
+        target_pose: Desired robot base pose.
+        action_limits: Optional per-step CRV motion limits.
+        ignore_object_names: Optional object names that should be ignored as
+            obstacles during planning.
+        carrying: If ``True``, enable holding-aware collision checking and contact
+            propagation. If ``None``, this is inferred from the current suctioned
+            objects in the state.
+        seed: Random seed for BiRRT sampling.
+        num_attempts: Number of planner restarts.
+        num_iters: Maximum BiRRT iterations per attempt.
+        smooth_amt: Number of shortcut-smoothing passes.
+        sample_goal_eps: Probability of directly sampling the goal during search.
+
+    Returns:
+        A list of executable CRV actions, or ``None`` if no collision-free plan
+        is found.
+    """
     robot = _find_robot_object(current_state)
     if carrying is None:
         carrying = bool(get_suctioned_objects(current_state, robot))
@@ -530,7 +612,7 @@ def is_inside(
     outer: Object,
     static_object_cache: dict[Object, MultiBody2D],
 ) -> bool:
-    """Check if inner rectangle is completely inside outer rectangle."""
+    """Return ``True`` if one rectangle object is fully inside another."""
     inner_geom = rectangle_object_to_geom(state, inner, static_object_cache)
     outer_geom = rectangle_object_to_geom(state, outer, static_object_cache)
     for x, y in inner_geom.vertices:
@@ -545,7 +627,7 @@ def is_inside_shelf(
     outer: Object,
     static_object_cache: dict[Object, MultiBody2D],
 ) -> bool:
-    """Check if inner rectangle is completely inside double-rect shelf opening."""
+    """Return ``True`` if a rectangle is fully inside a shelf opening."""
     assert outer.is_instance(DoubleRectType)
     inner_geom = rectangle_object_to_geom(state, inner, static_object_cache)
     outer_geom = double_rectangle_object_to_part_geom(state, outer, static_object_cache)

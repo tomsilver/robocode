@@ -1,9 +1,8 @@
-"""Tests for the ClutteredStorage2D oracle approach."""
+"""Regression tests for the ClutteredStorage2D oracle approach."""
 
-import kinder
-import numpy as np
+from __future__ import annotations
+
 import pytest
-from gymnasium.wrappers import RecordVideo
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.oracles.clutteredstorage2d_medium.approach import (
@@ -14,12 +13,10 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     inside_blocks,
     outside_blocks,
 )
-from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/ClutteredStorage2D-b3-v0"
-MAX_STEPS = 800
-SOLVE_SEEDS = [0, 1]
-REPORT_SEEDS = list(range(100))
+MAX_STEPS = 500
+SOLVE_SEEDS = [0, 1, 2, 3]
 
 
 def _run_episode(
@@ -52,80 +49,48 @@ def _run_episode(
 
 
 @pytest.fixture(name="clutteredstorage_env")
-def _clutteredstorage_env():
+def _clutteredstorage_env() -> KinderGeom2DEnv:
     """Create a KinderGeom2DEnv for the ClutteredStorage2D-b3 environment."""
     return KinderGeom2DEnv(ENV_ID)
 
 
 @pytest.mark.parametrize("seed", SOLVE_SEEDS)
-def test_oracle_solves_known_seeds(
+def test_oracle_solves_regression_seeds(
     clutteredstorage_env: KinderGeom2DEnv,
     seed: int,
-):
-    """The oracle approach should solve known regression seeds."""
+) -> None:
+    """The oracle should solve a fixed set of regression seeds."""
     approach = ClutteredStorage2DOracleApproach(
         action_space=clutteredstorage_env.action_space,
         observation_space=clutteredstorage_env.observation_space,
     )
     solved, steps, inside, outside = _run_episode(clutteredstorage_env, approach, seed)
+
     assert solved, (
         f"seed={seed}: not solved in {steps} steps; "
         f"inside={inside}, outside={outside}"
     )
-    assert len(outside) == 0
-    assert len(inside) == 3
-    print(f"seed={seed}: solved in {steps} steps")
+    assert len(outside) == 0, f"seed={seed}: expected no outside blocks, got {outside}"
+    assert len(inside) == 3, f"seed={seed}: expected 3 inside blocks, got {inside}"
 
 
-def test_oracle_episode_with_optional_video():
-    """Run a full episode in the same style as the other oracle approach tests."""
-    kinder.register_all_environments()
-    render_mode = "rgb_array" if MAKE_VIDEOS else None
-    base_env = kinder.make(ENV_ID, render_mode=render_mode)
-    env = RecordVideo(base_env, "unit_test_videos") if MAKE_VIDEOS else base_env
-    try:
-        wrapped_env = env
+def test_oracle_solves_all_regression_seeds_in_batch(
+    clutteredstorage_env: KinderGeom2DEnv,
+) -> None:
+    """Fail loudly if any regression seed stops solving."""
+    failures: list[str] = []
+
+    for seed in SOLVE_SEEDS:
         approach = ClutteredStorage2DOracleApproach(
-            action_space=wrapped_env.action_space,
-            observation_space=wrapped_env.observation_space,
+            action_space=clutteredstorage_env.action_space,
+            observation_space=clutteredstorage_env.observation_space,
         )
-        solved, steps, inside, outside = _run_episode(wrapped_env, approach, seed=0)
-        assert solved, (
-            f"seed=0: not solved in {steps} steps; "
-            f"inside={inside}, outside={outside}"
+        solved, steps, inside, outside = _run_episode(
+            clutteredstorage_env, approach, seed
         )
-    finally:
-        env.close()
-
-
-def test_oracle_solve_rate_report():
-    """Report solve rate across a fixed seed set without gating on 100% yet."""
-    render_mode = "rgb_array" if MAKE_VIDEOS else None
-    shared_env = KinderGeom2DEnv(ENV_ID) if not MAKE_VIDEOS else None
-
-    approach = ClutteredStorage2DOracleApproach(
-        action_space=KinderGeom2DEnv(ENV_ID).action_space,
-        observation_space=KinderGeom2DEnv(ENV_ID).observation_space,
-    )
-
-    results = []
-    for seed in REPORT_SEEDS:
-        if MAKE_VIDEOS:
-            ep_env = RecordVideo(
-                kinder.make(ENV_ID, render_mode=render_mode),
-                f"unit_test_videos/approach_seed{seed}",
+        if not solved:
+            failures.append(
+                f"seed={seed} steps={steps} inside={inside} outside={outside}"
             )
-        else:
-            ep_env = shared_env
-        solved, steps, _, outside = _run_episode(ep_env, approach, seed)
-        results.append(
-            {"seed": seed, "solved": solved, "steps": steps, "outside": outside}
-        )
-        print(f"seed={seed}: solved={solved} steps={steps} outside={outside}")
-        if MAKE_VIDEOS:
-            ep_env.close()
 
-    solve_rate = float(np.mean([result["solved"] for result in results]))
-    mean_steps = float(np.mean([result["steps"] for result in results]))
-    print(f"\nSolve rate: {solve_rate:.0%}, Mean steps: {mean_steps:.0f}")
-    assert len(results) == len(REPORT_SEEDS)
+    assert not failures, "Regression seeds failed:\n" + "\n".join(failures)

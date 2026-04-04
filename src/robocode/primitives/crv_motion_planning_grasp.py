@@ -1,4 +1,14 @@
-"""CRV grasp planning built on top of geometric CRV motion planning."""
+"""CRV grasp planning built on top of geometric CRV motion planning.
+
+This module provides a higher-level grasp primitive for 2D CRV environments.
+Callers specify a target object, a relative grasp pose in the target frame, and
+the arm length to use for suction. The planner then:
+
+1. plans a collision-free base path to a pre-grasp pose,
+2. checks the short final base approach,
+3. checks arm extension to the requested grasp length, and
+4. returns a full list of CRV waypoints ending with vacuum-on suction.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +37,11 @@ _ARM_EPS = 1e-6
 
 @dataclass(frozen=True)
 class RelativeGraspPose:
-    """A grasp pose expressed in the target-object center frame."""
+    """A grasp pose expressed in the target object's center frame.
+
+    The pose describes where the robot base should be located relative to the
+    target object immediately before the final arm extension and suction step.
+    """
 
     x: float
     y: float
@@ -36,7 +50,7 @@ class RelativeGraspPose:
 
 @dataclass(frozen=True)
 class CRVGraspWaypoint:
-    """A full CRV waypoint including arm and vacuum commands."""
+    """A full CRV waypoint including base pose, arm setting, and vacuum command."""
 
     x: float
     y: float
@@ -211,7 +225,31 @@ def plan_crv_grasp(
     vacuum_on: float = 1.0,
     vacuum_off: float = 0.0,
 ) -> list[CRVGraspWaypoint]:
-    """Plan a collision-free grasp and finish with extend+suction.
+    """Plan a collision-free grasp and finish with extend-and-suction.
+
+    Args:
+        current_state: Object-centric world state containing a CRV robot named
+            ``"robot"``.
+        grasp_target_object: Object or object name to grasp. The target must be a
+            rectangle object.
+        relative_grasp_pose: Desired final base pose expressed in the target
+            object's center frame.
+        grasping_arm_length: Arm extension to use for the final suction step.
+        pre_grasp_margin: Optional offset that backs the pre-grasp pose away from
+            the final grasp pose along the grasp direction.
+        action_limits: Optional per-step CRV base motion limits.
+        seed: Random seed for BiRRT sampling.
+        num_attempts: Number of planner restarts.
+        num_iters: Maximum BiRRT iterations per attempt.
+        smooth_amt: Number of shortcut-smoothing passes.
+        sample_goal_eps: Probability of directly sampling the goal during search.
+        vacuum_on: Vacuum value used for the final suction waypoint.
+        vacuum_off: Vacuum value used before the final suction waypoint.
+
+    Returns:
+        A list of ``CRVGraspWaypoint`` objects describing the entire grasp
+        execution, including any arm retraction, base motion, final extension,
+        and the terminal vacuum-on waypoint.
 
     Raises:
         SuctionFailedEmptySpaceError: suction misses the target object.
