@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.mcp.server import create_server
 
 _ENV_CONFIG = {
@@ -53,6 +54,36 @@ def test_render_state_returns_png_path(renders_dir: Path) -> None:
     path = _call_tool(srv, "render_state", {"seed": 42})
     assert path.endswith(".png")
     assert Path(path).exists()
+
+
+def test_render_state_with_arbitrary_state(renders_dir: Path) -> None:
+    """render_state accepts an arbitrary state as a list of floats."""
+    env = KinderGeom2DEnv(_ENV_CONFIG["env_id"])
+    env.reset(seed=0)
+    state_list = env.get_state().tolist()
+
+    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    path = _call_tool(srv, "render_state", {"state": state_list})
+    assert path.endswith(".png")
+    assert Path(path).exists()
+    assert "state_custom" in Path(path).name
+
+
+def test_render_state_label(renders_dir: Path) -> None:
+    """The label parameter is reflected in the output filename."""
+    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    path = _call_tool(srv, "render_state", {"seed": 0, "label": "my_label"})
+    assert "my_label" in Path(path).name
+
+
+def test_render_state_deduplicates_filenames(renders_dir: Path) -> None:
+    """Calling render_state twice with the same args produces distinct files."""
+    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    path1 = _call_tool(srv, "render_state", {"seed": 7})
+    path2 = _call_tool(srv, "render_state", {"seed": 7})
+    assert path1 != path2
+    assert Path(path1).exists()
+    assert Path(path2).exists()
 
 
 def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) -> None:
