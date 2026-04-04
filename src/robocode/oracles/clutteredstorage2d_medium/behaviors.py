@@ -17,7 +17,6 @@ from robocode.oracles.clutteredstorage2d_medium.act_helpers import (
     connecting_waypoints,
     inflate_block_radius,
     path_length,
-    segment_collision_free,
     waypoints_to_actions,
 )
 from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
@@ -47,9 +46,7 @@ from robocode.oracles.clutteredstorage2d_medium.obs_helpers import (
     wrap_angle,
 )
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
-from robocode.primitives import (
-    crv_motion_planning_grasp as crv_motion_planning_grasp_module,
-)
+from robocode.primitives import crv_motion_planning_grasp as crv_grasp_module
 from robocode.primitives.behavior import Behavior
 
 ANGLE_TOL = 0.05
@@ -150,7 +147,7 @@ class _SingleTaskBehavior(Behavior[NDArray, NDArray]):
             "crv_motion_planning", crv_motion_planning_module
         )
         self._grasp_motion_planner = (primitives or {}).get(
-            "crv_motion_planning_grasp", crv_motion_planning_grasp_module
+            "crv_motion_planning_grasp", crv_grasp_module
         )
         self._planner_rng = np.random.default_rng(seed)
         self._actions: deque[NDArray] = deque()
@@ -713,9 +710,6 @@ class _SingleTaskBehavior(Behavior[NDArray, NDArray]):
         """Return the shortest valid pick plan for a single outside block."""
         object_state = extract_object_centric_state(x)
         robot = extract_robot(x)
-        bounds = self._base_path_bounds(x, robot)
-        path_obstacles = self._base_path_obstacles(x, ignore_block="", robot=robot)
-        local_obstacles = self._base_path_obstacles(x, block_name, robot)
         best_candidate: tuple[float, RobotPose, list[RobotPose]] | None = None
 
         for candidate in pick_base_pose_candidates(x, block_name):
@@ -759,7 +753,6 @@ class _SingleTaskBehavior(Behavior[NDArray, NDArray]):
                 best_candidate = (candidate_length, target, robot_waypoints)
 
         return best_candidate
-
 
     def _select_store_pick(
         self,
@@ -1152,7 +1145,10 @@ class _SingleTaskBehavior(Behavior[NDArray, NDArray]):
             self._queue_retreat(x)
             return action, True
 
-        if block_y < target_y - self.target_y_tol and robot.arm_joint < place_arm - ARM_TOL:
+        if (
+            block_y < target_y - self.target_y_tol
+            and robot.arm_joint < place_arm - ARM_TOL
+        ):
             action[3] = float(np.clip(place_arm - robot.arm_joint, -DARM_LIM, DARM_LIM))
             return action, False
 
