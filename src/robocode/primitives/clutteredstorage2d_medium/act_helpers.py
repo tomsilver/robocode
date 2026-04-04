@@ -1,4 +1,4 @@
-"""Action helpers for StickButton2D-b3 oracle behaviors.
+"""Action helpers.
 
 Converts sparse key-waypoints into dense action sequences that respect the environment's
 action-space limits.
@@ -11,8 +11,7 @@ from collections import deque
 
 import numpy as np
 from numpy.typing import NDArray
-
-from robocode.oracles.stickbutton2d_medium.obs_helpers import RobotPose
+from obs_helpers import RobotPose  # type: ignore[import-not-found]
 
 # Default per-step limits (matching the StickButton2D action space).
 DX_LIM = 0.05
