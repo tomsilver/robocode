@@ -133,7 +133,8 @@ class RRT(Generic[_RRTState]):
         return self._distance_fn(pt, node.data)
 
     def _smooth_path(self, path: list[_RRTState]) -> list[_RRTState]:
-        assert len(path) > 2
+        if len(path) <= 2 or self._smooth_amt <= 0:
+            return path
         for _ in range(self._smooth_amt):
             i = self._rng.integers(0, len(path) - 1)
             j = self._rng.integers(0, len(path) - 1)
