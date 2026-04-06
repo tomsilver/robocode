@@ -12,6 +12,7 @@ python experiments/run_experiment.py \
     seed="$SEED" \
     num_eval_tasks=100 \
     'primitives=[]' \
-    'mcp_tools=[render_state,render_policy]' \
+    'mcp_tools=[]' \
     environment="$ENV" \
-    "hydra.run.dir=outputs/cdl_no_mp_${ENV}_${DATE}/s${SEED}"
+    approach.load_dir=outputs/cdl_no_primitives_w_helpers_${ENV}_${DATE}/s${SEED} \
+    "hydra.run.dir=outputs/cdl_no_primitives_w_helpers_${ENV}_${DATE}/s${SEED}_test"

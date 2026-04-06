@@ -3,8 +3,12 @@
 # Based on the official Claude Code devcontainer:
 #   https://github.com/anthropics/claude-code/tree/main/.devcontainer
 #
-# Adds Python 3.11 + uv on top of the official node:20 base and installs all
-# robocode Python dependencies into /robocode/.venv.
+# Adds Python 3.11 + uv on top of the official node:20 base.
+#
+# PyPI deps are pre-installed into .venv during build, but src/ and
+# prpl-mono/ are DELETED from the image after install — they are
+# bind-mounted (filtered) at runtime so oracle/solution code never leaks.
+# A quick `uv sync` in the entrypoint re-creates editable .pth entries.
 #
 # Build from the repository root:
 #   bash docker/build.sh
@@ -12,13 +16,9 @@
 #   docker build -t robocode-sandbox -f docker/Dockerfile .
 #
 # Runtime bind-mounts (see docker_sandbox.py):
-#   -v <sandbox_dir>:/sandbox          writable — agent writes approach.py here
-#   -v <repo>/prpl-mono:/robocode/prpl-mono:ro — overrides the stale in-image copy
-#
-# The prpl-mono submodule is baked in during the build so that `uv sync` can
-# create the editable-install .pth entries pointing to /robocode/prpl-mono/*.
-# The bind-mount at runtime transparently replaces the source, so no image
-# rebuild is needed for prpl-mono code changes — only for PyPI dep changes.
+#   -v <sandbox_dir>:/sandbox              writable — agent writes approach.py here
+#   -v <src>:/robocode/src:ro              filtered copy (oracles stripped)
+#   -v <prpl-mono>:/robocode/prpl-mono:ro  filtered copy (tests stripped)
 
 FROM node:20
 
@@ -86,12 +86,12 @@ RUN mkdir -p /home/node/.claude \
     && chown -R node:node /home/node/.claude
 
 # ---------------------------------------------------------------------------
-# Python environment — install all robocode deps into /robocode/.venv
+# Python environment — pre-install all PyPI deps into /robocode/.venv.
 #
-# Layer ordering for cache efficiency:
-#   1. pyproject.toml + uv.lock  (invalidated when PyPI deps change)
-#   2. prpl-mono/                (invalidated when submodule structure changes)
-#   3. src/                      (invalidated on every robocode source change)
+# src/ and prpl-mono/ are copied temporarily so `uv sync` can resolve
+# editable installs, then DELETED so oracle/solution code is never baked
+# into the image.  At runtime they are bind-mounted (filtered) and a
+# quick `uv sync` in the entrypoint re-creates the editable .pth entries.
 # ---------------------------------------------------------------------------
 WORKDIR /robocode
 
@@ -99,10 +99,16 @@ COPY pyproject.toml uv.lock ./
 COPY prpl-mono/ prpl-mono/
 COPY src/ src/
 
-RUN uv sync --frozen --python python3.11
+RUN uv sync --frozen --python python3.11 \
+    && rm -rf src/ prpl-mono/ \
+    && find .venv -maxdepth 3 \( -name '*.egg-info' -o -name '*.dist-info' -o -name '*.pth' \) \
+       -exec rm -rf {} + 2>/dev/null; true
+
+# The `node` user needs write access to update .venv at runtime.
+RUN chown -R node:node /robocode
 
 # ---------------------------------------------------------------------------
-# Entrypoint: init firewall → exec claude
+# Entrypoint: init firewall → uv sync → exec claude
 # ---------------------------------------------------------------------------
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

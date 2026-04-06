@@ -1,19 +1,6 @@
-"""Observation parsing and geometric predicates for StickButton2D-b3.
+"""Observation parsing and geometric predicates.
 
 Provides named access to object features from the flat observation vector.
-
-Object names and feature layout:
-  robot    [0:9]   x y theta base_radius arm_joint arm_length
-                    vacuum gripper_height gripper_width
-  stick    [9:19]  x y theta static cr cg cb z_order width height
-  button0  [19:28] x y theta static cr cg cb z_order radius
-  button1  [28:37] x y theta static cr cg cb z_order radius
-  button2  [37:46] x y theta static cr cg cb z_order radius
-
-Position convention:
-  Robot: (x, y) is the centre of the base circle.
-  Stick: (x, y) is the bottom-left corner.
-  Buttons: (x, y) is the centre of the circle.
 """
 
 from __future__ import annotations
@@ -67,13 +54,7 @@ CIRCLE_FEATURES = [
 # Layout: object name -> (base_index, feature_list)
 # ---------------------------------------------------------------------------
 
-LAYOUT: dict[str, tuple[int, list[str]]] = {
-    "robot": (0, ROBOT_FEATURES),
-    "stick": (9, RECT_FEATURES),
-    "button0": (19, CIRCLE_FEATURES),
-    "button1": (28, CIRCLE_FEATURES),
-    "button2": (37, CIRCLE_FEATURES),
-}
+LAYOUT: dict[str, tuple[int, list[str]]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -120,26 +101,6 @@ class RectPose:
     theta: float
     width: float
     height: float
-
-    @property
-    def cx(self) -> float:
-        """Centre x."""
-        return self.x + self.width / 2
-
-    @property
-    def cy(self) -> float:
-        """Centre y."""
-        return self.y + self.height / 2
-
-    @property
-    def top(self) -> float:
-        """Top edge y."""
-        return self.y + self.height
-
-    @property
-    def right(self) -> float:
-        """Right edge x."""
-        return self.x + self.width
 
 
 @dataclass(frozen=True)
