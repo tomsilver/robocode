@@ -24,8 +24,8 @@ Integration tests are skipped automatically when the image is unavailable;
 build it with ``bash docker/build.sh`` to run them.
 """
 
-import tempfile
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
