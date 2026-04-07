@@ -25,6 +25,7 @@ build it with ``bash docker/build.sh`` to run them.
 """
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ import pytest
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
+    _copy_src_without_oracles,
     _find_repo_root,
     _setup_sandbox_dir,
 )
@@ -68,36 +70,61 @@ requires_docker = pytest.mark.skipif(
 
 
 def _run_in_container(
-    sandbox_dir: Path, bash_cmd: str
+    sandbox_dir: Path,
+    bash_cmd: str,
+    *,
+    uv_sync: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run *bash_cmd* inside the container with the sandbox and prpl-mono mounted.
+    """Run *bash_cmd* inside the container with sandbox, src, and prpl-mono mounted.
 
     Uses ``--entrypoint /bin/bash`` to skip ``init-firewall.sh`` so that
     no ``NET_ADMIN`` capability is required during tests.
+
+    When *uv_sync* is True, ``uv sync`` is run before *bash_cmd* so that
+    the venv is available (since it is no longer baked into the image).
     """
     repo_root = _find_repo_root()
-    return subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--entrypoint",
-            "/bin/bash",
-            "-v",
-            f"{sandbox_dir.resolve()}:/sandbox",
-            "-v",
-            f"{(repo_root / 'prpl-mono').resolve()}:/robocode/prpl-mono:ro",
-            "-w",
-            "/sandbox",
-            _DOCKER_IMAGE,
-            "-c",
-            bash_cmd,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+
+    # Create a filtered copy of src/ (oracles stripped).
+
+    tmp_dir = tempfile.mkdtemp(prefix="robocode-test-src-")
+    filtered_src = Path(tmp_dir) / "src"
+    _copy_src_without_oracles(repo_root / "src", filtered_src)
+
+    prefix = (
+        "cd /robocode && uv sync --frozen --python python3.11 && cd /sandbox && "
+        if uv_sync
+        else ""
     )
+    try:
+        return subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/bash",
+                "-v",
+                f"{sandbox_dir.resolve()}:/sandbox",
+                "-v",
+                f"{filtered_src.resolve()}:/robocode/src",
+                "-v",
+                f"{(repo_root / 'prpl-mono').resolve()}:/robocode/prpl-mono",
+                "-w",
+                "/sandbox",
+                _DOCKER_IMAGE,
+                "-c",
+                prefix + bash_cmd,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300 if uv_sync else 60,
+            check=False,
+        )
+    finally:
+        import shutil  # pylint: disable=import-outside-toplevel
+
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -270,10 +297,12 @@ def test_container_primitives_files(tmp_path: Path) -> None:
 
 @requires_docker
 def test_container_venv_python_exists(tmp_path: Path) -> None:
-    """The venv Python interpreter exists and is executable."""
+    """The venv Python interpreter exists and is executable after uv sync."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
-    result = _run_in_container(config.sandbox_dir, f"{DOCKER_PYTHON} --version")
+    result = _run_in_container(
+        config.sandbox_dir, f"{DOCKER_PYTHON} --version", uv_sync=True
+    )
     assert result.returncode == 0, result.stderr
     version_output = result.stdout + result.stderr  # Python prints to stderr on 3.x
     assert "Python 3.11" in version_output
@@ -287,6 +316,7 @@ def test_container_venv_imports_core_packages(tmp_path: Path) -> None:
     result = _run_in_container(
         config.sandbox_dir,
         f"{DOCKER_PYTHON} -c 'import numpy, gymnasium, robocode; print(\"OK\")'",
+        uv_sync=True,
     )
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout
@@ -313,9 +343,22 @@ def test_container_prpl_mono_importable(tmp_path: Path) -> None:
     result = _run_in_container(
         config.sandbox_dir,
         f"{DOCKER_PYTHON} -c 'import relational_structs; print(\"OK\")'",
+        uv_sync=True,
     )
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout
+
+
+@requires_docker
+def test_container_oracles_not_present(tmp_path: Path) -> None:
+    """Oracle solutions must NOT be present in the container."""
+    config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
+    _setup_sandbox_dir(config)
+    result = _run_in_container(
+        config.sandbox_dir,
+        "test -d /robocode/src/robocode/oracles && echo found || echo absent",
+    )
+    assert "absent" in result.stdout
 
 
 @requires_docker
