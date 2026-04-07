@@ -25,6 +25,7 @@ build it with ``bash docker/build.sh`` to run them.
 """
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -85,7 +86,6 @@ def _run_in_container(
     repo_root = _find_repo_root()
 
     # Create a filtered copy of src/ (oracles stripped).
-    import tempfile  # pylint: disable=import-outside-toplevel
 
     tmp_dir = tempfile.mkdtemp(prefix="robocode-test-src-")
     filtered_src = Path(tmp_dir) / "src"
