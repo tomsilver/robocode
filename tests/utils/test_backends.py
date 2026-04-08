@@ -11,6 +11,7 @@ from omegaconf import DictConfig
 
 from robocode.utils.backends import (
     DEFAULT_BACKEND_CFG,
+    DEFAULT_OPENCODE_CFG,
     PROVIDERS,
     create_backend,
     firewall_domains_for_model,
@@ -192,7 +193,7 @@ class TestOpenCodeBackend:
             prompt="hello",
             model="openai/gpt-4o",
         )
-        cmd = OpenCodeBackend().build_cli_cmd(config)
+        cmd = OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_cli_cmd(config)
         assert cmd[0] == "opencode" or cmd[0].endswith("/opencode")
         assert "run" in cmd
         assert "hello" in cmd
@@ -209,7 +210,7 @@ class TestOpenCodeBackend:
             model="openai/gpt-4o",
             system_prompt="be helpful",
         )
-        cmd = OpenCodeBackend().build_cli_cmd(config)
+        cmd = OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_cli_cmd(config)
         assert "--dangerously-skip-permissions" not in cmd
         assert "--output-format" not in cmd
         assert "--system-prompt" not in cmd
@@ -224,7 +225,7 @@ class TestOpenCodeBackend:
             {"CLAUDECODE_X": "1", "OPENCODE_Y": "2"},
             clear=False,
         ):
-            env = OpenCodeBackend().build_env(config)
+            env = OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(config)
         assert "CLAUDECODE_X" not in env
         assert "OPENCODE_Y" not in env
         assert env["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
@@ -232,7 +233,9 @@ class TestOpenCodeBackend:
     def test_build_env_with_extra(self) -> None:
         """Extra env vars are merged into the environment."""
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
-        env = OpenCodeBackend().build_env(config, extra={"OPENAI_API_KEY": "sk"})
+        env = OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(
+            config, extra={"OPENAI_API_KEY": "sk"}
+        )
         assert env["OPENAI_API_KEY"] == "sk"
 
     def test_setup_sandbox_files_creates_opencode_json(self, tmp_path: Path) -> None:
@@ -241,7 +244,7 @@ class TestOpenCodeBackend:
             sandbox_dir=tmp_path,
             model="openai/gpt-4o",
         )
-        OpenCodeBackend().setup_sandbox_files(config)
+        OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(config)
         oc_path = tmp_path / "opencode.json"
         assert oc_path.exists()
         oc = json.loads(oc_path.read_text())
@@ -255,7 +258,7 @@ class TestOpenCodeBackend:
             sandbox_dir=tmp_path,
             system_prompt="You are a policy writer",
         )
-        OpenCodeBackend().setup_sandbox_files(config)
+        OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(config)
         agents_md = tmp_path / "AGENTS.md"
         assert agents_md.exists()
         text = agents_md.read_text()
@@ -265,14 +268,16 @@ class TestOpenCodeBackend:
     def test_setup_sandbox_files_no_claude_files(self, tmp_path: Path) -> None:
         """OpenCode backend should NOT create .claude/ or CLAUDE.md."""
         config = SandboxConfig(sandbox_dir=tmp_path)
-        OpenCodeBackend().setup_sandbox_files(config)
+        OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(config)
         assert not (tmp_path / "CLAUDE.md").exists()
         assert not (tmp_path / ".claude").exists()
 
     def test_setup_sandbox_files_docker_python(self, tmp_path: Path) -> None:
         """AGENTS.md references the Docker Python path when provided."""
         config = SandboxConfig(sandbox_dir=tmp_path)
-        OpenCodeBackend().setup_sandbox_files(config, docker_python="/venv/bin/python")
+        OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(
+            config, docker_python="/venv/bin/python"
+        )
         text = (tmp_path / "AGENTS.md").read_text()
         assert "/venv/bin/python" in text
 
@@ -387,7 +392,7 @@ class TestOpenCodeParseStream:
             ),
         ]
         proc = self._make_mock_proc([e + "\n" for e in events])
-        result = OpenCodeBackend().parse_stream(proc)
+        result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(proc)
         assert not result.is_error
         assert result.num_turns == 1
         assert result.total_cost == pytest.approx(0.001)
@@ -408,7 +413,7 @@ class TestOpenCodeParseStream:
             ),
         ]
         proc = self._make_mock_proc([e + "\n" for e in events])
-        result = OpenCodeBackend().parse_stream(proc)
+        result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(proc)
         assert result.is_error
         assert result.error_text is not None
         assert "ProviderAuthError" in result.error_text
@@ -462,14 +467,14 @@ class TestOpenCodeParseStream:
             ),
         ]
         proc = self._make_mock_proc([e + "\n" for e in events])
-        result = OpenCodeBackend().parse_stream(proc)
+        result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(proc)
         assert not result.is_error
         assert result.num_turns == 1
 
     def test_parse_nonzero_exit(self) -> None:
         """Non-zero exit code is reported as an error."""
         proc = self._make_mock_proc([], returncode=1)
-        result = OpenCodeBackend().parse_stream(proc)
+        result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(proc)
         assert result.is_error
         assert result.error_text is not None
         assert "exited with code 1" in result.error_text
@@ -509,7 +514,7 @@ class TestOpenCodeParseStream:
                 )
             )
         proc = self._make_mock_proc([e + "\n" for e in events])
-        result = OpenCodeBackend().parse_stream(proc)
+        result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(proc)
         assert result.num_turns == 3
         assert result.total_cost == pytest.approx(0.03)
 
@@ -548,6 +553,6 @@ class TestOpenCodeParseStream:
             + "\n",
         ]
         proc = self._make_mock_proc(lines)
-        result = OpenCodeBackend().parse_stream(proc)
+        result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(proc)
         assert not result.is_error
         assert result.num_turns == 1

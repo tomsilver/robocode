@@ -22,6 +22,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from omegaconf import DictConfig
+
 from robocode.mcp import setup_mcp_config
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
@@ -37,7 +39,8 @@ _RATE_LIMIT_RE = re.compile(
 class OpenCodeBackend:
     """OpenCode CLI agent backend."""
 
-    def __init__(self) -> None:
+    def __init__(self, backend_cfg: DictConfig) -> None:
+        self._variant = backend_cfg.get("variant", "")
         self._max_budget_usd: float = 0.0
         self._max_turns: int = 0
 
@@ -68,6 +71,8 @@ class OpenCodeBackend:
         ]
         if config.model:
             args += ["--model", config.model]
+        if self._variant:
+            args += ["--variant", self._variant]
         # MCP config is written into opencode.json by setup_sandbox_files,
         # not passed via CLI flags. But we still need to set up the .mcp/
         # directory with env_config.json and mcp_config.json for the MCP

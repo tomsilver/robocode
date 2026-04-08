@@ -204,9 +204,10 @@ async def run_agent_in_sandbox(
     """
 
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
-    backend.setup_sandbox_files(config)
-    _initial_commit(config.sandbox_dir)
 
+    # build_cli_cmd must run before setup_sandbox_files because it writes
+    # .mcp/mcp_config.json which setup_sandbox_files reads to convert MCP
+    # config for OpenCode's opencode.json.
     cmd = backend.build_cli_cmd(
         config,
         mcp_python_cmd=sys.executable,
@@ -214,6 +215,8 @@ async def run_agent_in_sandbox(
             (config.sandbox_dir / ".mcp" / "env_config.json").resolve()
         ),
     )
+    backend.setup_sandbox_files(config)
+    _initial_commit(config.sandbox_dir)
 
     env = backend.build_env(config)
     sandbox_abs = str(config.sandbox_dir.resolve())

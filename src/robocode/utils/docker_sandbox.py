@@ -155,10 +155,7 @@ class DockerSandboxConfig(SandboxConfig):
     mcp_tools: tuple[str, ...] = ()
 
 
-def _setup_sandbox_dir(
-    config: DockerSandboxConfig,
-    backend: AgentBackend,
-) -> None:
+def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
     """Populate *config.sandbox_dir* with the standard sandbox scaffolding.
 
     Creates (idempotently):
@@ -187,14 +184,9 @@ def _setup_sandbox_dir(
             else:
                 raise RuntimeError(f"Primitive source file not found: {src_file}")
 
-    # Write backend-specific config and instruction files.
-    backend.setup_sandbox_files(
-        config,
-        docker_python=DOCKER_PYTHON,
-        primitive_names=config.primitive_names,
-    )
-
-    _initial_commit(config.sandbox_dir)
+    # NOTE: backend.setup_sandbox_files() is NOT called here because it
+    # needs .mcp/mcp_config.json to exist first (written by build_cli_cmd).
+    # The caller (run_agent_in_docker_sandbox) calls it after build_cli_cmd.
 
 
 def _build_docker_auth_args(
@@ -285,7 +277,7 @@ async def run_agent_in_docker_sandbox(
     """
     backend_name = backend.name
 
-    _setup_sandbox_dir(config, backend)
+    _setup_sandbox_dir(config)
 
     repo_root = _find_repo_root()
     prpl_mono = repo_root / "prpl-mono"
@@ -362,6 +354,15 @@ async def run_agent_in_docker_sandbox(
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
         )
         docker_cmd += agent_cmd
+
+        # Write backend config files (opencode.json, AGENTS.md, etc.)
+        # AFTER build_cli_cmd so .mcp/mcp_config.json exists for conversion.
+        backend.setup_sandbox_files(
+            config,
+            docker_python=DOCKER_PYTHON,
+            primitive_names=config.primitive_names,
+        )
+        _initial_commit(config.sandbox_dir)
 
         env = backend.build_env(config, auth_env if auth_env else None)
 

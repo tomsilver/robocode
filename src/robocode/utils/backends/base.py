@@ -87,5 +87,5 @@ def create_backend(backend_cfg: DictConfig) -> AgentBackend:
             OpenCodeBackend,
         )
 
-        return OpenCodeBackend()
+        return OpenCodeBackend(backend_cfg)
     raise ValueError(f"Unknown backend {name!r}. Expected 'claude' or 'opencode'.")

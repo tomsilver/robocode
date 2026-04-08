@@ -8,11 +8,14 @@ from pathlib import Path
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
 
-# Descriptions shown to the agent so it knows how to call each MCP tool.
-MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
+# Tool description templates. Use {render_state} and {render_policy}
+# placeholders for the backend-specific tool names (Claude uses
+# ``mcp__robocode-tools__render_state``, OpenCode uses
+# ``robocode-tools_render_state``).
+_TOOL_DESC_TEMPLATES: dict[str, str] = {
     "render_state": (
-        f"`mcp__{MCP_SERVER_NAME}__render_state(seed=42, state=None, "
-        'label="")` \u2014 renders an environment state as a PNG and returns '
+        "`{render_state}(seed=42, state=None, "
+        'label="")`: renders an environment state as a PNG and returns '
         "the file path.\n"
         "  Two modes:\n"
         "  1. **Reset mode** (default): pass `seed` to render the initial "
@@ -30,27 +33,27 @@ MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
         "  - From an existing observation: `obs.tolist()`\n"
         "  - To inspect/modify named features: use "
         "`env.observation_space.devectorize(obs)` to get an "
-        "`ObjectCentricState` (a dict of `{Object: feature_array}`), "
+        "`ObjectCentricState` (a dict of `{{Object: feature_array}}`), "
         "modify it, then `env.observation_space.vectorize(ocs).tolist()` "
         "to convert back.\n"
         "  - To build a state from scratch: construct an "
-        "`ObjectCentricState(data={obj: np.array([...]), ...}, "
+        "`ObjectCentricState(data={{obj: np.array([...]), ...}}, "
         "type_features=env.observation_space.type_features)` using the "
         "objects from `env.observation_space.constant_objects`, then "
         "vectorize it.\n"
-        "  IMPORTANT: You must call this MCP tool DIRECTLY \u2014 MCP tools are "
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
         "NOT available inside subagents. Call it yourself, then delegate "
         "image reading to a subagent: have it Read the PNG, describe the "
         "scene, and return a concise summary. Delete the file when done."
     ),
     "render_policy": (
-        f'`mcp__{MCP_SERVER_NAME}__render_policy(approach_dir=".", seed=42, '
-        "max_steps=1000, max_frames=100)` \u2014 runs a full episode of the "
+        '`{render_policy}(approach_dir=".", seed=42, '
+        "max_steps=1000, max_frames=100)`: runs a full episode of the "
         "approach in `approach_dir/approach.py` on the given seed and saves "
         "each frame as a PNG. Returns a list of file paths. Use this to "
         "visually debug policy failures: see where the agent gets stuck, "
         "overshoots, or collides.\n"
-        "  IMPORTANT: You must call this MCP tool DIRECTLY — MCP tools are "
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
         "NOT available inside subagents. Call it yourself to generate "
         "frames, then delegate reading to a subagent. The subagent "
         "should Read a sample of frames (e.g. first, middle, last, and any "
@@ -58,14 +61,41 @@ MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
         "modes, and return a concise text summary. Delete the output "
         "directory when done.\n"
         "  Typical workflow:\n"
-        f"  1. Call mcp__{MCP_SERVER_NAME}__render_policy yourself to "
-        "generate frames\n"
+        "  1. Call {render_policy} yourself to generate frames\n"
         '  2. Spawn a subagent: "Read these frame PNGs and describe '
         "the agent's trajectory. What goes wrong? Return a short summary.\"\n"
         "  3. Use the summary to fix your approach\n"
         "  4. Delete the frames directory"
     ),
 }
+
+
+def mcp_tool_name_claude(tool: str) -> str:
+    """Claude Code MCP tool name: ``mcp__robocode-tools__<tool>``."""
+    return f"mcp__{MCP_SERVER_NAME}__{tool}"
+
+
+def mcp_tool_name_opencode(tool: str) -> str:
+    """OpenCode MCP tool name: ``robocode-tools_<tool>``."""
+    return f"{MCP_SERVER_NAME}_{tool}"
+
+
+def mcp_tool_descriptions(backend_name: str) -> dict[str, str]:
+    """Return MCP tool descriptions with backend-specific tool names."""
+    if backend_name == "opencode":
+        namer = mcp_tool_name_opencode
+    else:
+        namer = mcp_tool_name_claude
+    names = {tool: namer(tool) for tool in _TOOL_DESC_TEMPLATES}
+    return {
+        tool: template.format(**names)
+        for tool, template in _TOOL_DESC_TEMPLATES.items()
+    }
+
+
+# Backward compat: descriptions with Claude naming (used by existing code
+# that doesn't pass a backend name).
+MCP_TOOL_DESCRIPTIONS: dict[str, str] = mcp_tool_descriptions("claude")
 
 # List of available MCP tool names.
 MCP_TOOL_NAMES: tuple[str, ...] = tuple(MCP_TOOL_DESCRIPTIONS)

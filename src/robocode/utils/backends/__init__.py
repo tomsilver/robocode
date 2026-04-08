@@ -29,6 +29,7 @@ __all__ = [
 
 # Convenience defaults for tests and callers that don't use Hydra configs.
 DEFAULT_BACKEND_CFG = DictConfig({"backend": "claude", "model": "sonnet"})
+DEFAULT_OPENCODE_CFG = DictConfig({"backend": "opencode", "model": "openai/gpt-4o"})
 DEFAULT_BACKEND = create_backend(DEFAULT_BACKEND_CFG)
 
 
