@@ -11,15 +11,23 @@ containers for authentication.
 
 from dataclasses import dataclass, field
 
+from omegaconf import DictConfig
+
 from robocode.utils.backends.base import AgentBackend, create_backend
 
 __all__ = [
     "AgentBackend",
+    "DEFAULT_BACKEND",
+    "DEFAULT_BACKEND_CFG",
     "PROVIDERS",
     "TOOL_NAMES_PROMPT_SUFFIX",
     "create_backend",
     "provider_from_model",
 ]
+
+# Convenience defaults for tests and callers that don't use Hydra configs.
+DEFAULT_BACKEND_CFG = DictConfig({"backend": "claude", "model": "sonnet"})
+DEFAULT_BACKEND = create_backend(DEFAULT_BACKEND_CFG)
 
 
 @dataclass(frozen=True)

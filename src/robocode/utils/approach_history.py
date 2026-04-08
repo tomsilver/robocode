@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from omegaconf import DictConfig
 
 from robocode.approaches.agentic_approach import AgenticApproach
+from robocode.utils.backends import DEFAULT_BACKEND_CFG
 from robocode.utils.episode import run_episode, save_video
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ def record_episodes(
                 observation_space=env.observation_space,
                 seed=seed,
                 primitives=primitives,
-                backend=DictConfig({"backend": "claude", "model": "sonnet"}),
+                backend=DEFAULT_BACKEND_CFG,
                 load_dir=str(version_dir),
             )
             approach.train()

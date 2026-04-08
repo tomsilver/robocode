@@ -21,7 +21,7 @@ from gymnasium.spaces import Space
 from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.mcp import MCP_TOOL_DESCRIPTIONS
+from robocode.mcp import MCP_TOOL_DESCRIPTIONS, MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 from robocode.primitives import PRIMITIVE_DESCRIPTIONS
 from robocode.utils.backends import TOOL_NAMES_PROMPT_SUFFIX, create_backend
 from robocode.utils.docker_sandbox import (
@@ -68,16 +68,6 @@ _SYSTEM_PROMPT = (
     "arithmetic in text."
 )
 
-_MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
-    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
-    "Start by calling render_state to see the environment before writing code. "
-    "When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes. "
-    "CRITICAL: MCP tools are only available to YOU directly — they CANNOT be "
-    "called from inside Task subagents. Always call MCP tools yourself, then "
-    "delegate image reading to a Task subagent."
-)
-
 _CDL_DECOMPOSITION_PROMPT = """\
 
 BEFORE writing any low-level code, you MUST first reason about the HIGH-LEVEL \
@@ -97,13 +87,6 @@ object, lower the arm, activate vacuum, retract arm").
 5. **Why this ordering**: Explain why the previous behavior's subgoal satisfies this \
 behavior's precondition.
 
-Example decomposition for a pick-and-place task with obstructions:
-- **Behavior 1: ClearRegion** — Precondition: obstructions overlap the goal region. \
-Subgoal: no obstructions overlap the goal region. Policy: for each obstruction on the \
-surface, pick it up and place it in an empty area.
-- **Behavior 2: PickAndPlace** — Precondition: goal region is clear. Subgoal: target \
-block is on the goal surface. Policy: pick the block, carry it to the surface, place it.
-
 The approach should determine which behavior to start from by checking preconditions \
 BACKWARDS from the last behavior. If the last behavior's precondition is already \
 satisfied, skip all earlier behaviors.
@@ -119,10 +102,15 @@ one file. Do NOT put helper functions inside approach.py or behavior files.
 
 Required files:
 - ``obs_helpers.py`` — ALL functions that parse/interpret the observation vector. \
-This includes extracting object positions, computing geometric predicates \
-(overlaps, is_on, etc.), and any named constants for observation indices. \
-Every "magic number" related to observation parsing (index offsets, tolerances, \
-physics constants like table height) MUST be a named constant here. \
+This includes extracting object positions, computing geometric predicates, \
+and any named constants for observation indices. \
+Every "magic number" related to observation parsing MUST be a named constant here. \
+BEFORE writing this file, you MUST run: \
+``feats = env.unwrapped.observation_space.devectorize(obs)`` \
+to inspect the observation structure. This returns a dictionary mapping \
+feature names to their values, so you can see exactly what each part of \
+the observation vector represents. Use this to determine the correct \
+indices, feature names, and semantics — do NOT guess the observation layout. \
 {obs_helpers_note}
 - ``act_helpers.py`` — ALL functions that help generate actions. This includes \
 waypoint interpolation, action clipping, proportional controllers, etc. \
@@ -458,7 +446,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         if self._backend_cfg.get("base_url"):
             system_prompt += TOOL_NAMES_PROMPT_SUFFIX
         if self._mcp_tools:
-            system_prompt += _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 
         docker_config: DockerSandboxConfig | None = None
         config: SandboxConfig | None = None

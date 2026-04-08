@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import imageio.v3 as iio
+import numpy as np
 from hydra.utils import instantiate
 from mcp.server.fastmcp import FastMCP
 from omegaconf import OmegaConf
@@ -92,19 +93,68 @@ def create_server(
 
     if "render_state" in tool_names:
 
+        def _unique_path(directory: Path, stem: str, ext: str) -> Path:
+            """Return ``directory/stem.ext``, appending _1, _2, ...
+
+            if taken.
+            """
+            candidate = directory / f"{stem}{ext}"
+            i = 1
+            while candidate.exists():
+                candidate = directory / f"{stem}_{i}{ext}"
+                i += 1
+            return candidate
+
         @server.tool()
         @_logged_tool
-        def render_state(seed: int = 42) -> str:
-            """Render the environment's initial state for a given seed.
+        def render_state(
+            seed: int = 42,
+            state: list[float] | None = None,
+            label: str = "",
+        ) -> str:
+            """Render the environment state as a PNG image.
+
+            There are two modes:
+
+            1. **Reset mode** (default): pass only ``seed`` to render the
+               initial state after ``env.reset(seed=seed)``.
+            2. **Arbitrary state mode**: pass ``state`` as a flat list of
+               floats (the same format returned by
+               ``env.get_state().tolist()``). ``seed`` is ignored when
+               ``state`` is provided.
+
+            Parameters
+            ----------
+            seed:
+                Seed for resetting the environment (used only when
+                ``state`` is not provided).
+            state:
+                Optional flat list of floats representing an arbitrary
+                environment state. When provided, renders this state
+                instead of resetting.
+            label:
+                Optional short label used in the output filename for
+                easier identification (e.g. "after_grasp", "step42").
 
             Returns the file path of the saved PNG image.
             """
-            env.reset(seed=seed)
-            state = env.get_state()
-            frame = _render_state_fn(env, state)
+            if state is not None:
+                env_state = np.array(state, dtype=np.float32)
+                env.set_state(env_state)
+            else:
+                env.reset(seed=seed)
+                env_state = env.get_state()
 
-            out = out_dir / f"state_seed{seed}.png"
-            out.parent.mkdir(parents=True, exist_ok=True)
+            frame = _render_state_fn(env, env_state)
+
+            suffix = f"_{label}" if label else ""
+            if state is not None:
+                stem = f"state_custom{suffix}"
+            else:
+                stem = f"state_seed{seed}{suffix}"
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out = _unique_path(out_dir, stem, ".png")
             iio.imwrite(str(out), frame)
             return str(out)
 

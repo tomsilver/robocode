@@ -3,13 +3,11 @@
 from functools import partial
 
 import pytest
-from omegaconf import DictConfig
 
 from robocode.approaches.agentic_approach import AgenticApproach
 from robocode.environments.maze_env import MazeEnv
 from robocode.primitives.check_action_collision import check_action_collision
-
-_CLAUDE_BACKEND = DictConfig({"backend": "claude", "model": "sonnet"})
+from robocode.utils.backends import DEFAULT_BACKEND_CFG
 
 
 def test_agentic_approach_fallback():
@@ -20,7 +18,7 @@ def test_agentic_approach_fallback():
         observation_space=env.observation_space,
         seed=123,
         primitives={"check_action_collision": partial(check_action_collision, env)},
-        backend=_CLAUDE_BACKEND,
+        backend=DEFAULT_BACKEND_CFG,
     )
     state, info = env.reset(seed=123)
     approach.reset(state, info)
@@ -36,7 +34,7 @@ def test_agentic_approach_with_generated():
         observation_space=env.observation_space,
         seed=123,
         primitives={"check_action_collision": partial(check_action_collision, env)},
-        backend=_CLAUDE_BACKEND,
+        backend=DEFAULT_BACKEND_CFG,
         output_dir="/tmp/test_agentic",
     )
 
@@ -89,7 +87,7 @@ def test_load_dir_skips_agent(tmp_path):
         observation_space=env.observation_space,
         seed=42,
         primitives={"check_action_collision": partial(check_action_collision, env)},
-        backend=_CLAUDE_BACKEND,
+        backend=DEFAULT_BACKEND_CFG,
         load_dir=str(tmp_path),
     )
     approach.train()
@@ -137,7 +135,7 @@ def test_load_generated_with_sibling_modules(tmp_path):
         observation_space=env.observation_space,
         seed=42,
         primitives={"check_action_collision": partial(check_action_collision, env)},
-        backend=_CLAUDE_BACKEND,
+        backend=DEFAULT_BACKEND_CFG,
         load_dir=str(tmp_path),
     )
     approach.train()
@@ -158,7 +156,7 @@ def test_load_dir_missing_file_raises(tmp_path):
         observation_space=env.observation_space,
         seed=42,
         primitives={"check_action_collision": partial(check_action_collision, env)},
-        backend=_CLAUDE_BACKEND,
+        backend=DEFAULT_BACKEND_CFG,
         load_dir=str(tmp_path),
     )
     with pytest.raises(FileNotFoundError):

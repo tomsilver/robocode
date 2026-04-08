@@ -10,7 +10,7 @@ from gymnasium.spaces import Space
 from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.mcp import MCP_TOOL_DESCRIPTIONS
+from robocode.mcp import MCP_TOOL_DESCRIPTIONS, MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 from robocode.primitives import PRIMITIVE_DESCRIPTIONS
 from robocode.utils.backends import TOOL_NAMES_PROMPT_SUFFIX, create_backend
 from robocode.utils.docker_sandbox import (
@@ -44,16 +44,6 @@ _SYSTEM_PROMPT = (
     "Use the Task tool to explore source code in parallel — e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially."
-)
-
-_MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
-    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
-    "Start by calling render_state to see the environment before writing code. "
-    "When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes. "
-    "CRITICAL: MCP tools are only available to YOU directly — they CANNOT be "
-    "called from inside Task subagents. Always call MCP tools yourself, then "
-    "delegate image reading to a Task subagent."
 )
 
 _INTERFACE_SPEC = """\
@@ -312,7 +302,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         if self._backend_cfg.get("base_url"):
             system_prompt += TOOL_NAMES_PROMPT_SUFFIX
         if self._mcp_tools:
-            system_prompt += _MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 
         if self._use_docker:
             docker_config = DockerSandboxConfig(

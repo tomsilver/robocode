@@ -10,6 +10,7 @@ import pytest
 from omegaconf import DictConfig
 
 from robocode.utils.backends import (
+    DEFAULT_BACKEND_CFG,
     PROVIDERS,
     create_backend,
     provider_from_model,
@@ -31,7 +32,7 @@ class TestCreateBackend:
 
     def test_create_claude_backend(self) -> None:
         """create_backend returns a ClaudeBackend for 'claude'."""
-        cfg = DictConfig({"backend": "claude", "model": "sonnet"})
+        cfg = DEFAULT_BACKEND_CFG
         backend = create_backend(cfg)
         assert isinstance(backend, ClaudeBackend)
 
@@ -50,7 +51,7 @@ class TestCreateBackend:
     def test_backends_satisfy_protocol(self) -> None:
         """Both backends have the required methods."""
         for cfg in (
-            DictConfig({"backend": "claude", "model": "sonnet"}),
+            DEFAULT_BACKEND_CFG,
             DictConfig({"backend": "opencode", "model": "openai/gpt-4o"}),
         ):
             backend = create_backend(cfg)
@@ -77,7 +78,7 @@ class TestClaudeBackend:
             max_budget_usd=3.0,
             system_prompt="be helpful",
         )
-        backend = ClaudeBackend(DictConfig({"backend": "claude", "model": "sonnet"}))
+        backend = ClaudeBackend(DEFAULT_BACKEND_CFG)
         cmd = backend.build_cli_cmd(config)
         assert cmd[0] == "claude" or cmd[0].endswith("/claude")
         assert "-p" in cmd
@@ -96,7 +97,7 @@ class TestClaudeBackend:
         """No --system-prompt flag when system_prompt is empty."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
         cmd = ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).build_cli_cmd(config)
         assert "--system-prompt" not in cmd
 
@@ -104,7 +105,7 @@ class TestClaudeBackend:
         """No --max-budget-usd flag when budget is zero."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi", max_budget_usd=0)
         cmd = ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).build_cli_cmd(config)
         assert "--max-budget-usd" not in cmd
 
@@ -112,7 +113,7 @@ class TestClaudeBackend:
         """All standard tools are listed in --tools."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
         cmd = ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).build_cli_cmd(config)
         assert "--tools" in cmd
         tools_idx = cmd.index("--tools")
@@ -125,7 +126,7 @@ class TestClaudeBackend:
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
         with patch.dict(os.environ, {"CLAUDECODE_FOO": "bar"}, clear=False):
             env = ClaudeBackend(
-                DictConfig({"backend": "claude", "model": "sonnet"})
+                DEFAULT_BACKEND_CFG
             ).build_env(config)
         assert "CLAUDECODE_FOO" not in env
         assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "16384"
@@ -135,7 +136,7 @@ class TestClaudeBackend:
         """Extra env vars are merged into the environment."""
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
         env = ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).build_env(config, extra={"MY_KEY": "val"})
         assert env["MY_KEY"] == "val"
 
@@ -143,7 +144,7 @@ class TestClaudeBackend:
         """CLAUDE.md is created with relative-path instructions."""
         config = SandboxConfig(sandbox_dir=tmp_path)
         ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).setup_sandbox_files(config)
         assert (tmp_path / "CLAUDE.md").exists()
         assert "relative paths" in (tmp_path / "CLAUDE.md").read_text()
@@ -152,7 +153,7 @@ class TestClaudeBackend:
         """.claude/settings.json has the PreToolUse write-validation hook."""
         config = SandboxConfig(sandbox_dir=tmp_path)
         ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).setup_sandbox_files(config)
         settings_path = tmp_path / ".claude" / "settings.json"
         assert settings_path.exists()
@@ -164,7 +165,7 @@ class TestClaudeBackend:
         """.claude/validate_sandbox.py is created."""
         config = SandboxConfig(sandbox_dir=tmp_path)
         ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).setup_sandbox_files(config)
         assert (tmp_path / ".claude" / "validate_sandbox.py").exists()
 
@@ -172,7 +173,7 @@ class TestClaudeBackend:
         """CLAUDE.md references the Docker Python path when provided."""
         config = SandboxConfig(sandbox_dir=tmp_path)
         ClaudeBackend(
-            DictConfig({"backend": "claude", "model": "sonnet"})
+            DEFAULT_BACKEND_CFG
         ).setup_sandbox_files(config, docker_python="/custom/python")
         text = (tmp_path / "CLAUDE.md").read_text()
         assert "/custom/python" in text

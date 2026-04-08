@@ -25,21 +25,21 @@ build it with ``bash docker/build.sh`` to run them.
 """
 
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
-from omegaconf import DictConfig
 
-from robocode.utils.backends.claude import ClaudeBackend
+from robocode.utils.backends import DEFAULT_BACKEND
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
+    _copy_src_without_oracles,
     _find_repo_root,
     _setup_sandbox_dir,
 )
 
 _DOCKER_IMAGE = "robocode-sandbox"
-_DEFAULT_BACKEND = ClaudeBackend(DictConfig({"backend": "claude", "model": "sonnet"}))
 
 
 # ---------------------------------------------------------------------------
@@ -71,36 +71,61 @@ requires_docker = pytest.mark.skipif(
 
 
 def _run_in_container(
-    sandbox_dir: Path, bash_cmd: str
+    sandbox_dir: Path,
+    bash_cmd: str,
+    *,
+    uv_sync: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run *bash_cmd* inside the container with the sandbox and prpl-mono mounted.
+    """Run *bash_cmd* inside the container with sandbox, src, and prpl-mono mounted.
 
     Uses ``--entrypoint /bin/bash`` to skip ``init-firewall.sh`` so that
     no ``NET_ADMIN`` capability is required during tests.
+
+    When *uv_sync* is True, ``uv sync`` is run before *bash_cmd* so that
+    the venv is available (since it is no longer baked into the image).
     """
     repo_root = _find_repo_root()
-    return subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--entrypoint",
-            "/bin/bash",
-            "-v",
-            f"{sandbox_dir.resolve()}:/sandbox",
-            "-v",
-            f"{(repo_root / 'prpl-mono').resolve()}:/robocode/prpl-mono:ro",
-            "-w",
-            "/sandbox",
-            _DOCKER_IMAGE,
-            "-c",
-            bash_cmd,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+
+    # Create a filtered copy of src/ (oracles stripped).
+
+    tmp_dir = tempfile.mkdtemp(prefix="robocode-test-src-")
+    filtered_src = Path(tmp_dir) / "src"
+    _copy_src_without_oracles(repo_root / "src", filtered_src)
+
+    prefix = (
+        "cd /robocode && uv sync --frozen --python python3.11 && cd /sandbox && "
+        if uv_sync
+        else ""
     )
+    try:
+        return subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/bash",
+                "-v",
+                f"{sandbox_dir.resolve()}:/sandbox",
+                "-v",
+                f"{filtered_src.resolve()}:/robocode/src",
+                "-v",
+                f"{(repo_root / 'prpl-mono').resolve()}:/robocode/prpl-mono",
+                "-w",
+                "/sandbox",
+                _DOCKER_IMAGE,
+                "-c",
+                prefix + bash_cmd,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300 if uv_sync else 60,
+            check=False,
+        )
+    finally:
+        import shutil  # pylint: disable=import-outside-toplevel
+
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +162,14 @@ def test_setup_creates_sandbox_dir(tmp_path: Path) -> None:
     """_setup_sandbox_dir() creates the sandbox directory if absent."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     assert not config.sandbox_dir.exists()
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     assert config.sandbox_dir.is_dir()
 
 
 def test_setup_creates_claude_md(tmp_path: Path) -> None:
     """CLAUDE.md is created and references the Docker Python path."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     claude_md = config.sandbox_dir / "CLAUDE.md"
     assert claude_md.exists()
     assert DOCKER_PYTHON in claude_md.read_text()
@@ -153,7 +178,7 @@ def test_setup_creates_claude_md(tmp_path: Path) -> None:
 def test_setup_creates_dot_claude_settings(tmp_path: Path) -> None:
     """.claude/settings.json is created with the PreToolUse hook."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     settings = config.sandbox_dir / ".claude" / "settings.json"
     assert settings.exists()
     assert "PreToolUse" in settings.read_text()
@@ -162,14 +187,14 @@ def test_setup_creates_dot_claude_settings(tmp_path: Path) -> None:
 def test_setup_creates_validate_script(tmp_path: Path) -> None:
     """.claude/validate_sandbox.py is created."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     assert (config.sandbox_dir / ".claude" / "validate_sandbox.py").exists()
 
 
 def test_setup_creates_git_repo(tmp_path: Path) -> None:
     """_setup_sandbox_dir() initialises a git repo inside the sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     assert (config.sandbox_dir / ".git").is_dir()
 
 
@@ -179,7 +204,7 @@ def test_setup_copies_only_requested_primitives(tmp_path: Path) -> None:
         sandbox_dir=tmp_path / "sandbox",
         primitive_names=("csp", "check_action_collision"),
     )
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     primitives_dir = config.sandbox_dir / "primitives"
     assert primitives_dir.is_dir()
     copied = {f.name for f in primitives_dir.glob("*.py")}
@@ -189,7 +214,7 @@ def test_setup_copies_only_requested_primitives(tmp_path: Path) -> None:
 def test_setup_no_primitives_dir_when_none_requested(tmp_path: Path) -> None:
     """No primitives/ directory is created when primitive_names is empty."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     assert not (config.sandbox_dir / "primitives").exists()
 
 
@@ -201,7 +226,7 @@ def test_setup_copies_init_files(tmp_path: Path) -> None:
         sandbox_dir=tmp_path / "sandbox",
         init_files={"subdir/hello.txt": source},
     )
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     dest = config.sandbox_dir / "subdir" / "hello.txt"
     assert dest.exists()
     assert dest.read_text() == "hello world"
@@ -210,8 +235,8 @@ def test_setup_copies_init_files(tmp_path: Path) -> None:
 def test_setup_is_idempotent(tmp_path: Path) -> None:
     """Calling _setup_sandbox_dir twice raises no errors."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +248,7 @@ def test_setup_is_idempotent(tmp_path: Path) -> None:
 def test_container_cwd_is_sandbox(tmp_path: Path) -> None:
     """The container's working directory is /sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(config.sandbox_dir, "pwd")
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "/sandbox"
@@ -240,7 +265,7 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
         sandbox_dir=tmp_path / "sandbox",
         primitive_names=("csp", "check_action_collision"),
     )
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(config.sandbox_dir, "ls -a /sandbox")
     assert result.returncode == 0, result.stderr
     listed = set(result.stdout.split())
@@ -264,7 +289,7 @@ def test_container_primitives_files(tmp_path: Path) -> None:
         sandbox_dir=tmp_path / "sandbox",
         primitive_names=("check_action_collision", "BiRRT"),
     )
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(config.sandbox_dir, "ls /sandbox/primitives/")
     assert result.returncode == 0, result.stderr
     listed = set(result.stdout.split())
@@ -273,10 +298,12 @@ def test_container_primitives_files(tmp_path: Path) -> None:
 
 @requires_docker
 def test_container_venv_python_exists(tmp_path: Path) -> None:
-    """The venv Python interpreter exists and is executable."""
+    """The venv Python interpreter exists and is executable after uv sync."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
-    result = _run_in_container(config.sandbox_dir, f"{DOCKER_PYTHON} --version")
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
+    result = _run_in_container(
+        config.sandbox_dir, f"{DOCKER_PYTHON} --version", uv_sync=True
+    )
     assert result.returncode == 0, result.stderr
     version_output = result.stdout + result.stderr  # Python prints to stderr on 3.x
     assert "Python 3.11" in version_output
@@ -286,10 +313,11 @@ def test_container_venv_python_exists(tmp_path: Path) -> None:
 def test_container_venv_imports_core_packages(tmp_path: Path) -> None:
     """Numpy, gymnasium, and robocode are importable via the venv Python."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(
         config.sandbox_dir,
         f"{DOCKER_PYTHON} -c 'import numpy, gymnasium, robocode; print(\"OK\")'",
+        uv_sync=True,
     )
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout
@@ -299,7 +327,7 @@ def test_container_venv_imports_core_packages(tmp_path: Path) -> None:
 def test_container_prpl_mono_mounted(tmp_path: Path) -> None:
     """/robocode/prpl-mono/ is present (bind-mounted from the host submodule)."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(
         config.sandbox_dir,
         "test -d /robocode/prpl-mono && echo mounted || echo absent",
@@ -312,20 +340,33 @@ def test_container_prpl_mono_mounted(tmp_path: Path) -> None:
 def test_container_prpl_mono_importable(tmp_path: Path) -> None:
     """Prpl-mono packages (relational_structs) are importable via the venv."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(
         config.sandbox_dir,
         f"{DOCKER_PYTHON} -c 'import relational_structs; print(\"OK\")'",
+        uv_sync=True,
     )
     assert result.returncode == 0, result.stderr
     assert "OK" in result.stdout
 
 
 @requires_docker
+def test_container_oracles_not_present(tmp_path: Path) -> None:
+    """Oracle solutions must NOT be present in the container."""
+    config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
+    result = _run_in_container(
+        config.sandbox_dir,
+        "test -d /robocode/src/robocode/oracles && echo found || echo absent",
+    )
+    assert "absent" in result.stdout
+
+
+@requires_docker
 def test_container_robocode_source_not_in_sandbox(tmp_path: Path) -> None:
     """Robocode source is NOT present inside /sandbox/ directly."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(
         config.sandbox_dir,
         "test -d /sandbox/robocode && echo found || echo absent",
@@ -337,7 +378,7 @@ def test_container_robocode_source_not_in_sandbox(tmp_path: Path) -> None:
 def test_container_hook_blocks_write_outside_sandbox(tmp_path: Path) -> None:
     """validate_sandbox.py denies a Write tool call to a path outside /sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(
         config.sandbox_dir,
         'echo \'{"tool_name": "Write", "tool_input": {"file_path": "/etc/evil"}}\' '
@@ -350,7 +391,7 @@ def test_container_hook_blocks_write_outside_sandbox(tmp_path: Path) -> None:
 def test_container_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
     """validate_sandbox.py allows a Write tool call to a path inside /sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     bash_cmd = (
         'echo \'{"tool_name": "Write", '
         '"tool_input": {"file_path": "/sandbox/approach.py"}}\''
@@ -366,7 +407,7 @@ def test_container_files_persist_on_host(tmp_path: Path) -> None:
     """Files written inside /sandbox (including subdirectories) are visible on the host
     via the bind-mount."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    _setup_sandbox_dir(config, _DEFAULT_BACKEND)
+    _setup_sandbox_dir(config, DEFAULT_BACKEND)
     result = _run_in_container(
         config.sandbox_dir,
         "echo 'print(42)' > /sandbox/approach.py && "

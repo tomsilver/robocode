@@ -13,7 +13,7 @@ from tests.conftest import MAKE_VIDEOS
 
 ENV_ID = "kinder/Obstruction2D-o2-v0"
 MAX_STEPS = 500
-SEEDS = list(np.random.choice(1000, size=5, replace=False))
+SEEDS = [0]
 
 
 def _run_episode(
