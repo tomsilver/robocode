@@ -34,19 +34,6 @@ _RATE_LIMIT_RE = re.compile(
 )
 
 
-def firewall_domains_for_model(model: str) -> list[str]:
-    """Return the API domains that must be whitelisted for *model*."""
-    # Import here to avoid circular import: __init__ -> base -> opencode -> __init__
-    from robocode.utils.backends import (  # pylint: disable=import-outside-toplevel
-        PROVIDERS,
-        provider_from_model,
-    )
-
-    provider = provider_from_model(model)
-    info = PROVIDERS.get(provider)
-    return list(info.domains) if info else []
-
-
 class OpenCodeBackend:
     """OpenCode CLI agent backend."""
 

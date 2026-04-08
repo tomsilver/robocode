@@ -13,13 +13,11 @@ from robocode.utils.backends import (
     DEFAULT_BACKEND_CFG,
     PROVIDERS,
     create_backend,
+    firewall_domains_for_model,
     provider_from_model,
 )
 from robocode.utils.backends.claude import _RATE_LIMIT_RE, ClaudeBackend
-from robocode.utils.backends.opencode import (
-    OpenCodeBackend,
-    firewall_domains_for_model,
-)
+from robocode.utils.backends.opencode import OpenCodeBackend
 from robocode.utils.sandbox import SandboxConfig
 
 # ---------------------------------------------------------------------------
@@ -96,25 +94,19 @@ class TestClaudeBackend:
     def test_build_cli_cmd_no_system_prompt(self, tmp_path: Path) -> None:
         """No --system-prompt flag when system_prompt is empty."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
-        cmd = ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).build_cli_cmd(config)
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
         assert "--system-prompt" not in cmd
 
     def test_build_cli_cmd_no_budget_when_zero(self, tmp_path: Path) -> None:
         """No --max-budget-usd flag when budget is zero."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi", max_budget_usd=0)
-        cmd = ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).build_cli_cmd(config)
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
         assert "--max-budget-usd" not in cmd
 
     def test_build_cli_cmd_includes_tools(self, tmp_path: Path) -> None:
         """All standard tools are listed in --tools."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
-        cmd = ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).build_cli_cmd(config)
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
         assert "--tools" in cmd
         tools_idx = cmd.index("--tools")
         tools_str = cmd[tools_idx + 1]
@@ -125,9 +117,7 @@ class TestClaudeBackend:
         """CLAUDECODE* env vars are removed from the child environment."""
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
         with patch.dict(os.environ, {"CLAUDECODE_FOO": "bar"}, clear=False):
-            env = ClaudeBackend(
-                DEFAULT_BACKEND_CFG
-            ).build_env(config)
+            env = ClaudeBackend(DEFAULT_BACKEND_CFG).build_env(config)
         assert "CLAUDECODE_FOO" not in env
         assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "16384"
         assert env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "80"
@@ -135,26 +125,22 @@ class TestClaudeBackend:
     def test_build_env_with_extra(self) -> None:
         """Extra env vars are merged into the environment."""
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
-        env = ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).build_env(config, extra={"MY_KEY": "val"})
+        env = ClaudeBackend(DEFAULT_BACKEND_CFG).build_env(
+            config, extra={"MY_KEY": "val"}
+        )
         assert env["MY_KEY"] == "val"
 
     def test_setup_sandbox_files_creates_claude_md(self, tmp_path: Path) -> None:
         """CLAUDE.md is created with relative-path instructions."""
         config = SandboxConfig(sandbox_dir=tmp_path)
-        ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).setup_sandbox_files(config)
+        ClaudeBackend(DEFAULT_BACKEND_CFG).setup_sandbox_files(config)
         assert (tmp_path / "CLAUDE.md").exists()
         assert "relative paths" in (tmp_path / "CLAUDE.md").read_text()
 
     def test_setup_sandbox_files_creates_settings(self, tmp_path: Path) -> None:
         """.claude/settings.json has the PreToolUse write-validation hook."""
         config = SandboxConfig(sandbox_dir=tmp_path)
-        ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).setup_sandbox_files(config)
+        ClaudeBackend(DEFAULT_BACKEND_CFG).setup_sandbox_files(config)
         settings_path = tmp_path / ".claude" / "settings.json"
         assert settings_path.exists()
         settings = json.loads(settings_path.read_text())
@@ -164,17 +150,15 @@ class TestClaudeBackend:
     def test_setup_sandbox_files_creates_validate_script(self, tmp_path: Path) -> None:
         """.claude/validate_sandbox.py is created."""
         config = SandboxConfig(sandbox_dir=tmp_path)
-        ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).setup_sandbox_files(config)
+        ClaudeBackend(DEFAULT_BACKEND_CFG).setup_sandbox_files(config)
         assert (tmp_path / ".claude" / "validate_sandbox.py").exists()
 
     def test_setup_sandbox_files_docker_python(self, tmp_path: Path) -> None:
         """CLAUDE.md references the Docker Python path when provided."""
         config = SandboxConfig(sandbox_dir=tmp_path)
-        ClaudeBackend(
-            DEFAULT_BACKEND_CFG
-        ).setup_sandbox_files(config, docker_python="/custom/python")
+        ClaudeBackend(DEFAULT_BACKEND_CFG).setup_sandbox_files(
+            config, docker_python="/custom/python"
+        )
         text = (tmp_path / "CLAUDE.md").read_text()
         assert "/custom/python" in text
 

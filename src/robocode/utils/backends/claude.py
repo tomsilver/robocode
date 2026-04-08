@@ -187,7 +187,7 @@ class ClaudeBackend:
                     "CONTEXT MANAGEMENT: your context window is limited and "
                     "you MUST protect it aggressively: "
                     "(1) Delegate ALL source code reading, exploration, and "
-                    "deep reasoning to Task subagents: have them return only "
+                    "deep reasoning to subagents: have them return only "
                     "concise summaries and actionable suggestions. "
                     "(2) Never read large files directly; spawn a subagent to "
                     "read and summarize them. "

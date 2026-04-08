@@ -236,7 +236,8 @@ class _SingleTaskBehavior(Behavior[NDArray, NDArray]):
         block_name: str,
         candidate: RobotPose,
     ) -> bool:
-        """Return True if arm extension at the grasp pose avoids other outside blocks."""
+        """Return True if arm extension at the grasp pose avoids other outside
+        blocks."""
         robot = extract_robot(x)
         sweep_margin = max(0.01, 0.35 * robot.gripper_height) + APPROACH_MARGIN
 

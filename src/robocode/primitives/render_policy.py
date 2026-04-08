@@ -5,9 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from robocode.utils.backends import DEFAULT_BACKEND_CFG
-
 from robocode.approaches.agentic_approach import AgenticApproach
+from robocode.utils.backends import DEFAULT_BACKEND_CFG
 from robocode.utils.episode import run_episode, save_frames
 
 

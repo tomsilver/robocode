@@ -23,7 +23,11 @@ from omegaconf import DictConfig
 from robocode.approaches.base_approach import BaseApproach
 from robocode.mcp import MCP_TOOL_DESCRIPTIONS, MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 from robocode.primitives import PRIMITIVE_DESCRIPTIONS
-from robocode.utils.backends import TOOL_NAMES_PROMPT_SUFFIX, create_backend
+from robocode.utils.backends import (
+    CLAUDE_PROMPT_SUFFIX,
+    OPENCODE_PROMPT_SUFFIX,
+    create_backend,
+)
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -57,7 +61,7 @@ _SYSTEM_PROMPT = (
     "`git add -A && git commit -m '<describe what you changed and why>'`. "
     "Commit often, do not batch everything into one final commit. "
     "You should commit the approach every time before you test it in the environment. "
-    "Use the Task tool to explore source code in parallel — e.g. spawn "
+    "Use subagents to explore source code in parallel, e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially. "
     "TOKEN BUDGET: You have a limited output-token budget per turn. Be concise. "
@@ -443,8 +447,11 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             )
 
         system_prompt = _SYSTEM_PROMPT
-        if self._backend_cfg.get("base_url"):
-            system_prompt += TOOL_NAMES_PROMPT_SUFFIX
+        backend_name = self._backend_cfg["backend"]
+        if backend_name == "opencode":
+            system_prompt += OPENCODE_PROMPT_SUFFIX
+        else:
+            system_prompt += CLAUDE_PROMPT_SUFFIX
         if self._mcp_tools:
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 

@@ -56,8 +56,8 @@ class CRVConfig:
 class CRVActionLimits:
     """Relative action limits used to discretize CRV interpolation.
 
-    These limits define the maximum per-step change in base translation and
-    rotation when converting a continuous path into executable CRV actions.
+    These limits define the maximum per-step change in base translation and rotation
+    when converting a continuous path into executable CRV actions.
     """
 
     max_dx: float
@@ -207,8 +207,8 @@ def get_suctioned_objects(
 ) -> list[tuple[Object, SE2Pose]]:
     """Return movable objects currently attached to the robot suction zone.
 
-    Each result also includes the relative transform from the gripper tool-tip
-    frame to the attached object pose.
+    Each result also includes the relative transform from the gripper tool-tip frame to
+    the attached object pose.
     """
     if state.get(robot, "vacuum") <= 0.5:
         return []
@@ -252,8 +252,8 @@ def move_objects_in_contact(
 ) -> tuple[ObjectCentricState, set[tuple[Object, SE2Pose]]]:
     """Propagate contact from suctioned objects to nearby movable objects.
 
-    This is a conservative approximation used during holding-aware planning so
-    the planner can reject motions that would shove other movable objects.
+    This is a conservative approximation used during holding-aware planning so the
+    planner can reject motions that would shove other movable objects.
     """
     moved_objects: list[tuple[Object, SE2Pose]] = []
     moving_objects = {robot} | {o for o, _ in suctioned_objs}

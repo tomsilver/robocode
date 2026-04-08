@@ -20,8 +20,10 @@ __all__ = [
     "DEFAULT_BACKEND",
     "DEFAULT_BACKEND_CFG",
     "PROVIDERS",
-    "TOOL_NAMES_PROMPT_SUFFIX",
+    "CLAUDE_PROMPT_SUFFIX",
+    "OPENCODE_PROMPT_SUFFIX",
     "create_backend",
+    "firewall_domains_for_model",
     "provider_from_model",
 ]
 
@@ -70,12 +72,39 @@ def provider_from_model(model: str) -> str:
     return ""
 
 
-# Appended to the system prompt when using non-Anthropic models via
-# Claude Code CLI (base_url set), since smaller models often get tool
-# name casing wrong.
-TOOL_NAMES_PROMPT_SUFFIX = (
+def firewall_domains_for_model(model: str) -> list[str]:
+    """Return the API domains that must be whitelisted for *model*."""
+    provider = provider_from_model(model)
+    info = PROVIDERS.get(provider)
+    return list(info.domains) if info else []
+
+
+# Backend-specific system prompt suffixes.
+# Always appended to guide tool usage and subagent delegation.
+
+CLAUDE_PROMPT_SUFFIX = (
     " CRITICAL: Tool names are case-sensitive and MUST be capitalized exactly: "
     "Bash, Read, Write, Edit, Glob, Grep, Task. "
     "Using lowercase (e.g. 'bash' instead of 'Bash') will fail. "
     "Always use the exact capitalized names."
+    " SUBAGENTS: Use the Task tool to delegate work to subagents. "
+    "Available subagent types: "
+    "'general-purpose' for research, multi-step tasks, and broad exploration; "
+    "'Explore' for fast read-only codebase searches (grep, glob, read); "
+    "'Plan' for designing an implementation strategy before coding. "
+    "Start complex tasks by spawning a Plan subagent to outline your approach, "
+    "then use Explore subagents to read source code in parallel, "
+    "and general-purpose subagents for deeper analysis."
+)
+
+OPENCODE_PROMPT_SUFFIX = (
+    " Your tools use lowercase names: bash, read, write, edit, glob, grep, task."
+    " SUBAGENTS: Use the task tool to delegate work to subagents. "
+    "Available subagent_type values: "
+    "'general' for research, multi-step tasks, and broad exploration; "
+    "'explore' for fast read-only codebase searches (grep, glob, read); "
+    "'plan' for designing an implementation strategy before coding. "
+    "Start complex tasks by spawning a plan subagent to outline your approach, "
+    "then use explore subagents to read source code in parallel, "
+    "and general subagents for deeper analysis."
 )

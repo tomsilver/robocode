@@ -48,8 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from robocode.primitives import PRIMITIVE_NAME_TO_FILE
-from robocode.utils.backends import PROVIDERS, AgentBackend
-from robocode.utils.backends.opencode import firewall_domains_for_model
+from robocode.utils.backends import PROVIDERS, AgentBackend, firewall_domains_for_model
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
