@@ -16,6 +16,8 @@ cd /robocode
 uv sync --frozen --python python3.11
 cd /sandbox
 
-sudo /usr/local/bin/init-firewall.sh
+# Pass ROBOCODE_FIREWALL_EXTRA_DOMAINS through sudo (sudo strips env by default).
+sudo ROBOCODE_FIREWALL_EXTRA_DOMAINS="${ROBOCODE_FIREWALL_EXTRA_DOMAINS:-}" \
+    /usr/local/bin/init-firewall.sh
 
 exec "$@"

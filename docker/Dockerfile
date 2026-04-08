@@ -77,15 +77,18 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
 # ---------------------------------------------------------------------------
 COPY docker/init-firewall.sh /usr/local/bin/init-firewall.sh
 RUN chmod +x /usr/local/bin/init-firewall.sh \
-    && echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" \
+    && echo "node ALL=(root) NOPASSWD:SETENV: /usr/local/bin/init-firewall.sh" \
        > /etc/sudoers.d/node-firewall \
     && chmod 0440 /etc/sudoers.d/node-firewall
 
 # ---------------------------------------------------------------------------
-# Claude config directory for the node user
+# Config/data directories for the node user
 # ---------------------------------------------------------------------------
 RUN mkdir -p /home/node/.claude \
-    && chown -R node:node /home/node/.claude
+    && mkdir -p /home/node/.local/state \
+    && mkdir -p /home/node/.local/share/opencode \
+    && chown -R node:node /home/node/.claude \
+    && chown -R node:node /home/node/.local
 
 # ---------------------------------------------------------------------------
 # Python environment — pre-install all PyPI deps into /robocode/.venv.

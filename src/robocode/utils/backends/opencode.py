@@ -68,6 +68,9 @@ class OpenCodeBackend:
             config.prompt,
             "--format",
             "json",
+            "--print-logs",
+            "--log-level",
+            "INFO",
         ]
         if config.model:
             args += ["--model", config.model]
@@ -303,17 +306,23 @@ class OpenCodeBackend:
 
         proc.wait()
 
-        # Read stderr: may contain error messages or (in some versions)
-        # JSON events. Parse any JSON lines found there as well.
+        # Read stderr: contains --print-logs debug output and possibly
+        # error JSON events. Write to a separate log file.
         assert proc.stderr is not None
         stderr_output = proc.stderr.read()
         if stderr_output.strip():
+            # Write debug logs to a separate file (not stream.jsonl).
+            if stream_log_path is not None:
+                debug_log_path = stream_log_path.with_name(
+                    "opencode_debug.log"
+                )
+                debug_log_path.write_text(stderr_output)
+
+            # Still check for JSON error events in stderr.
             for line in stderr_output.splitlines():
                 line = line.strip()
                 if not line:
                     continue
-                if stream_log_fh is not None:
-                    stream_log_fh.write(line + "\n")
                 try:
                     msg = json.loads(line)
                     msg_type = msg.get("type", "")
@@ -321,11 +330,15 @@ class OpenCodeBackend:
                         is_error = True
                         err_data = msg.get("error", {})
                         error_name = err_data.get("name", "UnknownError")
-                        err_msg = err_data.get("data", {}).get("message", str(err_data))
+                        err_msg = err_data.get("data", {}).get(
+                            "message", str(err_data)
+                        )
                         error_text = f"{error_name}: {err_msg}"
-                        logger.error("Session error (stderr): %s", error_text)
+                        logger.error(
+                            "Session error (stderr): %s", error_text
+                        )
                 except json.JSONDecodeError:
-                    logger.debug("Stderr: %s", line[:500])
+                    pass
 
         if proc.returncode != 0 and not is_error:
             is_error = True
