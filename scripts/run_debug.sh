@@ -8,6 +8,6 @@ python experiments/run_experiment.py \
     environment=obstruction2d_hard \
     seed=24 \
     "primitives=[]" \
-    num_eval_tasks=100 \
+    num_eval_tasks=1 \
     render_videos=true \
     hydra.run.dir=outputs/cdl_no_mp_obstruction2d_hard_04-07/s24
