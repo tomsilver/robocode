@@ -65,7 +65,8 @@ def _main() -> None:
     numeric_cols = dataframe.select_dtypes(include="number").columns.tolist()
     if "seed" in numeric_cols:
         numeric_cols.remove("seed")
-    group_cols = [c for c in dataframe.columns if c not in numeric_cols and c != "seed"]
+    exclude_from_group = {"seed", "approach.load_dir"}
+    group_cols = [c for c in dataframe.columns if c not in numeric_cols and c not in exclude_from_group]
 
     seed_info = (
         dataframe.groupby(group_cols, sort=False)["seed"]
