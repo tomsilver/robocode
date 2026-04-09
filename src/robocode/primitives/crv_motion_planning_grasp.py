@@ -39,8 +39,8 @@ _ARM_EPS = 1e-6
 class RelativeGraspPose:
     """A grasp pose expressed in the target object's center frame.
 
-    The pose describes where the robot base should be located relative to the
-    target object immediately before the final arm extension and suction step.
+    The pose describes where the robot base should be located relative to the target
+    object immediately before the final arm extension and suction step.
     """
 
     x: float
