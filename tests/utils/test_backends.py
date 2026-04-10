@@ -281,6 +281,97 @@ class TestOpenCodeBackend:
         text = (tmp_path / "AGENTS.md").read_text()
         assert "/venv/bin/python" in text
 
+    def test_setup_sandbox_files_ollama_provider_injected(self, tmp_path: Path) -> None:
+        """opencode.json gets an Ollama provider block for ollama/ models."""
+        cfg = DictConfig({"backend": "opencode", "model": "ollama/qwen3.5:27b"})
+        config = SandboxConfig(sandbox_dir=tmp_path, model="ollama/qwen3.5:27b")
+        OpenCodeBackend(cfg).setup_sandbox_files(config)
+        oc = json.loads((tmp_path / "opencode.json").read_text())
+        assert "provider" in oc
+        assert "ollama" in oc["provider"]
+        ollama_cfg = oc["provider"]["ollama"]
+        assert ollama_cfg["options"]["baseURL"] == "http://localhost:11434/v1"
+        assert "qwen3.5:27b" in ollama_cfg["models"]
+
+    def test_setup_sandbox_files_no_provider_for_non_ollama(
+        self, tmp_path: Path
+    ) -> None:
+        """opencode.json does NOT get a provider block for non-Ollama models."""
+        config = SandboxConfig(sandbox_dir=tmp_path, model="openai/gpt-4o")
+        OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(config)
+        oc = json.loads((tmp_path / "opencode.json").read_text())
+        assert "provider" not in oc
+
+    def test_build_env_calls_ensure_ollama(self) -> None:
+        """build_env triggers ensure_ollama for ollama/ models."""
+        cfg = DictConfig(
+            {
+                "backend": "opencode",
+                "model": "ollama/qwen3.5:27b",
+                "ollama_keep_alive": "3m",
+            }
+        )
+        config = SandboxConfig(
+            sandbox_dir=Path("/tmp/test"), model="ollama/qwen3.5:27b"
+        )
+        with patch("robocode.utils.backends.opencode.ensure_ollama") as mock_ensure:
+            OpenCodeBackend(cfg).build_env(config)
+        mock_ensure.assert_called_once_with(keep_alive="3m")
+
+    def test_build_env_skips_ensure_ollama_for_non_ollama(self) -> None:
+        """build_env does NOT call ensure_ollama for non-Ollama models."""
+        config = SandboxConfig(sandbox_dir=Path("/tmp/test"), model="openai/gpt-4o")
+        with patch("robocode.utils.backends.opencode.ensure_ollama") as mock_ensure:
+            OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(config)
+        mock_ensure.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ClaudeBackend Ollama integration
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeOllama:
+    """Tests for Claude backend Ollama integration."""
+
+    def test_build_env_calls_ensure_ollama(self) -> None:
+        """build_env triggers ensure_ollama when base_url points to Ollama."""
+        cfg = DictConfig(
+            {
+                "backend": "claude",
+                "model": "qwen3.5:27b",
+                "base_url": "http://localhost:11434",
+                "auth_token": "ollama",
+                "ollama_keep_alive": "7m",
+            }
+        )
+        config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
+        with patch("robocode.utils.backends.claude.ensure_ollama") as mock_ensure:
+            ClaudeBackend(cfg).build_env(config)
+        mock_ensure.assert_called_once_with(keep_alive="7m")
+
+    def test_build_env_skips_ensure_ollama_without_base_url(self) -> None:
+        """build_env does NOT call ensure_ollama for standard Claude."""
+        config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
+        with patch("robocode.utils.backends.claude.ensure_ollama") as mock_ensure:
+            ClaudeBackend(DEFAULT_BACKEND_CFG).build_env(config)
+        mock_ensure.assert_not_called()
+
+    def test_build_env_default_keep_alive(self) -> None:
+        """Defaults to 5m keep_alive when not configured."""
+        cfg = DictConfig(
+            {
+                "backend": "claude",
+                "model": "qwen3.5:27b",
+                "base_url": "http://localhost:11434",
+                "auth_token": "ollama",
+            }
+        )
+        config = SandboxConfig(sandbox_dir=Path("/tmp/test"))
+        with patch("robocode.utils.backends.claude.ensure_ollama") as mock_ensure:
+            ClaudeBackend(cfg).build_env(config)
+        mock_ensure.assert_called_once_with(keep_alive="5m")
+
 
 # ---------------------------------------------------------------------------
 # Provider registry and utility functions
