@@ -4,7 +4,7 @@ set -euo pipefail
 ENV="${1:-obstruction2d_medium}"
 DATE=$(date +%m-%d)
 
-python experiments/run_experiment.py \
+python experiments/run_experiment.py -m \
     approach=agentic_cdl \
     approach.use_docker=true \
     approach.max_budget_usd=20.0 \
@@ -14,4 +14,4 @@ python experiments/run_experiment.py \
     'mcp_tools=[render_state,render_policy]' \
     environment="$ENV" \
     "hydra.sweep.dir=outputs/cdl_mp_${ENV}_${DATE}" \
-    "hydra.sweep.subdir=s${seed}"
+    'hydra.sweep.subdir=s${seed}'
