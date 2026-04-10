@@ -10,8 +10,8 @@ python experiments/run_experiment.py -m \
     approach.max_budget_usd=20.0 \
     seed=42,24,444 \
     num_eval_tasks=100 \
-    'primitives=[]' \
+    'primitives=[crv_motion_planning,crv_motion_planning_grasp]' \
     'mcp_tools=[render_state,render_policy]' \
     environment="$ENV" \
-    "hydra.sweep.dir=outputs/cdl_np_${ENV}_${DATE}" \
+    "hydra.sweep.dir=outputs/cdl_crv_${ENV}_${DATE}" \
     'hydra.sweep.subdir=s${seed}'
