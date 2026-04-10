@@ -1,0 +1,9 @@
+{
+  "version": 19,
+  "commit_hash": "f58919514c47bfae7cd1b45217143c5c786a82d9",
+  "timestamp": "2026-04-07T19:52:02+00:00",
+  "message": "Exclude non-surface obs from drop zones with robot body margin",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

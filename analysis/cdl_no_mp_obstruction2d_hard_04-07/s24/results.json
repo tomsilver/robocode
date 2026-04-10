@@ -1,0 +1,68 @@
+{
+  "mean_eval_reward": -1000.0,
+  "mean_eval_steps": 1000.0,
+  "solve_rate": 0.0,
+  "num_eval_tasks": 100,
+  "per_episode": [
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    }
+  ]
+}

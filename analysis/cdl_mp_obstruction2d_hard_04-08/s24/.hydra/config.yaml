@@ -1,0 +1,23 @@
+approach:
+  _target_: robocode.approaches.agentic_cdl_approach.AgenticCDLApproach
+  model: sonnet
+  max_budget_usd: 5.0
+  output_dir: ${hydra:runtime.output_dir}
+  load_dir: outputs/cdl_mp_obstruction2d_hard_04-08/s24
+  use_docker: true
+  geometry_prompt: true
+  max_output_tokens: 32000
+  autocompact_pct: 80
+environment:
+  _target_: robocode.environments.kinder_geom2d_env.KinderGeom2DEnv
+  env_id: kinder/Obstruction2D-o4-v0
+seed: 24
+max_steps: 1000
+num_eval_tasks: 1
+render_videos: true
+record_approach_history: true
+primitives:
+- BiRRT
+mcp_tools:
+- render_state
+- render_policy

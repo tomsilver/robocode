@@ -1,0 +1,153 @@
+## outputs/cdl_mp_obstruction2d_hard_04-08/s444
+
+
+
+![image-20260409210335627](/Users/libowen/Library/Application Support/typora-user-images/image-20260409210335627.png)
+
+#### v00
+
+```
+    def _plan_pick_path(self, obs):
+        robot = get_robot(obs)
+        px = self._pick_x_fn(obs)
+        goal_y = APPROACH_Y_ABOVE  # robot y for approach
+        path = _plan_path(
+            self._primitives, obs,
+            [robot['x'], robot['y']],
+            [px, goal_y],
+            excluded=self._excluded,
+            rng=self._rng,
+        )
+        if path is None:
+            # Fallback: direct line
+            path = [np.array([px, goal_y])]
+```
+
+Goal Y is too small, 0.25
+
+
+
+#### v01
+
+Fix: two-phase navigation (high altitude then descent) to avoid obstruction collisions
+
+1. make_birrt_fns again does not consider walls
+
+2. It was using this function to do path following...
+
+   ```
+   def toward_pos(cur_x, cur_y, tgt_x, tgt_y, vac=0.0, darm=0.0, cur_theta=None):
+       """Proportional control action to move robot base toward (tgt_x, tgt_y).
+       Optionally also corrects theta to -pi/2 if cur_theta is provided."""
+       dx = np.clip((tgt_x - cur_x) * K_POS, -MAX_DX, MAX_DX)
+       dy = np.clip((tgt_y - cur_y) * K_POS, -MAX_DY, MAX_DY)
+       dtheta = 0.0
+       if cur_theta is not None:
+           err_theta = normalize_angle(-np.pi / 2 - cur_theta)
+           dtheta = np.clip(err_theta * K_THETA, -MAX_DTHETA, MAX_DTHETA)
+       return clip_action(dx=dx, dy=dy, dtheta=dtheta, darm=darm, vac=vac)
+   ```
+
+   So it was zig-zag behavior...
+
+3. Again, approach low-y is too low:
+
+   ```
+           path = _plan_path(self._primitives, obs,
+                             [robot['x'], robot['y']], [px, APPROACH_LOW_Y],
+                             excluded=self._excl, rng=self._rng)
+           self._path = path or [np.array([px, APPROACH_LOW_Y])]
+   ```
+
+   0.25
+
+
+
+#### v02
+
+Tighten NAV_HIGH x-alignment tolerance before descent to prevent obs collision
+
+```
+def pick_robot_y(obj_y, obj_h):
+    """Compute robot y for approaching object from above."""
+    obj_top = obj_y + obj_h / 2.0
+    return obj_top + OBJ_TOP_OFFSET
+```
+
+1. This is wrong
+2. The previous KP issue make the robot stuck at the position without proceeding
+
+
+
+#### v03
+
+Switch obstruction clearing from pick-from-above to push-from-side strategy
+
+Definitely wrong...
+
+![image-20260409213218373](/Users/libowen/Library/Application Support/typora-user-images/image-20260409213218373.png)
+
+#### v04
+
+Replace pick-from-above with sweep strategy for obstruction clearing
+
+Definitely wrong.......
+
+
+
+#### v05
+
+Use OBS_PICK_OFFSET=0.19 and arm=0.175 for obstruction picking (pick_y > min_y)
+
+```
+        obs_top = o['y'] + o['height'] / 2
+        self._pick_y = obs_top + OBS_PICK_OFFSET
+        dx, dy = get_drop_xy(self._i)
+```
+
+This results in wrong 
+
+```
+        elif self._phase == PH_EXTEND:
+            if arm_reached(arm, OBS_PICK_ARM):
+                self._phase = PH_GRASP
+                self._hold_cnt = 0
+            dx_n = np.clip((px - rx) * K_POS, -MAX_DX, MAX_DX)
+            dy_n = np.clip((py - ry) * K_POS, -MAX_DY, MAX_DY)
+            darm = np.clip((OBS_PICK_ARM - arm) * 8.0, -0.1, 0.1)
+            return clip_action(dx=dx_n, dy=dy_n, darm=darm, vac=0.0)
+```
+
+So arm is never extended, stuck
+
+
+
+#### v06
+
+Use PICK_ARM_JOINT=0.13 for obstruction picking, slow arm extension
+
+```
+def pick_robot_y(obj_y, obj_h):
+    """Compute robot y for approaching object from above."""
+    obj_top = obj_y + obj_h / 2.0
+    return obj_top + OBJ_TOP_OFFSET
+```
+
+This is so hard to fix loll
+
+
+
+Overall, I feel:
+
+
+
+1. Claude does not quite understand the motion planner:
+
+   1. It does not write good fn
+   2. It also does not debug well if it BiRRT does not find a path (it will just introduce more offset hyper parameter)
+
+2. Providing BiRRT actually makes it harder to debug
+
+   - Because if BiRRT returns none, it actually does not know why
+
+   

@@ -1,0 +1,9 @@
+{
+  "version": 27,
+  "commit_hash": "0455ed62edad0b1932d99da0c022d833156533d6",
+  "timestamp": "2026-04-09T01:03:16+00:00",
+  "message": "RELEASE: rotate arm to theta=0 so paddle vertical, obs slides off; no fling",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

@@ -1,0 +1,9 @@
+{
+  "version": 12,
+  "commit_hash": "4b0894c01cad9311967cb961a97556ecff504cec",
+  "timestamp": "2026-04-09T00:05:07+00:00",
+  "message": "NAV_DROP: use arm-down theta so obs hangs below robot, not above",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

@@ -1,0 +1,236 @@
+[
+  {
+    "version": 0,
+    "commit_hash": "2f5dc59e5f08b0dbfb997eda41e0e7920aaa9976",
+    "timestamp": "2026-04-07T18:04:28+00:00",
+    "message": "Initial approach: PickAndDrop obstructions + PickAndPlace target block",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 1,
+    "commit_hash": "ce7a47d6700fe24e0d07b0655ee0af28be8a0e47",
+    "timestamp": "2026-04-07T18:11:35+00:00",
+    "message": "Fix KP oscillation (1.0 from 3.0) and obstruction detection (y-tolerance)",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 2,
+    "commit_hash": "02a8c7285f01cf3c017e8ac8e35d817c09ff018d",
+    "timestamp": "2026-04-07T18:25:03+00:00",
+    "message": "Fix drop zone collision: lower obstruction before releasing in PickAndDrop",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 3,
+    "commit_hash": "282b4d4120afb4cb818d6fbb76a718041562aca9",
+    "timestamp": "2026-04-07T18:27:08+00:00",
+    "message": "PickAndDrop: properly lower obstruction to table level before releasing (descend+extend)",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 4,
+    "commit_hash": "34dd9063ffb3d970e6ed938195925988864eda3f",
+    "timestamp": "2026-04-07T18:30:52+00:00",
+    "message": "Fix PickAndDrop premature termination: use phase-based done check, not obstruction_on_surface",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 5,
+    "commit_hash": "ddf3cc2c335acb9b522e5941004c566bb3a00f0f",
+    "timestamp": "2026-04-07T18:37:25+00:00",
+    "message": "Redesign: PickAndDrop carries with arm extended, fix place_robot_y to use ARM_MIN",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 6,
+    "commit_hash": "89790c904491a62ac50738d23fc4971099ed20a8",
+    "timestamp": "2026-04-07T18:47:50+00:00",
+    "message": "Fix: smart drop zones avoiding non-surface obs, deposit obstructions at TABLE_TOP via deposit_y formula",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 7,
+    "commit_hash": "a219152a9190fb83268836626b33f4516a7268e6",
+    "timestamp": "2026-04-07T18:50:54+00:00",
+    "message": "Fix double-margin bug in get_drop_zones, reduce CARRY_OBJ_HALF_W to 0.12",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 8,
+    "commit_hash": "04202353e0bc42bdf6248fb740796dfd2c116b2d",
+    "timestamp": "2026-04-07T18:55:07+00:00",
+    "message": "Lazy drop zone computation in PickAndDrop.reset(), reduce margins to 0.10",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 9,
+    "commit_hash": "2d250c02a41bfaee5848c819850fa07f2fa8a1ef",
+    "timestamp": "2026-04-07T18:56:48+00:00",
+    "message": "Use x=0.20 as minimum drop zone start to avoid world boundary",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 10,
+    "commit_hash": "3e9b8a785cd2efd8e0ca1c1f954aca299170e2cd",
+    "timestamp": "2026-04-07T18:58:07+00:00",
+    "message": "Sort surface obstructions by height desc to avoid robot collision with adjacent tall obs",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 11,
+    "commit_hash": "bc66cac731c4457b9f61a3871b6b666d2f86fbd3",
+    "timestamp": "2026-04-07T18:59:30+00:00",
+    "message": "Increase SAFE_NAV_HEIGHT to 0.70 to carry tall obstructions above adjacent surface obstacles",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 12,
+    "commit_hash": "184b8cc967674b98d3412814e42f81e7aacb5cf8",
+    "timestamp": "2026-04-07T19:02:08+00:00",
+    "message": "Exclude target block from drop zones to avoid collision during obstruction deposit",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 13,
+    "commit_hash": "98442ade0d6e69d2daffe658d81f71098f098d47",
+    "timestamp": "2026-04-07T19:07:06+00:00",
+    "message": "Drop-from-height strategy: release at SAFE_NAV_HEIGHT=0.80, avoid surface/block only in drop zones",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 14,
+    "commit_hash": "4b316955e6b06b96c13da9dc0b5bb920502285f6",
+    "timestamp": "2026-04-07T19:12:37+00:00",
+    "message": "Fix release bug: execute vacuum-off action before transitioning; add RELEASE\u2192DONE phase",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 15,
+    "commit_hash": "9ab2ef59213c01257a99fae21e8f4d195f42711b",
+    "timestamp": "2026-04-07T19:17:39+00:00",
+    "message": "Rise up during RELEASE to physically separate arm from dropped object",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 16,
+    "commit_hash": "aaab90382aef8fe87ab8a39b2dfff0c0bacae7b8",
+    "timestamp": "2026-04-07T19:25:02+00:00",
+    "message": "Reactive descent in LOWER_CARRY: stop when stuck (handles stacking/congestion)",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 17,
+    "commit_hash": "a1140008796cc0c3e889c74d3591be81709b424b",
+    "timestamp": "2026-04-07T19:42:28+00:00",
+    "message": "Reactive descent in LOWER_PLACE + vac-OFF + rise in P_RELEASE",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 18,
+    "commit_hash": "e1e27a68ff7d0b4372696ca30be636bdc21167df",
+    "timestamp": "2026-04-07T19:48:49+00:00",
+    "message": "Fix place_y with actual arm_joint; fix drop zone to clear robot-body radius around block pickup",
+    "total_reward": -941.0,
+    "num_steps": 941,
+    "solved": true
+  },
+  {
+    "version": 19,
+    "commit_hash": "f58919514c47bfae7cd1b45217143c5c786a82d9",
+    "timestamp": "2026-04-07T19:52:02+00:00",
+    "message": "Exclude non-surface obs from drop zones with robot body margin",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 20,
+    "commit_hash": "6c95ede585ebe5959539a06b5be4458f556805f8",
+    "timestamp": "2026-04-07T19:59:03+00:00",
+    "message": "Revert non-surface obs exclusions (broke seeds 0,1); fix fallback to stack at zones[0]",
+    "total_reward": -941.0,
+    "num_steps": 941,
+    "solved": true
+  },
+  {
+    "version": 21,
+    "commit_hash": "b21c26b62130dab5371239dd9eb947f1f69c2d42",
+    "timestamp": "2026-04-07T20:07:21+00:00",
+    "message": "Restore 29/30 stable state: fallback stacking + reverted non-surf exclusions",
+    "total_reward": -941.0,
+    "num_steps": 941,
+    "solved": true
+  },
+  {
+    "version": 22,
+    "commit_hash": "9f1aa88968dfdc04592e9c0688a4966646e443ab",
+    "timestamp": "2026-04-07T20:12:27+00:00",
+    "message": "Add lateral shift recovery in LOWER_CARRY when stuck; fixes seed 20",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 23,
+    "commit_hash": "4714582ad99e9f3b01cc57107acad01bf0af4015",
+    "timestamp": "2026-04-07T20:26:28+00:00",
+    "message": "WIP: smart lateral shift in LOWER_CARRY (45/50)",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 24,
+    "commit_hash": "9d3385d6755747b1181df18790d0174257357d0b",
+    "timestamp": "2026-04-07T20:46:10+00:00",
+    "message": "Fix REPOSITION: exclude current drop_x, add timeout; add non-surf obs exclusions to get_drop_zones",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 25,
+    "commit_hash": "e6f2faef20300da8116feddc469445190b174185",
+    "timestamp": "2026-04-07T21:04:19+00:00",
+    "message": "Restore stable 29/30 state: 4/4 primary seeds, 29/30 broad seeds",
+    "total_reward": -941.0,
+    "num_steps": 941,
+    "solved": true
+  }
+]

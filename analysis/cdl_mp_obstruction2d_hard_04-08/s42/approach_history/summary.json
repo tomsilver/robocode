@@ -1,0 +1,174 @@
+[
+  {
+    "version": 0,
+    "commit_hash": "9450de6c2f6c1fd4e0b3a3246aab56ec60fb2b9b",
+    "timestamp": "2026-04-08T19:55:40+00:00",
+    "message": "Initial approach: ClearAllObstructions, PickupTargetBlock, PlaceTargetBlock with BiRRT navigation",
+    "total_reward": NaN,
+    "num_steps": 0,
+    "solved": false,
+    "error": "ImportError: cannot import name 'THETA_DOWN' from 'obs_helpers' (/home/airlabbw/NeSy/robocode_branches/helpers/outputs/cdl_mp_obstruction2d_hard_04-08/s42/approach_history/v000/sandbox/obs_helpers.py)"
+  },
+  {
+    "version": 1,
+    "commit_hash": "0ff460e0a54faa4a76b40dbb20a8b865fa2f79aa",
+    "timestamp": "2026-04-08T20:22:46+00:00",
+    "message": "Fix bottom-left vs center coordinate confusion for all rectangles",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 2,
+    "commit_hash": "ec57fb79350592b90b07ed40ea07f3c49c976663",
+    "timestamp": "2026-04-08T20:26:25+00:00",
+    "message": "Fix approach_xy_for_pick: use obj_top + arm_length + 0.010",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 3,
+    "commit_hash": "7ab4aba917679a30f28452440021b904de796620",
+    "timestamp": "2026-04-08T20:32:48+00:00",
+    "message": "Fix behavior termination and carry navigation",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 4,
+    "commit_hash": "d16ba49078feb4f4b6ce68f3ce9e6dbc991c263f",
+    "timestamp": "2026-04-08T20:35:01+00:00",
+    "message": "Use broader surface-blocking check to clear adjacent obstructions",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 5,
+    "commit_hash": "2c3e6493f0949c2a20f9d3320326e515277fbff5",
+    "timestamp": "2026-04-08T20:36:49+00:00",
+    "message": "Pick tallest obstruction first to avoid lateral gripper collision",
+    "total_reward": -265.0,
+    "num_steps": 265,
+    "solved": true
+  },
+  {
+    "version": 6,
+    "commit_hash": "2d9d64944c5ebeba92a0ef172ff780c892c9a17a",
+    "timestamp": "2026-04-08T20:43:04+00:00",
+    "message": "Add descent-before-release phases to avoid obstructions floating at gripper height",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 7,
+    "commit_hash": "1189e7bb88aacac24c4862e6e303fc993ab0e78c",
+    "timestamp": "2026-04-08T20:52:02+00:00",
+    "message": "Simplify ClearAllObstructions: release straight up, no horizontal carry (avoids arm/gripper collision with dropped obstructions)",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 8,
+    "commit_hash": "b92ed50a897cc5581dbe5418a05194e04df0134f",
+    "timestamp": "2026-04-08T21:12:03+00:00",
+    "message": "Add carry-aware BiRRT collision fn and smart drop zones to avoid floating obstruction collisions",
+    "total_reward": -258.0,
+    "num_steps": 258,
+    "solved": true
+  },
+  {
+    "version": 9,
+    "commit_hash": "e1ad3f2345bbbc9c0ded4e54f1fecd26bf389f83",
+    "timestamp": "2026-04-08T21:20:21+00:00",
+    "message": "Fix _choose_drop_x: more candidates, correct target block exclusion, better fallback",
+    "total_reward": -258.0,
+    "num_steps": 258,
+    "solved": true
+  },
+  {
+    "version": 10,
+    "commit_hash": "668109e36dfc222c93ee9097d0b154d53ea25ceb",
+    "timestamp": "2026-04-08T21:34:20+00:00",
+    "message": "Fix terminated() threshold to 0.25; use carry-aware path in PlaceTargetBlock",
+    "total_reward": -256.0,
+    "num_steps": 256,
+    "solved": true
+  },
+  {
+    "version": 11,
+    "commit_hash": "42b4a89942068313044abb488c3e65f723395ea6",
+    "timestamp": "2026-04-08T21:40:15+00:00",
+    "message": "PlaceTargetBlock: carry-aware surf_x selection and path planning; base path for descent",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 12,
+    "commit_hash": "d66cdec203e4bf80ea61de3c4902c0d8398abd22",
+    "timestamp": "2026-04-08T21:42:43+00:00",
+    "message": "Drop block from current height when PLAN_PLACE descent is blocked",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 13,
+    "commit_hash": "c9a444ca44cd221ceffe9e430bd244514708e50e",
+    "timestamp": "2026-04-08T21:49:31+00:00",
+    "message": "Fix _pick_surf_x: check base collision at place_y AND carry at NAV_HEIGHT; fallback to x_max",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 14,
+    "commit_hash": "aff30e97dae451016b077d2dfee70ad4f3aa185e",
+    "timestamp": "2026-04-08T21:55:40+00:00",
+    "message": "Fix NAV_PLACE: use direct goal path when BiRRT fails (margin too conservative); physics handles actual collision",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 15,
+    "commit_hash": "8e20029bfaea2530bd5bd649712cf682694cd86d",
+    "timestamp": "2026-04-08T22:10:39+00:00",
+    "message": "Fix place_y: use correct suction_depth formula; block_bottom at TABLE+IS_ON_TOL/2 (achievable and within surface tolerance)",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 16,
+    "commit_hash": "40c31bd4c77b61679c8ecd5b5f1bd2c64b37089d",
+    "timestamp": "2026-04-08T22:13:40+00:00",
+    "message": "Fix _pick_surf_x: add 1mm margin to avoid floating-point boundary miss in is_block_on_surface",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 17,
+    "commit_hash": "0f732298ecb36eb60028518b8274c1be2f9aa6d3",
+    "timestamp": "2026-04-08T22:13:58+00:00",
+    "message": "Final: all 4 seeds solved - clean up debug files",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  },
+  {
+    "version": 18,
+    "commit_hash": "3d677cba02142262894b0468e6e51a483a3bc8ad",
+    "timestamp": "2026-04-08T18:14:08-04:00",
+    "message": "auto-commit uncommitted changes",
+    "total_reward": -257.0,
+    "num_steps": 257,
+    "solved": true
+  }
+]

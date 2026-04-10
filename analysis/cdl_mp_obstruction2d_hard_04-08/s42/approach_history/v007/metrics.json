@@ -1,0 +1,9 @@
+{
+  "version": 7,
+  "commit_hash": "1189e7bb88aacac24c4862e6e303fc993ab0e78c",
+  "timestamp": "2026-04-08T20:52:02+00:00",
+  "message": "Simplify ClearAllObstructions: release straight up, no horizontal carry (avoids arm/gripper collision with dropped obstructions)",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

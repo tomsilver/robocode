@@ -1,0 +1,278 @@
+## cdl_no_mp_obstruction2d_hard_04-07/s24 (0.84)
+
+
+
+![image-20260409105538317](/Users/libowen/Library/Application Support/typora-user-images/image-20260409105538317.png)
+
+#### v00
+
+```
+def rects_overlap_aabb(r1, r2):
+    """AABB overlap (ignores rotation — fine for theta≈0 objects)."""
+    return (r1['x'] < r2['x'] + r2['width']  and
+            r1['x'] + r1['width']  > r2['x']  and
+            r1['y'] < r2['y'] + r2['height'] and
+            r1['y'] + r1['height'] > r2['y'])
+
+
+def obstruction_on_surface(obs, i):
+    """True if obstruction i overlaps the target surface (AABB check)."""
+    obs_rect = extract_obstruction(obs, i)
+    surf_rect = extract_target_surface(obs)
+    return rects_overlap_aabb(obs_rect, surf_rect)
+```
+
+This is wrong as checking "y" is wrong, this makes the robot directly pick and place tgt block.
+
+
+
+#### **v01**
+
+Fix KP oscillation (1.0 from 3.0) and obstruction detection (y-tolerance)
+
+Okay, this is a really hard bug to figure out.
+
+```
+class PickAndDrop(Behavior):
+
+    def terminated(self, obs) -> bool:
+        return not obstruction_on_surface(obs, self._obs_idx)
+```
+
+It terminates immediately after retract arm, so the approach moved to the next PickAndDrop, got stuck:
+
+![image-20260409113326541](/Users/libowen/Library/Application Support/typora-user-images/image-20260409113326541.png)
+
+
+
+#### v02
+
+Fix drop zone collision: lower obstruction before releasing in PickAndDrop
+
+This does not fix the problem.
+
+
+
+#### v03
+
+PickAndDrop: properly lower obstruction to table level before releasing (descend+extend)
+
+This does not fix the problem.
+
+
+
+#### v04
+
+Initial approach: PickAndDrop obstructions + PickAndPlace target block
+
+It figured out the previous problem!
+
+```
+    def terminated(self, obs) -> bool:
+        # Use phase-based termination: done only after we've released the object.
+        # Checking obstruction_on_surface here is wrong because the obstruction
+        # leaves the surface as soon as we lift it, causing premature termination.
+        return self._phase >= _PH_RELEASE
+```
+
+Now the problem is wrong dropping region:
+
+![image-20260409114212518](/Users/libowen/Library/Application Support/typora-user-images/image-20260409114212518.png)
+
+#### v05
+
+Redesign: PickAndDrop carries with arm extended, fix place_robot_y to use ARM_MIN
+
+This does not fix the problem.
+
+
+
+#### v06
+
+Fix: smart drop zones avoiding non-surface obs, deposit obstructions at TABLE_TOP via deposit_y formula
+
+This does not fix the problem.
+
+
+
+#### v07
+
+Fix double-margin bug in get_drop_zones, reduce CARRY_OBJ_HALF_W to 0.12
+
+This does not fix the problem.
+
+
+
+#### v08
+
+Lazy drop zone computation in PickAndDrop.reset(), reduce margins to 0.10
+
+This does not fix the problem.
+
+
+
+#### v09
+
+Use x=0.20 as minimum drop zone start to avoid world boundary
+
+![image-20260409115123217](/Users/libowen/Library/Application Support/typora-user-images/image-20260409115123217.png)
+
+This does not fix the problem.
+
+
+
+#### v10
+
+Sort surface obstructions by height desc to avoid robot collision with adjacent tall obs
+
+This does not fix the problem.
+
+
+
+#### v11
+
+Increase SAFE_NAV_HEIGHT to 0.70 to carry tall obstructions above adjacent surface obstacles
+
+This does not fix the problem.
+
+
+
+#### v12
+
+Exclude target block from drop zones to avoid collision during obstruction deposit
+
+![image-20260409115539994](/Users/libowen/Library/Application Support/typora-user-images/image-20260409115539994.png)
+
+Finally nearly solve the problem now!
+
+
+
+#### v13
+
+Drop-from-height strategy: release at SAFE_NAV_HEIGHT=0.80, avoid surface/block only in drop zones
+
+![image-20260409115714842](/Users/libowen/Library/Application Support/typora-user-images/image-20260409115714842.png)
+
+This introduced a new problem.. of robot navigation with collision
+
+
+
+#### v14
+
+Fix release bug: execute vacuum-off action before transitioning; add RELEASE→DONE phase
+
+Does not solve the previous problem.
+
+
+
+#### v15
+
+Rise up during RELEASE to physically separate arm from dropped object
+
+Does not solve the previous problem.
+
+
+
+#### v16
+
+Reactive descent in LOWER_CARRY: stop when stuck (handles stacking/congestion)
+
+This nearly solved the problem:
+
+![image-20260409120120000](/Users/libowen/Library/Application Support/typora-user-images/image-20260409120120000.png)
+
+The final problem is that placing the target block is not actually in the region.
+
+
+
+#### v17
+
+Reactive descent in LOWER_PLACE + vac-OFF + rise in P_RELEASE
+
+This does not address the final problem
+
+
+
+#### v18
+
+Fix place_y with actual arm_joint; fix drop zone to clear robot-body radius around block pickup
+
+Finally succeed
+
+
+
+#### Summary of the final approach failure cases
+
+![image-20260409122353017](/Users/libowen/Library/Application Support/typora-user-images/image-20260409122353017.png)
+
+Placing Zone has long-dependency (e.g., the empty space is not very large and programmatic Zone finding is tricky), and this zone finding is also entangled with "how to navigate".
+
+```
+# ─── Drop zone computation ────────────────────────────────────────────────────
+def get_drop_zones(obs):
+    """Return N x-positions for dropping obstructions.
+
+    Scans left→right for positions where:
+    - Enough clearance from target surface and non-surface obstructions
+    - Robot can safely descend there with the carried object
+    """
+    surf = extract_target_surface(obs)
+    sx = surf['x']
+    sw = surf['width']
+
+    ROBOT_BASE_RADIUS = 0.10
+
+    exclusions = []
+    # Target surface: must not accidentally deposit onto it
+    exclusions.append((sx - DROP_MARGIN - CARRY_OBJ_HALF_W,
+                       sx + sw + DROP_MARGIN + CARRY_OBJ_HALF_W))
+    # Target block: exclude robot-body radius on both sides of block center
+    # so that deposited obs don't interfere with robot descending to pick block.
+    blk = extract_target_block(obs)
+    pick_x = blk['x'] + blk['width'] / 2.0
+    blk_excl_half = ROBOT_BASE_RADIUS + CARRY_OBJ_HALF_W  # = 0.20
+    exclusions.append((pick_x - blk_excl_half, pick_x + blk_excl_half))
+    def is_blocked(x):
+        for (lo, hi) in exclusions:
+            if lo <= x <= hi:
+                return True
+        return False
+
+    def next_clear(x):
+        """Jump x past any blocking interval."""
+        changed = True
+        while changed:
+            changed = False
+            for (lo, hi) in exclusions:
+                if lo <= x <= hi:
+                    x = hi + 0.01
+                    changed = True
+        return x
+
+    zones = []
+    # Start at 0.20: robot base_radius (0.10) + CARRY_OBJ_HALF_W (0.10) from world left edge
+    x = max(WORLD_MIN_X + 0.20, WORLD_MIN_X + DROP_MARGIN)
+    x = next_clear(x)  # skip any initial blocked region
+    while x <= WORLD_MAX_X - DROP_MARGIN and len(zones) < NUM_OBSTRUCTIONS:
+        if not is_blocked(x):
+            zones.append(x)
+            x += DROP_SPACING
+            x = next_clear(x)
+        else:
+            x = next_clear(x)
+
+    # Fallback: use positions near world edges
+    if len(zones) < NUM_OBSTRUCTIONS:
+        # Try right edge
+        for i in range(NUM_OBSTRUCTIONS - len(zones)):
+            candidate = WORLD_MAX_X - DROP_MARGIN - i * DROP_SPACING
+            if not is_blocked(candidate):
+                zones.append(candidate)
+    # Final fallback: stack at first valid zone (reactive descent handles stacking)
+    while len(zones) < NUM_OBSTRUCTIONS:
+        zones.append(zones[0] if zones else WORLD_MIN_X + 0.20)
+
+    return zones[:NUM_OBSTRUCTIONS]
+```
+
+Some rest of the failures are target block placing, but that should be fixable.

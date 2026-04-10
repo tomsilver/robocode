@@ -1,0 +1,9 @@
+- approach=agentic_cdl
+- approach.use_docker=true
+- approach.max_budget_usd=20.0
+- seed=42
+- num_eval_tasks=100
+- primitives=[]
+- mcp_tools=[render_state,render_policy]
+- environment=obstruction2d_hard
+- approach.load_dir=outputs/cdl_no_mp_obstruction2d_hard_04-07/s42

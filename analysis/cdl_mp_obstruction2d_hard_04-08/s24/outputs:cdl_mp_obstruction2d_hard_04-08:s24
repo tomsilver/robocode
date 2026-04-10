@@ -1,0 +1,230 @@
+## outputs/cdl_mp_obstruction2d_hard_04-08/s24
+
+
+
+![image-20260409105538317](/Users/libowen/Library/Application Support/typora-user-images/image-20260409105538317.png)
+
+#### v00
+
+It spends a lot of time and reasoning on how to use BiRRT, writing collision/sampling function,
+
+but ended up not using it.
+The approach fails at navigate
+
+```
+        if self._phase == PHASE_NAV:
+            # Navigate to position where arm can reach obstruction
+            theta_to_obj = np.arctan2(oy - r["y"], ox - r["x"])
+            goal_x, goal_y = robot_goal_for_grasp(ox, oy, theta_to_obj)
+            dist = np.hypot(r["x"] - goal_x, r["y"] - goal_y)
+            ang_err = abs(angle_diff(theta_to_obj, r["theta"]))
+            if dist < NAV_PHASE_TOL and ang_err < ANG_PHASE_TOL:
+                self._phase = PHASE_EXTEND
+            return navigate_to_pose(obs, goal_x, goal_y, theta_to_obj, vac=0.0)
+            
+def robot_goal_for_grasp(tx, ty, theta) -> tuple:
+    """Robot center position so suction zone reaches (tx,ty) with arm at max extension."""
+    rx = tx - np.cos(theta) * GRASP_REACH
+    ry = ty - np.sin(theta) * GRASP_REACH
+    return rx, ry
+```
+
+The goal does not account for block width/height, so it collided.
+
+
+
+#### v01
+
+Fix rectangle coordinate convention (x,y=bottom-left), **approach from side**
+
+Now this makes the high-level sequences wrong:
+
+```
+def rects_overlap(ax1, ax2, ay1, ay2, bx1, bx2, by1, by2, margin=0.0) -> bool:
+    return (ax1 < bx2 - margin and ax2 > bx1 + margin and
+            ay1 < by2 - margin and ay2 > by1 + margin)
+
+
+def obstruction_overlaps_surface(obs: np.ndarray, i: int) -> bool:
+    surf = extract_surface(obs)
+    ob   = extract_obstruction(obs, i)
+    return rects_overlap(ob["x1"], ob["x2"], ob["y1"], ob["y2"],
+                         surf["x1"], surf["x2"], surf["y1"], surf["y2"],
+                         SURF_OVERLAP_TOL)
+```
+
+```
+        b_place = PlaceBlock(self._primitives)
+        b_pick  = PickBlock(self._primitives)
+
+        if not b_place.initializable(state):
+            if not b_pick.initializable(state):
+                # Block already held — skip to place
+                pass
+            else:
+                behaviors.append(b_pick)
+
+            # Add clearing behaviors for obstructions that overlap surface
+            clears = []
+            for i in range(NUM_OBS):
+                b = ClearObstruction(i, self._primitives)
+                if b.initializable(state):
+                    clears.append(b)
+            # Insert clears before pick
+            behaviors = clears + behaviors
+```
+
+It will directly Pick and Place (from side)
+
+<img src="/Users/libowen/Library/Application Support/typora-user-images/image-20260409143126674.png" alt="image-20260409143126674" style="zoom:50%;" />
+
+
+
+#### v02
+
+Fix the grasp approach direction to avoid collision with obstacles
+
+```
+def choose_grasp_approach(obs_arr, obj_cx, obj_cy, skip_idx=None):
+    """Return (goal_x, goal_y, theta) for approaching object at (obj_cx, obj_cy).
+    Tries left (theta=0) then right (theta=pi); picks the one not in collision.
+    skip_idx: index of the obstruction being grasped (exclude from collision check).
+    """
+    from obs_helpers import (extract_obstruction, extract_block,
+                              NUM_OBSTRUCTIONS, NAV_CLEAR_Y)
+    grasp_y = max(NAV_CLEAR_Y, obj_cy)  # can't go below min safe y
+
+    candidates = [
+        (obj_cx - GRASP_REACH, grasp_y, 0.0),      # approach from left
+        (obj_cx + GRASP_REACH, grasp_y, np.pi),     # approach from right
+    ]
+
+    # Build obstacle rects (all except skip_idx)
+    rects = []
+    for i in range(NUM_OBSTRUCTIONS):
+        if i == skip_idx:
+            continue
+        ob = extract_obstruction(obs_arr, i)
+        rects.append((ob["x1"], ob["x2"], ob["y1"], ob["y2"]))
+    if skip_idx != -1:  # -1 means "skip the block" (target is the block)
+        blk = extract_block(obs_arr)
+        rects.append((blk["x1"], blk["x2"], blk["y1"], blk["y2"]))
+
+    for (gx, gy, gtheta) in candidates:
+        if gx < WORLD_MIN_X or gx > WORLD_MAX_X:
+            continue
+        if gy < WORLD_MIN_Y or gy > WORLD_MAX_Y:
+            continue
+        collides = False
+        for (x1, x2, y1, y2) in rects:
+            if _circle_rect_collision(gx, gy, ROBOT_EFF_RADIUS, x1, x2, y1, y2):
+                collides = True
+                break
+        if not collides:
+            return _clamp(gx, WORLD_MIN_X, WORLD_MAX_X), _clamp(gy, WORLD_MIN_Y, WORLD_MAX_Y), gtheta
+
+    # Fallback: return best option even if in collision
+    gx, gy, gt = candidates[0]
+    return _clamp(gx, WORLD_MIN_X, WORLD_MAX_X), _clamp(gy, WORLD_MIN_Y, WORLD_MAX_Y), gt
+```
+
+1. It only attempts grasping from left or right...
+
+2. **The BiRRT is wrongly implemented (it forgets about the walls...)**
+
+   So BiRRT got stuck in the very first step. We actually never passed the static states from an environment to the agent (which are the walls.....)
+
+```
+            rects = get_rects_for_nav(obs, skip_indices=[self._i]) # walls forgotten
+            birrt = make_birrt(self._primitives, obs, rects)
+
+def make_birrt(primitives, obs, rects_to_avoid):
+    """Build BiRRT for (x,y,theta) navigation.
+    rects_to_avoid: list of (x1,x2,y1,y2) axis-aligned rects (from bottom-left convention)
+    """
+    BiRRT = primitives["BiRRT"]
+    rng   = np.random.default_rng(42)
+    r     = extract_robot(obs)
+    base_r = r["base_radius"]
+    # Add clearance to robot radius for collision check
+    eff_radius = base_r + 0.01
+
+    def sample_fn(state):
+        x     = rng.uniform(WORLD_MIN_X, WORLD_MAX_X)
+        y     = rng.uniform(WORLD_MIN_Y, WORLD_MAX_Y)
+        theta = rng.uniform(-np.pi, np.pi)
+        return np.array([x, y, theta])
+
+    def extend_fn(s1, s2):
+        dist  = np.hypot(s2[0]-s1[0], s2[1]-s1[1])
+        steps = max(2, int(dist / (DX_MAX * 0.5)))
+        pts   = []
+        for k in range(1, steps+1):
+            t     = k / steps
+            x     = s1[0] + t*(s2[0]-s1[0])
+            y     = s1[1] + t*(s2[1]-s1[1])
+            theta = s1[2] + t*angle_diff(s2[2], s1[2])
+            pts.append(np.array([x, y, theta]))
+        return pts
+
+    def collision_fn(state):
+        x, y = state[0], state[1]
+        if x < WORLD_MIN_X or x > WORLD_MAX_X or y < WORLD_MIN_Y or y > WORLD_MAX_Y:
+            return True
+        for (x1, x2, y1, y2) in rects_to_avoid:
+            # Circle-AABB collision check
+            nearest_x = max(x1, min(x, x2))
+            nearest_y = max(y1, min(y, y2))
+            if (x - nearest_x)**2 + (y - nearest_y)**2 < eff_radius**2:
+                return True
+        return False
+
+    def distance_fn(s1, s2):
+        return np.hypot(s2[0]-s1[0], s2[1]-s1[1]) + 0.3 * abs(angle_diff(s2[2], s1[2]))
+
+    birrt = BiRRT(sample_fn, extend_fn, collision_fn, distance_fn,
+                  rng, BIRRT_ATTEMPTS, BIRRT_ITERS, BIRRT_SMOOTH)
+    return birrt
+```
+
+
+
+#### v03
+
+Fix: XY-only BiRRT + rotate phase to prevent arm sweep collisions
+
+This does not fix the problem
+
+
+
+#### v04
+
+Add ROTATE_NAV phase: rotate arm up before navigating
+
+
+
+#### v05
+
+Fix choose_grasp_approach: compute theta to aim at obj_cy below NAV_CLEAR_Y
+
+
+
+#### v06
+
+Fix PickBlock/PlaceBlock to pass obj_x1/obj_x2 to choose_grasp_approach
+
+
+
+#### v07
+
+Add fine-positioning (dx/dy) during PHASE_EXTEND to fix arm contact < vacuum threshold
+
+
+
+#### v08
+
+Fix grasp approach: above-first with correct formula obj_y2+0.21, add obj_y2 param
+
+
+
+Never successfully fix this bug..

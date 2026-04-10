@@ -1,0 +1,9 @@
+{
+  "version": 22,
+  "commit_hash": "eac82e860c0b66dae71a0455f2da1087dec4f9b1",
+  "timestamp": "2026-04-09T00:33:37+00:00",
+  "message": "Fix drop_x: obs was hitting left wall during rotation; use surf_cx-0.22 so obs clears WORLD_MIN_X=0.12 at theta=-pi",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

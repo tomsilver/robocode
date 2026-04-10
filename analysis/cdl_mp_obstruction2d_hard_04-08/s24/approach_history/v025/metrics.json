@@ -1,0 +1,9 @@
+{
+  "version": 25,
+  "commit_hash": "6a483f866e405adc9aaa666d9e743146c998639e",
+  "timestamp": "2026-04-09T00:47:27+00:00",
+  "message": "RAISE_NAV phase + CCW release rotation: go UP to 0.55 first, rotate arm to pi/2, obs falls freely",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

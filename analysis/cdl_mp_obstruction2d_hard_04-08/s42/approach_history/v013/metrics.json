@@ -1,0 +1,9 @@
+{
+  "version": 13,
+  "commit_hash": "c9a444ca44cd221ceffe9e430bd244514708e50e",
+  "timestamp": "2026-04-08T21:49:31+00:00",
+  "message": "Fix _pick_surf_x: check base collision at place_y AND carry at NAV_HEIGHT; fallback to x_max",
+  "total_reward": -257.0,
+  "num_steps": 257,
+  "solved": true
+}

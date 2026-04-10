@@ -1,0 +1,9 @@
+{
+  "version": 24,
+  "commit_hash": "49397e82c65dee44b39b4e8c7a7c31b3f22a5994",
+  "timestamp": "2026-04-09T00:42:25+00:00",
+  "message": "Raise drop_y (+0.45-0.50 offset) so held obs clears floating released obs during nav_drop",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

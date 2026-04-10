@@ -1,0 +1,13 @@
+{
+  "mean_eval_reward": -272.0,
+  "mean_eval_steps": 272.0,
+  "solve_rate": 1.0,
+  "num_eval_tasks": 1,
+  "per_episode": [
+    {
+      "total_reward": -272.0,
+      "num_steps": 272,
+      "solved": true
+    }
+  ]
+}

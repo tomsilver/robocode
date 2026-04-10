@@ -1,0 +1,508 @@
+{
+  "mean_eval_reward": -243.01,
+  "mean_eval_steps": 243.01,
+  "solve_rate": 0.96,
+  "num_eval_tasks": 100,
+  "per_episode": [
+    {
+      "total_reward": -358.0,
+      "num_steps": 358,
+      "solved": true
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -272.0,
+      "num_steps": 272,
+      "solved": true
+    },
+    {
+      "total_reward": -192.0,
+      "num_steps": 192,
+      "solved": true
+    },
+    {
+      "total_reward": -193.0,
+      "num_steps": 193,
+      "solved": true
+    },
+    {
+      "total_reward": -212.0,
+      "num_steps": 212,
+      "solved": true
+    },
+    {
+      "total_reward": -161.0,
+      "num_steps": 161,
+      "solved": true
+    },
+    {
+      "total_reward": -205.0,
+      "num_steps": 205,
+      "solved": true
+    },
+    {
+      "total_reward": -182.0,
+      "num_steps": 182,
+      "solved": true
+    },
+    {
+      "total_reward": -201.0,
+      "num_steps": 201,
+      "solved": true
+    },
+    {
+      "total_reward": -180.0,
+      "num_steps": 180,
+      "solved": true
+    },
+    {
+      "total_reward": -214.0,
+      "num_steps": 214,
+      "solved": true
+    },
+    {
+      "total_reward": -175.0,
+      "num_steps": 175,
+      "solved": true
+    },
+    {
+      "total_reward": -239.0,
+      "num_steps": 239,
+      "solved": true
+    },
+    {
+      "total_reward": -196.0,
+      "num_steps": 196,
+      "solved": true
+    },
+    {
+      "total_reward": -192.0,
+      "num_steps": 192,
+      "solved": true
+    },
+    {
+      "total_reward": -246.0,
+      "num_steps": 246,
+      "solved": true
+    },
+    {
+      "total_reward": -251.0,
+      "num_steps": 251,
+      "solved": true
+    },
+    {
+      "total_reward": -187.0,
+      "num_steps": 187,
+      "solved": true
+    },
+    {
+      "total_reward": -171.0,
+      "num_steps": 171,
+      "solved": true
+    },
+    {
+      "total_reward": -268.0,
+      "num_steps": 268,
+      "solved": true
+    },
+    {
+      "total_reward": -260.0,
+      "num_steps": 260,
+      "solved": true
+    },
+    {
+      "total_reward": -180.0,
+      "num_steps": 180,
+      "solved": true
+    },
+    {
+      "total_reward": -283.0,
+      "num_steps": 283,
+      "solved": true
+    },
+    {
+      "total_reward": -256.0,
+      "num_steps": 256,
+      "solved": true
+    },
+    {
+      "total_reward": -190.0,
+      "num_steps": 190,
+      "solved": true
+    },
+    {
+      "total_reward": -107.0,
+      "num_steps": 107,
+      "solved": true
+    },
+    {
+      "total_reward": -279.0,
+      "num_steps": 279,
+      "solved": true
+    },
+    {
+      "total_reward": -193.0,
+      "num_steps": 193,
+      "solved": true
+    },
+    {
+      "total_reward": -187.0,
+      "num_steps": 187,
+      "solved": true
+    },
+    {
+      "total_reward": -241.0,
+      "num_steps": 241,
+      "solved": true
+    },
+    {
+      "total_reward": -210.0,
+      "num_steps": 210,
+      "solved": true
+    },
+    {
+      "total_reward": -185.0,
+      "num_steps": 185,
+      "solved": true
+    },
+    {
+      "total_reward": -165.0,
+      "num_steps": 165,
+      "solved": true
+    },
+    {
+      "total_reward": -183.0,
+      "num_steps": 183,
+      "solved": true
+    },
+    {
+      "total_reward": -202.0,
+      "num_steps": 202,
+      "solved": true
+    },
+    {
+      "total_reward": -145.0,
+      "num_steps": 145,
+      "solved": true
+    },
+    {
+      "total_reward": -265.0,
+      "num_steps": 265,
+      "solved": true
+    },
+    {
+      "total_reward": -186.0,
+      "num_steps": 186,
+      "solved": true
+    },
+    {
+      "total_reward": -262.0,
+      "num_steps": 262,
+      "solved": true
+    },
+    {
+      "total_reward": -261.0,
+      "num_steps": 261,
+      "solved": true
+    },
+    {
+      "total_reward": -204.0,
+      "num_steps": 204,
+      "solved": true
+    },
+    {
+      "total_reward": -265.0,
+      "num_steps": 265,
+      "solved": true
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -119.0,
+      "num_steps": 119,
+      "solved": true
+    },
+    {
+      "total_reward": -197.0,
+      "num_steps": 197,
+      "solved": true
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -240.0,
+      "num_steps": 240,
+      "solved": true
+    },
+    {
+      "total_reward": -182.0,
+      "num_steps": 182,
+      "solved": true
+    },
+    {
+      "total_reward": -263.0,
+      "num_steps": 263,
+      "solved": true
+    },
+    {
+      "total_reward": -202.0,
+      "num_steps": 202,
+      "solved": true
+    },
+    {
+      "total_reward": -206.0,
+      "num_steps": 206,
+      "solved": true
+    },
+    {
+      "total_reward": -208.0,
+      "num_steps": 208,
+      "solved": true
+    },
+    {
+      "total_reward": -232.0,
+      "num_steps": 232,
+      "solved": true
+    },
+    {
+      "total_reward": -198.0,
+      "num_steps": 198,
+      "solved": true
+    },
+    {
+      "total_reward": -209.0,
+      "num_steps": 209,
+      "solved": true
+    },
+    {
+      "total_reward": -163.0,
+      "num_steps": 163,
+      "solved": true
+    },
+    {
+      "total_reward": -158.0,
+      "num_steps": 158,
+      "solved": true
+    },
+    {
+      "total_reward": -162.0,
+      "num_steps": 162,
+      "solved": true
+    },
+    {
+      "total_reward": -258.0,
+      "num_steps": 258,
+      "solved": true
+    },
+    {
+      "total_reward": -188.0,
+      "num_steps": 188,
+      "solved": true
+    },
+    {
+      "total_reward": -238.0,
+      "num_steps": 238,
+      "solved": true
+    },
+    {
+      "total_reward": -186.0,
+      "num_steps": 186,
+      "solved": true
+    },
+    {
+      "total_reward": -250.0,
+      "num_steps": 250,
+      "solved": true
+    },
+    {
+      "total_reward": -238.0,
+      "num_steps": 238,
+      "solved": true
+    },
+    {
+      "total_reward": -198.0,
+      "num_steps": 198,
+      "solved": true
+    },
+    {
+      "total_reward": -100.0,
+      "num_steps": 100,
+      "solved": true
+    },
+    {
+      "total_reward": -189.0,
+      "num_steps": 189,
+      "solved": true
+    },
+    {
+      "total_reward": -198.0,
+      "num_steps": 198,
+      "solved": true
+    },
+    {
+      "total_reward": -266.0,
+      "num_steps": 266,
+      "solved": true
+    },
+    {
+      "total_reward": -227.0,
+      "num_steps": 227,
+      "solved": true
+    },
+    {
+      "total_reward": -204.0,
+      "num_steps": 204,
+      "solved": true
+    },
+    {
+      "total_reward": -262.0,
+      "num_steps": 262,
+      "solved": true
+    },
+    {
+      "total_reward": -201.0,
+      "num_steps": 201,
+      "solved": true
+    },
+    {
+      "total_reward": -218.0,
+      "num_steps": 218,
+      "solved": true
+    },
+    {
+      "total_reward": -248.0,
+      "num_steps": 248,
+      "solved": true
+    },
+    {
+      "total_reward": -267.0,
+      "num_steps": 267,
+      "solved": true
+    },
+    {
+      "total_reward": -238.0,
+      "num_steps": 238,
+      "solved": true
+    },
+    {
+      "total_reward": -170.0,
+      "num_steps": 170,
+      "solved": true
+    },
+    {
+      "total_reward": -129.0,
+      "num_steps": 129,
+      "solved": true
+    },
+    {
+      "total_reward": -174.0,
+      "num_steps": 174,
+      "solved": true
+    },
+    {
+      "total_reward": -195.0,
+      "num_steps": 195,
+      "solved": true
+    },
+    {
+      "total_reward": -192.0,
+      "num_steps": 192,
+      "solved": true
+    },
+    {
+      "total_reward": -162.0,
+      "num_steps": 162,
+      "solved": true
+    },
+    {
+      "total_reward": -242.0,
+      "num_steps": 242,
+      "solved": true
+    },
+    {
+      "total_reward": -204.0,
+      "num_steps": 204,
+      "solved": true
+    },
+    {
+      "total_reward": -203.0,
+      "num_steps": 203,
+      "solved": true
+    },
+    {
+      "total_reward": -262.0,
+      "num_steps": 262,
+      "solved": true
+    },
+    {
+      "total_reward": -189.0,
+      "num_steps": 189,
+      "solved": true
+    },
+    {
+      "total_reward": -187.0,
+      "num_steps": 187,
+      "solved": true
+    },
+    {
+      "total_reward": -250.0,
+      "num_steps": 250,
+      "solved": true
+    },
+    {
+      "total_reward": -242.0,
+      "num_steps": 242,
+      "solved": true
+    },
+    {
+      "total_reward": -179.0,
+      "num_steps": 179,
+      "solved": true
+    },
+    {
+      "total_reward": -148.0,
+      "num_steps": 148,
+      "solved": true
+    },
+    {
+      "total_reward": -224.0,
+      "num_steps": 224,
+      "solved": true
+    },
+    {
+      "total_reward": -254.0,
+      "num_steps": 254,
+      "solved": true
+    },
+    {
+      "total_reward": -1000.0,
+      "num_steps": 1000,
+      "solved": false
+    },
+    {
+      "total_reward": -207.0,
+      "num_steps": 207,
+      "solved": true
+    },
+    {
+      "total_reward": -263.0,
+      "num_steps": 263,
+      "solved": true
+    },
+    {
+      "total_reward": -308.0,
+      "num_steps": 308,
+      "solved": true
+    }
+  ]
+}

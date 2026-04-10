@@ -1,0 +1,9 @@
+{
+  "version": 16,
+  "commit_hash": "40c31bd4c77b61679c8ecd5b5f1bd2c64b37089d",
+  "timestamp": "2026-04-08T22:13:40+00:00",
+  "message": "Fix _pick_surf_x: add 1mm margin to avoid floating-point boundary miss in is_block_on_surface",
+  "total_reward": -257.0,
+  "num_steps": 257,
+  "solved": true
+}

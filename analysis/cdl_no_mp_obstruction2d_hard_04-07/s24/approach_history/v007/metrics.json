@@ -1,0 +1,9 @@
+{
+  "version": 7,
+  "commit_hash": "a219152a9190fb83268836626b33f4516a7268e6",
+  "timestamp": "2026-04-07T18:50:54+00:00",
+  "message": "Fix double-margin bug in get_drop_zones, reduce CARRY_OBJ_HALF_W to 0.12",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

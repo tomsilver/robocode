@@ -1,0 +1,9 @@
+{
+  "version": 13,
+  "commit_hash": "98442ade0d6e69d2daffe658d81f71098f098d47",
+  "timestamp": "2026-04-07T19:07:06+00:00",
+  "message": "Drop-from-height strategy: release at SAFE_NAV_HEIGHT=0.80, avoid surface/block only in drop zones",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

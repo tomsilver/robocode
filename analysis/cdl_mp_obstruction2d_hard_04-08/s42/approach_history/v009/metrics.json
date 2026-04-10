@@ -1,0 +1,9 @@
+{
+  "version": 9,
+  "commit_hash": "e1ad3f2345bbbc9c0ded4e54f1fecd26bf389f83",
+  "timestamp": "2026-04-08T21:20:21+00:00",
+  "message": "Fix _choose_drop_x: more candidates, correct target block exclusion, better fallback",
+  "total_reward": -258.0,
+  "num_steps": 258,
+  "solved": true
+}

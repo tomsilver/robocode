@@ -1,0 +1,9 @@
+{
+  "version": 22,
+  "commit_hash": "9f1aa88968dfdc04592e9c0688a4966646e443ab",
+  "timestamp": "2026-04-07T20:12:27+00:00",
+  "message": "Add lateral shift recovery in LOWER_CARRY when stuck; fixes seed 20",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

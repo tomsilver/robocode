@@ -1,0 +1,9 @@
+{
+  "version": 20,
+  "commit_hash": "1751a61093af83fd4d8ee8992ffb70961cf287d3",
+  "timestamp": "2026-04-09T00:25:33+00:00",
+  "message": "Fix nav_drop: use arm RIGHT (theta=0) so obs hangs right of robot, falls freely on release; drop positions far left of surface",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

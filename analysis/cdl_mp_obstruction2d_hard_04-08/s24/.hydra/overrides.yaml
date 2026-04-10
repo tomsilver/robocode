@@ -1,0 +1,8 @@
+- approach=agentic_cdl
+- approach.load_dir=outputs/cdl_mp_obstruction2d_hard_04-08/s24
+- environment=obstruction2d_hard
+- seed=24
+- primitives=[BiRRT]
+- num_eval_tasks=1
+- render_videos=true
+- record_approach_history=true

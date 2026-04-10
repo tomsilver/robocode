@@ -1,0 +1,74 @@
+[
+  {
+    "version": 0,
+    "commit_hash": "349f0c64a65c8333ee4815f18d5744b285e1e6e6",
+    "timestamp": "2026-04-09T01:16:11+00:00",
+    "message": "Initial approach: ClearObstructions, GraspBlock, PlaceBlock with BiRRT navigation",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 1,
+    "commit_hash": "5450e28b28cf02e412f7f4dccfcf0711f8d84ce5",
+    "timestamp": "2026-04-09T01:18:37+00:00",
+    "message": "Fix: two-phase navigation (high altitude then descent) to avoid obstruction collisions",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 2,
+    "commit_hash": "879b6479c826f61be6339a0cab106efca73aadbf",
+    "timestamp": "2026-04-09T01:42:19+00:00",
+    "message": "Tighten NAV_HIGH x-alignment tolerance before descent to prevent obs collision",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 3,
+    "commit_hash": "9b90ac5982fe02e654f6958a019124b98eaae375",
+    "timestamp": "2026-04-09T02:21:53+00:00",
+    "message": "Switch obstruction clearing from pick-from-above to push-from-side strategy",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 4,
+    "commit_hash": "bdbcacf9098a4f7f39d951ec80082c0f657fd2bf",
+    "timestamp": "2026-04-09T02:27:01+00:00",
+    "message": "Replace pick-from-above with sweep strategy for obstruction clearing",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 5,
+    "commit_hash": "c46f411679b1c9894fd2446c3f52a72b480e7eee",
+    "timestamp": "2026-04-09T02:47:03+00:00",
+    "message": "Use OBS_PICK_OFFSET=0.19 and arm=0.175 for obstruction picking (pick_y > min_y)",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 6,
+    "commit_hash": "7a9fe41b42e21bd6c9e2b0b1cf10f0744f122ebc",
+    "timestamp": "2026-04-09T04:28:45+00:00",
+    "message": "Use PICK_ARM_JOINT=0.13 for obstruction picking, slow arm extension",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 7,
+    "commit_hash": "b770cae9cf3ddb3d816aad739e35a76ad38ec653",
+    "timestamp": "2026-04-09T00:31:33-04:00",
+    "message": "auto-commit uncommitted changes",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  }
+]

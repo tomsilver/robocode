@@ -1,0 +1,9 @@
+{
+  "version": 14,
+  "commit_hash": "aff30e97dae451016b077d2dfee70ad4f3aa185e",
+  "timestamp": "2026-04-08T21:55:40+00:00",
+  "message": "Fix NAV_PLACE: use direct goal path when BiRRT fails (margin too conservative); physics handles actual collision",
+  "total_reward": -257.0,
+  "num_steps": 257,
+  "solved": true
+}

@@ -1,0 +1,263 @@
+[
+  {
+    "version": 0,
+    "commit_hash": "f7fa484f7619545677550a217438ae7d73842e9d",
+    "timestamp": "2026-04-08T22:32:13+00:00",
+    "message": "Initial approach: proportional controllers for pick-place with 4 obstructions",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 1,
+    "commit_hash": "639953ccb85349a831a58e85c238f639e2761305",
+    "timestamp": "2026-04-08T22:49:33+00:00",
+    "message": "Fix rectangle coordinate convention (x,y=bottom-left), approach from side",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 2,
+    "commit_hash": "a73823c8ea019b86087564726cdbc4e575eb9dbe",
+    "timestamp": "2026-04-08T22:55:10+00:00",
+    "message": "Fix grasp approach direction to avoid collision with obstacles",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 3,
+    "commit_hash": "d1c32fd7fd231b961bd3fe67b7d5c88525c8735f",
+    "timestamp": "2026-04-08T22:59:19+00:00",
+    "message": "Fix: XY-only BiRRT + rotate phase to prevent arm sweep collisions",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 4,
+    "commit_hash": "4be66d8f480ebf270090f80177b7e2a4cdcd6e6d",
+    "timestamp": "2026-04-08T23:00:28+00:00",
+    "message": "Add ROTATE_NAV phase: rotate arm up before navigating",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 5,
+    "commit_hash": "3cdcf34cd41a0d4e8c15e6990495de25f1cf9df4",
+    "timestamp": "2026-04-08T23:04:34+00:00",
+    "message": "Fix choose_grasp_approach: compute theta to aim at obj_cy below NAV_CLEAR_Y",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 6,
+    "commit_hash": "eee208458233b2dbd7b973d528be50df79eea72e",
+    "timestamp": "2026-04-08T23:27:10+00:00",
+    "message": "Fix PickBlock/PlaceBlock to pass obj_x1/obj_x2 to choose_grasp_approach",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 7,
+    "commit_hash": "e72ba82947877f221cb4ba8d52c9ee4726ed8e6d",
+    "timestamp": "2026-04-08T23:29:34+00:00",
+    "message": "Add fine-positioning (dx/dy) during PHASE_EXTEND to fix arm contact < vacuum threshold",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 8,
+    "commit_hash": "6b0a4a74e0ec4411d4ff3d47c9ad8ea53622f455",
+    "timestamp": "2026-04-08T23:51:28+00:00",
+    "message": "Fix grasp approach: above-first with correct formula obj_y2+0.21, add obj_y2 param",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 9,
+    "commit_hash": "386e7ba3ea39606b12b037a9f7c9ca15a19dcce3",
+    "timestamp": "2026-04-08T23:55:50+00:00",
+    "message": "Add PHASE_RETREAT after release to escape dropped obstruction",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 10,
+    "commit_hash": "9f14c6b058bd0375c1e067a0686d2bef51b76f75",
+    "timestamp": "2026-04-08T23:58:22+00:00",
+    "message": "PlaceBlock ROTATE_NAV: retract arm while rotating to lift block off table",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 11,
+    "commit_hash": "59c6d22fa2ac466757ff3599893e533cab7f6f7b",
+    "timestamp": "2026-04-09T00:03:43+00:00",
+    "message": "NAV_DROP: wait for theta convergence before release so obs drops vertically",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 12,
+    "commit_hash": "4b0894c01cad9311967cb961a97556ecff504cec",
+    "timestamp": "2026-04-09T00:05:07+00:00",
+    "message": "NAV_DROP: use arm-down theta so obs hangs below robot, not above",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 13,
+    "commit_hash": "6397b7efdd9ce39f323a43d052ba5f729d97b0d3",
+    "timestamp": "2026-04-09T00:09:39+00:00",
+    "message": "Rewrite PlaceBlock: navigate with arm=0.200 down, block hangs below, release at surf_cx",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 14,
+    "commit_hash": "65186f933a38a0b6c60c5eb08dd218d3f73d3eec",
+    "timestamp": "2026-04-09T00:10:21+00:00",
+    "message": "Move all drop positions to far LEFT to avoid block collision during nav_drop",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 15,
+    "commit_hash": "dfb4b22a962f6abf3395db3e71baed6b0a3d2f5a",
+    "timestamp": "2026-04-09T00:12:21+00:00",
+    "message": "Raise drop y positions so held obs hangs above previously-dropped obs",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 16,
+    "commit_hash": "45d2c2e5378dd1be1abb76492ccb3133d6f99a30",
+    "timestamp": "2026-04-09T00:14:20+00:00",
+    "message": "Retreat: rotate arm to NAV_THETA so arm body doesn't carry released obs upward",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 17,
+    "commit_hash": "a2d57d544faa4ff469cef711ce3c6f2225ad7265",
+    "timestamp": "2026-04-09T00:15:36+00:00",
+    "message": "Rotate arm during PHASE_RELEASE to sweep obs out of gripper body",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 18,
+    "commit_hash": "996ae1913c8dc948670dd43b3f3690f46c16d8be",
+    "timestamp": "2026-04-09T00:18:02+00:00",
+    "message": "NAV_DROP: use theta=pi (arm left) so vertical paddle allows obs to fall freely",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 19,
+    "commit_hash": "4853867dc509d728f024a65fda5f4b71cc5cc293",
+    "timestamp": "2026-04-09T00:19:57+00:00",
+    "message": "Release: tilt arm to -pi to slide obs left off paddle; adjust drop positions",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 20,
+    "commit_hash": "1751a61093af83fd4d8ee8992ffb70961cf287d3",
+    "timestamp": "2026-04-09T00:25:33+00:00",
+    "message": "Fix nav_drop: use arm RIGHT (theta=0) so obs hangs right of robot, falls freely on release; drop positions far left of surface",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 21,
+    "commit_hash": "be758db666230f12f49e6f1ae73075ba047d99ab",
+    "timestamp": "2026-04-09T00:30:38+00:00",
+    "message": "nav_drop: keep arm DOWN (-pi/2) during nav to avoid sweep collision; tilt to -pi at drop site for free release",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 22,
+    "commit_hash": "eac82e860c0b66dae71a0455f2da1087dec4f9b1",
+    "timestamp": "2026-04-09T00:33:37+00:00",
+    "message": "Fix drop_x: obs was hitting left wall during rotation; use surf_cx-0.22 so obs clears WORLD_MIN_X=0.12 at theta=-pi",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 23,
+    "commit_hash": "0c80fa76bee7258af81692f51a06327a988b8664",
+    "timestamp": "2026-04-09T00:38:37+00:00",
+    "message": "Simplify release: just drop vacuum, let obs slide off paddle during retreat arm rotation",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 24,
+    "commit_hash": "49397e82c65dee44b39b4e8c7a7c31b3f22a5994",
+    "timestamp": "2026-04-09T00:42:25+00:00",
+    "message": "Raise drop_y (+0.45-0.50 offset) so held obs clears floating released obs during nav_drop",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 25,
+    "commit_hash": "6a483f866e405adc9aaa666d9e743146c998639e",
+    "timestamp": "2026-04-09T00:47:27+00:00",
+    "message": "RAISE_NAV phase + CCW release rotation: go UP to 0.55 first, rotate arm to pi/2, obs falls freely",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 26,
+    "commit_hash": "0dca58bfd914e7a95d71f6b621a8742dd28353e1",
+    "timestamp": "2026-04-09T00:57:29+00:00",
+    "message": "GENTLE DEPOSIT: lower to DEPOSIT_Y=0.28 then release; no CCW rotation fling",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 27,
+    "commit_hash": "0455ed62edad0b1932d99da0c022d833156533d6",
+    "timestamp": "2026-04-09T01:03:16+00:00",
+    "message": "RELEASE: rotate arm to theta=0 so paddle vertical, obs slides off; no fling",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 28,
+    "commit_hash": "7e4f4eacb2c5e92f5a3a997c8e860865158e8318",
+    "timestamp": "2026-04-09T01:03:40+00:00",
+    "message": "RETREAT: move right while rotating arm to NAV_THETA; obs falls off tilted paddle",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  }
+]
