@@ -1,79 +1,39 @@
-"""Sandboxed Claude agent runner using the Claude Code CLI.
+"""Sandboxed agent runner.
 
-Runs the `claude` CLI as a subprocess in a restricted working directory.
-The CLI's --dangerously-skip-permissions flag enables OS-level sandboxing
-(macOS Seatbelt / Linux bubblewrap) which restricts filesystem writes to
+Runs a coding agent CLI as a subprocess in a restricted working directory.
+The backend (Claude Code CLI, OpenCode, etc.) is selected via
+:class:`~robocode.utils.backends.base.AgentBackend`.
+
+The CLI's --dangerously-skip-permissions flag (Claude) or permission config
+(OpenCode) enables OS-level sandboxing which restricts filesystem writes to
 the working directory.
 
 WARNING: The OS-level sandbox restricts filesystem *writes* to the sandbox
 directory, but allows *reads* of the entire filesystem. Bash commands like
-`cat /etc/passwd` or `python -c "open('/etc/hosts').read()"` will succeed.
+``cat /etc/passwd`` or ``python -c "open('/etc/hosts').read()"`` will succeed.
+Use Docker-based sandboxing (``use_docker: true``) for full isolation.
 
-Set the ROBOCODE_CLAUDE_CMD environment variable to override the default
-`claude` binary (e.g. to point to a specific installation).
-
-TODO: Transition to Docker-based sandboxing for full filesystem isolation.
+Set ROBOCODE_CLAUDE_CMD or ROBOCODE_OPENCODE_CMD environment variables
+to override the default binary paths.
 """
 
-import json
+from __future__ import annotations
+
 import logging
-import os
-import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
 
-from robocode.mcp import MCP_SERVER_NAME, mcp_tool_cli_names
+from robocode.utils.backends import AgentBackend
+from robocode.utils.sandbox_types import (
+    SandboxConfig,
+    SandboxResult,
+    _StreamParseResult,
+)
 
 logger = logging.getLogger(__name__)
 
-_RATE_LIMIT_RE = re.compile(
-    r"(?:out of extra usage|hit your limit).*resets\s+(\d{1,2}(?:am|pm))",
-    re.IGNORECASE,
-)
-
-_WRITE_TOOLS: set[str] = {"Write", "Edit"}
-
-_PATH_KEYS: dict[str, str] = {
-    "Write": "file_path",
-    "Edit": "file_path",
-}
-
-_VALIDATE_SANDBOX_SCRIPT = """\
-#!/usr/bin/env python3
-import json
-import os
-import sys
-
-data = json.load(sys.stdin)
-tool_name = data.get("tool_name", "")
-tool_input = data.get("tool_input", {})
-
-if tool_name not in ("Write", "Edit"):
-    sys.exit(0)
-
-file_path = tool_input.get("file_path", "")
-if not file_path:
-    sys.exit(0)
-
-sandbox = os.path.realpath(os.getcwd())
-resolved = os.path.realpath(file_path)
-
-if resolved == sandbox or resolved.startswith(sandbox + os.sep):
-    sys.exit(0)
-
-json.dump({
-    "hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "permissionDecisionReason": (
-            f"Blocked: {file_path} resolves outside the sandbox directory"
-        ),
-    }
-}, sys.stdout)
-"""
 
 _SANDBOX_GITIGNORE = """\
 __pycache__/
@@ -88,60 +48,6 @@ agent_log.txt
 mcp_renders/
 """
 
-_SANDBOX_SETTINGS: dict = {
-    "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "Write|Edit",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": "python3 .claude/validate_sandbox.py",
-                    }
-                ],
-            }
-        ],
-    }
-}
-
-
-@dataclass(frozen=True)
-class SandboxConfig:
-    """Configuration for a sandboxed Claude agent run."""
-
-    sandbox_dir: Path
-    init_files: dict[str, Path] = field(default_factory=dict)
-    prompt: str = ""
-    output_filename: str = ""
-    model: str = "sonnet"
-    max_budget_usd: float = 5.0
-    system_prompt: str = ""
-    mcp_tools: tuple[str, ...] = ()
-    max_output_tokens: int = 16384
-    autocompact_pct: int = 80
-
-
-@dataclass(frozen=True)
-class SandboxResult:
-    """Result from a sandboxed Claude agent run."""
-
-    success: bool
-    output_file: Path | None
-    error: str | None
-    total_cost_usd: float | None = None
-    rate_limit_reset: str | None = None  # e.g. "3am" from usage limit message
-
-
-@dataclass(frozen=True)
-class _StreamParseResult:
-    """Intermediate result from parsing Claude CLI stream-json output."""
-
-    is_error: bool
-    error_text: str | None
-    num_turns: int
-    total_cost: float | None
-    rate_limit_reset: str | None = None  # e.g. "3am" parsed from usage message
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers (used by both sandbox.py and docker_sandbox.py)
@@ -149,10 +55,11 @@ class _StreamParseResult:
 
 
 def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> None:
-    """Create sandbox directory, copy init files, git init, and install hooks.
+    """Create sandbox directory, copy init files, and git init.
 
-    Does NOT write ``CLAUDE.md`` — callers should write their own
-    variant after calling this function.
+    Does NOT write backend-specific config files (CLAUDE.md, settings.json,
+    opencode.json, AGENTS.md, etc.). Callers must invoke
+    ``backend.setup_sandbox_files()`` after this function.
     """
     sandbox_dir.mkdir(parents=True, exist_ok=True)
 
@@ -176,18 +83,13 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
                 check=False,
             )
 
-    claude_dir = sandbox_dir / ".claude"
-    claude_dir.mkdir(exist_ok=True)
-    (claude_dir / "settings.json").write_text(
-        json.dumps(_SANDBOX_SETTINGS, indent=2) + "\n"
-    )
-    (claude_dir / "validate_sandbox.py").write_text(_VALIDATE_SANDBOX_SCRIPT)
-
     gitignore = sandbox_dir / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(_SANDBOX_GITIGNORE)
 
-    # Initial commit so git log works and the agent has a clean baseline.
+
+def _initial_commit(sandbox_dir: Path) -> None:
+    """Make an initial commit so git log works and the agent has a baseline."""
     subprocess.run(
         ["git", "add", "-A"],
         cwd=str(sandbox_dir),
@@ -206,283 +108,6 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
         cwd=str(sandbox_dir),
         capture_output=True,
         check=False,
-    )
-
-
-def _setup_mcp_config(
-    sandbox_dir: Path,
-    tool_names: tuple[str, ...],
-    python_cmd: str,
-    env_config_path: str,
-    log_file_path: str,
-) -> Path:
-    """Write MCP server config into ``sandbox_dir/.mcp/``.
-
-    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
-    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
-    """
-    mcp_dir = sandbox_dir / ".mcp"
-    mcp_dir.mkdir(exist_ok=True)
-
-    shutil.copy2(
-        sandbox_dir.parent / "env_config.json",
-        mcp_dir / "env_config.json",
-    )
-
-    # Use a shell wrapper so that stderr (import errors, tracebacks) is also
-    # captured in the log file even if the Python process never reaches main().
-    stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
-    server_cmd = (
-        f"{python_cmd} -m robocode.mcp.server"
-        f" --env-config {env_config_path}"
-        f" --tools {','.join(tool_names)}"
-        f" --log-file {log_file_path}"
-        f" 2>>{stderr_log_path}"
-    )
-    mcp_config = {
-        "mcpServers": {
-            MCP_SERVER_NAME: {
-                "command": "bash",
-                "args": ["-c", server_cmd],
-            }
-        }
-    }
-    config_path = mcp_dir / "mcp_config.json"
-    config_path.write_text(json.dumps(mcp_config, indent=2))
-    return config_path
-
-
-def _build_claude_cli_args(
-    prompt: str,
-    model: str,
-    system_prompt: str,
-    max_budget_usd: float,
-    *,
-    sandbox_dir: Path | None = None,
-    mcp_tools: tuple[str, ...] = (),
-    mcp_python_cmd: str = "",
-    mcp_env_config_path: str = "",
-    mcp_config_cli_path: str | None = None,
-    mcp_log_file_path: str = "",
-) -> list[str]:
-    """Build the common Claude CLI arguments (excluding the binary itself).
-
-    When mcp_tools is non-empty, also writes the MCP server config into sandbox_dir and
-    appends --mcp-config to the returned args. mcp_config_cli_path overrides the config
-    path passed to the CLI (useful for Docker where the host path differs from the
-    container path).
-    """
-    tools = "Bash,Read,Write,Edit,Glob,Grep,Task"
-    if mcp_tools:
-        tools += "," + ",".join(mcp_tool_cli_names(mcp_tools))
-    logger.info("Enabled tools: %s", tools)
-    args = [
-        "-p",
-        prompt,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--model",
-        model,
-        "--dangerously-skip-permissions",
-        "--no-session-persistence",
-        "--tools",
-        tools,
-        "--setting-sources",
-        "project",
-    ]
-    if system_prompt:
-        args += ["--system-prompt", system_prompt]
-    if max_budget_usd > 0:
-        args += ["--max-budget-usd", str(max_budget_usd)]
-    if mcp_tools:
-        assert sandbox_dir is not None
-        log_path = mcp_log_file_path or str(
-            (sandbox_dir / ".mcp" / "mcp_server.log").resolve()
-        )
-        config_path = _setup_mcp_config(
-            sandbox_dir, mcp_tools, mcp_python_cmd, mcp_env_config_path, log_path
-        )
-        cli_path = mcp_config_cli_path or str(config_path.resolve())
-        args += ["--mcp-config", cli_path, "--strict-mcp-config"]
-    return args
-
-
-def _build_sandbox_env(
-    max_output_tokens: int = 16384,
-    autocompact_pct: int = 80,
-    extra: dict[str, str] | None = None,
-) -> dict[str, str]:
-    """Build a clean environment dict, stripping ``CLAUDECODE*`` vars."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
-    env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
-    env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(autocompact_pct)
-    if extra:
-        env.update(extra)
-    return env
-
-
-def _parse_claude_stream(
-    proc: subprocess.Popen[str],
-    stream_log_path: Path | None = None,
-) -> _StreamParseResult:
-    """Parse ``stream-json`` stdout from a Claude CLI process and wait for exit.
-
-    Logs assistant messages, tool calls, and tool results as they arrive. After the
-    process exits, checks stderr for errors.
-
-    If *stream_log_path* is given, every raw JSON line from the stream is appended to
-    that file for post-hoc debugging.
-    """
-    is_error = False
-    error_text: str | None = None
-    num_turns = 0
-    total_cost: float | None = None
-    rate_limit_reset: str | None = None
-    mcp_log: Path | None = None
-
-    stream_log_fh = (
-        open(stream_log_path, "a", encoding="utf-8")  # noqa: SIM115
-        if stream_log_path
-        else None
-    )
-
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        if stream_log_fh is not None:
-            stream_log_fh.write(line + "\n")
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            logger.debug("Non-JSON output: %s", line[:200])
-            continue
-
-        msg_type = msg.get("type", "")
-
-        if msg_type == "system":
-            subtype = msg.get("subtype", "")
-            if subtype == "init":
-                mcp_servers = msg.get("mcp_servers", [])
-                if mcp_servers:
-                    assert (
-                        stream_log_path is not None
-                    ), "stream_log_path must be set when MCP servers are configured"
-                    mcp_log = (
-                        stream_log_path.parent / "sandbox" / ".mcp" / "mcp_server.log"
-                    )
-                for srv in mcp_servers:
-                    status = srv.get("status")
-                    name = srv.get("name")
-                    if name != MCP_SERVER_NAME:
-                        continue
-                    if status != "connected":
-                        logger.warning("MCP server %s: %s", name, status)
-                        logger.warning("MCP server %s full status: %s", name, srv)
-                        logger.warning(
-                            "Check the MCP server log for details: %s",
-                            mcp_log,
-                        )
-                        logger.warning(
-                            "If running in Docker, try rebuilding the image "
-                            "with `bash docker/build.sh`, as the robocode "
-                            "package (including MCP server code) is baked "
-                            "into the image at build time."
-                        )
-                    else:
-                        logger.info("MCP server %s: %s", name, status)
-            elif subtype == "compact_boundary":
-                meta = msg.get("compact_metadata", {})
-                logger.info(
-                    "Context compaction: trigger=%s, pre_tokens=%s",
-                    meta.get("trigger"),
-                    meta.get("pre_tokens"),
-                )
-            elif subtype != "status":
-                logger.info("System event: subtype=%s", subtype)
-
-        if msg_type == "assistant":
-            for block in msg.get("message", {}).get("content", []):
-                if block.get("type") == "thinking":
-                    logger.info("Thinking: %s", block.get("thinking", ""))
-                elif block.get("type") == "text":
-                    text = block["text"]
-                    logger.info("Agent: %s", text)
-                    m = _RATE_LIMIT_RE.search(text)
-                    if m:
-                        rate_limit_reset = m.group(1)  # e.g. "3am"
-                elif block.get("type") == "tool_use":
-                    input_str = json.dumps(block.get("input", {}))
-                    if len(input_str) > 300:
-                        input_str = input_str[:300] + "..."
-                    logger.info("Tool call: %s(%s)", block.get("name"), input_str)
-
-        elif msg_type in ("tool_result", "user"):
-            # Log only MCP tool results (contain "mcp_renders") and errors.
-            tool_use_result = msg.get("tool_use_result")
-            if tool_use_result is not None:
-                if len(tool_use_result) > 500:
-                    tool_use_result = tool_use_result[:500] + "..."
-                if "Error" in tool_use_result:
-                    logger.warning("Tool result: %s", tool_use_result)
-                    if "No such tool" in tool_use_result:
-                        logger.warning(
-                            "Tool not found, if running in Docker, try "
-                            "rebuilding the image with "
-                            "`bash docker/build.sh`. "
-                            "Check %s for server-side details.",
-                            mcp_log,
-                        )
-                elif "mcp_renders" in tool_use_result:
-                    logger.info("Tool result: %s", tool_use_result)
-                else:
-                    logger.debug("Tool result: %s", tool_use_result)
-
-        elif msg_type == "result":
-            is_error = msg.get("is_error", False)
-            num_turns = msg.get("num_turns", 0)
-            total_cost = msg.get("total_cost_usd")
-            if is_error:
-                error_text = msg.get("result", "Unknown error")
-                # Also check the result text for rate-limit info.
-                if not rate_limit_reset:
-                    m = _RATE_LIMIT_RE.search(error_text)
-                    if m:
-                        rate_limit_reset = m.group(1)
-
-    proc.wait()
-
-    if stream_log_fh is not None:
-        stream_log_fh.close()
-
-    assert proc.stderr is not None
-    stderr_output = proc.stderr.read()
-    if proc.returncode != 0 and not is_error:
-        is_error = True
-        error_text = (
-            stderr_output[:1000]
-            if stderr_output
-            else f"Process exited with code {proc.returncode}"
-        )
-        # Check stderr for rate-limit info too.
-        if not rate_limit_reset and stderr_output:
-            m = _RATE_LIMIT_RE.search(stderr_output)
-            if m:
-                rate_limit_reset = m.group(1)
-
-    # If we detected a rate-limit message but no error was flagged, mark it.
-    if rate_limit_reset and not is_error:
-        is_error = True
-        error_text = f"Rate-limited: resets {rate_limit_reset}"
-
-    return _StreamParseResult(
-        is_error=is_error,
-        error_text=error_text,
-        num_turns=num_turns,
-        total_cost=total_cost,
-        rate_limit_reset=rate_limit_reset,
     )
 
 
@@ -529,11 +154,6 @@ def _is_path_within_sandbox(path_str: str, sandbox_dir: Path) -> bool:
         return False
 
 
-def _get_claude_cmd() -> str:
-    """Return the claude CLI command, respecting ROBOCODE_CLAUDE_CMD."""
-    return os.environ.get("ROBOCODE_CLAUDE_CMD", "claude")
-
-
 def _final_commit(sandbox_dir: Path) -> None:
     """Commit any uncommitted changes in the sandbox so nothing is lost."""
     sandbox = str(sandbox_dir)
@@ -566,38 +186,39 @@ def _final_commit(sandbox_dir: Path) -> None:
         logger.info("No uncommitted changes to commit in sandbox.")
 
 
-async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
-    """Run a Claude agent in a sandboxed working directory.
+async def run_agent_in_sandbox(
+    config: SandboxConfig,
+    backend: AgentBackend,
+) -> SandboxResult:
+    """Run an agent in a sandboxed working directory.
 
-    Initializes the sandbox with files, gives the agent a prompt via the Claude Code
-    CLI, and retrieves the specified output file.
+    Initializes the sandbox with files, gives the agent a prompt via the
+    configured backend CLI, and retrieves the specified output file.
+
+    Parameters
+    ----------
+    config:
+        Sandbox configuration.
+    backend:
+        Agent backend to use.
     """
+
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
 
-    # Write a CLAUDE.md that instructs the agent to keep files in the sandbox.
-    claude_md = config.sandbox_dir / "CLAUDE.md"
-    if not claude_md.exists():
-        claude_md.write_text(
-            "All files you create MUST use relative paths so they "
-            "stay in the current working directory. Never write files "
-            "using absolute paths.\n"
-        )
-
-    claude_cmd = _get_claude_cmd()
-    cmd = [claude_cmd] + _build_claude_cli_args(
-        config.prompt,
-        config.model,
-        config.system_prompt,
-        config.max_budget_usd,
-        sandbox_dir=config.sandbox_dir,
-        mcp_tools=config.mcp_tools,
+    # build_cli_cmd must run before setup_sandbox_files because it writes
+    # .mcp/mcp_config.json which setup_sandbox_files reads to convert MCP
+    # config for OpenCode's opencode.json.
+    cmd = backend.build_cli_cmd(
+        config,
         mcp_python_cmd=sys.executable,
         mcp_env_config_path=str(
             (config.sandbox_dir / ".mcp" / "env_config.json").resolve()
         ),
     )
+    backend.setup_sandbox_files(config)
+    _initial_commit(config.sandbox_dir)
 
-    env = _build_sandbox_env(config.max_output_tokens, config.autocompact_pct)
+    env = backend.build_env(config)
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
@@ -608,12 +229,14 @@ async def run_agent_in_sandbox(config: SandboxConfig) -> SandboxResult:
         cmd,
         cwd=sandbox_abs,
         env=env,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
 
-    stream = _parse_claude_stream(
+    stream = backend.parse_stream(
         proc,
         stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
     )

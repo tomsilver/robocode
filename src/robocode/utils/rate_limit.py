@@ -1,4 +1,4 @@
-"""Helpers for running sandboxed Claude agents with rate-limit retry."""
+"""Helpers for running sandboxed agents with rate-limit retry."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
+from robocode.utils.backends import AgentBackend
 from robocode.utils.docker_sandbox import (
     DockerSandboxConfig,
     run_agent_in_docker_sandbox,
@@ -61,14 +62,17 @@ def seconds_until_reset(reset_hour: int) -> float:
 def run_with_rate_limit_retry(
     docker_config: DockerSandboxConfig | None,
     local_config: SandboxConfig | None,
+    backend: AgentBackend,
 ) -> SandboxResult:
     """Run the sandbox, retrying on rate-limit by sleeping until reset."""
     while True:
         if docker_config is not None:
-            result = run_async(lambda: run_agent_in_docker_sandbox(docker_config))
+            result = run_async(
+                lambda: run_agent_in_docker_sandbox(docker_config, backend)
+            )
         else:
             assert local_config is not None
-            result = run_async(lambda: run_agent_in_sandbox(local_config))
+            result = run_async(lambda: run_agent_in_sandbox(local_config, backend))
 
         if result.rate_limit_reset is None:
             return result

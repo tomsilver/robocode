@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from robocode.approaches.agentic_approach import AgenticApproach
+from robocode.utils.backends import DEFAULT_BACKEND_CFG
 from robocode.utils.episode import run_episode, save_frames
 
 
@@ -34,6 +35,7 @@ def render_policy(
         observation_space=env.observation_space,
         seed=seed,
         primitives=primitives,
+        backend=DEFAULT_BACKEND_CFG,
         load_dir=load_dir,
     )
     approach.train()

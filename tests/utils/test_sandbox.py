@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
+from robocode.utils.backends.claude import _RATE_LIMIT_RE
 from robocode.utils.sandbox import (
-    _RATE_LIMIT_RE,
     SandboxConfig,
     SandboxResult,
     _is_path_within_sandbox,

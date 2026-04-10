@@ -1,14 +1,21 @@
 """MCP server for robocode debugging tools."""
 
+import json
+import shutil
+from pathlib import Path
+
 # Server name used by FastMCP and to build Claude CLI tool names
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
 
-# Descriptions shown to the Claude agent so it knows how to call each MCP tool.
-MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
+# Tool description templates. Use {render_state} and {render_policy}
+# placeholders for the backend-specific tool names (Claude uses
+# ``mcp__robocode-tools__render_state``, OpenCode uses
+# ``robocode-tools_render_state``).
+_TOOL_DESC_TEMPLATES: dict[str, str] = {
     "render_state": (
-        f"`mcp__{MCP_SERVER_NAME}__render_state(seed=42, state=None, "
-        'label="")` \u2014 renders an environment state as a PNG and returns '
+        "`{render_state}(seed=42, state=None, "
+        'label="")`: renders an environment state as a PNG and returns '
         "the file path.\n"
         "  Two modes:\n"
         "  1. **Reset mode** (default): pass `seed` to render the initial "
@@ -26,42 +33,69 @@ MCP_TOOL_DESCRIPTIONS: dict[str, str] = {
         "  - From an existing observation: `obs.tolist()`\n"
         "  - To inspect/modify named features: use "
         "`env.observation_space.devectorize(obs)` to get an "
-        "`ObjectCentricState` (a dict of `{Object: feature_array}`), "
+        "`ObjectCentricState` (a dict of `{{Object: feature_array}}`), "
         "modify it, then `env.observation_space.vectorize(ocs).tolist()` "
         "to convert back.\n"
         "  - To build a state from scratch: construct an "
-        "`ObjectCentricState(data={obj: np.array([...]), ...}, "
+        "`ObjectCentricState(data={{obj: np.array([...]), ...}}, "
         "type_features=env.observation_space.type_features)` using the "
         "objects from `env.observation_space.constant_objects`, then "
         "vectorize it.\n"
-        "  IMPORTANT: You must call this MCP tool DIRECTLY \u2014 MCP tools are "
-        "NOT available inside Task subagents. Call it yourself, then delegate "
-        "image reading to a Task subagent: have it Read the PNG, describe the "
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
+        "NOT available inside subagents. Call it yourself, then delegate "
+        "image reading to a subagent: have it Read the PNG, describe the "
         "scene, and return a concise summary. Delete the file when done."
     ),
     "render_policy": (
-        f'`mcp__{MCP_SERVER_NAME}__render_policy(approach_dir=".", seed=42, '
-        "max_steps=1000, max_frames=100)` \u2014 runs a full episode of the "
+        '`{render_policy}(approach_dir=".", seed=42, '
+        "max_steps=1000, max_frames=100)`: runs a full episode of the "
         "approach in `approach_dir/approach.py` on the given seed and saves "
         "each frame as a PNG. Returns a list of file paths. Use this to "
         "visually debug policy failures: see where the agent gets stuck, "
         "overshoots, or collides.\n"
-        "  IMPORTANT: You must call this MCP tool DIRECTLY — MCP tools are "
-        "NOT available inside Task subagents. Call it yourself to generate "
-        "frames, then delegate reading to a Task subagent. The subagent "
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
+        "NOT available inside subagents. Call it yourself to generate "
+        "frames, then delegate reading to a subagent. The subagent "
         "should Read a sample of frames (e.g. first, middle, last, and any "
         "where behavior changes), describe the trajectory, identify failure "
         "modes, and return a concise text summary. Delete the output "
         "directory when done.\n"
         "  Typical workflow:\n"
-        f"  1. Call mcp__{MCP_SERVER_NAME}__render_policy yourself to "
-        "generate frames\n"
-        '  2. Spawn a Task subagent: "Read these frame PNGs and describe '
+        "  1. Call {render_policy} yourself to generate frames\n"
+        '  2. Spawn a subagent: "Read these frame PNGs and describe '
         "the agent's trajectory. What goes wrong? Return a short summary.\"\n"
         "  3. Use the summary to fix your approach\n"
-        "  4. Delete the frames directory with Bash"
+        "  4. Delete the frames directory"
     ),
 }
+
+
+def mcp_tool_name_claude(tool: str) -> str:
+    """Claude Code MCP tool name: ``mcp__robocode-tools__<tool>``."""
+    return f"mcp__{MCP_SERVER_NAME}__{tool}"
+
+
+def mcp_tool_name_opencode(tool: str) -> str:
+    """OpenCode MCP tool name: ``robocode-tools_<tool>``."""
+    return f"{MCP_SERVER_NAME}_{tool}"
+
+
+def mcp_tool_descriptions(backend_name: str) -> dict[str, str]:
+    """Return MCP tool descriptions with backend-specific tool names."""
+    if backend_name == "opencode":
+        namer = mcp_tool_name_opencode
+    else:
+        namer = mcp_tool_name_claude
+    names = {tool: namer(tool) for tool in _TOOL_DESC_TEMPLATES}
+    return {
+        tool: template.format(**names)
+        for tool, template in _TOOL_DESC_TEMPLATES.items()
+    }
+
+
+# Backward compat: descriptions with Claude naming (used by existing code
+# that doesn't pass a backend name).
+MCP_TOOL_DESCRIPTIONS: dict[str, str] = mcp_tool_descriptions("claude")
 
 # List of available MCP tool names.
 MCP_TOOL_NAMES: tuple[str, ...] = tuple(MCP_TOOL_DESCRIPTIONS)
@@ -76,11 +110,54 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     "devectorize/vectorize on env.observation_space to construct or modify "
     "states with named features. "
     "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
-    "called from inside Task subagents. Always call MCP tools yourself, then "
-    "delegate image reading to a Task subagent."
+    "called from inside subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a subagent."
 )
 
 
 def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
     """Return Claude CLI tool names (e.g. ``mcp__robocode-tools__render_state``)."""
     return tuple(f"mcp__{MCP_SERVER_NAME}__{t}" for t in tool_names)
+
+
+def setup_mcp_config(
+    sandbox_dir: Path,
+    tool_names: tuple[str, ...],
+    python_cmd: str,
+    env_config_path: str,
+    log_file_path: str,
+) -> Path:
+    """Write MCP server config into ``sandbox_dir/.mcp/``.
+
+    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
+    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
+    """
+    mcp_dir = sandbox_dir / ".mcp"
+    mcp_dir.mkdir(exist_ok=True)
+
+    shutil.copy2(
+        sandbox_dir.parent / "env_config.json",
+        mcp_dir / "env_config.json",
+    )
+
+    # Use a shell wrapper so that stderr (import errors, tracebacks) is also
+    # captured in the log file even if the Python process never reaches main().
+    stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
+    server_cmd = (
+        f"{python_cmd} -m robocode.mcp.server"
+        f" --env-config {env_config_path}"
+        f" --tools {','.join(tool_names)}"
+        f" --log-file {log_file_path}"
+        f" 2>>{stderr_log_path}"
+    )
+    mcp_config = {
+        "mcpServers": {
+            MCP_SERVER_NAME: {
+                "command": "bash",
+                "args": ["-c", server_cmd],
+            }
+        }
+    }
+    config_path = mcp_dir / "mcp_config.json"
+    config_path.write_text(json.dumps(mcp_config, indent=2))
+    return config_path

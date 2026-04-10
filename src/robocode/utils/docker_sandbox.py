@@ -1,25 +1,22 @@
-"""Docker-based sandboxed Claude agent runner.
+"""Docker-based sandboxed agent runner.
 
-Runs the `claude` CLI inside a ``robocode-sandbox`` Docker container that
+Runs an agent CLI inside a ``robocode-sandbox`` Docker container that
 provides:
 
-* **Filesystem isolation** — the container can only *write* to ``/sandbox``
+* **Filesystem isolation** -- the container can only *write* to ``/sandbox``
   (the bind-mounted output directory); host paths are unreachable.
-* **Network restriction** — ``init-firewall.sh`` whitelists only
-  ``api.anthropic.com``, GitHub, and Claude telemetry endpoints.
-* **Claude Code CLI auth** — on macOS the OAuth access token is extracted
-  from the Keychain (service ``"Claude Code-credentials"``) and forwarded
-  as ``CLAUDE_CODE_OAUTH_TOKEN``; on other platforms the host ``~/.claude``
-  directory is bind-mounted so the CLI authenticates via the existing
-  ``claude login`` session.
-* **Reproducible Python environment** — ``uv sync --frozen`` runs at
-  container start using the bind-mounted source trees.
-* **Primitive source files** — ``src/robocode/primitives/*.py`` are copied
+* **Network restriction** -- ``init-firewall.sh`` whitelists only the API
+  endpoints needed by the configured backend/provider, plus GitHub and
+  telemetry endpoints.
+* **Auth forwarding** -- for Claude: OAuth token or ``~/.claude`` bind-mount;
+  for OpenCode: ``~/.local/share/opencode`` bind-mount or API key env vars.
+* **Reproducible Python environment** -- all robocode dependencies are
+  pre-installed in ``/robocode/.venv`` via ``uv sync --frozen``.
+* **Primitive source files** -- ``src/robocode/primitives/*.py`` are copied
   into ``/sandbox/primitives/`` so the agent can read their API.
-* **src bind-mount** — ``src/`` is mounted read-only at
-  ``/robocode/src/``, with ``oracles/`` stripped to prevent solution leakage.
-* **prpl-mono bind-mount** — ``prpl-mono/`` is mounted read-only at
-  ``/robocode/prpl-mono/``, with ``tests/`` and ``docs/`` stripped.
+* **prpl-mono bind-mount** -- the current submodule is mounted read-only at
+  ``/robocode/prpl-mono/``, overriding the stale in-image copy without
+  requiring an image rebuild.
 
 Usage
 -----
@@ -37,6 +34,8 @@ See Also
 docker/Dockerfile, docker/build.sh, docker/init-firewall.sh
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -49,13 +48,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from robocode.primitives import PRIMITIVE_NAME_TO_FILE
+from robocode.utils.backends import PROVIDERS, AgentBackend, firewall_domains_for_model
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
-    _build_claude_cli_args,
-    _build_sandbox_env,
     _final_commit,
-    _parse_claude_stream,
+    _initial_commit,
     _setup_sandbox_common,
     _stream_result_to_sandbox_result,
 )
@@ -145,7 +143,7 @@ def _copy_src_without_oracles(src: Path, dest: Path) -> None:
 
 @dataclass(frozen=True)
 class DockerSandboxConfig(SandboxConfig):
-    """Configuration for a Docker-sandboxed Claude agent run.
+    """Configuration for a Docker-sandboxed agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with
     ``docker_image`` for Docker-based sandboxing and ``primitive_names``
@@ -162,13 +160,10 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
 
     Creates (idempotently):
 
-    * ``primitives/*.py`` — copied from ``src/robocode/primitives/``
-    * ``CLAUDE.md`` — instructs the agent to use relative paths and points to
-      the Docker Python interpreter
-    * ``.claude/settings.json`` — PreToolUse hook that blocks writes outside
-      the sandbox
-    * ``.claude/validate_sandbox.py`` — the hook implementation
-    * ``.git/`` — so that ``claude`` treats ``/sandbox`` as the project root
+    * ``primitives/*.py`` -- copied from ``src/robocode/primitives/``
+    * Backend-specific config files (CLAUDE.md + .claude/, or AGENTS.md +
+      opencode.json)
+    * ``.git/`` -- so the agent CLI treats ``/sandbox`` as the project root
 
     Also copies any files listed in ``config.init_files``.
     """
@@ -189,42 +184,63 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
             else:
                 raise RuntimeError(f"Primitive source file not found: {src_file}")
 
-    # CLAUDE.md — written once; describes the Docker environment.
-    claude_md = config.sandbox_dir / "CLAUDE.md"
-    if not claude_md.exists():
-        claude_md_text = (
-            "All files you create MUST use relative paths so they stay in "
-            "the current working directory (/sandbox). Never write files "
-            "using absolute paths.\n\n"
-            "CONTEXT MANAGEMENT: your context window is limited and you MUST "
-            "protect it aggressively: "
-            "(1) Delegate ALL source code reading, exploration, and deep "
-            "reasoning to Task subagents: have them return only concise "
-            "summaries and actionable suggestions. "
-            "(2) Never read large files directly; spawn a subagent to read "
-            "and summarize them. "
-            "(3) When running Bash commands, pipe output through "
-            "`head` or `tail` to limit verbosity if possible. "
-            "(4) Keep your thinking brief, do not write long reasoning "
-            "traces. If you need to reason deeply about a design decision, "
-            "delegate that to a subagent and have it return the conclusion. "
-            "(5) Keep your main conversation focused on writing and testing "
-            "code, not on reading source or reasoning at length."
-            f"The Python interpreter is at {DOCKER_PYTHON}\n"
-            "Run test scripts with:\n"
-            f"    {DOCKER_PYTHON} test_approach.py\n"
-        )
-        if config.primitive_names:
-            claude_md_text += (
-                "\nPrimitive source files (for reference) are in " "./primitives/\n"
+    # NOTE: backend.setup_sandbox_files() is NOT called here because it
+    # needs .mcp/mcp_config.json to exist first (written by build_cli_cmd).
+    # The caller (run_agent_in_docker_sandbox) calls it after build_cli_cmd.
+
+
+def _build_docker_auth_args(
+    backend_name: str,
+) -> tuple[list[str], dict[str, str]]:
+    """Return Docker CLI args and env vars for backend authentication.
+
+    For Claude: OAuth token or ~/.claude bind-mount.
+    For OpenCode: ~/.local/share/opencode bind-mount + API key passthrough.
+    """
+    docker_args: list[str] = []
+    extra_env: dict[str, str] = {}
+
+    if backend_name == "claude":
+        oauth_token = _get_claude_oauth_token()
+        if oauth_token:
+            docker_args += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
+            extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+        else:
+            logger.warning(
+                "No Claude OAuth token found in Keychain; "
+                "falling back to ~/.claude bind-mount. "
+                "Run `claude login` on the host if the container "
+                "cannot authenticate."
             )
-        claude_md.write_text(claude_md_text)
+            host_claude_cfg = Path(
+                os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
+            )
+            docker_args += ["-v", f"{host_claude_cfg}:/home/node/.claude"]
+    else:
+        # OpenCode: bind-mount auth store and pass through API key env vars.
+        opencode_data = Path.home() / ".local" / "share" / "opencode"
+        if opencode_data.exists():
+            docker_args += [
+                "-v",
+                f"{opencode_data}:/home/node/.local/share/opencode",
+            ]
+
+        # Pass through provider API key env vars if set.
+        for info in PROVIDERS.values():
+            if info.api_key_env:
+                val = os.environ.get(info.api_key_env)
+                if val:
+                    docker_args += ["-e", info.api_key_env]
+                    extra_env[info.api_key_env] = val
+
+    return docker_args, extra_env
 
 
 async def run_agent_in_docker_sandbox(
     config: DockerSandboxConfig,
+    backend: AgentBackend,
 ) -> SandboxResult:
-    """Run a Claude agent inside the ``robocode-sandbox`` Docker container.
+    """Run an agent inside the ``robocode-sandbox`` Docker container.
 
     Steps
     -----
@@ -233,23 +249,25 @@ async def run_agent_in_docker_sandbox(
     3. Launches ``docker run`` with:
 
        * ``--cap-add=NET_ADMIN --cap-add=NET_RAW`` for the iptables firewall
-       * ``-e CLAUDE_CODE_OAUTH_TOKEN`` — OAuth access token extracted from
-         the macOS Keychain (``claude login``) so the CLI authenticates
-         without an ``ANTHROPIC_API_KEY``; on non-macOS platforms the host
-         ``~/.claude`` directory is bind-mounted as a fallback
+       * Backend-specific auth forwarding (Claude OAuth token / ``~/.claude``
+         bind-mount, or OpenCode ``~/.local/share/opencode`` / API key env
+         vars)
        * ``-v <sandbox_dir>:/sandbox`` (writable bind-mount)
        * ``-v <prpl_mono>:/robocode/prpl-mono:ro`` (read-only bind-mount)
        * ``-w /sandbox`` as the working directory
-       * The container's entrypoint runs ``init-firewall.sh`` then ``claude``
+       * The container's entrypoint runs ``init-firewall.sh`` then the
+         agent CLI command
 
-    4. Streams and parses the JSON output from ``claude --output-format
-       stream-json``, logging assistant messages and tool calls.
+    4. Streams and parses the JSON output, logging assistant messages and
+       tool calls.
     5. Returns a :class:`~robocode.utils.sandbox.SandboxResult`.
 
     Parameters
     ----------
     config:
         Sandbox configuration including the output directory and prompt.
+    backend:
+        Agent backend to use.
 
     Returns
     -------
@@ -257,6 +275,8 @@ async def run_agent_in_docker_sandbox(
         ``success=True`` with ``output_file`` set when the agent writes the
         requested output file; ``success=False`` with an ``error`` otherwise.
     """
+    backend_name = backend.name
+
     _setup_sandbox_dir(config)
 
     repo_root = _find_repo_root()
@@ -266,8 +286,8 @@ async def run_agent_in_docker_sandbox(
             f"prpl-mono not found at {prpl_mono}; "
             "run: git submodule update --init --recursive"
         )
-    src_dir = repo_root / "src"
 
+    src_dir = repo_root / "src"
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
@@ -282,17 +302,14 @@ async def run_agent_in_docker_sandbox(
         src_abs = str(filtered_src.resolve())
 
         # --- Authentication ---
-        oauth_token = _get_claude_oauth_token()
-        if not oauth_token:
-            logger.warning(
-                "No Claude OAuth token found in Keychain; "
-                "falling back to ~/.claude bind-mount. "
-                "Run `claude login` on the host if the container cannot authenticate."
-            )
+        auth_args, auth_env = _build_docker_auth_args(backend_name)
 
-        host_claude_cfg = Path(
-            os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
-        )
+        # --- Firewall extra domains ---
+        firewall_domains: list[str] = []
+        if backend_name == "opencode":
+            firewall_domains = firewall_domains_for_model(config.model)
+            # OpenCode also needs access to its own telemetry/update servers.
+            # firewall_domains.append("registry.npmjs.org")
 
         docker_cmd = [
             "docker",
@@ -308,10 +325,13 @@ async def run_agent_in_docker_sandbox(
             f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
         ]
 
-        if oauth_token:
-            docker_cmd += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
-        else:
-            docker_cmd += ["-v", f"{host_claude_cfg}:/home/node/.claude"]
+        if firewall_domains:
+            docker_cmd += [
+                "-e",
+                f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
+            ]
+
+        docker_cmd += auth_args
 
         docker_cmd += [
             "-v",
@@ -324,28 +344,27 @@ async def run_agent_in_docker_sandbox(
             "/sandbox",
             config.docker_image,
         ]
-        claude_args = _build_claude_cli_args(
-            config.prompt,
-            config.model,
-            config.system_prompt,
-            config.max_budget_usd,
-            sandbox_dir=config.sandbox_dir,
-            mcp_tools=config.mcp_tools,
+
+        # Build the agent CLI command.
+        agent_cmd = backend.build_cli_cmd(
+            config,
             mcp_python_cmd=DOCKER_PYTHON,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
         )
-        docker_cmd += claude_args
+        docker_cmd += agent_cmd
 
-        extra_env: dict[str, str] = {}
-        if oauth_token:
-            extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-        env = _build_sandbox_env(
-            config.max_output_tokens,
-            config.autocompact_pct,
-            extra_env if extra_env else None,
+        # Write backend config files (opencode.json, AGENTS.md, etc.)
+        # AFTER build_cli_cmd so .mcp/mcp_config.json exists for conversion.
+        backend.setup_sandbox_files(
+            config,
+            docker_python=DOCKER_PYTHON,
+            primitive_names=config.primitive_names,
         )
+        _initial_commit(config.sandbox_dir)
+
+        env = backend.build_env(config, auth_env if auth_env else None)
 
         logger.info(
             "Starting Docker sandbox: container=%s image=%s sandbox=%s",
@@ -359,12 +378,13 @@ async def run_agent_in_docker_sandbox(
         proc = subprocess.Popen(  # pylint: disable=consider-using-with
             docker_cmd,
             env=env,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
 
-        stream = _parse_claude_stream(
+        stream = backend.parse_stream(
             proc,
             stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
         )

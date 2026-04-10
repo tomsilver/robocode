@@ -1,6 +1,9 @@
+defaults:
+  - backend: claude_sonnet
+
 _target_: robocode.approaches.agentic_cdl_approach.AgenticCDLApproach
-model: sonnet
 max_budget_usd: 5.0
+max_turns: 0
 output_dir: ${hydra:runtime.output_dir}
 load_dir: null
 use_docker: true
