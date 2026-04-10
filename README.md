@@ -13,6 +13,24 @@ cd robocode
 bash install.sh
 ```
 
+### System prerequisites
+
+The following tools are **not** installed by `install.sh` / `uv sync` and must be set up separately:
+
+| Tool | Required for | Install |
+|---|---|---|
+| [Ollama](https://ollama.com/) | Local model serving (Claude + Ollama, OpenCode + Ollama) | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | `claude` backend (default) | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| [OpenCode CLI](https://opencode.ai) | `opencode` backend (multi-provider) | `curl -fsSL https://opencode.ai/install \| bash` |
+| [vLLM](https://docs.vllm.ai/) | Serving models via OpenAI-compatible API | `pip install vllm` (in a separate env) |
+| [Docker](https://www.docker.com/) | Docker sandbox (recommended for isolation) | See [Docker docs](https://docs.docker.com/get-docker/) |
+
+For local model serving with Ollama, pull a model after installing:
+
+```bash
+ollama pull gemma4:31b
+```
+
 ### Agent backend setup
 
 The agentic approach supports two backends: **Claude Code CLI** (default) and **OpenCode** (for GPT, Gemini, open-source models via vLLM/Ollama, etc.).
@@ -40,7 +58,7 @@ See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude
 
 [OpenCode](https://opencode.ai) supports 75+ providers including OpenAI, Google, Anthropic, and local models served via Ollama or vLLM.
 
-Install: `npm install -g opencode-ai` (also pre-installed in the Docker image).
+Install: `curl -fsSL https://opencode.ai/install | bash` (also pre-installed in the Docker image).
 
 Authenticate with your provider:
 

@@ -233,6 +233,7 @@ async def run_agent_in_sandbox(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
 
     stream = backend.parse_stream(

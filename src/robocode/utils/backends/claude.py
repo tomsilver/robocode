@@ -16,6 +16,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from robocode.mcp import MCP_SERVER_NAME, mcp_tool_cli_names, setup_mcp_config
+from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ class ClaudeBackend:
     def __init__(self, backend_cfg: DictConfig) -> None:
         self._base_url = backend_cfg.get("base_url", "")
         self._auth_token = backend_cfg.get("auth_token", "ollama")
+        self._ollama_keep_alive = backend_cfg.get("ollama_keep_alive", "")
         self._max_turns: int = 0
 
     @property
@@ -158,6 +160,8 @@ class ClaudeBackend:
         if self._base_url:
             env["ANTHROPIC_BASE_URL"] = self._base_url
             env["ANTHROPIC_AUTH_TOKEN"] = self._auth_token
+            if "11434" in self._base_url:
+                ensure_ollama(keep_alive=self._ollama_keep_alive or "5m")
         if extra:
             env.update(extra)
         return env
@@ -304,7 +308,7 @@ class ClaudeBackend:
                         num_turns,
                         self._max_turns,
                     )
-                    proc.kill()
+                    os.killpg(proc.pid, 9)
                     is_error = True
                     error_text = (
                         f"Turn limit reached: {num_turns} >= " f"{self._max_turns}"

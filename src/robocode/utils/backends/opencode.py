@@ -25,6 +25,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from robocode.mcp import setup_mcp_config
+from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class OpenCodeBackend:
 
     def __init__(self, backend_cfg: DictConfig) -> None:
         self._variant = backend_cfg.get("variant", "")
+        self._ollama_keep_alive = backend_cfg.get("ollama_keep_alive", "")
         self._max_budget_usd: float = 0.0
         self._max_turns: int = 0
 
@@ -107,6 +109,8 @@ class OpenCodeBackend:
         # Prevent OpenCode from reading the host's CLAUDE.md as a fallback
         # instruction file, since we write our own AGENTS.md.
         env["OPENCODE_DISABLE_CLAUDE_CODE"] = "1"
+        if config.model.startswith("ollama/"):
+            ensure_ollama(keep_alive=self._ollama_keep_alive or "5m")
         if extra:
             env.update(extra)
         return env
@@ -126,6 +130,17 @@ class OpenCodeBackend:
             "permission": "allow",
             "compaction": {"auto": True, "prune": True},
         }
+
+        # Auto-configure Ollama provider when model uses ollama/ prefix.
+        if config.model.startswith("ollama/"):
+            model_name = config.model.split("/", 1)[1]
+            oc_config["provider"] = {
+                "ollama": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "options": {"baseURL": "http://localhost:11434/v1"},
+                    "models": {model_name: {"name": model_name}},
+                },
+            }
 
         # MCP server config (if tools are configured).
         if config.mcp_tools:
@@ -236,7 +251,7 @@ class OpenCodeBackend:
                         num_turns,
                         self._max_turns,
                     )
-                    proc.kill()
+                    os.killpg(proc.pid, 9)
                     is_error = True
                     error_text = (
                         f"Turn limit reached: {num_turns} >= " f"{self._max_turns}"
@@ -285,7 +300,7 @@ class OpenCodeBackend:
                         total_cost,
                         self._max_budget_usd,
                     )
-                    proc.kill()
+                    os.killpg(proc.pid, 9)
                     is_error = True
                     error_text = (
                         f"Budget exceeded: ${total_cost:.4f} "
@@ -313,9 +328,7 @@ class OpenCodeBackend:
         if stderr_output.strip():
             # Write debug logs to a separate file (not stream.jsonl).
             if stream_log_path is not None:
-                debug_log_path = stream_log_path.with_name(
-                    "opencode_debug.log"
-                )
+                debug_log_path = stream_log_path.with_name("opencode_debug.log")
                 debug_log_path.write_text(stderr_output)
 
             # Still check for JSON error events in stderr.
@@ -330,13 +343,9 @@ class OpenCodeBackend:
                         is_error = True
                         err_data = msg.get("error", {})
                         error_name = err_data.get("name", "UnknownError")
-                        err_msg = err_data.get("data", {}).get(
-                            "message", str(err_data)
-                        )
+                        err_msg = err_data.get("data", {}).get("message", str(err_data))
                         error_text = f"{error_name}: {err_msg}"
-                        logger.error(
-                            "Session error (stderr): %s", error_text
-                        )
+                        logger.error("Session error (stderr): %s", error_text)
                 except json.JSONDecodeError:
                     pass
 

@@ -1,2 +1,3 @@
 backend: opencode
 model: ollama/qwen3:0.6b
+ollama_keep_alive: 5m
