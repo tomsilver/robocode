@@ -1,0 +1,9 @@
+{
+  "version": 0,
+  "commit_hash": "d8892bb141a9222b4bbf21d1c9ccb17ce6f64f03",
+  "timestamp": "2026-04-09T07:57:53+00:00",
+  "message": "Fix PickupBlock ARM_TOL too-early transition; use small darm=0.02 for arm extension in both behaviors",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

@@ -1,0 +1,9 @@
+{
+  "version": 8,
+  "commit_hash": "a54d9ce16e743414b7ce2b458964b00ee019c519",
+  "timestamp": "2026-04-09T06:05:37+00:00",
+  "message": "Fix PlaceInShelf: use fine arm steps (DARM_LIM/2) for shelf insertion, floor-level target_y, early exit when in shelf",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

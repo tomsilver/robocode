@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.png
+*.gif
+*.jpg
+*.jpeg
+*.mp4
+agent_log.txt
+.mcp/
+mcp_renders/

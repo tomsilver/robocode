@@ -1,0 +1,9 @@
+{
+  "version": 20,
+  "commit_hash": "8eedbe5cb33bdb260314eabdd060555019f2a526",
+  "timestamp": "2026-04-02T10:17:46+00:00",
+  "message": "Reduce HOLDING_DIST_THRESHOLD 0.55->0.20 to eliminate false-positive grasp detection",
+  "total_reward": -331.0,
+  "num_steps": 331,
+  "solved": true
+}

@@ -1,0 +1,192 @@
+[
+  {
+    "version": 0,
+    "commit_hash": "73747f4748ae74447c02ff745a7c0389db30895b",
+    "timestamp": "2026-04-02T00:49:38+00:00",
+    "message": "Initial implementation: PickBlock + PlaceBlock behaviors with BiRRT navigation",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 1,
+    "commit_hash": "05aa23d75657a35d9d6e4589a125af38861d00f3",
+    "timestamp": "2026-04-02T01:03:00+00:00",
+    "message": "Fix arm extension: use small EXTEND_DARM=0.02 to enter narrow suction window",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 2,
+    "commit_hash": "f9f125debfd50afd57e131ef7df29fa521566ada",
+    "timestamp": "2026-04-02T01:54:14+00:00",
+    "message": "Rewrite behaviors: pick-angle reorientation, TempDrop, HoldInShelf stacking strategy",
+    "total_reward": -822.0,
+    "num_steps": 822,
+    "solved": true
+  },
+  {
+    "version": 3,
+    "commit_hash": "b3806cf499dd52f134c37f3c30fd73521b87cd86",
+    "timestamp": "2026-04-02T02:02:52+00:00",
+    "message": "Fix nav-with-block collisions: lower y_ceiling for BiRRT, simple 2-waypoint TempDrop",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 4,
+    "commit_hash": "ed4cfe478521ee5ea78960f17821a0b01c8b7b69",
+    "timestamp": "2026-04-02T02:08:04+00:00",
+    "message": "Add ESCAPE phase to TempDropBehavior so robot clears dropped block0",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 5,
+    "commit_hash": "8e1cb435c387df559fa5e1d75343f5015a0cd3ef",
+    "timestamp": "2026-04-02T02:12:19+00:00",
+    "message": "Fix x-clamp: use ROBOT_RADIUS (not +0.05) so block fits inside shelf inner bounds",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 6,
+    "commit_hash": "f4e302d149b842caf2300d9d24f26ea1a8e3253b",
+    "timestamp": "2026-04-02T02:18:04+00:00",
+    "message": "Pass block_obstacles to BiRRT in all _plan_path methods to avoid floor block collisions",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 7,
+    "commit_hash": "32b21acec0665d40cd317bb46a2824db80f5b97c",
+    "timestamp": "2026-04-02T02:20:34+00:00",
+    "message": "Fix BiRRT obstacle handling: include target block, use BiRRT in TempDropBehavior",
+    "total_reward": -757.0,
+    "num_steps": 757,
+    "solved": true
+  },
+  {
+    "version": 8,
+    "commit_hash": "6ad661b748dfc465f5a9af0b52affc0c768ffaeb",
+    "timestamp": "2026-04-02T02:23:26+00:00",
+    "message": "Correct lateral gripper offset in Place/HoldInShelf: adjust robot_x based on measured block center",
+    "total_reward": -756.0,
+    "num_steps": 756,
+    "solved": true
+  },
+  {
+    "version": 9,
+    "commit_hash": "af59ecf5a485c2324d809ca2a6bd9e8246e59c24",
+    "timestamp": "2026-04-01T22:36:08-04:00",
+    "message": "auto-commit uncommitted changes",
+    "total_reward": -780.0,
+    "num_steps": 780,
+    "solved": true
+  },
+  {
+    "version": 10,
+    "commit_hash": "5132ac12dfa1e7a4bea2b568ad66d0275e87109d",
+    "timestamp": "2026-04-02T04:05:00-04:00",
+    "message": "initial sandbox setup",
+    "total_reward": NaN,
+    "num_steps": 0,
+    "solved": false,
+    "error": "ImportError: cannot import name 'BLOCK_NAMES' from 'obs_helpers' (/home/qianwei/robocode/analysis/cdl_mp_clutteredstorage2d_medium_04-01/s42/approach_history/v010/sandbox/obs_helpers.py)"
+  },
+  {
+    "version": 11,
+    "commit_hash": "5b7d6528c369138ba0828f621e0b9c953e339577",
+    "timestamp": "2026-04-02T08:15:44+00:00",
+    "message": "Initial approach: pick-and-place blocks into shelf using BiRRT navigation + arm-up strategy",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 12,
+    "commit_hash": "358529961360372b4155d3821c581b44ccc9363c",
+    "timestamp": "2026-04-02T08:20:18+00:00",
+    "message": "Fix block geometry: obs x/y is corner not center; fix block_vertices and is_holding_block",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 13,
+    "commit_hash": "30b8b68af3cb432d141f13d47d3dfdd1449b8eda",
+    "timestamp": "2026-04-02T08:37:48+00:00",
+    "message": "Fix pick strategy: target block bottom face not center; fix terminated() to wait for queue empty",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 14,
+    "commit_hash": "42333258787fb379d4d71fa2ed3c69f4df3f20e1",
+    "timestamp": "2026-04-02T08:49:23+00:00",
+    "message": "Implement face-normal grasping approach in PickBlockBehavior",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 15,
+    "commit_hash": "b0b3d51db57f5455e69aa4213f2d9d3570bea570",
+    "timestamp": "2026-04-02T09:06:52+00:00",
+    "message": "Fix PlaceBlockBehavior: wait for full plan before declaring terminated",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 16,
+    "commit_hash": "e3bd17c75abed660af34925bb3cea314cec44512",
+    "timestamp": "2026-04-02T09:59:38+00:00",
+    "message": "Add MoveBlock0UpBehavior to push block0 high in shelf, freeing space for blocks 1 and 2",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 17,
+    "commit_hash": "5803375ea63639db195476259c60ade222995100",
+    "timestamp": "2026-04-02T10:10:27+00:00",
+    "message": "Score face approach by dist from robot; add block obstacle avoidance to BiRRT",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 18,
+    "commit_hash": "7509165a2adede9a1bb0e079044a2961767de99a",
+    "timestamp": "2026-04-02T10:12:33+00:00",
+    "message": "Score face approach by orientation alignment for horizontal placement",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 19,
+    "commit_hash": "f46a5c49e4e71421fdf6575a51149b4cbc914862",
+    "timestamp": "2026-04-02T10:16:02+00:00",
+    "message": "Include target block in BiRRT obstacles so robot routes around it to approach face",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 20,
+    "commit_hash": "8eedbe5cb33bdb260314eabdd060555019f2a526",
+    "timestamp": "2026-04-02T10:17:46+00:00",
+    "message": "Reduce HOLDING_DIST_THRESHOLD 0.55->0.20 to eliminate false-positive grasp detection",
+    "total_reward": -331.0,
+    "num_steps": 331,
+    "solved": true
+  }
+]

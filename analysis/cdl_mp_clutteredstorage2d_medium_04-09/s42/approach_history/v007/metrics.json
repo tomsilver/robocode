@@ -1,0 +1,9 @@
+{
+  "version": 7,
+  "commit_hash": "e18971accf5eb7a84920b4ba8b39bd62bd649da8",
+  "timestamp": "2026-04-09T05:51:14+00:00",
+  "message": "Fix pick: arm stops at dist-0.030 (suction at block center), require arm>0.42 to terminate; SHELF_APPROACH_Y=1.95",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

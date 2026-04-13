@@ -1,0 +1,9 @@
+{
+  "version": 12,
+  "commit_hash": "358529961360372b4155d3821c581b44ccc9363c",
+  "timestamp": "2026-04-02T08:20:18+00:00",
+  "message": "Fix block geometry: obs x/y is corner not center; fix block_vertices and is_holding_block",
+  "total_reward": -1000.0,
+  "num_steps": 1000,
+  "solved": false
+}

@@ -1,0 +1,9 @@
+- approach=agentic_cdl
+- approach.use_docker=true
+- approach.max_budget_usd=20.0
+- seed=24
+- num_eval_tasks=100
+- primitives=[BiRRT]
+- mcp_tools=[render_state,render_policy]
+- environment=clutteredstorage2d_medium
+- approach.load_dir=outputs/cdl_mp_clutteredstorage2d_medium_04-01/s24

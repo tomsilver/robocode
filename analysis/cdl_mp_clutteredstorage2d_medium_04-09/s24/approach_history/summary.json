@@ -1,0 +1,119 @@
+[
+  {
+    "version": 0,
+    "commit_hash": "d8892bb141a9222b4bbf21d1c9ccb17ce6f64f03",
+    "timestamp": "2026-04-09T07:57:53+00:00",
+    "message": "Fix PickupBlock ARM_TOL too-early transition; use small darm=0.02 for arm extension in both behaviors",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 1,
+    "commit_hash": "bca03047f85e979a4532b16b7e2d8f49de55cc9b",
+    "timestamp": "2026-04-09T08:01:14+00:00",
+    "message": "Remove PlaceBlock RETRACT phase; navigate with arm extended to avoid dropping block; plan nav in reset()",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 2,
+    "commit_hash": "790fae9c1d9b458ec2591e4bfaed08354fe55e3a",
+    "timestamp": "2026-04-09T08:03:45+00:00",
+    "message": "Fix NAVIGATE fallthrough bug: use while loop to skip close waypoints, return VAC_ON during navigation",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 3,
+    "commit_hash": "f5c0f10f2f7a33dbec9eaf30cd0f138278b69e52",
+    "timestamp": "2026-04-09T08:06:50+00:00",
+    "message": "PlaceBlock: tight position/theta tolerances in ORIENT; servo x,y during EXTEND to keep block centered in shelf slot",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 4,
+    "commit_hash": "b87e4c88b2a188e78d4cd4705ffafa8cb69fbae2",
+    "timestamp": "2026-04-09T08:11:26+00:00",
+    "message": "PlaceBlock ORIENT/EXTEND: dynamically correct robot x to account for block-arm offset so block fits in shelf slot",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 5,
+    "commit_hash": "601f6020d2c6c4a6526d7313a1558df5040bbfff",
+    "timestamp": "2026-04-09T08:19:10+00:00",
+    "message": "PlaceBlock: clamp adj_x to world bounds in ORIENT; no x movement during EXTEND arm; fix nav target_x clamping",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 6,
+    "commit_hash": "53d6136f43ab0c52b5770fb87fb6a49e7182fe8f",
+    "timestamp": "2026-04-09T08:29:38+00:00",
+    "message": "Fix PickupBlock false termination + nav stuck + PlaceBlock skip when nothing held + arm stuck detect",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 7,
+    "commit_hash": "0b2a49e1f9dbcb7fd540099cc3fce9016da502d2",
+    "timestamp": "2026-04-09T08:36:23+00:00",
+    "message": "Fix block drop: no rotation during PlaceBlock NAVIGATE; fix ORIENT adj_x bounds and block-dropped detection",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 8,
+    "commit_hash": "b84796b842c99863d561dfc2dd1bf90759d07b05",
+    "timestamp": "2026-04-09T08:40:57+00:00",
+    "message": "Prefer approach from below (theta=pi/2) for stable grip; retry logic in approach.py",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 9,
+    "commit_hash": "ac523245699e979300a7914147af8253448b232f",
+    "timestamp": "2026-04-09T10:03:47+00:00",
+    "message": "Add block0 shelf-removal strategy: PickupBlock allow_shelf, DropBlock, push-stacking in PlaceBlock",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 10,
+    "commit_hash": "b065c3e1ca37764aa0bb6c8bdb8afb93a0d817ec",
+    "timestamp": "2026-04-09T10:07:05+00:00",
+    "message": "Fix DropBlock: retract arm then exit shelf vertically before lateral movement",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 11,
+    "commit_hash": "7cfd3cc2550c3452dc748a5168caf56853b09de6",
+    "timestamp": "2026-04-09T10:15:19+00:00",
+    "message": "Fix DropBlock: add phase4 move-away after releasing block0; fix drop location to avoid robot-block collision",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  },
+  {
+    "version": 12,
+    "commit_hash": "fc43955357cb40a901e210e52059edd1dfcb018e",
+    "timestamp": "2026-04-09T10:19:28+00:00",
+    "message": "Retract arm while navigating in PickupBlock to prevent arm-sweep collision during retries",
+    "total_reward": -1000.0,
+    "num_steps": 1000,
+    "solved": false
+  }
+]
