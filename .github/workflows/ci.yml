@@ -22,6 +22,10 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
+    - name: Configure git to skip analysis submodules
+      run: |
+        git config --global submodule.active '.'
+        git config --global --add submodule.active ':(exclude)analysis/**'
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -43,6 +47,10 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
+    - name: Configure git to skip analysis submodules
+      run: |
+        git config --global submodule.active '.'
+        git config --global --add submodule.active ':(exclude)analysis/**'
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -68,6 +76,10 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y liblapack-dev libblas-dev
+    - name: Configure git to skip analysis submodules
+      run: |
+        git config --global submodule.active '.'
+        git config --global --add submodule.active ':(exclude)analysis/**'
     - uses: actions/checkout@v4
       with:
         submodules: recursive
