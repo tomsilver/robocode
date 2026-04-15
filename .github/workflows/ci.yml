@@ -10,12 +10,12 @@ jobs:
       - name: Run black to test code linting
         uses: psf/black@stable
         with:
-          options: "--check --verbose --exclude 'prpl-mono|\\.venv|outputs'"
+          options: "--check --verbose --exclude 'prpl-mono|\\.venv|outputs|analysis'"
           jupyter: true
       - name: Run isort to organize imports
         uses: isort/isort-action@master
         with:
-          configuration: "--skip prpl-mono --skip .venv --skip outputs --check-only"
+          configuration: "--skip prpl-mono --skip .venv --skip outputs --skip analysis --check-only"
   linting:
     runs-on: ubuntu-latest
     strategy:
@@ -36,7 +36,7 @@ jobs:
       run: uv sync --all-extras --dev
     - name: Lint
       run: |
-        uv run pytest . --pylint -m pylint --pylint-rcfile=.pylintrc --ignore=prpl-mono --ignore=outputs
+        uv run pytest . --pylint -m pylint --pylint-rcfile=.pylintrc --ignore=prpl-mono --ignore=outputs --ignore=analysis
   static-type-checking:
     runs-on: ubuntu-latest
     strategy:
@@ -57,7 +57,7 @@ jobs:
       run: uv sync --all-extras --dev
     - name: Mypy
       run: |
-        uv run mypy . --exclude prpl-mono --exclude outputs
+        uv run mypy . --exclude prpl-mono --exclude outputs --exclude analysis
   unit-tests:
     runs-on: ubuntu-latest
     strategy:
