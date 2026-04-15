@@ -1,0 +1,9 @@
+{
+  "version": 10,
+  "commit_hash": "1d0a8999c67053ca29027755df757c0511916dee",
+  "timestamp": "2026-04-09T00:04:22Z",
+  "message": "Revert upward push in press phase (caused regressions); keep smart arm selection and regrasp",
+  "total_reward": -109.0,
+  "num_steps": 110,
+  "solved": true
+}
