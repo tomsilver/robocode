@@ -24,7 +24,7 @@ def ensure_ollama(keep_alive: str = "5m") -> None:
     """
     # Already reachable — nothing to do.
     try:
-        urllib.request.urlopen(f"{_OLLAMA_URL}/api/tags", timeout=2)  # noqa: S310
+        urllib.request.urlopen(f"{_OLLAMA_URL}/api/tags", timeout=2)
         logger.info("Ollama already running at %s", _OLLAMA_URL)
         return
     except OSError:
@@ -53,7 +53,7 @@ def ensure_ollama(keep_alive: str = "5m") -> None:
     # Wait for the server to become ready.
     for _ in range(30):
         try:
-            urllib.request.urlopen(f"{_OLLAMA_URL}/api/tags", timeout=2)  # noqa: S310
+            urllib.request.urlopen(f"{_OLLAMA_URL}/api/tags", timeout=2)
             logger.info("Ollama server ready (pid=%d)", proc.pid)
             return
         except OSError:

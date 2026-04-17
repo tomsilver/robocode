@@ -16,6 +16,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from robocode.mcp import MCP_SERVER_NAME, mcp_tool_cli_names, setup_mcp_config
+from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
@@ -77,7 +78,7 @@ _SANDBOX_SETTINGS: dict = {
 }
 
 
-class ClaudeBackend:
+class ClaudeBackend(AgentBackend):
     """Claude Code CLI agent backend.
 
     When ``base_url`` is set in the backend config, ``ANTHROPIC_BASE_URL``

@@ -11,8 +11,6 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
-from omegaconf import DictConfig
-
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
 
@@ -63,29 +61,3 @@ class AgentBackend(Protocol):
         stream_log_path: Path | None = None,
     ) -> _StreamParseResult:
         """Parse the CLI's streaming output and return a unified result."""
-
-
-def create_backend(backend_cfg: DictConfig) -> AgentBackend:
-    """Instantiate an agent backend from a config mapping.
-
-    Parameters
-    ----------
-    backend_cfg:
-        Backend config (DictConfig or dict) with at least a ``backend``
-        key (``"claude"`` or ``"opencode"``). Additional keys like
-        ``base_url`` or ``auth_token`` are passed through.
-    """
-    name = backend_cfg["backend"]
-    if name == "claude":
-        from robocode.utils.backends.claude import (  # pylint: disable=import-outside-toplevel
-            ClaudeBackend,
-        )
-
-        return ClaudeBackend(backend_cfg)
-    if name == "opencode":
-        from robocode.utils.backends.opencode import (  # pylint: disable=import-outside-toplevel
-            OpenCodeBackend,
-        )
-
-        return OpenCodeBackend(backend_cfg)
-    raise ValueError(f"Unknown backend {name!r}. Expected 'claude' or 'opencode'.")

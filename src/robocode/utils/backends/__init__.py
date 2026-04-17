@@ -13,12 +13,15 @@ from dataclasses import dataclass, field
 
 from omegaconf import DictConfig
 
-from robocode.utils.backends.base import AgentBackend, create_backend
+from robocode.utils.backends.base import AgentBackend
+from robocode.utils.backends.claude import ClaudeBackend
+from robocode.utils.backends.opencode import OpenCodeBackend
 
 __all__ = [
     "AgentBackend",
     "DEFAULT_BACKEND",
     "DEFAULT_BACKEND_CFG",
+    "DEFAULT_OPENCODE_CFG",
     "PROVIDERS",
     "CLAUDE_PROMPT_SUFFIX",
     "OPENCODE_PROMPT_SUFFIX",
@@ -26,6 +29,25 @@ __all__ = [
     "firewall_domains_for_model",
     "provider_from_model",
 ]
+
+
+def create_backend(backend_cfg: DictConfig) -> AgentBackend:
+    """Instantiate an agent backend from a config mapping.
+
+    Parameters
+    ----------
+    backend_cfg:
+        Backend config (DictConfig or dict) with at least a ``backend``
+        key (``"claude"`` or ``"opencode"``). Additional keys like
+        ``base_url`` or ``auth_token`` are passed through.
+    """
+    name = backend_cfg["backend"]
+    if name == "claude":
+        return ClaudeBackend(backend_cfg)
+    if name == "opencode":
+        return OpenCodeBackend(backend_cfg)
+    raise ValueError(f"Unknown backend {name!r}. Expected 'claude' or 'opencode'.")
+
 
 # Convenience defaults for tests and callers that don't use Hydra configs.
 DEFAULT_BACKEND_CFG = DictConfig({"backend": "claude", "model": "sonnet"})

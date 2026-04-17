@@ -25,6 +25,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from robocode.mcp import setup_mcp_config
+from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
@@ -37,7 +38,7 @@ _RATE_LIMIT_RE = re.compile(
 )
 
 
-class OpenCodeBackend:
+class OpenCodeBackend(AgentBackend):
     """OpenCode CLI agent backend."""
 
     def __init__(self, backend_cfg: DictConfig) -> None:
@@ -51,7 +52,7 @@ class OpenCodeBackend:
         """Backend identifier."""
         return "opencode"
 
-    def build_cli_cmd(  # pylint: disable=unused-argument
+    def build_cli_cmd(
         self,
         config: SandboxConfig,
         *,
@@ -95,7 +96,7 @@ class OpenCodeBackend:
             )
         return args
 
-    def build_env(  # pylint: disable=unused-argument
+    def build_env(
         self,
         config: SandboxConfig,
         extra: dict[str, str] | None = None,
