@@ -168,3 +168,4 @@ cython_debug/
 CLAUDE.md
 .vscode
 unit_test_artifacts
+.openrouterkey
