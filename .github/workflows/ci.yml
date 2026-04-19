@@ -22,6 +22,10 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
+    - name: Install system libs
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y liblapack-dev libblas-dev libegl1 libgl1 libglu1-mesa
     - uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -64,10 +68,10 @@ jobs:
       matrix:
         python-version: ["3.11"]
     steps:
-    - name: Install LAPACK and BLAS
+    - name: Install system libs
       run: |
         sudo apt-get update
-        sudo apt-get install -y liblapack-dev libblas-dev
+        sudo apt-get install -y liblapack-dev libblas-dev libegl1 libgl1 libglu1-mesa
     - uses: actions/checkout@v4
       with:
         submodules: recursive

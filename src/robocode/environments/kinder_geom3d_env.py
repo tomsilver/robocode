@@ -15,8 +15,11 @@ try:
     import mujoco  # pylint: disable=unused-import
 
     _ = mujoco
-except ImportError:
-    pass  # mujoco is optional; only needed for libero-style downstream use.
+except Exception:  # pylint: disable=broad-except
+    # mujoco is optional; only needed for libero-style downstream use. Catch
+    # broad Exception because mujoco's import chain touches ctypes/OpenGL and
+    # can raise AttributeError / OSError when GL runtime libs are missing.
+    pass
 
 # pylint: disable=wrong-import-position
 from typing import Any, SupportsFloat

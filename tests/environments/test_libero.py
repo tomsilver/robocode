@@ -62,6 +62,16 @@ def test_libero_env_rollout() -> None:
         OffScreenRenderEnv,
     )
 
+    # Probe the mujoco GL runtime. CI hosts without libegl1/libgl1 installed
+    # will fail when OffScreenRenderEnv initializes an EGL context; skip
+    # cleanly instead of erroring.
+    try:
+        import mujoco  # pylint: disable=import-outside-toplevel
+
+        mujoco.GLContext(max_width=16, max_height=16).free()
+    except Exception as e:  # pylint: disable=broad-except
+        pytest.skip(f"mujoco GL runtime unavailable: {e}")
+
     task_suite = benchmark.get_benchmark_dict()["libero_goal"]()
     bddl_file = task_suite.get_task_bddl_file_path(0)
 
