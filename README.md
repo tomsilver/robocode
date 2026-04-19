@@ -145,6 +145,45 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 | `packing3d_medium` | `kinder/Packing3D-p2-v0` | Medium (2 parts) |
 | `packing3d_hard` | `kinder/Packing3D-p3-v0` | Hard (3 parts) |
 
+### LIBERO-PRO (manipulation benchmark, optional extra)
+
+[LIBERO-PRO](https://github.com/uynitsuj/LIBERO-PRO) is a Franka tabletop manipulation benchmark (~80 task suites covering goal / spatial / object / 10-task mixes plus OOD and perturbation variants) built on MuJoCo via robosuite. It is vendored as a submodule under `third-party/LIBERO-PRO/` and gated behind the optional `libero` extra — it is **not** installed by default because it pins old upstreams (`robosuite==1.4.0`, `gym==0.25.2`, `robomimic==0.2.0`, `bddl==1.0.1`) and drags in a CUDA-enabled torch.
+
+Install (into the same venv as the rest of robocode):
+
+```bash
+sudo apt-get install -y libegl1 libgl1    # EGL/GL runtime for MuJoCo
+uv sync --extra libero --all-extras --dev  # ~60 extra Python packages, several GB
+```
+
+First use of the `libero` package runs an interactive `input()` prompt asking where to store datasets; the test harness writes `~/.libero/config.yaml` automatically. If you hit the prompt manually, answer `N` — the default paths are fine for env rollouts (pre-recorded demos are not required).
+
+List available benchmark suites:
+
+```python
+from libero import benchmark
+print(list(benchmark.get_benchmark_dict().keys()))  # ~80 suites
+```
+
+Minimal rollout on `libero_goal` task 0:
+
+```python
+from libero import benchmark
+from libero.envs import OffScreenRenderEnv
+
+task_suite = benchmark.get_benchmark_dict()["libero_goal"]()
+bddl = task_suite.get_task_bddl_file_path(0)
+env = OffScreenRenderEnv(bddl_file_name=bddl, camera_heights=128, camera_widths=128)
+env.seed(0)
+obs = env.reset()   # dict with agentview_image, robot state, per-object poses, ...
+obs, reward, done, info = env.step([0.0] * 7)
+env.close()
+```
+
+Smoke tests live at `tests/environments/test_libero.py` (benchmark dict + rollout); they skip cleanly if the extra isn't installed.
+
+Note on OpenGL: LIBERO's MuJoCo needs to coexist in-process with kinder's pybullet. `src/robocode/environments/kinder_geom2d_env.py` and `kinder_geom3d_env.py` pin `MUJOCO_GL=egl` / `PYOPENGL_PLATFORM=egl` before kinder loads so PyOpenGL latches to the EGL platform — without this, later robosuite imports in the same process fail with `'NoneType' object has no attribute 'glGetError'`. If you see that error, confirm `libegl1` is installed.
+
 ## Sandbox
 
 The agent runs inside a Docker container (`robocode-sandbox`) that provides full filesystem isolation, a restricted network, and a pre-built Python environment.
