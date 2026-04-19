@@ -152,12 +152,6 @@ def test_find_repo_root_has_pyproject() -> None:
     assert (root / "pyproject.toml").exists()
 
 
-def test_find_repo_root_has_prpl_mono() -> None:
-    """_find_repo_root() returns a directory containing prpl-mono/."""
-    root = _find_repo_root()
-    assert (root / "prpl-mono").is_dir()
-
-
 def test_setup_creates_sandbox_dir(tmp_path: Path) -> None:
     """_setup_sandbox_dir() creates the sandbox directory if absent."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")

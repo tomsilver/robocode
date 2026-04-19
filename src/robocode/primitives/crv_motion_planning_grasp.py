@@ -15,8 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from kinder.envs.geom2d.object_types import RectangleType
-from kinder.envs.geom2d.structs import MultiBody2D, SE2Pose
+from kinder.envs.kinematic2d.object_types import RectangleType
+from kinder.envs.kinematic2d.structs import MultiBody2D, SE2Pose
 from kinder.envs.utils import rectangle_object_to_geom, state_2d_has_collision
 from prpl_utils.utils import get_signed_angle_distance, wrap_angle
 from relational_structs import Object, ObjectCentricState

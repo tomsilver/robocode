@@ -21,7 +21,7 @@ from collections import deque
 from typing import Callable
 
 import numpy as np
-from kinder.envs.geom2d.structs import SE2Pose
+from kinder.envs.kinematic2d.structs import SE2Pose
 from numpy.typing import NDArray
 
 from robocode.oracles.pushpullhook2d.act_helpers import (

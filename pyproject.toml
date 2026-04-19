@@ -17,11 +17,8 @@ dependencies = [
    "hydra-core",
    "hydra-joblib-launcher",
    "omegaconf",
-   "relational-structs",
-   "prpl_utils",
-   "tomsgeoms2d",
-   "kinder[all]",
-   "pybullet_helpers",
+   "kindergarden[kinematic2d,kinematic3d,dynamic2d,dynamic3d]",
+   "pybullet",
    "types-shapely",
    "scipy-stubs",
    "imageio",
@@ -65,14 +62,10 @@ wrap-descriptions = 88
 strict_equality = true
 disallow_untyped_calls = true
 warn_unreachable = true
-exclude = ["venv/*", ".venv/*", "outputs/*"]
+exclude = ["venv/*", ".venv/*", "outputs/*", "third-party/*"]
 
 [tool.uv.sources]
-relational-structs = { path = "prpl-mono/relational-structs", editable = true }
-prpl_utils = { path = "prpl-mono/prpl-utils", editable = true }
-tomsgeoms2d = { path = "prpl-mono/toms-geoms-2d", editable = true }
-kinder = { path = "prpl-mono/kinder", editable = true }
-pybullet_helpers = { path = "prpl-mono/pybullet-helpers", editable = true }
+kindergarden = { path = "third-party/kindergarden", editable = true }
 
 [[tool.mypy.overrides]]
 module = [
