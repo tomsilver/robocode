@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from kinder.envs.geom2d.object_types import (
+from kinder.envs.kinematic2d.object_types import (
     CRVRobotType,
     DoubleRectType,
-    Geom2DRobotEnvTypeFeatures,
+    Kinematic2DRobotEnvTypeFeatures,
     RectangleType,
 )
-from kinder.envs.geom2d.utils import create_walls_from_world_boundaries
+from kinder.envs.kinematic2d.utils import create_walls_from_world_boundaries
 from numpy.typing import NDArray
 from relational_structs import Object, ObjectCentricState
 
@@ -94,9 +94,9 @@ _SHELF_OBJECT = Object("shelf", DoubleRectType)
 _BLOCK_OBJECTS = {name: Object(name, RectangleType) for name in BLOCK_NAMES}
 
 _OBJECT_CENTRIC_TYPE_FEATURES = {
-    CRVRobotType: Geom2DRobotEnvTypeFeatures[CRVRobotType],
-    DoubleRectType: Geom2DRobotEnvTypeFeatures[DoubleRectType],
-    RectangleType: Geom2DRobotEnvTypeFeatures[RectangleType],
+    CRVRobotType: Kinematic2DRobotEnvTypeFeatures[CRVRobotType],
+    DoubleRectType: Kinematic2DRobotEnvTypeFeatures[DoubleRectType],
+    RectangleType: Kinematic2DRobotEnvTypeFeatures[RectangleType],
 }
 
 
@@ -463,7 +463,7 @@ def extract_object_centric_state(obs: NDArray) -> ObjectCentricState:
         min_dy=-0.05,
         max_dy=0.05,
     )
-    rect_features = Geom2DRobotEnvTypeFeatures[RectangleType]
+    rect_features = Kinematic2DRobotEnvTypeFeatures[RectangleType]
     for wall_obj, wall_feat_dict in walls.items():
         state_data[wall_obj] = np.array(
             [float(wall_feat_dict[feat]) for feat in rect_features],

@@ -136,9 +136,9 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 | `obstruction3d_easy` | `kinder/Obstruction3D-o0-v0` | Easy (0 obstructions) |
 | `obstruction3d_medium` | `kinder/Obstruction3D-o2-v0` | Medium (2 obstructions) |
 | `obstruction3d_hard` | `kinder/Obstruction3D-o4-v0` | Hard (4 obstructions) |
-| `shelf3d_easy` | `kinder/Shelf3D-o1-v0` | Easy (1 cube) |
-| `shelf3d_medium` | `kinder/Shelf3D-o3-v0` | Medium (3 cubes) |
-| `shelf3d_hard` | `kinder/Shelf3D-o5-v0` | Hard (5 cubes) |
+| `shelf3d_easy` | `kinder/KinematicShelf3D-o1-v0` | Easy (1 cube) |
+| `shelf3d_medium` | `kinder/KinematicShelf3D-o3-v0` | Medium (3 cubes) |
+| `shelf3d_hard` | `kinder/KinematicShelf3D-o5-v0` | Hard (5 cubes) |
 | `transport3d_easy` | `kinder/Transport3D-o1-v0` | Easy (1 cube) |
 | `transport3d_hard` | `kinder/Transport3D-o2-v0` | Hard (2 cubes) |
 | `packing3d_easy` | `kinder/Packing3D-p1-v0` | Easy (1 part) |

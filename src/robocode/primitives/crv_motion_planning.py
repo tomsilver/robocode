@@ -20,8 +20,8 @@ from typing import Any, Iterable
 
 import numpy as np
 from kinder.core import RobotActionSpace
-from kinder.envs.geom2d.object_types import DoubleRectType, RectangleType
-from kinder.envs.geom2d.structs import MultiBody2D, SE2Pose, ZOrder
+from kinder.envs.kinematic2d.object_types import DoubleRectType, RectangleType
+from kinder.envs.kinematic2d.structs import MultiBody2D, SE2Pose, ZOrder
 from kinder.envs.utils import (
     BLACK,
     crv_robot_to_multibody2d,

@@ -1,2 +1,2 @@
 _target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
-env_id: kinder/Shelf3D-o1-v0
+env_id: kinder/KinematicShelf3D-o1-v0

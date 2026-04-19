@@ -1,4 +1,4 @@
 #!/bin/bash
-python -m black . --exclude 'prpl-mono|\.venv|outputs|multirun'
-docformatter -i -r . --exclude venv .venv prpl-mono outputs multirun
-isort . --skip .venv --skip prpl-mono --skip outputs --skip multirun
+python -m black . --exclude 'third-party|\.venv|outputs|multirun'
+docformatter -i -r . --exclude venv .venv third-party outputs multirun
+isort . --skip .venv --skip third-party --skip outputs --skip multirun

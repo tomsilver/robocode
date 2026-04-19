@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
-from kinder.envs.geom2d.object_types import (
+from kinder.envs.kinematic2d.object_types import (
     CRVRobotType,
-    Geom2DRobotEnvTypeFeatures,
+    Kinematic2DRobotEnvTypeFeatures,
     RectangleType,
 )
 from relational_structs import Object, ObjectCentricState
@@ -27,8 +27,8 @@ DY_LIM = 0.05
 
 _ROBOT = Object("robot", CRVRobotType)
 _TYPE_FEATURES = {
-    CRVRobotType: Geom2DRobotEnvTypeFeatures[CRVRobotType],
-    RectangleType: Geom2DRobotEnvTypeFeatures[RectangleType],
+    CRVRobotType: Kinematic2DRobotEnvTypeFeatures[CRVRobotType],
+    RectangleType: Kinematic2DRobotEnvTypeFeatures[RectangleType],
 }
 
 
@@ -73,7 +73,7 @@ def _state(
     for name, (cx, cy, width, height) in (extra_blocks or {}).items():
         data[Object(name, RectangleType)] = _rect_from_center(cx, cy, width, height)
 
-    rect_features = Geom2DRobotEnvTypeFeatures[RectangleType]
+    rect_features = Kinematic2DRobotEnvTypeFeatures[RectangleType]
     walls = create_walls_from_world_boundaries(
         WORLD_MIN_X,
         WORLD_MAX_X,
