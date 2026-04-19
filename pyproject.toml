@@ -86,5 +86,6 @@ module = [
     "pybullet_helpers.*",
     "pybullet_utils.*",
     "libero.*",
+    "mujoco.*",
 ]
 ignore_missing_imports = true

@@ -3,16 +3,10 @@
 Skips cleanly when ``libero`` is not installed (it ships behind the
 ``[libero]`` extra). Pre-creates ``~/.libero/config.yaml`` so the package's
 interactive first-run prompt never fires in CI.
-
-The env-rollout test runs in a spawned subprocess because the kinder 3D
-tests (tests/environments/test_kinder_geom3d_env.py) init pybullet's OpenGL
-in the same interpreter, leaving PyOpenGL in a state where robosuite's
-subsequent mujoco/EGL init fails with "NoneType has no attribute glGetError".
 """
 
 from __future__ import annotations
 
-import multiprocessing as mp
 import os
 from pathlib import Path
 
@@ -59,14 +53,9 @@ def test_libero_benchmark_dict_nonempty() -> None:
     assert "libero_spatial" in suites
 
 
-def _run_goal_task_0_rollout() -> None:
-    """Reset + 5 zero-action steps on libero_goal task 0, asserting obs/reward/done.
-
-    Called as the target of a spawned subprocess, so all heavy imports live here.
-    """
-    os.environ["MUJOCO_GL"] = "egl"
-    os.environ["PYOPENGL_PLATFORM"] = "egl"
-
+def test_libero_env_rollout() -> None:
+    """Reset + 5 zero-action steps on libero_goal task 0; sanity-check
+    obs/reward/done."""
     import numpy as np  # pylint: disable=import-outside-toplevel
     from libero import benchmark  # pylint: disable=import-outside-toplevel
     from libero.envs import (  # pylint: disable=import-outside-toplevel
@@ -82,23 +71,15 @@ def _run_goal_task_0_rollout() -> None:
     try:
         env.seed(0)
         obs = env.reset()
-        assert isinstance(obs, dict), type(obs)
+        assert isinstance(obs, dict)
         assert "agentview_image" in obs
         assert obs["agentview_image"].shape == (64, 64, 3)
 
         action = np.zeros(7, dtype=np.float32)
         for _ in range(5):
-            obs, reward, done, _ = env.step(action)
+            obs, reward, done, _info = env.step(action)
             assert isinstance(obs, dict)
             assert np.isfinite(reward)
             assert isinstance(done, (bool, np.bool_))
     finally:
         env.close()
-
-
-def test_libero_env_rollout() -> None:
-    """Run the libero_goal task 0 rollout in a fresh interpreter and check exit."""
-    proc = mp.get_context("spawn").Process(target=_run_goal_task_0_rollout)
-    proc.start()
-    proc.join(timeout=180)
-    assert proc.exitcode == 0, f"rollout process exited with code {proc.exitcode}"

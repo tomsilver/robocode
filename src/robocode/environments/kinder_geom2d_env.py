@@ -1,5 +1,24 @@
 """Wrapper around kinder geom2d environments."""
 
+import os
+
+# kinder.register_all_environments() (below) hardcodes MUJOCO_GL=osmesa and
+# PYOPENGL_PLATFORM=osmesa on headless Linux and then imports mujoco to probe
+# for Dynamic3D support, which permanently locks PyOpenGL to OSMesaPlatform.
+# OSMesa isn't installed on every dev machine (EGL from libegl1 is), and later
+# mujoco users in the same process (e.g. robosuite via LIBERO) expect EGL too.
+# Pin MUJOCO_GL=egl and preempt-import mujoco here so PyOpenGL locks to
+# EGLPlatform before kinder runs.
+os.environ.setdefault("MUJOCO_GL", "egl")
+os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+try:
+    import mujoco  # pylint: disable=unused-import
+
+    _ = mujoco
+except ImportError:
+    pass  # mujoco is optional; only needed for libero-style downstream use.
+
+# pylint: disable=wrong-import-position
 from typing import Any, SupportsFloat
 
 import gymnasium
@@ -12,6 +31,10 @@ from numpy.typing import NDArray
 from robocode.environments.base_env import BaseEnv
 
 kinder.register_all_environments()
+# Restore the EGL pin (kinder flipped to osmesa) so later robosuite imports
+# in the same process also pick EGL.
+os.environ["MUJOCO_GL"] = "egl"
+os.environ["PYOPENGL_PLATFORM"] = "egl"
 
 
 def _unwrap_to_kinder(env: gymnasium.Env) -> ConstantObjectKinDEREnv:
