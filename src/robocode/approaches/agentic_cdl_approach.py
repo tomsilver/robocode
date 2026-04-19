@@ -18,10 +18,16 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
+from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.mcp import MCP_TOOL_DESCRIPTIONS, MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
 from robocode.primitives import PRIMITIVE_DESCRIPTIONS
+from robocode.utils.backends import (
+    CLAUDE_PROMPT_SUFFIX,
+    OPENCODE_PROMPT_SUFFIX,
+    create_backend,
+)
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -55,7 +61,7 @@ _SYSTEM_PROMPT = (
     "`git add -A && git commit -m '<describe what you changed and why>'`. "
     "Commit often, do not batch everything into one final commit. "
     "You should commit the approach every time before you test it in the environment. "
-    "Use the Task tool to explore source code in parallel — e.g. spawn "
+    "Use subagents to explore source code in parallel, e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially. "
     "TOKEN BUDGET: You have a limited output-token budget per turn. Be concise. "
@@ -300,9 +306,10 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         observation_space: Space[_ObsType],
         seed: int,
         primitives: dict[str, Callable[..., Any]],
+        backend: DictConfig,  # Hydra backend config (backend name, model, etc.)
         env_description_path: str | None = None,
-        model: str = "sonnet",
         max_budget_usd: float = 5.0,
+        max_turns: int = 0,
         output_dir: str = ".",
         load_dir: str | None = None,
         use_docker: bool = False,
@@ -319,8 +326,11 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             primitives,
             env_description_path,
         )
-        self._model = model
+        self._backend_cfg = backend
+        self._backend = create_backend(backend)
+        self._model = backend["model"]
         self._max_budget_usd = max_budget_usd
+        self._max_turns = max_turns
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._use_docker = use_docker
@@ -383,13 +393,15 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             primitives_desc = "`primitives` is an empty dict."
 
         if self._mcp_tools:
+            backend_name = self._backend_cfg["backend"]
+            tool_descs = mcp_tool_descriptions(backend_name)
             mcp_lines = [
                 "\n\nYou also have MCP tools for visual debugging (they do NOT "
                 "affect your test scripts):\n",
             ]
             for name in self._mcp_tools:
-                if name in MCP_TOOL_DESCRIPTIONS:
-                    mcp_lines.append(f"- {MCP_TOOL_DESCRIPTIONS[name]}")
+                if name in tool_descs:
+                    mcp_lines.append(f"- {tool_descs[name]}")
             primitives_desc += "\n".join(mcp_lines)
 
         python_exe = DOCKER_PYTHON if self._use_docker else sys.executable
@@ -437,6 +449,11 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             )
 
         system_prompt = _SYSTEM_PROMPT
+        backend_name = self._backend_cfg["backend"]
+        if backend_name == "opencode":
+            system_prompt += OPENCODE_PROMPT_SUFFIX
+        else:
+            system_prompt += CLAUDE_PROMPT_SUFFIX
         if self._mcp_tools:
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 
@@ -451,6 +468,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                max_turns=self._max_turns,
                 primitive_names=tuple(self._primitives),
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
@@ -466,6 +484,8 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 system_prompt=system_prompt,
                 model=self._model,
                 max_budget_usd=self._max_budget_usd,
+                max_turns=self._max_turns,
+                mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
             )
@@ -481,6 +501,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             result = run_with_rate_limit_retry(
                 docker_config if self._use_docker else None,
                 config if not self._use_docker else None,
+                backend=self._backend,
             )
         finally:
             sandbox_logger.removeHandler(file_handler)

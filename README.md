@@ -13,9 +13,31 @@ cd robocode
 bash install.sh
 ```
 
-### Claude Code CLI setup
+### System prerequisites
 
-The agentic approach requires the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`). Authenticate via one of:
+The following tools are **not** installed by `install.sh` / `uv sync` and must be set up separately:
+
+| Tool | Required for | Install |
+|---|---|---|
+| [Ollama](https://ollama.com/) | Local model serving (Claude + Ollama, OpenCode + Ollama) | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | `claude` backend (default) | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| [OpenCode CLI](https://opencode.ai) | `opencode` backend (multi-provider) | `curl -fsSL https://opencode.ai/install \| bash` |
+| [vLLM](https://docs.vllm.ai/) | Serving models via OpenAI-compatible API | `pip install vllm` (in a separate env) |
+| [Docker](https://www.docker.com/) | Docker sandbox (recommended for isolation) | See [Docker docs](https://docs.docker.com/get-docker/) |
+
+For local model serving with Ollama, pull a model after installing:
+
+```bash
+ollama pull gemma4:31b
+```
+
+### Agent backend setup
+
+The agentic approach supports two backends: **Claude Code CLI** (default) and **OpenCode** (for GPT, Gemini, open-source models via vLLM/Ollama, etc.).
+
+#### Claude Code CLI (default)
+
+The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) is the default backend. Authenticate via one of:
 
 - **Subscription (free usage):** `claude auth login`
 - **API key:** set `ANTHROPIC_API_KEY` in your environment
@@ -30,18 +52,49 @@ The `model` parameter in `agentic.yaml` accepts CLI model aliases or full model 
 | `opus` | `claude-opus-4-6` (latest Opus) |
 | `haiku` | `claude-haiku-4-5-20251001` (latest Haiku) |
 
-Older model versions can also be used by specifying the full ID:
-
-| Full model ID | Description |
-|---|---|
-| `claude-sonnet-4-5-20250929` | Claude Sonnet 4.5 |
-| `claude-opus-4-5-20251101` | Claude Opus 4.5 |
-| `claude-opus-4-1-20250805` | Claude Opus 4.1 |
-| `claude-sonnet-4-20250514` | Claude Sonnet 4 |
-| `claude-opus-4-20250514` | Claude Opus 4 |
-| `claude-3-7-sonnet-20250219` | Claude 3.7 Sonnet |
-
 See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude/models/overview) for the full list.
+
+#### OpenCode (multi-provider)
+
+[OpenCode](https://opencode.ai) supports 75+ providers including OpenAI, Google, Anthropic, and local models served via Ollama or vLLM.
+
+Install: `curl -fsSL https://opencode.ai/install | bash` (also pre-installed in the Docker image).
+
+Authenticate with your provider:
+
+```bash
+# API key (set the appropriate env var for your provider)
+export OPENAI_API_KEY=sk-...
+export GOOGLE_API_KEY=...
+
+# Or use OpenCode's interactive auth
+opencode providers login
+```
+
+Optionally set `ROBOCODE_OPENCODE_CMD` to point to a specific `opencode` binary.
+
+Models use the `provider/model` format:
+
+| Model | Provider |
+|---|---|
+| `openai/gpt-4o` | OpenAI |
+| `google/gemini-2.5-pro` | Google |
+| `anthropic/claude-sonnet-4-5` | Anthropic |
+| `ollama/qwen3.5:latest` | Ollama (local) |
+
+For local models (Ollama, vLLM), create an `opencode.json` config with your provider:
+
+```json
+{
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://localhost:11434/v1" },
+      "models": { "qwen3.5:latest": { "name": "Qwen 3.5" } }
+    }
+  }
+}
+```
 
 ## Environments
 
@@ -101,8 +154,8 @@ The agent runs inside a Docker container (`robocode-sandbox`) that provides full
 | Layer | Mechanism |
 |---|---|
 | Filesystem | Docker bind-mount: agent can only write to `/sandbox` (the run's output dir) |
-| Network | `init-firewall.sh` whitelists `api.anthropic.com`, GitHub IPs, and Claude telemetry; blocks everything else via iptables |
-| Write hook | `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox` |
+| Network | `init-firewall.sh` whitelists API endpoints for the configured provider (Anthropic, OpenAI, Google, etc.), GitHub IPs, and telemetry; blocks everything else via iptables. Extra domains are passed via `ROBOCODE_FIREWALL_EXTRA_DOMAINS`. |
+| Write hook | Claude backend: `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox`. OpenCode backend: `"permission": "allow"` in `opencode.json` (Docker provides the isolation). |
 
 ### What the agent sees
 
@@ -163,12 +216,28 @@ python experiments/analyze_results.py multirun/
 
 ### Agentic approach
 
-The `agentic` approach launches a Claude agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.
+The `agentic` approach launches a coding agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.
 
-By default the agent runs in the Docker sandbox (requires `bash docker/build.sh` once):
+By default the agent uses the Claude Code CLI backend and runs in the Docker sandbox (requires `bash docker/build.sh` once):
+
 ```bash
 python experiments/run_experiment.py approach=agentic environment=motion2d_easy
 ```
+
+To use a different backend/model, override the `approach/backend` config:
+
+```bash
+# GPT-4o via OpenCode
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt4o
+
+# Local Ollama model
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_ollama
+
+# Or override individual fields
+python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro
+```
+
+Available backend presets: `claude_sonnet` (default), `claude_opus`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
 
 To use the legacy OS-level sandbox instead:
 ```bash

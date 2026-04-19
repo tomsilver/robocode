@@ -35,7 +35,7 @@ def _run_behavior(
     raise AssertionError(f"{name} did not finish in {max_steps} steps.")
 
 
-@pytest.mark.parametrize("seed", [9])
+@pytest.mark.parametrize("seed", [0])
 def test_push(seed) -> None:
     """After Push, both buttons should be pressed."""
     kinder.register_all_environments()

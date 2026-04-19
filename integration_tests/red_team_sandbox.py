@@ -21,11 +21,16 @@ import logging
 import shutil
 from pathlib import Path
 
+from omegaconf import DictConfig
+
+from robocode.utils.backends import create_backend
 from robocode.utils.docker_sandbox import (
     DockerSandboxConfig,
     run_agent_in_docker_sandbox,
 )
 from robocode.utils.sandbox import SandboxConfig, SandboxResult, run_agent_in_sandbox
+
+_DEFAULT_BACKEND = create_backend(DictConfig({"backend": "claude", "model": "sonnet"}))
 
 RED_TEAM_DIR = Path("red_team_workdir")
 SANDBOX_DIR = RED_TEAM_DIR / "sandbox"
@@ -158,7 +163,7 @@ async def _run_agent(use_docker: bool, prompt: str) -> SandboxResult:
             max_budget_usd=1.0,
             system_prompt=SYSTEM_PROMPT,
         )
-        return await run_agent_in_docker_sandbox(docker_config)
+        return await run_agent_in_docker_sandbox(docker_config, _DEFAULT_BACKEND)
 
     os_config = SandboxConfig(
         sandbox_dir=SANDBOX_DIR,
@@ -167,7 +172,7 @@ async def _run_agent(use_docker: bool, prompt: str) -> SandboxResult:
         max_budget_usd=1.0,
         system_prompt=SYSTEM_PROMPT,
     )
-    return await run_agent_in_sandbox(os_config)
+    return await run_agent_in_sandbox(os_config, _DEFAULT_BACKEND)
 
 
 async def _run_smoke_test(use_docker: bool) -> None:

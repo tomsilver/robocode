@@ -172,8 +172,8 @@ def create_server(
         ) -> list[str]:
             """Run a full episode of the approach and save frames as PNGs.
 
-            Returns the list of saved PNG file paths. Use a Task subagent to read and
-            analyze the frames — do NOT read them directly to avoid context bloat.
+            Returns the list of saved PNG file paths. Use a subagent to read and analyze
+            the frames — do NOT read them directly to avoid context bloat.
             """
             out = out_dir / f"policy_seed{seed}"
             out.mkdir(parents=True, exist_ok=True)

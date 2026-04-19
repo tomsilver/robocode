@@ -46,7 +46,7 @@ def _obstruction_env():
 
 def test_oracle_solves_episode(obstruction_env: KinderGeom2DEnv):
     """The oracle approach should solve the environment for each seed."""
-    seed = 636
+    seed = 0
     approach = Obstruction2DOracleApproach(
         action_space=obstruction_env.action_space,
         observation_space=obstruction_env.observation_space,

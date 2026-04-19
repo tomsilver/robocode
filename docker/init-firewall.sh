@@ -73,6 +73,28 @@ for domain in \
     done <<< "$ips"
 done
 
+# Whitelist extra domains passed via ROBOCODE_FIREWALL_EXTRA_DOMAINS
+# (comma-separated list, e.g. "api.openai.com,api.groq.com").
+if [ -n "${ROBOCODE_FIREWALL_EXTRA_DOMAINS:-}" ]; then
+    IFS=',' read -ra EXTRA_DOMAINS <<< "$ROBOCODE_FIREWALL_EXTRA_DOMAINS"
+    for domain in "${EXTRA_DOMAINS[@]}"; do
+        domain=$(echo "$domain" | xargs)  # trim whitespace
+        if [ -z "$domain" ]; then
+            continue
+        fi
+        ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
+        if [ -z "$ips" ]; then
+            echo "WARNING: could not resolve extra domain $domain" >&2
+            continue
+        fi
+        while IFS= read -r ip; do
+            if [ -n "$ip" ] && echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+                ipset add allowed-domains "$ip"
+            fi
+        done <<< "$ips"
+    done
+fi
+
 # Allow host network (/24 of the default gateway).
 HOST_IP=$(ip route | grep default | awk '{print $3}' | head -1)
 HOST_NETWORK=$(echo "$HOST_IP" | sed 's/\.[0-9]*$/.0\/24/')

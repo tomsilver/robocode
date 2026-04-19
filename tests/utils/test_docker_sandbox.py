@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from robocode.utils.backends import DEFAULT_BACKEND
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -169,6 +170,7 @@ def test_setup_creates_claude_md(tmp_path: Path) -> None:
     """CLAUDE.md is created and references the Docker Python path."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
+    DEFAULT_BACKEND.setup_sandbox_files(config, docker_python=DOCKER_PYTHON)
     claude_md = config.sandbox_dir / "CLAUDE.md"
     assert claude_md.exists()
     assert DOCKER_PYTHON in claude_md.read_text()
@@ -178,6 +180,7 @@ def test_setup_creates_dot_claude_settings(tmp_path: Path) -> None:
     """.claude/settings.json is created with the PreToolUse hook."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
+    DEFAULT_BACKEND.setup_sandbox_files(config)
     settings = config.sandbox_dir / ".claude" / "settings.json"
     assert settings.exists()
     assert "PreToolUse" in settings.read_text()
@@ -187,6 +190,7 @@ def test_setup_creates_validate_script(tmp_path: Path) -> None:
     """.claude/validate_sandbox.py is created."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
+    DEFAULT_BACKEND.setup_sandbox_files(config)
     assert (config.sandbox_dir / ".claude" / "validate_sandbox.py").exists()
 
 
@@ -265,6 +269,7 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
         primitive_names=("csp", "check_action_collision"),
     )
     _setup_sandbox_dir(config)
+    DEFAULT_BACKEND.setup_sandbox_files(config, docker_python=DOCKER_PYTHON)
     result = _run_in_container(config.sandbox_dir, "ls -a /sandbox")
     assert result.returncode == 0, result.stderr
     listed = set(result.stdout.split())
@@ -378,6 +383,7 @@ def test_container_hook_blocks_write_outside_sandbox(tmp_path: Path) -> None:
     """validate_sandbox.py denies a Write tool call to a path outside /sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
+    DEFAULT_BACKEND.setup_sandbox_files(config)
     result = _run_in_container(
         config.sandbox_dir,
         'echo \'{"tool_name": "Write", "tool_input": {"file_path": "/etc/evil"}}\' '
@@ -391,6 +397,7 @@ def test_container_hook_allows_write_inside_sandbox(tmp_path: Path) -> None:
     """validate_sandbox.py allows a Write tool call to a path inside /sandbox."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
+    DEFAULT_BACKEND.setup_sandbox_files(config)
     bash_cmd = (
         'echo \'{"tool_name": "Write", '
         '"tool_input": {"file_path": "/sandbox/approach.py"}}\''

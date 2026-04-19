@@ -1,0 +1,2 @@
+backend: opencode
+model: openai/gpt-4o-mini
