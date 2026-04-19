@@ -7,3 +7,16 @@
 [submodule "third-party/LIBERO-PRO"]
 	path = third-party/LIBERO-PRO
 	url = https://github.com/uynitsuj/LIBERO-PRO
+[submodule "third-party/robosuite-libero"]
+	path = third-party/robosuite-libero
+	url = https://github.com/Max-Fu/robosuite
+	branch = maxf/egl_context
+[submodule "third-party/sam3"]
+	path = third-party/sam3
+	url = https://github.com/Max-Fu/sam3
+[submodule "third-party/contact_graspnet_pytorch"]
+	path = third-party/contact_graspnet_pytorch
+	url = https://github.com/uynitsuj/contact_graspnet_pytorch
+[submodule "third-party/pyroki"]
+	path = third-party/pyroki
+	url = https://github.com/chungmin99/pyroki

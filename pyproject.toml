@@ -37,14 +37,52 @@ develop = [
     "types-PyYAML",
 ]
 libero = [
+    # LIBERO-PRO benchmark (editable from third-party/LIBERO-PRO).
     "libero",
-    "robosuite==1.4.0",
+    # robosuite fork with EGL offscreen context, used by LIBERO.
+    "robosuite",
+    # LIBERO + cap-x pinned runtime deps.
     "bddl==1.0.1",
     "robomimic==0.2.0",
     "gym==0.25.2",
+    "easydict==1.9",
+    "einops==0.4.1",
+    "thop==0.1.1-2209072238",
+    "future==0.18.2",
+    "cloudpickle==2.1.0",
+    "scikit-learn",
     "mujoco",
-    "future",
-    "easydict",
+    # cap-x itself (editable from third-party/cap-x).
+    "capx",
+    # cap-x base deps needed to run its LIBERO launch.py + CaP-Agent0 servers
+    # (pyroki/sam3/contact_graspnet are listed here so our [tool.uv.sources]
+    # overrides pick up our top-level submodules rather than cap-x's nested ones).
+    "pyroki",
+    "sam3",
+    "contact_graspnet_pytorch",
+    "ray==2.48.0",
+    "fastapi",
+    "uvicorn",
+    "transformers",
+    "openai",
+    "pyrender",
+    "opencv-python-headless",
+    "pillow>=10",
+    "msgpack_numpy",
+    "mediapy>=1.2.5",
+    "tyro>=0.8.5",
+    "pydantic>=2.7",
+    "rich>=13.7",
+    "decord",
+    "pycocotools",
+    "h5py",
+    "tqdm",
+    "open3d",
+    "robot_descriptions>=1.16.0",
+    "yourdfpy>=0.0.56",
+    "viser>=0.2.0",
+    "trimesh>=4.4.0",
+    "requests",
 ]
 
 [tool.setuptools.packages.find]
@@ -78,6 +116,34 @@ exclude = ["venv/*", ".venv/*", "outputs/*", "third-party/*"]
 [tool.uv.sources]
 kindergarden = { path = "third-party/kindergarden", editable = true }
 libero = { path = "third-party/LIBERO-PRO", editable = true }
+robosuite = { path = "third-party/robosuite-libero", editable = true }
+capx = { path = "third-party/cap-x", editable = true }
+sam3 = { path = "third-party/sam3", editable = true }
+pyroki = { path = "third-party/pyroki", editable = true }
+contact_graspnet_pytorch = { path = "third-party/contact_graspnet_pytorch", editable = true }
+
+# Mirror cap-x's override-dependencies so our resolver picks the same pins
+# cap-x uses internally (otherwise e.g. numpy 2.x breaks robomimic).
+[tool.uv]
+override-dependencies = [
+    "transformers<5.0",
+    "PyOpenGL==3.1.6",
+    "PyOpenGL-accelerate==3.1.6",
+    "numpy==1.26.4",
+    "opencv-python-headless<4.13",
+    "jax<0.4.30",
+    "jaxlib<0.4.30",
+]
+
+# Some third-party packages forget to declare numpy / torch as build-time deps.
+# Mirror cap-x's extra-build-dependencies so editable builds succeed.
+[tool.uv.extra-build-dependencies]
+egl-probe = ["cmake<3.27"]
+pointnet2 = ["torch"]
+knn = ["torch"]
+flash-attn = ["torch"]
+contact-graspnet-pytorch = ["numpy"]
+nvidia-curobo = ["torch"]
 
 [[tool.mypy.overrides]]
 module = [
