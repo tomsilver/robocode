@@ -14,9 +14,9 @@ provides:
   pre-installed in ``/robocode/.venv`` via ``uv sync --frozen``.
 * **Primitive source files** -- ``src/robocode/primitives/*.py`` are copied
   into ``/sandbox/primitives/`` so the agent can read their API.
-* **prpl-mono bind-mount** -- the current submodule is mounted read-only at
-  ``/robocode/prpl-mono/``, overriding the stale in-image copy without
-  requiring an image rebuild.
+* **kindergarden bind-mount** -- the ``third-party/kindergarden`` submodule
+  is mounted read-only at ``/robocode/third-party/kindergarden/``, overriding
+  the stale in-image copy without requiring an image rebuild.
 
 Usage
 -----
@@ -118,10 +118,10 @@ def _find_repo_root() -> Path:
     )
 
 
-def _copy_prpl_mono_without_tests(prpl_mono: Path, dest: Path) -> None:
-    """Copy ``prpl-mono`` to *dest*, skipping ``tests/`` and ``docs/``."""
+def _copy_kindergarden_without_tests(kindergarden: Path, dest: Path) -> None:
+    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``."""
     shutil.copytree(
-        prpl_mono,
+        kindergarden,
         dest,
         ignore=shutil.ignore_patterns("tests", "docs"),
     )
@@ -245,7 +245,8 @@ async def run_agent_in_docker_sandbox(
     Steps
     -----
     1. Calls :func:`_setup_sandbox_dir` to populate the sandbox directory.
-    2. Resolves the ``prpl-mono`` submodule path from the repo root.
+    2. Resolves the ``third-party/kindergarden`` submodule path from the repo
+       root.
     3. Launches ``docker run`` with:
 
        * ``--cap-add=NET_ADMIN --cap-add=NET_RAW`` for the iptables firewall
@@ -253,7 +254,7 @@ async def run_agent_in_docker_sandbox(
          bind-mount, or OpenCode ``~/.local/share/opencode`` / API key env
          vars)
        * ``-v <sandbox_dir>:/sandbox`` (writable bind-mount)
-       * ``-v <prpl_mono>:/robocode/prpl-mono:ro`` (read-only bind-mount)
+       * ``-v <kindergarden>:/robocode/third-party/kindergarden:ro`` (read-only)
        * ``-w /sandbox`` as the working directory
        * The container's entrypoint runs ``init-firewall.sh`` then the
          agent CLI command
@@ -280,10 +281,10 @@ async def run_agent_in_docker_sandbox(
     _setup_sandbox_dir(config)
 
     repo_root = _find_repo_root()
-    prpl_mono = repo_root / "prpl-mono"
-    if not prpl_mono.exists():
+    kindergarden = repo_root / "third-party" / "kindergarden"
+    if not kindergarden.exists():
         raise RuntimeError(
-            f"prpl-mono not found at {prpl_mono}; "
+            f"kindergarden not found at {kindergarden}; "
             "run: git submodule update --init --recursive"
         )
 
@@ -291,14 +292,14 @@ async def run_agent_in_docker_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    # Create filtered copies: prpl-mono without tests, src without oracles.
+    # Create filtered copies: kindergarden without tests, src without oracles.
     tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
-    filtered_prpl_mono = Path(tmp_dir) / "prpl-mono"
+    filtered_kindergarden = Path(tmp_dir) / "kindergarden"
     filtered_src = Path(tmp_dir) / "src"
     try:
-        _copy_prpl_mono_without_tests(prpl_mono, filtered_prpl_mono)
+        _copy_kindergarden_without_tests(kindergarden, filtered_kindergarden)
         _copy_src_without_oracles(src_dir, filtered_src)
-        prpl_mono_abs = str(filtered_prpl_mono.resolve())
+        kindergarden_abs = str(filtered_kindergarden.resolve())
         src_abs = str(filtered_src.resolve())
 
         # --- Authentication ---
@@ -339,7 +340,7 @@ async def run_agent_in_docker_sandbox(
             "-v",
             f"{src_abs}:/robocode/src",
             "-v",
-            f"{prpl_mono_abs}:/robocode/prpl-mono",
+            f"{kindergarden_abs}:/robocode/third-party/kindergarden",
             "-w",
             "/sandbox",
             config.docker_image,
