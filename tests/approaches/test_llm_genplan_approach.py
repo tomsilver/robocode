@@ -31,6 +31,9 @@ class _ToyEnv(Env):
         obs = np.array([self._pos], dtype=np.float32)
         return obs, -1.0, self._pos >= 3.0, False, {}
 
+    def render(self):
+        return None
+
 
 class _FakeClient:
     """Returns canned responses in order, recording the messages it saw."""
@@ -40,6 +43,7 @@ class _FakeClient:
         self.calls = []
 
     def complete(self, messages):
+        """Record the roles seen and return the next canned response."""
         self.calls.append([m["role"] for m in messages])
         return LLMResponse(text=self._responses.pop(0), cost_usd=0.01)
 
