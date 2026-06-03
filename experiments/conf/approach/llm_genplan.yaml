@@ -1,0 +1,12 @@
+defaults:
+  - completion: anthropic_sonnet
+
+_target_: robocode.approaches.llm_genplan_approach.LLMGenPlanApproach
+output_dir: ${hydra:runtime.output_dir}
+load_dir: null
+# Defaults follow Silver et al. 2023.
+num_train_tasks: 10
+num_prompt_tasks: 2
+max_debug_attempts: 4
+skip_chain_of_thought: false
+episode_timeout_s: 30.0

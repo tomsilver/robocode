@@ -75,6 +75,8 @@ def _main(cfg: DictConfig) -> float:
         env_description_path=env_description_path,
         mcp_tools=mcp_tools,
         env_name=env_name,
+        env=env,
+        max_steps=cfg.max_steps,
     )
 
     task_rng = np.random.default_rng(cfg.seed)

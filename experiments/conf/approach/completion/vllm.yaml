@@ -1,0 +1,4 @@
+provider: openai_compatible
+model: Qwen/Qwen2.5-Coder-32B-Instruct
+base_url: http://localhost:8000/v1
+api_key_env: ""

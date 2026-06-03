@@ -1,0 +1,7 @@
+# Experimental: drives the Claude CLI single-shot with tools disabled. Not a
+# perfectly faithful plain LLM (an irreducible ~2k-token system prompt remains);
+# prefer the SDK providers when possible.
+provider: cli
+model: sonnet
+base_url: ""
+auth_token: ollama
