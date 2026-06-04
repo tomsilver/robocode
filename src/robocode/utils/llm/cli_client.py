@@ -1,12 +1,8 @@
 """Claude CLI driven as a plain LLM (experimental, best-effort non-agentic).
 
-Runs ``claude -p`` single-shot with tools disabled and the system prompt
-minimized, so it behaves as closely as possible to a normal completion API.
-
-Caveat: the Claude CLI keeps an irreducible baseline system prompt (~2k
-tokens) that cannot be removed via flags, so this is NOT a perfectly faithful
-plain-LLM path. The SDK clients (anthropic/openai) inject zero system prompt
-and are the faithful default; prefer those when possible.
+Runs ``claude -p`` single-shot with tools and system prompt stripped. The CLI
+keeps an irreducible ~2k-token system prompt, so prefer the SDK clients
+(anthropic/openai) when a faithful plain LLM is needed.
 """
 
 from __future__ import annotations
@@ -30,9 +26,6 @@ class ClaudeCLIClient:
         self._auth_token = cfg.get("auth_token", "ollama")
         self._ollama_keep_alive = cfg.get("ollama_keep_alive", "")
         self._timeout_s = cfg.get("request_timeout_s", 1200.0)
-        # Extended-thinking budget. 0 (default) disables it: one-shot code
-        # generation does not need it, and it adds latency and worsens
-        # throttling. Raise it to let the model think.
         self._max_thinking_tokens = cfg.get("max_thinking_tokens", 0)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
@@ -59,10 +52,7 @@ class ClaudeCLIClient:
                 self._base_url, self._auth_token, self._ollama_keep_alive
             )
         )
-        # Feed the prompt via stdin, NOT as a CLI argument: with the env source
-        # and debug history it can exceed the OS per-argument limit
-        # (MAX_ARG_STRLEN, 128KB -> "Argument list too long"). `claude -p` reads
-        # the query from stdin, which also avoids the stdin-wait hang.
+        # Prompt via stdin, not argv: it can exceed the OS per-arg limit (128KB).
         result = subprocess.run(
             args,
             env=env,
@@ -77,9 +67,5 @@ class ClaudeCLIClient:
 
 
 def _flatten(messages: list[dict[str, str]]) -> str:
-    """Collapse a multi-turn history into one prompt string.
-
-    The CLI ``-p`` mode is stateless, so the framework-owned conversation is
-    replayed as labeled turns each call.
-    """
+    """Collapse the multi-turn history into one prompt for the stateless CLI."""
     return "\n\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)

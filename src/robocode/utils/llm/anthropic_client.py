@@ -15,9 +15,7 @@ _MAX_TOKENS = 8192
 class AnthropicClient:
     """Single-shot completions via the Anthropic Messages API.
 
-    ``model`` must be a full API id (e.g. ``claude-sonnet-4-6``). An optional
-    ``base_url`` points at an Anthropic-compatible endpoint; ``api_key_env``
-    names the environment variable holding the API key.
+    ``model`` is a full API id (e.g. ``claude-sonnet-4-6``).
     """
 
     def __init__(self, cfg: DictConfig) -> None:

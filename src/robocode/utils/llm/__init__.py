@@ -1,14 +1,8 @@
-"""Pure LLM completion clients.
+"""Pure LLM completion clients: one model API call (no tools, no agent loop),
+unlike ``robocode.utils.backends`` which drives an autonomous coding agent.
 
-A completion client is a single model API call (messages in, one text response
-out), with no tools and no agent loop -- the caller drives the conversation.
-This is distinct from ``robocode.utils.backends``, which spawns an autonomous
-coding agent (Claude Code / OpenCode CLI) that reads, writes, and runs code.
-
-Providers (selected by ``cfg.provider``):
-    - ``anthropic``: Anthropic Messages API (faithful plain LLM)
-    - ``openai_compatible``: OpenAI ``/v1`` API, incl. vLLM and Ollama
-    - ``cli``: Claude CLI single-shot, no tools (experimental, see cli_client)
+Providers (``cfg.provider``): ``anthropic``, ``openai_compatible`` (vLLM/Ollama),
+``cli`` (experimental).
 """
 
 from omegaconf import DictConfig

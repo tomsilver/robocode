@@ -20,8 +20,7 @@ class OpenAICompatibleClient:
     def __init__(self, cfg: DictConfig) -> None:
         self._model = cfg["model"]
         self._base_url = cfg.get("base_url", "") or None
-        # Local servers (vLLM/Ollama) often need no real key; default to a
-        # placeholder so the SDK is happy.
+        # Local servers (vLLM/Ollama) usually need no real key.
         api_key_env = cfg.get("api_key_env", "")
         self._api_key = os.environ.get(api_key_env, "") if api_key_env else "EMPTY"
         if self._base_url and "11434" in self._base_url:

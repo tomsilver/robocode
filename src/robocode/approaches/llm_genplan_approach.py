@@ -131,9 +131,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         for t in range(self._max_debug_attempts + 1):
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
-            # Each response is a complete GeneratedApproach class, so the latest
-            # one replaces the previous. Do NOT accumulate: appending would stack
-            # several class definitions in approach.py (only the last would run).
+            # Overwrite, don't accumulate: each response is a full class.
             approach_path.write_text(_parse_python_code(response))
 
             failure = self._validate(approach_path, train_seeds)
@@ -275,8 +273,7 @@ def _run_episode_worker(
 ) -> None:
     """Run one episode in a subprocess and classify the outcome.
 
-    The single try/except here is deliberate: it turns a crash in generated code into
-    structured LLM feedback (the point of the debugging loop).
+    The try/except is deliberate: a crash in generated code becomes LLM feedback.
     """
     try:
         approach = load_generated_approach(

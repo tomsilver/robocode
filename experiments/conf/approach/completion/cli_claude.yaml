@@ -1,11 +1,5 @@
-# Experimental: drives the Claude CLI single-shot with tools disabled. Not a
-# perfectly faithful plain LLM (an irreducible ~2k-token system prompt remains);
-# prefer the SDK providers when possible.
+# Experimental: drives the Claude CLI single-shot. Prefer the SDK providers.
 provider: cli
 model: sonnet
-base_url: ""
-auth_token: ollama
-# Per-call CLI timeout (seconds); the subscription CLI throttles batched calls.
 request_timeout_s: 1200.0
-# Extended-thinking token budget; 0 disables thinking (faster, less throttling).
-max_thinking_tokens: 0
+max_thinking_tokens: 0  # 0 disables extended thinking

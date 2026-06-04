@@ -1,9 +1,6 @@
-"""Pure LLM completion interface.
-
-This is a single model API call (messages in, one text response out) -- NOT
-an agent. There are no tools, no file access, and no multi-turn tool-use loop;
-the caller owns the conversation. Contrast with ``robocode.utils.backends``,
-which drives an autonomous coding agent (Claude Code / OpenCode CLI).
+"""Pure LLM completion interface: one model API call (messages in, text out),
+no tools and no agent loop. Contrast with ``robocode.utils.backends``, which
+drives an autonomous coding agent.
 """
 
 from __future__ import annotations
