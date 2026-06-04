@@ -29,9 +29,11 @@ class ClaudeCLIClient:
         self._base_url = cfg.get("base_url", "")
         self._auth_token = cfg.get("auth_token", "ollama")
         self._ollama_keep_alive = cfg.get("ollama_keep_alive", "")
-        # Generous: the subscription CLI throttles batched calls, so allow long
-        # waits, but still fail loudly rather than hang forever.
         self._timeout_s = cfg.get("request_timeout_s", 1200.0)
+        # Extended-thinking budget. 0 (default) disables it: one-shot code
+        # generation does not need it, and it adds latency and worsens
+        # throttling. Raise it to let the model think.
+        self._max_thinking_tokens = cfg.get("max_thinking_tokens", 0)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
         """Return the model's reply to a message list."""
@@ -48,10 +50,8 @@ class ClaudeCLIClient:
             "--system-prompt",
             "",
             "--exclude-dynamic-system-prompt-sections",
-            # Disable extended thinking: it adds latency/tokens we don't need for
-            # one-shot code generation and worsens throttling.
             "--max-thinking-tokens",
-            "0",
+            str(self._max_thinking_tokens),
         ]
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
         env.update(

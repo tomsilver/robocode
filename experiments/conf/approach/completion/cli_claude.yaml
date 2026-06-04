@@ -5,3 +5,7 @@ provider: cli
 model: sonnet
 base_url: ""
 auth_token: ollama
+# Per-call CLI timeout (seconds); the subscription CLI throttles batched calls.
+request_timeout_s: 1200.0
+# Extended-thinking token budget; 0 disables thinking (faster, less throttling).
+max_thinking_tokens: 0
