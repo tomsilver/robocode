@@ -53,8 +53,17 @@ class ClaudeCLIClient:
                 self._base_url, self._auth_token, self._ollama_keep_alive
             )
         )
+        # stdin=DEVNULL (as the agentic backend does): `claude -p` treats stdin
+        # as an optional input channel and blocks waiting on it when stdin is an
+        # inherited open pipe (e.g. a background/non-TTY run); DEVNULL gives it
+        # immediate EOF so it proceeds.
         result = subprocess.run(
-            args, env=env, capture_output=True, text=True, check=True
+            args,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         data = json.loads(result.stdout)
         return LLMResponse(text=data["result"], cost_usd=data.get("total_cost_usd"))
