@@ -109,7 +109,11 @@ def test_debug_loop_fixes_broken_policy(tmp_path):
 
     # Two completions: the broken attempt, then the fix after feedback.
     assert len(client.calls) == 2
-    assert (tmp_path / "sandbox" / "approach.py").exists()
+    approach_py = (tmp_path / "sandbox" / "approach.py").read_text()
+    # The fix must REPLACE the broken code, not be appended to it: exactly one
+    # GeneratedApproach class should remain (regression guard for accumulation).
+    assert approach_py.count("class GeneratedApproach") == 1
+    assert "[1.0]" in approach_py and "[0.0]" not in approach_py
 
     # The loaded policy solves the env.
     state, info = env.reset(seed=42)

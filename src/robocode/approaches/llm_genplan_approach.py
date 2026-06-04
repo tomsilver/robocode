@@ -128,12 +128,13 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self._exchange(messages, _STRATEGY_PROMPT, sandbox_dir, 1)
             messages.append({"role": "user", "content": _INTERFACE_SPEC})
 
-        code = ""
         for t in range(self._max_debug_attempts + 1):
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
-            code = (code + "\n\n\n" + _parse_python_code(response)).strip()
-            approach_path.write_text(code)
+            # Each response is a complete GeneratedApproach class, so the latest
+            # one replaces the previous. Do NOT accumulate: appending would stack
+            # several class definitions in approach.py (only the last would run).
+            approach_path.write_text(_parse_python_code(response))
 
             failure = self._validate(approach_path, train_seeds)
             if failure is None:
@@ -143,7 +144,13 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 break
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
             messages.append(
-                {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
+                {
+                    "role": "user",
+                    "content": (
+                        f"{failure['feedback']}\nFix the code. Return the complete, "
+                        "corrected GeneratedApproach class as a single code block."
+                    ),
+                }
             )
 
         self._load_generated(approach_path)
