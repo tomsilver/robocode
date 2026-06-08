@@ -216,9 +216,10 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             ),
         )
         proc.start()
+        assert proc.pid is not None
         proc.join(self._episode_timeout_s)
         if proc.is_alive():
-            os.kill(proc.pid, signal.SIGINT)  # type: ignore[arg-type]
+            os.kill(proc.pid, signal.SIGINT)
             proc.join(3)
             if proc.is_alive():
                 proc.kill()
@@ -323,7 +324,9 @@ def _gather_env_source(env: gymnasium.Env) -> str:
     """Best-effort bundle of the env's local source (robocode + kinder)."""
     files: list[Path] = []
     for obj, package in _source_targets(env):
-        src = Path(inspect.getsourcefile(type(obj)))  # type: ignore[arg-type]
+        source_file = inspect.getsourcefile(type(obj))
+        assert source_file is not None
+        src = Path(source_file)
         root = src.parents[len(type(obj).__module__.split(".")) - 1]
         files.extend(collect_local_deps(src, root, package))
     seen: set[Path] = set()
@@ -347,8 +350,9 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
 
 def _render_state(observation_space: Space[Any], obs: Any) -> str:
     """Human-readable view of an observation (object-centric if possible)."""
-    if hasattr(observation_space, "devectorize"):
-        return str(observation_space.devectorize(obs))  # type: ignore[attr-defined]
+    devectorize = getattr(observation_space, "devectorize", None)
+    if devectorize is not None:
+        return str(devectorize(obs))
     return repr(obs)
 
 

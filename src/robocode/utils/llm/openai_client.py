@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+import openai
 from omegaconf import DictConfig
 
 from robocode.utils.backends.ollama_server import ensure_ollama
@@ -28,8 +29,6 @@ class OpenAICompatibleClient:
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
         """Return the model's reply to a message list."""
-        import openai  # pylint: disable=import-outside-toplevel,import-error
-
         client = openai.OpenAI(api_key=self._api_key, base_url=self._base_url)
         response = client.chat.completions.create(
             model=self._model,

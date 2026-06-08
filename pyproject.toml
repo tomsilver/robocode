@@ -23,6 +23,8 @@ dependencies = [
    "scipy-stubs",
    "imageio",
    "mcp[cli]",
+   "anthropic",
+   "openai",
 ]
 
 [project.optional-dependencies]
@@ -46,13 +48,6 @@ libero = [
     "future",
     "easydict",
 ]
-# Direct LLM API clients for the llm_genplan baseline. Optional: the CLI
-# completion provider needs neither package.
-llm = [
-    "anthropic",
-    "openai",
-]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -93,9 +88,5 @@ module = [
     "pybullet_utils.*",
     "libero.*",
     "mujoco.*",
-    "anthropic",
-    "anthropic.*",
-    "openai",
-    "openai.*",
 ]
 ignore_missing_imports = true

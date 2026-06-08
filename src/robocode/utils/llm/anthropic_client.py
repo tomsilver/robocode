@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import anthropic
 from omegaconf import DictConfig
 
 from robocode.utils.llm.base import LLMResponse
@@ -26,8 +27,6 @@ class AnthropicClient:
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
         """Return the model's reply to a message list."""
-        import anthropic  # pylint: disable=import-outside-toplevel,import-error
-
         client = anthropic.Anthropic(api_key=self._api_key, base_url=self._base_url)
         response = client.messages.create(
             model=self._model,

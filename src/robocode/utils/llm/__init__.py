@@ -5,36 +5,30 @@ Providers (``cfg.provider``): ``anthropic``, ``openai_compatible`` (vLLM/Ollama)
 ``cli`` (experimental).
 """
 
+from collections.abc import Callable
+
 from omegaconf import DictConfig
 
+from robocode.utils.llm.anthropic_client import AnthropicClient
 from robocode.utils.llm.base import LLMClient, LLMResponse
+from robocode.utils.llm.cli_client import ClaudeCLIClient
+from robocode.utils.llm.openai_client import OpenAICompatibleClient
 
 __all__ = ["LLMClient", "LLMResponse", "create_llm_client"]
+
+_CLIENTS: dict[str, Callable[[DictConfig], LLMClient]] = {
+    "anthropic": AnthropicClient,
+    "openai_compatible": OpenAICompatibleClient,
+    "cli": ClaudeCLIClient,
+}
 
 
 def create_llm_client(cfg: DictConfig) -> LLMClient:
     """Instantiate a completion client from a config mapping."""
-    # Imports are local so optional SDK dependencies load only when used.
     provider = cfg["provider"]
-    if provider == "anthropic":
-        from robocode.utils.llm.anthropic_client import (  # pylint: disable=import-outside-toplevel
-            AnthropicClient,
+    if provider not in _CLIENTS:
+        raise ValueError(
+            f"Unknown completion provider {provider!r}. "
+            f"Expected one of {sorted(_CLIENTS)}."
         )
-
-        return AnthropicClient(cfg)
-    if provider == "openai_compatible":
-        from robocode.utils.llm.openai_client import (  # pylint: disable=import-outside-toplevel
-            OpenAICompatibleClient,
-        )
-
-        return OpenAICompatibleClient(cfg)
-    if provider == "cli":
-        from robocode.utils.llm.cli_client import (  # pylint: disable=import-outside-toplevel
-            ClaudeCLIClient,
-        )
-
-        return ClaudeCLIClient(cfg)
-    raise ValueError(
-        f"Unknown completion provider {provider!r}. Expected "
-        "'anthropic', 'openai_compatible', or 'cli'."
-    )
+    return _CLIENTS[provider](cfg)
