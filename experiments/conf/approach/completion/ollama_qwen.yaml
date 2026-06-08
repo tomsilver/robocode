@@ -1,4 +1,4 @@
 provider: openai_compatible
-model: qwen2.5-coder:32b
+model: qwen3.6
 base_url: http://localhost:11434/v1
 api_key_env: ""
