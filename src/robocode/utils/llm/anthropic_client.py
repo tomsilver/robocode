@@ -9,21 +9,19 @@ from omegaconf import DictConfig
 
 from robocode.utils.llm.base import LLMResponse
 
-# Anthropic recommends an explicit max_tokens; generated policies are short.
-_MAX_TOKENS = 8192
-
 
 class AnthropicClient:
     """Single-shot completions via the Anthropic Messages API.
 
-    ``model`` is a full API id (e.g. ``claude-sonnet-4-6``).
+    ``model`` is a full API id (e.g. ``claude-sonnet-4-6``). The Messages API
+    requires an explicit ``max_tokens``; set it via ``max_tokens`` in the config.
     """
 
     def __init__(self, cfg: DictConfig) -> None:
         self._model = cfg["model"]
         self._base_url = cfg.get("base_url", "") or None
         self._api_key = os.environ[cfg.get("api_key_env", "ANTHROPIC_API_KEY")]
-        self._max_tokens = cfg.get("max_tokens", _MAX_TOKENS)
+        self._max_tokens = cfg.get("max_tokens", 32000)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
         """Return the model's reply to a message list."""
