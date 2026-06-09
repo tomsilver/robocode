@@ -11,7 +11,7 @@ from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
 from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
-from robocode.primitives import PRIMITIVE_DESCRIPTIONS
+from robocode.primitives import format_primitives_description
 from robocode.utils.backends import (
     CLAUDE_PROMPT_SUFFIX,
     OPENCODE_PROMPT_SUFFIX,
@@ -251,21 +251,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         # Build the prompt. If we have an env description, inline it so the
         # agent knows exactly which environment to target.  Otherwise fall
         # back to asking the agent to read source files.
-        if self._primitives:
-            lines = ["`primitives` is a dict with these callables:\n"]
-            for name in sorted(self._primitives):
-                desc = PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
-                lines.append(f"- {desc}")
-            primitives_desc = "\n".join(lines)
-            names = ", ".join(f"`{n}`" for n in sorted(self._primitives))
-            primitives_desc += (
-                f"\n\nIMPORTANT: Your approach MUST use the following "
-                f"primitives: {names}. These are essential for solving "
-                f"this environment. Read their descriptions above and "
-                f"integrate them into your solution."
-            )
-        else:
-            primitives_desc = "`primitives` is an empty dict."
+        primitives_desc = format_primitives_description(list(self._primitives))
 
         if self._mcp_tools:
             backend_name = self._backend_cfg["backend"]

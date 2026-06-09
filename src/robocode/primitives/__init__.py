@@ -96,3 +96,23 @@ def build_primitives(env: Any, names: list[str] | tuple[str, ...]) -> dict[str, 
     """Build a primitives dict containing only the requested *names*."""
     all_prims = _all_primitives(env)
     return {name: all_prims[name] for name in names}
+
+
+def format_primitives_description(names: list[str]) -> str:
+    """Markdown describing the ``primitives`` dict passed to GeneratedApproach.
+
+    Shared by the agentic and llm_genplan prompts so both describe primitives the same
+    way.
+    """
+    if not names:
+        return "`primitives` is an empty dict."
+    lines = ["`primitives` is a dict with these callables:\n"]
+    for name in sorted(names):
+        lines.append(f"- {PRIMITIVE_DESCRIPTIONS.get(name, f'`{name}`')}")
+    listed = ", ".join(f"`{n}`" for n in sorted(names))
+    lines.append(
+        f"\nIMPORTANT: Your approach MUST use the following primitives: {listed}. "
+        "These are essential for solving this environment. Read their descriptions "
+        "above and integrate them into your solution."
+    )
+    return "\n".join(lines)
