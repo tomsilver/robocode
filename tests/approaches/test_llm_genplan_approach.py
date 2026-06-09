@@ -95,6 +95,7 @@ def _make_approach(env, client, tmp_path):
         num_prompt_tasks=1,
         max_debug_attempts=4,
         skip_chain_of_thought=True,
+        use_docker=False,
     )
     approach._client = client  # pylint: disable=protected-access
     return approach

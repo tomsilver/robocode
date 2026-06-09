@@ -46,6 +46,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from robocode.primitives import PRIMITIVE_NAME_TO_FILE
 from robocode.utils.backends import PROVIDERS, AgentBackend, firewall_domains_for_model
@@ -127,18 +128,84 @@ def _copy_kindergarden_without_tests(kindergarden: Path, dest: Path) -> None:
     )
 
 
-def _copy_src_without_oracles(src: Path, dest: Path) -> None:
-    """Copy ``src/`` to *dest*, skipping ``oracles/`` and ``primitives/``.
+def run_genplan_in_docker(
+    sandbox_dir: Path,
+    completion_cfg: dict[str, Any],
+    image: str = _DEFAULT_IMAGE,
+    timeout: float = 3600.0,
+) -> None:
+    """Run the whole LLM-GenPlan loop inside one sandbox container.
 
-    Both directories contain solution code that must not be exposed to
-    the agent.  Primitive source files are selectively copied into the
-    sandbox via :func:`_setup_sandbox_dir` instead.
+    Mirrors :func:`run_agent_in_docker_sandbox` (single ``docker run`` through
+    the firewall + ``uv sync`` entrypoint) but the command is the genplan driver
+    instead of the agent CLI. The driver reads ``sandbox_dir/genplan_config.json``
+    and writes ``sandbox_dir/approach.py``. ``src`` keeps ``primitives`` (unlike
+    the agent mount) so the policy can build/use them as it does at eval.
     """
-    shutil.copytree(
-        src,
-        dest,
-        ignore=shutil.ignore_patterns("oracles", "primitives"),
-    )
+    repo_root = _find_repo_root()
+    kindergarden = repo_root / "third-party" / "kindergarden"
+    if not kindergarden.exists():
+        raise RuntimeError(
+            f"kindergarden not found at {kindergarden}; "
+            "run: git submodule update --init --recursive"
+        )
+    tmp_dir = tempfile.mkdtemp(prefix="robocode-genplan-")
+    filtered_src = Path(tmp_dir) / "src"
+    filtered_kindergarden = Path(tmp_dir) / "kindergarden"
+    container_name = f"robocode-genplan-{uuid.uuid4().hex[:8]}"
+    try:
+        _copy_src(repo_root / "src", filtered_src, keep_primitives=True)
+        _copy_kindergarden_without_tests(kindergarden, filtered_kindergarden)
+        # Reuse the agent auth: the cli provider needs Claude OAuth/~/.claude;
+        # the SDK providers just need their API key forwarded (the non-claude
+        # branch forwards ANTHROPIC_API_KEY/OPENAI_API_KEY).
+        auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
+        auth_args, auth_env = _build_docker_auth_args(auth_backend)
+        docker_cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--cap-add=NET_ADMIN",
+            "--cap-add=NET_RAW",
+            *auth_args,
+            "-v",
+            f"{sandbox_dir.resolve()}:/sandbox",
+            "-v",
+            f"{filtered_src.resolve()}:/robocode/src",
+            "-v",
+            f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
+            "-w",
+            "/sandbox",
+            image,
+            DOCKER_PYTHON,
+            "-m",
+            "robocode.approaches.genplan_driver",
+        ]
+        logger.info("Starting genplan Docker container %s", container_name)
+        subprocess.run(
+            docker_cmd,
+            env={**os.environ, **auth_env},
+            stdin=subprocess.DEVNULL,
+            check=True,
+            timeout=timeout,
+        )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _copy_src(src: Path, dest: Path, *, keep_primitives: bool = False) -> None:
+    """Copy ``src/`` to *dest*, always skipping ``oracles/`` (solution code).
+
+    The agent mount also skips ``primitives/`` so the author cannot read all
+    primitive solutions (it gets only the requested files via
+    :func:`_setup_sandbox_dir`). The genplan container sets ``keep_primitives``
+    so its driver can call ``build_primitives`` in-container exactly as eval does
+    on the host -- it is non-agentic, so there is no author to expose them to.
+    """
+    skip = ("oracles",) if keep_primitives else ("oracles", "primitives")
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
 
 
 @dataclass(frozen=True)
@@ -298,7 +365,7 @@ async def run_agent_in_docker_sandbox(
     filtered_src = Path(tmp_dir) / "src"
     try:
         _copy_kindergarden_without_tests(kindergarden, filtered_kindergarden)
-        _copy_src_without_oracles(src_dir, filtered_src)
+        _copy_src(src_dir, filtered_src)
         kindergarden_abs = str(filtered_kindergarden.resolve())
         src_abs = str(filtered_src.resolve())
 

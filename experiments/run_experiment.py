@@ -76,6 +76,9 @@ def _main(cfg: DictConfig) -> float:
         mcp_tools=mcp_tools,
         env_name=env_name,
         env=env,
+        # JSON (not the DictConfig) so hydra.utils.instantiate doesn't recursively
+        # instantiate it; the llm_genplan docker driver rebuilds the env from it.
+        env_cfg=json.dumps(OmegaConf.to_container(cfg.environment, resolve=True)),
         max_steps=cfg.max_steps,
     )
 

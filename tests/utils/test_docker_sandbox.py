@@ -34,7 +34,7 @@ from robocode.utils.backends import DEFAULT_BACKEND
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
-    _copy_src_without_oracles,
+    _copy_src,
     _find_repo_root,
     _setup_sandbox_dir,
 )
@@ -90,7 +90,7 @@ def _run_in_container(
 
     tmp_dir = tempfile.mkdtemp(prefix="robocode-test-src-")
     filtered_src = Path(tmp_dir) / "src"
-    _copy_src_without_oracles(repo_root / "src", filtered_src)
+    _copy_src(repo_root / "src", filtered_src)
 
     prefix = (
         "cd /robocode && uv sync --frozen --python python3.11 && cd /sandbox && "

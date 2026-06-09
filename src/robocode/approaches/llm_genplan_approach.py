@@ -11,22 +11,22 @@ writes and self-tests the policy with tools.
 from __future__ import annotations
 
 import inspect
+import json
 import logging
-import multiprocessing as mp
-import os
-import signal
-import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import gymnasium
 from gymnasium.spaces import Space
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.primitives import format_primitives_description
+from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
-from robocode.utils.llm import LLMResponse, create_llm_client
+from robocode.utils.genplan_validate import render_state, validate_tasks
+from robocode.utils.llm import LLMClient, LLMResponse, create_llm_client
 from robocode.utils.source_deps import collect_local_deps
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         primitives: dict[str, Callable[..., Any]],
         completion: DictConfig,
         env: gymnasium.Env | None = None,
+        env_cfg: str | None = None,  # JSON env config, for the docker driver
         env_description_path: str | None = None,
         output_dir: str = ".",
         load_dir: str | None = None,
@@ -87,13 +88,22 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         max_debug_attempts: int = 4,
         skip_chain_of_thought: bool = False,
         episode_timeout_s: float = 30.0,
+        use_docker: bool = True,
+        docker_image: str = "robocode-sandbox",
         **kwargs: Any,
     ) -> None:
         super().__init__(
             action_space, observation_space, seed, primitives, env_description_path
         )
-        self._client = create_llm_client(completion)
+        self._seed = seed
+        self._completion_cfg = completion
+        # With use_docker the loop runs inside the container (the driver builds
+        # the client there), so the host needs no client/key.
+        self._client: LLMClient | None = (
+            None if use_docker else create_llm_client(completion)
+        )
         self._env = env
+        self._env_cfg = env_cfg
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
         self._max_steps = max_steps
@@ -102,6 +112,8 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._max_debug_attempts = max_debug_attempts
         self._skip_chain_of_thought = skip_chain_of_thought
         self._episode_timeout_s = episode_timeout_s
+        self._use_docker = use_docker
+        self._docker_image = docker_image
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -110,14 +122,22 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self._load_generated(self._load_dir / "sandbox" / "approach.py")
             return
 
+        # Run the whole loop inside one sandbox container (like the agentic
+        # approach), launching the genplan driver. The driver reruns train()
+        # with use_docker=False to do the loop in-process there.
+        if self._use_docker:
+            self._train_in_docker()
+            self._load_generated(self._output_dir / "sandbox" / "approach.py")
+            return
+
         assert self._env is not None, "LLMGenPlanApproach needs the env during train()"
+        assert self._client is not None
         sandbox_dir = self._output_dir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         approach_path = sandbox_dir / "approach.py"
-
         train_seeds = list(range(self._num_train_tasks))
-        context = self._build_context(train_seeds[: self._num_prompt_tasks])
 
+        context = self._build_context(train_seeds[: self._num_prompt_tasks])
         messages: list[dict[str, str]] = []
         if self._skip_chain_of_thought:
             messages.append(
@@ -128,18 +148,54 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self._exchange(messages, _STRATEGY_PROMPT, sandbox_dir, 1)
             messages.append({"role": "user", "content": _INTERFACE_SPEC})
 
+        self._debug_loop(messages, approach_path, sandbox_dir, train_seeds)
+        self._load_generated(approach_path)
+
+    def _train_in_docker(self) -> None:
+        """Write the driver config and run the loop in one sandbox container."""
+        assert self._env_cfg is not None, "use_docker needs env_cfg"
+        sandbox_dir = self._output_dir / "sandbox"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        completion = cast(
+            dict[str, Any], OmegaConf.to_container(self._completion_cfg, resolve=True)
+        )
+        config = {
+            "completion": completion,
+            "environment": json.loads(self._env_cfg),
+            "seed": self._seed,
+            "primitive_names": list(self._primitives),
+            "max_steps": self._max_steps,
+            "num_train_tasks": self._num_train_tasks,
+            "num_prompt_tasks": self._num_prompt_tasks,
+            "max_debug_attempts": self._max_debug_attempts,
+            "skip_chain_of_thought": self._skip_chain_of_thought,
+            "episode_timeout_s": self._episode_timeout_s,
+        }
+        (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
+        run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
+
+    def _debug_loop(
+        self,
+        messages: list[dict[str, str]],
+        approach_path: Path,
+        sandbox_dir: Path,
+        seeds: list[int],
+    ) -> None:
+        """Generate, validate, re-prompt with feedback until solved or out of tries."""
         for t in range(self._max_debug_attempts + 1):
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
             # Overwrite, don't accumulate: each response is a full class.
             approach_path.write_text(_parse_python_code(response))
 
-            failure = self._validate(approach_path, train_seeds)
+            failure = self._validate(approach_path, seeds)
             if failure is None:
                 logger.info(
-                    "All %d training tasks solved at attempt %d", len(train_seeds), t
+                    "All %d training tasks solved at attempt %d",
+                    self._num_train_tasks,
+                    t,
                 )
-                break
+                return
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
             messages.append(
                 {
@@ -151,8 +207,6 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 }
             )
 
-        self._load_generated(approach_path)
-
     # ------------------------------------------------------------------ prompt
 
     def _build_context(self, prompt_seeds: list[int]) -> str:
@@ -163,6 +217,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             parts.append(Path(self._env_description_path).read_text(encoding="utf-8"))
         parts.append("## Full source code\n\n" + _gather_env_source(self._env))
         parts.append(
+            "## Primitives\n\n" + format_primitives_description(list(self._primitives))
+        )
+        parts.append(
             "## Example initial states\n\n"
             "Each instance below is one task (env.reset(seed=...)). Only the "
             "initial state varies across instances; the GOAL is fixed by the "
@@ -171,7 +228,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         )
         for s in prompt_seeds:
             obs, _ = self._env.reset(seed=s)
-            parts.append(f"### seed {s}\n\n{_render_state(self._state_space, obs)}")
+            parts.append(f"### seed {s}\n\n{render_state(self._state_space, obs)}")
         return "\n\n".join(parts)
 
     def _exchange(
@@ -182,6 +239,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         messages.append({"role": "assistant", "content": response})
 
     def _complete(self, messages: list[dict[str, str]], sandbox: Path, tag: str) -> str:
+        assert self._client is not None
         result: LLMResponse = self._client.complete(messages)
         if result.cost_usd is not None:
             self.total_cost_usd = (self.total_cost_usd or 0.0) + result.cost_usd
@@ -192,49 +250,22 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
     # -------------------------------------------------------------- validation
 
     def _validate(self, approach_path: Path, seeds: list[int]) -> dict[str, str] | None:
-        """Run the policy on each training task; return the first failure."""
-        for seed in seeds:
-            failure = self._validate_one(approach_path, seed)
-            if failure is not None:
-                return failure
-        return None
+        """Run the policy on the training tasks in-process; return first failure.
 
-    def _validate_one(self, approach_path: Path, seed: int) -> dict[str, str] | None:
-        ctx = mp.get_context("fork")  # fork: worker inherits the live env
-        result = ctx.Manager().dict()
-        proc = ctx.Process(
-            target=_run_episode_worker,
-            args=(
-                self._env,
-                approach_path,
-                self._action_space,
-                self._state_space,
-                self._primitives,
-                seed,
-                self._max_steps,
-                result,
-            ),
+        When ``use_docker`` is set this runs inside the sandbox container (the
+        whole loop does), so it is always isolated from the host there.
+        """
+        assert self._env is not None
+        return validate_tasks(
+            self._env,
+            approach_path,
+            self._action_space,
+            self._state_space,
+            self._primitives,
+            seeds,
+            self._max_steps,
+            self._episode_timeout_s,
         )
-        proc.start()
-        assert proc.pid is not None
-        proc.join(self._episode_timeout_s)
-        if proc.is_alive():
-            os.kill(proc.pid, signal.SIGINT)
-            proc.join(3)
-            if proc.is_alive():
-                proc.kill()
-                proc.join()
-            return {
-                "error_type": "timeout",
-                "feedback": (
-                    f"On the task with seed {seed}, get_action did not finish "
-                    f"within {self._episode_timeout_s:g}s. The code likely has an "
-                    "infinite loop or is far too slow."
-                ),
-            }
-        if result.get("solved"):
-            return None
-        return {"error_type": result["error_type"], "feedback": result["feedback"]}
 
     # ------------------------------------------------------------- delegation
 
@@ -260,64 +291,6 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             action: _ActType = self._generated.get_action(self._last_state)
             return action
         return self._action_space.sample()
-
-
-def _run_episode_worker(
-    env: gymnasium.Env,
-    approach_path: Path,
-    action_space: Space[Any],
-    observation_space: Space[Any],
-    primitives: dict[str, Callable[..., Any]],
-    seed: int,
-    max_steps: int,
-    result: Any,
-) -> None:
-    """Run one episode in a subprocess and classify the outcome.
-
-    The try/except is deliberate: a crash in generated code becomes LLM feedback.
-    """
-    try:
-        approach = load_generated_approach(
-            approach_path, action_space, observation_space, primitives
-        )
-        state, info = env.reset(seed=seed)
-        approach.reset(state, info)
-        total_reward = 0.0
-        for step in range(max_steps):
-            action = approach.get_action(state)
-            if not action_space.contains(action):
-                result["solved"] = False
-                result["error_type"] = "invalid-action"
-                result["feedback"] = (
-                    f"On the task with seed {seed}, at step {step} get_action "
-                    f"returned {action!r}, which is not a valid action. Valid "
-                    f"actions must lie in the action space: {action_space}."
-                )
-                return
-            state, reward, terminated, truncated, info = env.step(action)
-            total_reward += float(reward)
-            if hasattr(approach, "update"):
-                approach.update(state, float(reward), terminated or truncated, info)
-            if terminated:
-                result["solved"] = True
-                return
-            if truncated:
-                break
-        result["solved"] = False
-        result["error_type"] = "not-solved"
-        result["feedback"] = (
-            f"On the task with seed {seed}, the policy ran for {max_steps} steps "
-            f"without reaching the goal (total reward {total_reward:g}). The final "
-            f"state was:\n{_render_state(observation_space, state)}\n"
-            "Compare it to the goal/termination condition in the source."
-        )
-    except Exception:  # pylint: disable=broad-exception-caught
-        result["solved"] = False
-        result["error_type"] = "python-exception"
-        result["feedback"] = (
-            f"On the task with seed {seed}, the code raised an exception:\n"
-            + traceback.format_exc()
-        )
 
 
 def _gather_env_source(env: gymnasium.Env) -> str:
@@ -346,14 +319,6 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
     if underlying is not None:
         targets.append((underlying, type(underlying).__module__.split(".")[0]))
     return targets
-
-
-def _render_state(observation_space: Space[Any], obs: Any) -> str:
-    """Human-readable view of an observation (object-centric if possible)."""
-    devectorize = getattr(observation_space, "devectorize", None)
-    if devectorize is not None:
-        return str(devectorize(obs))
-    return repr(obs)
 
 
 def _parse_python_code(response: str) -> str:
