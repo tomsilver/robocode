@@ -2,7 +2,8 @@
 
 Used by the LLM-GenPlan debug loop. Each episode runs in a ``multiprocessing``
 worker so an infinite-looping ``get_action`` can be killed by timeout. When the
-loop runs inside the sandbox container (``use_docker``), this runs there too.
+loop runs inside the sandbox container (``container_backend`` docker/apptainer),
+this runs there too.
 """
 
 from __future__ import annotations

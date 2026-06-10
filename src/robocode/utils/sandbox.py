@@ -11,7 +11,7 @@ the working directory.
 WARNING: The OS-level sandbox restricts filesystem *writes* to the sandbox
 directory, but allows *reads* of the entire filesystem. Bash commands like
 ``cat /etc/passwd`` or ``python -c "open('/etc/hosts').read()"`` will succeed.
-Use Docker-based sandboxing (``use_docker: true``) for full isolation.
+Use container sandboxing (``container_backend: docker``) for full isolation.
 
 Set ROBOCODE_CLAUDE_CMD or ROBOCODE_OPENCODE_CMD environment variables
 to override the default binary paths.

@@ -265,8 +265,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
     def _validate(self, approach_path: Path, seeds: list[int]) -> dict[str, str] | None:
         """Run the policy on the training tasks in-process; return first failure.
 
-        When ``use_docker`` is set this runs inside the sandbox container (the
-        whole loop does), so it is always isolated from the host there.
+        When ``container_backend`` is docker/apptainer this runs inside the
+        sandbox container (the whole loop does), so it is always isolated from
+        the host there.
         """
         assert self._env is not None
         return validate_tasks(
