@@ -20,13 +20,13 @@ class AnthropicClient:
     def __init__(self, cfg: DictConfig) -> None:
         self._model = cfg["model"]
         self._base_url = cfg.get("base_url", "") or None
-        self._api_key = os.environ[cfg.get("api_key_env", "ANTHROPIC_API_KEY")]
+        api_key = os.environ[cfg.get("api_key_env", "ANTHROPIC_API_KEY")]
         self._max_tokens = cfg.get("max_tokens", 32000)
+        self._client = anthropic.Anthropic(api_key=api_key, base_url=self._base_url)
 
     def complete(self, messages: list[dict[str, str]]) -> LLMResponse:
         """Return the model's reply to a message list."""
-        client = anthropic.Anthropic(api_key=self._api_key, base_url=self._base_url)
-        response = client.messages.create(
+        response = self._client.messages.create(
             model=self._model,
             max_tokens=self._max_tokens,
             messages=messages,  # type: ignore[arg-type]
