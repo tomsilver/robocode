@@ -11,6 +11,10 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
+from robocode.utils.apptainer_sandbox import (
+    ApptainerSandboxConfig,
+    run_agent_in_apptainer_sandbox,
+)
 from robocode.utils.backends import AgentBackend
 from robocode.utils.docker_sandbox import (
     DockerSandboxConfig,
@@ -63,10 +67,15 @@ def run_with_rate_limit_retry(
     docker_config: DockerSandboxConfig | None,
     local_config: SandboxConfig | None,
     backend: AgentBackend,
+    apptainer_config: ApptainerSandboxConfig | None = None,
 ) -> SandboxResult:
     """Run the sandbox, retrying on rate-limit by sleeping until reset."""
     while True:
-        if docker_config is not None:
+        if apptainer_config is not None:
+            result = run_async(
+                lambda: run_agent_in_apptainer_sandbox(apptainer_config, backend)
+            )
+        elif docker_config is not None:
             result = run_async(
                 lambda: run_agent_in_docker_sandbox(docker_config, backend)
             )

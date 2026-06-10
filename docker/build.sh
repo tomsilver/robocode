@@ -15,5 +15,7 @@ echo "Building robocode-sandbox from ${REPO_ROOT} ..."
 docker build \
     --tag robocode-sandbox \
     --file "${REPO_ROOT}/docker/Dockerfile" \
+    --build-arg "USER_UID=$(id -u)" \
+    --build-arg "USER_GID=$(id -g)" \
     "${REPO_ROOT}"
 echo "Done. Image tagged: robocode-sandbox"

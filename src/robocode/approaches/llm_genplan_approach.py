@@ -23,6 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from robocode.approaches.base_approach import BaseApproach
 from robocode.primitives import format_primitives_description
+from robocode.utils.apptainer_sandbox import _DEFAULT_SIF, run_genplan_in_apptainer
 from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.genplan_validate import render_state, validate_tasks
@@ -88,7 +89,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         skip_chain_of_thought: bool = False,
         episode_timeout_s: float = 30.0,
         use_docker: bool = True,
+        container_backend: str | None = None,
         docker_image: str = "robocode-sandbox",
+        sif_path: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -96,10 +99,19 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         )
         self._seed = seed
         self._completion_cfg = completion
-        # With use_docker the loop runs inside the container (the driver builds
-        # the client there), so the host needs no client/key.
+        # container_backend takes precedence; use_docker kept for back-compat.
+        if container_backend is None:
+            container_backend = "docker" if use_docker else "local"
+        if container_backend not in ("docker", "apptainer", "local"):
+            raise ValueError(
+                f"Invalid container_backend {container_backend!r}; "
+                "expected 'docker', 'apptainer', or 'local'"
+            )
+        self._container_backend = container_backend
+        # Sandboxed runs build the client inside the container, so the host
+        # needs no client/key.
         self._client: LLMClient | None = (
-            None if use_docker else create_llm_client(completion)
+            create_llm_client(completion) if container_backend == "local" else None
         )
         self._env = env
         self._env_cfg = env_cfg
@@ -111,8 +123,8 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._max_debug_attempts = max_debug_attempts
         self._skip_chain_of_thought = skip_chain_of_thought
         self._episode_timeout_s = episode_timeout_s
-        self._use_docker = use_docker
         self._docker_image = docker_image
+        self._sif_path = Path(sif_path) if sif_path is not None else _DEFAULT_SIF
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -121,11 +133,10 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self._load_generated(self._load_dir / "sandbox" / "approach.py")
             return
 
-        # Run the whole loop inside one sandbox container (like the agentic
-        # approach), launching the genplan driver. The driver reruns train()
-        # with use_docker=False to do the loop in-process there.
-        if self._use_docker:
-            self._train_in_docker()
+        # Sandboxed: run the whole loop inside one container (docker/apptainer)
+        # via the genplan driver; the driver reruns train() locally inside.
+        if self._container_backend in ("docker", "apptainer"):
+            self._train_in_container()
             self._load_generated(self._output_dir / "sandbox" / "approach.py")
             return
 
@@ -157,9 +168,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._debug_loop(messages, approach_path, sandbox_dir, train_seeds)
         self._load_generated(approach_path)
 
-    def _train_in_docker(self) -> None:
+    def _train_in_container(self) -> None:
         """Write the driver config and run the loop in one sandbox container."""
-        assert self._env_cfg is not None, "use_docker needs env_cfg"
+        assert self._env_cfg is not None, "container runs need env_cfg"
         sandbox_dir = self._output_dir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         completion = cast(
@@ -178,7 +189,10 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             "episode_timeout_s": self._episode_timeout_s,
         }
         (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
-        run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
+        if self._container_backend == "apptainer":
+            run_genplan_in_apptainer(sandbox_dir, completion, sif_path=self._sif_path)
+        else:
+            run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
         cost = json.loads((sandbox_dir / "cost.json").read_text(encoding="utf-8"))
         self.total_cost_usd = cost["total_cost_usd"]
 
