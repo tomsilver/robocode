@@ -4,8 +4,8 @@
 # The firewall requires NET_ADMIN / NET_RAW capabilities:
 #   docker run --cap-add=NET_ADMIN --cap-add=NET_RAW ...
 #
-# src/ and prpl-mono/ are bind-mounted at runtime, so uv sync runs here
-# to create the .venv with editable installs pointing at the mounted source.
+# src/ and third-party/kindergarden/ are bind-mounted at runtime, so uv sync
+# runs here to create the .venv with editable installs pointing at the source.
 #
 # The `node` user has passwordless sudo for init-firewall.sh and uv
 # (configured in the Dockerfile via /etc/sudoers.d/node-firewall).

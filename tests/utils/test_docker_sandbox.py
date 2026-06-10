@@ -15,8 +15,8 @@ Tests are split into two categories:
     * ``/sandbox/primitives/`` holds the allowed primitive ``.py`` files.
     * ``/robocode/.venv/bin/python`` is executable and reports Python 3.11.
     * Key packages (numpy, gymnasium, robocode) are importable via the venv.
-    * ``/robocode/prpl-mono/`` reflects the bind-mounted submodule.
-    * prpl-mono packages (e.g. ``relational_structs``) are importable.
+    * ``/robocode/third-party/kindergarden/`` reflects the bind-mounted submodule.
+    * the bind-mounted ``kinder`` package is importable.
     * Robocode source is **not** present directly inside ``/sandbox/``.
     * The ``validate_sandbox.py`` hook blocks writes outside ``/sandbox``.
 
@@ -34,7 +34,7 @@ from robocode.utils.backends import DEFAULT_BACKEND
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
-    _copy_src_without_oracles,
+    _copy_src,
     _find_repo_root,
     _setup_sandbox_dir,
 )
@@ -76,7 +76,7 @@ def _run_in_container(
     *,
     uv_sync: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    """Run *bash_cmd* inside the container with sandbox, src, and prpl-mono mounted.
+    """Run *bash_cmd* in the container with sandbox, src, and kindergarden mounted.
 
     Uses ``--entrypoint /bin/bash`` to skip ``init-firewall.sh`` so that
     no ``NET_ADMIN`` capability is required during tests.
@@ -90,7 +90,7 @@ def _run_in_container(
 
     tmp_dir = tempfile.mkdtemp(prefix="robocode-test-src-")
     filtered_src = Path(tmp_dir) / "src"
-    _copy_src_without_oracles(repo_root / "src", filtered_src)
+    _copy_src(repo_root / "src", filtered_src)
 
     prefix = (
         "cd /robocode && uv sync --frozen --python python3.11 && cd /sandbox && "
@@ -110,7 +110,8 @@ def _run_in_container(
                 "-v",
                 f"{filtered_src.resolve()}:/robocode/src",
                 "-v",
-                f"{(repo_root / 'prpl-mono').resolve()}:/robocode/prpl-mono",
+                f"{(repo_root / 'third-party' / 'kindergarden').resolve()}"
+                ":/robocode/third-party/kindergarden",
                 "-w",
                 "/sandbox",
                 _DOCKER_IMAGE,
@@ -256,7 +257,7 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
     """The sandbox contains exactly the expected top-level entries and no extras.
 
     Expected entries: primitives/, CLAUDE.md, .claude/, .git/ Must NOT
-    contain: src/, pyproject.toml, prpl-mono/ (host repo files)
+    contain: src/, pyproject.toml, third-party/ (host repo files)
     """
     config = DockerSandboxConfig(
         sandbox_dir=tmp_path / "sandbox",
@@ -277,7 +278,7 @@ def test_container_sandbox_top_level_entries(tmp_path: Path) -> None:
     # Host repo files must NOT bleed into the sandbox.
     assert "pyproject.toml" not in listed
     assert "src" not in listed
-    assert "prpl-mono" not in listed
+    assert "third-party" not in listed
 
 
 @requires_docker
@@ -322,26 +323,26 @@ def test_container_venv_imports_core_packages(tmp_path: Path) -> None:
 
 
 @requires_docker
-def test_container_prpl_mono_mounted(tmp_path: Path) -> None:
-    """/robocode/prpl-mono/ is present (bind-mounted from the host submodule)."""
+def test_container_kindergarden_mounted(tmp_path: Path) -> None:
+    """/robocode/third-party/kindergarden/ is present (bind-mounted submodule)."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
     result = _run_in_container(
         config.sandbox_dir,
-        "test -d /robocode/prpl-mono && echo mounted || echo absent",
+        "test -d /robocode/third-party/kindergarden && echo mounted || echo absent",
     )
     assert result.returncode == 0, result.stderr
     assert "mounted" in result.stdout
 
 
 @requires_docker
-def test_container_prpl_mono_importable(tmp_path: Path) -> None:
-    """Prpl-mono packages (relational_structs) are importable via the venv."""
+def test_container_kindergarden_importable(tmp_path: Path) -> None:
+    """The bind-mounted kinder package is importable via the venv."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
     _setup_sandbox_dir(config)
     result = _run_in_container(
         config.sandbox_dir,
-        f"{DOCKER_PYTHON} -c 'import relational_structs; print(\"OK\")'",
+        f"{DOCKER_PYTHON} -c 'import kinder; print(\"OK\")'",
         uv_sync=True,
     )
     assert result.returncode == 0, result.stderr

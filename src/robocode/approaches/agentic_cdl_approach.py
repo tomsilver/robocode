@@ -318,6 +318,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
         env_name: str | None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(
             action_space,
@@ -325,6 +326,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             seed,
             primitives,
             env_description_path,
+            **kwargs,
         )
         self._backend_cfg = backend
         self._backend = create_backend(backend)

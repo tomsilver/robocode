@@ -75,6 +75,11 @@ def _main(cfg: DictConfig) -> float:
         env_description_path=env_description_path,
         mcp_tools=mcp_tools,
         env_name=env_name,
+        env=env,
+        # JSON (not the DictConfig) so hydra.utils.instantiate doesn't recursively
+        # instantiate it; the llm_genplan docker driver rebuilds the env from it.
+        env_cfg=json.dumps(OmegaConf.to_container(cfg.environment, resolve=True)),
+        max_steps=cfg.max_steps,
     )
 
     task_rng = np.random.default_rng(cfg.seed)
@@ -102,7 +107,7 @@ def _main(cfg: DictConfig) -> float:
     render = cfg.render_videos
     per_episode = []
     for i, s in enumerate(eval_seeds):
-        episode_result, frames = run_episode(
+        episode_result, frames, _ = run_episode(
             env, approach, s, cfg.max_steps, render=render
         )
         per_episode.append(episode_result)

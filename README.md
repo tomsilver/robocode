@@ -203,7 +203,7 @@ The agent runs inside a Docker container (`robocode-sandbox`) that provides full
 | `/sandbox/` | Working directory — agent writes `approach.py`, test scripts, etc. here |
 | `/sandbox/primitives/` | Source files from `src/robocode/primitives/` (read reference) |
 | `/robocode/.venv/bin/python` | Python 3.11 with all robocode dependencies pre-installed |
-| `/robocode/prpl-mono/` | Third-party packages, bind-mounted read-only from the host submodule |
+| `/robocode/third-party/kindergarden/` | The kinder env package, bind-mounted read-only from the host submodule |
 
 ### Start docker
 
@@ -220,7 +220,7 @@ sudo systemctl enable docker
 
 ### Building the image
 
-Build once from the repo root (rebuild when `pyproject.toml` / `uv.lock` change; not needed for `prpl-mono` code changes):
+Build once from the repo root (rebuild when `pyproject.toml` / `uv.lock` change; not needed for `third-party/kindergarden` code changes):
 
 ```bash
 bash docker/build.sh

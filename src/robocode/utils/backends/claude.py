@@ -109,7 +109,7 @@ class ClaudeBackend(AgentBackend):
     ) -> list[str]:
         """Build the Claude CLI command."""
         self._max_turns = config.max_turns
-        claude_cmd = _get_claude_cmd()
+        claude_cmd = get_claude_cmd()
         tools = "Bash,Read,Write,Edit,Glob,Grep,Task"
         if config.mcp_tools:
             tools += "," + ",".join(mcp_tool_cli_names(config.mcp_tools))
@@ -158,11 +158,11 @@ class ClaudeBackend(AgentBackend):
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(config.max_output_tokens)
         env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(config.autocompact_pct)
-        if self._base_url:
-            env["ANTHROPIC_BASE_URL"] = self._base_url
-            env["ANTHROPIC_AUTH_TOKEN"] = self._auth_token
-            if "11434" in self._base_url:
-                ensure_ollama(keep_alive=self._ollama_keep_alive or "5m")
+        env.update(
+            anthropic_compatible_env(
+                self._base_url, self._auth_token, self._ollama_keep_alive
+            )
+        )
         if extra:
             env.update(extra)
         return env
@@ -397,6 +397,25 @@ class ClaudeBackend(AgentBackend):
         )
 
 
-def _get_claude_cmd() -> str:
+def get_claude_cmd() -> str:
     """Return the claude CLI command, respecting ROBOCODE_CLAUDE_CMD."""
     return os.environ.get("ROBOCODE_CLAUDE_CMD", "claude")
+
+
+def anthropic_compatible_env(
+    base_url: str,
+    auth_token: str = "ollama",
+    ollama_keep_alive: str = "",
+) -> dict[str, str]:
+    """Env vars to point an Anthropic-API client at a custom endpoint.
+
+    Shared by the Claude agent backend and the CLI completion client so both
+    can talk to Ollama, vLLM, liteLLM, or any Anthropic-compatible server.
+    Returns an empty dict when ``base_url`` is unset. Starts Ollama if the
+    URL targets the default Ollama port.
+    """
+    if not base_url:
+        return {}
+    if "11434" in base_url:
+        ensure_ollama(keep_alive=ollama_keep_alive or "5m")
+    return {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": auth_token}

@@ -154,7 +154,9 @@ def record_episodes(
             approach.train()
 
             saved_state = env.get_state()
-            metrics, frames = run_episode(env, approach, seed, max_steps, render=True)
+            metrics, frames, _ = run_episode(
+                env, approach, seed, max_steps, render=True
+            )
             env.set_state(saved_state)
 
             if frames:

@@ -52,8 +52,8 @@ def run_episode(
     seed: int,
     max_steps: int,
     render: bool = False,
-) -> tuple[dict[str, Any], list[NDArray[np.uint8]]]:
-    """Run a single evaluation episode and return metrics + frames."""
+) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
+    """Run a single evaluation episode; return metrics, frames, final state."""
     state, info = env.reset(seed=seed)
     approach.reset(state, info)
 
@@ -86,7 +86,7 @@ def run_episode(
         "num_steps": num_steps,
         "solved": bool(terminated),
     }
-    return metrics, frames
+    return metrics, frames, state
 
 
 def save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:

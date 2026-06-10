@@ -6,9 +6,10 @@
 # Adds Python 3.11 + uv on top of the official node:20 base.
 #
 # PyPI deps are pre-installed into .venv during build, but src/ and
-# prpl-mono/ are DELETED from the image after install — they are
-# bind-mounted (filtered) at runtime so oracle/solution code never leaks.
-# A quick `uv sync` in the entrypoint re-creates editable .pth entries.
+# third-party/kindergarden/ are DELETED from the image after install — they
+# are bind-mounted (filtered) at runtime so oracle/solution code never leaks
+# and the env source stays current. A quick `uv sync` in the entrypoint
+# re-creates editable .pth entries.
 #
 # Build from the repository root:
 #   bash docker/build.sh
@@ -18,7 +19,7 @@
 # Runtime bind-mounts (see docker_sandbox.py):
 #   -v <sandbox_dir>:/sandbox              writable — agent writes approach.py here
 #   -v <src>:/robocode/src:ro              filtered copy (oracles stripped)
-#   -v <prpl-mono>:/robocode/prpl-mono:ro  filtered copy (tests stripped)
+#   -v <kindergarden>:/robocode/third-party/kindergarden:ro  (tests stripped)
 
 FROM node:20
 
@@ -93,19 +94,19 @@ RUN mkdir -p /home/node/.claude \
 # ---------------------------------------------------------------------------
 # Python environment — pre-install all PyPI deps into /robocode/.venv.
 #
-# src/ and prpl-mono/ are copied temporarily so `uv sync` can resolve
-# editable installs, then DELETED so oracle/solution code is never baked
-# into the image.  At runtime they are bind-mounted (filtered) and a
+# src/ and third-party/kindergarden/ are copied temporarily so `uv sync` can
+# resolve editable installs, then DELETED so oracle/solution code is never
+# baked into the image.  At runtime they are bind-mounted (filtered) and a
 # quick `uv sync` in the entrypoint re-creates the editable .pth entries.
 # ---------------------------------------------------------------------------
 WORKDIR /robocode
 
 COPY pyproject.toml uv.lock ./
-COPY prpl-mono/ prpl-mono/
+COPY third-party/kindergarden/ third-party/kindergarden/
 COPY src/ src/
 
 RUN uv sync --frozen --python python3.11 \
-    && rm -rf src/ prpl-mono/ \
+    && rm -rf src/ third-party/ \
     && find .venv -maxdepth 3 \( -name '*.egg-info' -o -name '*.dist-info' -o -name '*.pth' \) \
        -exec rm -rf {} + 2>/dev/null; true
 

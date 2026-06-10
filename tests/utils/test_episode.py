@@ -6,13 +6,21 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import imageio.v3 as iio
 import numpy as np
 import pytest
+from gymnasium import Env
 from gymnasium.spaces import Box
 
-from robocode.utils.episode import load_generated_approach, save_frames, save_video
+from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.episode import (
+    load_generated_approach,
+    run_episode,
+    save_frames,
+    save_video,
+)
 
 
 @pytest.fixture()
@@ -69,6 +77,39 @@ def test_load_cleans_sys_path(dummy_approach_file: Path) -> None:
 
     load_generated_approach(dummy_approach_file, action_space, obs_space, {})
     assert sandbox_dir not in sys.path
+
+
+def test_run_episode_returns_final_state() -> None:
+    """run_episode returns the observation the episode ended on."""
+
+    class _CountEnv(Env):
+        def __init__(self) -> None:
+            self.observation_space = Box(0.0, 10.0, shape=(1,), dtype=np.float32)
+            self.action_space = Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
+            self._pos = 0.0
+
+        def reset(self, *, seed=None, options=None):
+            super().reset(seed=seed)
+            self._pos = 0.0
+            return np.array([self._pos], dtype=np.float32), {}
+
+        def step(self, action):
+            self._pos += 1.0
+            obs = np.array([self._pos], dtype=np.float32)
+            return obs, 0.0, self._pos >= 3.0, False, {}
+
+        def render(self):
+            return None
+
+    class _NoopApproach(BaseApproach[Any, Any]):
+        def _get_action(self) -> Any:
+            return np.zeros(1, dtype=np.float32)
+
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, final_state = run_episode(env, approach, seed=0, max_steps=10)
+    assert metrics["solved"]
+    assert final_state == np.array([3.0], dtype=np.float32)
 
 
 def test_save_frames_creates_pngs(

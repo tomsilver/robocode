@@ -1,0 +1,330 @@
+"""LLM-GenPlan baseline (Silver et al. 2023, arXiv:2305.11014).
+
+A non-agentic baseline: a plain LLM is shown the environment source, asked to
+summarize it, propose a strategy, and implement a ``GeneratedApproach`` policy.
+The *framework* (not the model) then runs that policy on training tasks and, on
+failure, re-prompts the model with structured error feedback (automated
+debugging). Contrast with ``AgenticApproach``, where an autonomous coding agent
+writes and self-tests the policy with tools.
+"""
+
+from __future__ import annotations
+
+import inspect
+import json
+import logging
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, TypeVar, cast
+
+import gymnasium
+from gymnasium.spaces import Space
+from omegaconf import DictConfig, OmegaConf
+
+from robocode.approaches.base_approach import BaseApproach
+from robocode.primitives import format_primitives_description
+from robocode.utils.docker_sandbox import run_genplan_in_docker
+from robocode.utils.episode import load_generated_approach
+from robocode.utils.genplan_validate import render_state, validate_tasks
+from robocode.utils.llm import LLMClient, LLMResponse, create_llm_client
+from robocode.utils.source_deps import collect_local_deps
+
+logger = logging.getLogger(__name__)
+
+_ObsType = TypeVar("_ObsType")
+_ActType = TypeVar("_ActType")
+
+_INTERFACE_SPEC = """\
+Implement the strategy as a Python class named `GeneratedApproach` in a single \
+code block:
+
+```python
+class GeneratedApproach:
+    def __init__(self, action_space, observation_space, primitives):
+        \"\"\"action_space and observation_space are the gym spaces above.\"\"\"
+        ...
+
+    def reset(self, state, info):
+        \"\"\"Called at the start of each episode with the initial observation.\"\"\"
+        ...
+
+    def get_action(self, state):
+        \"\"\"Return a valid action (matching action_space) for this state.\"\"\"
+        ...
+```
+
+`state` is a numpy observation matching the observation space. `get_action` is \
+called every step and must return an action inside the action space. The class \
+may keep internal state between calls (e.g. a precomputed plan). Return ONLY \
+the code block; do not write tests or explanations."""
+
+_SUMMARY_PROMPT = "Write a short summary of this environment in words."
+
+_STRATEGY_PROMPT = (
+    "There is a simple strategy for solving all instances of this environment "
+    "without using search. What is that strategy?"
+)
+
+
+class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
+    """Generate a policy with a plain LLM and debug it against training tasks."""
+
+    def __init__(
+        self,
+        action_space: Space[_ActType],
+        observation_space: Space[_ObsType],
+        seed: int,
+        primitives: dict[str, Callable[..., Any]],
+        completion: DictConfig,
+        env: gymnasium.Env | None = None,
+        env_cfg: str | None = None,  # JSON env config, for the docker driver
+        env_description_path: str | None = None,
+        output_dir: str = ".",
+        load_dir: str | None = None,
+        max_steps: int = 100,
+        num_train_tasks: int = 10,
+        num_prompt_tasks: int = 2,
+        max_debug_attempts: int = 4,
+        skip_chain_of_thought: bool = False,
+        episode_timeout_s: float = 30.0,
+        use_docker: bool = True,
+        docker_image: str = "robocode-sandbox",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            action_space, observation_space, seed, primitives, env_description_path
+        )
+        self._seed = seed
+        self._completion_cfg = completion
+        # With use_docker the loop runs inside the container (the driver builds
+        # the client there), so the host needs no client/key.
+        self._client: LLMClient | None = (
+            None if use_docker else create_llm_client(completion)
+        )
+        self._env = env
+        self._env_cfg = env_cfg
+        self._output_dir = Path(output_dir)
+        self._load_dir = Path(load_dir) if load_dir is not None else None
+        self._max_steps = max_steps
+        self._num_train_tasks = num_train_tasks
+        self._num_prompt_tasks = num_prompt_tasks
+        self._max_debug_attempts = max_debug_attempts
+        self._skip_chain_of_thought = skip_chain_of_thought
+        self._episode_timeout_s = episode_timeout_s
+        self._use_docker = use_docker
+        self._docker_image = docker_image
+        self._generated: Any = None
+        self.total_cost_usd: float | None = None
+
+    def train(self) -> None:
+        if self._load_dir is not None:
+            self._load_generated(self._load_dir / "sandbox" / "approach.py")
+            return
+
+        # Run the whole loop inside one sandbox container (like the agentic
+        # approach), launching the genplan driver. The driver reruns train()
+        # with use_docker=False to do the loop in-process there.
+        if self._use_docker:
+            self._train_in_docker()
+            self._load_generated(self._output_dir / "sandbox" / "approach.py")
+            return
+
+        assert self._env is not None, "LLMGenPlanApproach needs the env during train()"
+        assert self._client is not None
+        sandbox_dir = self._output_dir / "sandbox"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        approach_path = sandbox_dir / "approach.py"
+        train_seeds = list(range(self._num_train_tasks))
+
+        context = self._build_context(train_seeds[: self._num_prompt_tasks])
+        messages: list[dict[str, str]] = []
+        if self._skip_chain_of_thought:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"{context}\n\nThere is a simple strategy for solving "
+                        "all instances of this environment without using "
+                        f"search. {_INTERFACE_SPEC}"
+                    ),
+                }
+            )
+        else:
+            self._exchange(messages, f"{context}\n\n{_SUMMARY_PROMPT}", sandbox_dir, 0)
+            self._exchange(messages, _STRATEGY_PROMPT, sandbox_dir, 1)
+            messages.append({"role": "user", "content": _INTERFACE_SPEC})
+
+        self._debug_loop(messages, approach_path, sandbox_dir, train_seeds)
+        self._load_generated(approach_path)
+
+    def _train_in_docker(self) -> None:
+        """Write the driver config and run the loop in one sandbox container."""
+        assert self._env_cfg is not None, "use_docker needs env_cfg"
+        sandbox_dir = self._output_dir / "sandbox"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        completion = cast(
+            dict[str, Any], OmegaConf.to_container(self._completion_cfg, resolve=True)
+        )
+        config = {
+            "completion": completion,
+            "environment": json.loads(self._env_cfg),
+            "seed": self._seed,
+            "primitive_names": list(self._primitives),
+            "max_steps": self._max_steps,
+            "num_train_tasks": self._num_train_tasks,
+            "num_prompt_tasks": self._num_prompt_tasks,
+            "max_debug_attempts": self._max_debug_attempts,
+            "skip_chain_of_thought": self._skip_chain_of_thought,
+            "episode_timeout_s": self._episode_timeout_s,
+        }
+        (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
+        run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
+        cost = json.loads((sandbox_dir / "cost.json").read_text(encoding="utf-8"))
+        self.total_cost_usd = cost["total_cost_usd"]
+
+    def _debug_loop(
+        self,
+        messages: list[dict[str, str]],
+        approach_path: Path,
+        sandbox_dir: Path,
+        seeds: list[int],
+    ) -> None:
+        """Generate, validate, re-prompt with feedback until solved or out of tries."""
+        for t in range(self._max_debug_attempts + 1):
+            response = self._complete(messages, sandbox_dir, f"impl{t}")
+            messages.append({"role": "assistant", "content": response})
+            # Overwrite, don't accumulate: each response is a full class.
+            approach_path.write_text(_parse_python_code(response))
+
+            failure = self._validate(approach_path, seeds)
+            if failure is None:
+                logger.info(
+                    "All %d training tasks solved at attempt %d",
+                    self._num_train_tasks,
+                    t,
+                )
+                return
+            logger.info("Attempt %d failed (%s)", t, failure["error_type"])
+            messages.append(
+                {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
+            )
+
+    # ------------------------------------------------------------------ prompt
+
+    def _build_context(self, prompt_seeds: list[int]) -> str:
+        """Env description + source + a couple of example initial states."""
+        assert self._env is not None
+        parts = ["You are writing a policy for the environment below.\n"]
+        if self._env_description_path is not None:
+            parts.append(Path(self._env_description_path).read_text(encoding="utf-8"))
+        parts.append("## Full source code\n\n" + _gather_env_source(self._env))
+        parts.append(
+            "## Primitives\n\n" + format_primitives_description(list(self._primitives))
+        )
+        parts.append(
+            "## Example initial states\n\n"
+            "Each instance below is one task (env.reset(seed=...))."
+        )
+        for s in prompt_seeds:
+            obs, _ = self._env.reset(seed=s)
+            parts.append(f"### seed {s}\n\n{render_state(self._state_space, obs)}")
+        return "\n\n".join(parts)
+
+    def _exchange(
+        self, messages: list[dict[str, str]], prompt: str, sandbox: Path, idx: int
+    ) -> None:
+        messages.append({"role": "user", "content": prompt})
+        response = self._complete(messages, sandbox, f"cot{idx}")
+        messages.append({"role": "assistant", "content": response})
+
+    def _complete(self, messages: list[dict[str, str]], sandbox: Path, tag: str) -> str:
+        assert self._client is not None
+        result: LLMResponse = self._client.complete(messages)
+        if result.cost_usd is not None:
+            self.total_cost_usd = (self.total_cost_usd or 0.0) + result.cost_usd
+        (sandbox / f"{tag}_prompt.txt").write_text(messages[-1]["content"])
+        (sandbox / f"{tag}_response.txt").write_text(result.text)
+        return result.text
+
+    # -------------------------------------------------------------- validation
+
+    def _validate(self, approach_path: Path, seeds: list[int]) -> dict[str, str] | None:
+        """Run the policy on the training tasks in-process; return first failure.
+
+        When ``use_docker`` is set this runs inside the sandbox container (the
+        whole loop does), so it is always isolated from the host there.
+        """
+        assert self._env is not None
+        return validate_tasks(
+            self._env,
+            approach_path,
+            self._action_space,
+            self._state_space,
+            self._primitives,
+            seeds,
+            self._max_steps,
+            self._episode_timeout_s,
+        )
+
+    # ------------------------------------------------------------- delegation
+
+    def _load_generated(self, path: Path) -> None:
+        self._generated = load_generated_approach(
+            path, self._action_space, self._state_space, self._primitives
+        )
+
+    def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
+        super().reset(state, info)
+        if self._generated is not None:
+            self._generated.reset(state, info)
+
+    def update(
+        self, state: _ObsType, reward: float, done: bool, info: dict[str, Any]
+    ) -> None:
+        super().update(state, reward, done, info)
+        if self._generated is not None and hasattr(self._generated, "update"):
+            self._generated.update(state, reward, done, info)
+
+    def _get_action(self) -> _ActType:
+        if self._generated is not None:
+            action: _ActType = self._generated.get_action(self._last_state)
+            return action
+        return self._action_space.sample()
+
+
+def _gather_env_source(env: gymnasium.Env) -> str:
+    """Best-effort bundle of the env's local source (robocode + kinder)."""
+    files: list[Path] = []
+    for obj, package in _source_targets(env):
+        source_file = inspect.getsourcefile(type(obj))
+        assert source_file is not None
+        src = Path(source_file)
+        root = src.parents[len(type(obj).__module__.split(".")) - 1]
+        files.extend(collect_local_deps(src, root, package))
+    seen: set[Path] = set()
+    blocks: list[str] = []
+    for path in files:
+        if path in seen:
+            continue
+        seen.add(path)
+        blocks.append(f"### {path.name}\n```python\n{path.read_text()}\n```")
+    return "\n\n".join(blocks)
+
+
+def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
+    """The objects whose source to bundle, with their top-level package."""
+    targets: list[tuple[Any, str]] = [(env, type(env).__module__.split(".")[0])]
+    underlying = getattr(env, "_kinder_env", None)
+    if underlying is not None:
+        targets.append((underlying, type(underlying).__module__.split(".")[0]))
+    return targets
+
+
+def _parse_python_code(response: str) -> str:
+    """Extract the first ```python fenced block, else the raw response."""
+    marker = "```python"
+    if marker in response:
+        rest = response[response.index(marker) + len(marker) :]
+        end = rest.index("```") if "```" in rest else len(rest)
+        return rest[:end].strip()
+    return response.strip()

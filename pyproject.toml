@@ -23,6 +23,8 @@ dependencies = [
    "scipy-stubs",
    "imageio",
    "mcp[cli]",
+   "anthropic",
+   "openai",
 ]
 
 [project.optional-dependencies]
@@ -46,7 +48,6 @@ libero = [
     "future",
     "easydict",
 ]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 

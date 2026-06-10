@@ -14,9 +14,9 @@ provides:
   pre-installed in ``/robocode/.venv`` via ``uv sync --frozen``.
 * **Primitive source files** -- ``src/robocode/primitives/*.py`` are copied
   into ``/sandbox/primitives/`` so the agent can read their API.
-* **prpl-mono bind-mount** -- the current submodule is mounted read-only at
-  ``/robocode/prpl-mono/``, overriding the stale in-image copy without
-  requiring an image rebuild.
+* **kindergarden bind-mount** -- the ``third-party/kindergarden`` submodule
+  is mounted read-only at ``/robocode/third-party/kindergarden/``, overriding
+  the stale in-image copy without requiring an image rebuild.
 
 Usage
 -----
@@ -44,11 +44,19 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from robocode.primitives import PRIMITIVE_NAME_TO_FILE
-from robocode.utils.backends import PROVIDERS, AgentBackend, firewall_domains_for_model
+from robocode.utils.backends import (
+    PROVIDERS,
+    AgentBackend,
+    firewall_domains_for_provider,
+    provider_from_model,
+)
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -118,27 +126,147 @@ def _find_repo_root() -> Path:
     )
 
 
-def _copy_prpl_mono_without_tests(prpl_mono: Path, dest: Path) -> None:
-    """Copy ``prpl-mono`` to *dest*, skipping ``tests/`` and ``docs/``."""
+def _copy_kindergarden_without_tests(kindergarden: Path, dest: Path) -> None:
+    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``."""
     shutil.copytree(
-        prpl_mono,
+        kindergarden,
         dest,
         ignore=shutil.ignore_patterns("tests", "docs"),
     )
 
 
-def _copy_src_without_oracles(src: Path, dest: Path) -> None:
-    """Copy ``src/`` to *dest*, skipping ``oracles/`` and ``primitives/``.
+@contextmanager
+def _filtered_repo_mounts(
+    *, keep_primitives: bool = False
+) -> Iterator[tuple[Path, Path]]:
+    """Yield filtered copies of ``src/`` and ``kindergarden/`` to bind-mount.
 
-    Both directories contain solution code that must not be exposed to
-    the agent.  Primitive source files are selectively copied into the
-    sandbox via :func:`_setup_sandbox_dir` instead.
+    ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
+    *keep_primitives*); ``kindergarden`` without tests/docs. The copies live in
+    a temp dir that is removed on exit.
     """
-    shutil.copytree(
-        src,
-        dest,
-        ignore=shutil.ignore_patterns("oracles", "primitives"),
-    )
+    repo_root = _find_repo_root()
+    kindergarden = repo_root / "third-party" / "kindergarden"
+    if not kindergarden.exists():
+        raise RuntimeError(
+            f"kindergarden not found at {kindergarden}; "
+            "run: git submodule update --init --recursive"
+        )
+    tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
+    filtered_src = Path(tmp_dir) / "src"
+    filtered_kindergarden = Path(tmp_dir) / "kindergarden"
+    try:
+        _copy_src(repo_root / "src", filtered_src, keep_primitives=keep_primitives)
+        _copy_kindergarden_without_tests(kindergarden, filtered_kindergarden)
+        yield filtered_src, filtered_kindergarden
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _docker_run_prefix(
+    container_name: str,
+    image: str,
+    sandbox_dir: Path,
+    filtered_src: Path,
+    filtered_kindergarden: Path,
+    auth_args: list[str],
+    firewall_domains: list[str],
+    env_args: list[str] | None = None,
+) -> list[str]:
+    """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
+
+    Callers append the in-container command (agent CLI or genplan driver).
+    """
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        container_name,
+        "--cap-add=NET_ADMIN",
+        "--cap-add=NET_RAW",
+        *(env_args or []),
+    ]
+    if firewall_domains:
+        cmd += [
+            "-e",
+            f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
+        ]
+    cmd += auth_args
+    cmd += [
+        "-v",
+        f"{sandbox_dir.resolve()}:/sandbox",
+        "-v",
+        f"{filtered_src.resolve()}:/robocode/src",
+        "-v",
+        f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
+        "-w",
+        "/sandbox",
+        image,
+    ]
+    return cmd
+
+
+def run_genplan_in_docker(
+    sandbox_dir: Path,
+    completion_cfg: dict[str, Any],
+    image: str = _DEFAULT_IMAGE,
+    timeout: float = 3600.0,
+) -> None:
+    """Run the whole LLM-GenPlan loop inside one sandbox container.
+
+    Mirrors :func:`run_agent_in_docker_sandbox` (single ``docker run`` through
+    the firewall + ``uv sync`` entrypoint) but the command is the genplan driver
+    instead of the agent CLI. The driver reads ``sandbox_dir/genplan_config.json``
+    and writes ``sandbox_dir/approach.py``. ``src`` keeps ``primitives`` (unlike
+    the agent mount) so the policy can build/use them as it does at eval.
+    """
+    container_name = f"robocode-genplan-{uuid.uuid4().hex[:8]}"
+    with _filtered_repo_mounts(keep_primitives=True) as (
+        filtered_src,
+        filtered_kindergarden,
+    ):
+        # Reuse the agent auth: the cli provider needs Claude OAuth/~/.claude;
+        # the SDK providers just need their API key forwarded (the non-claude
+        # branch forwards ANTHROPIC_API_KEY/OPENAI_API_KEY).
+        auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
+        auth_args, auth_env = _build_docker_auth_args(auth_backend)
+        # Whitelist the provider's API endpoint in the firewall (the default
+        # whitelist only covers Anthropic). The cli provider needs nothing
+        # extra; self-hosted endpoints are covered via base_url.
+        firewall_domains = firewall_domains_for_provider(
+            completion_cfg["provider"], completion_cfg.get("base_url", "")
+        )
+        docker_cmd = _docker_run_prefix(
+            container_name,
+            image,
+            sandbox_dir,
+            filtered_src,
+            filtered_kindergarden,
+            auth_args,
+            firewall_domains,
+        ) + [DOCKER_PYTHON, "-m", "robocode.approaches.genplan_driver"]
+        logger.info("Starting genplan Docker container %s", container_name)
+        subprocess.run(
+            docker_cmd,
+            env={**os.environ, **auth_env},
+            stdin=subprocess.DEVNULL,
+            check=True,
+            timeout=timeout,
+        )
+
+
+def _copy_src(src: Path, dest: Path, *, keep_primitives: bool = False) -> None:
+    """Copy ``src/`` to *dest*, always skipping ``oracles/`` (solution code).
+
+    The agent mount also skips ``primitives/`` so the author cannot read all
+    primitive solutions (it gets only the requested files via
+    :func:`_setup_sandbox_dir`). The genplan container sets ``keep_primitives``
+    so its driver can call ``build_primitives`` in-container exactly as eval does
+    on the host -- it is non-agentic, so there is no author to expose them to.
+    """
+    skip = ("oracles",) if keep_primitives else ("oracles", "primitives")
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
 
 
 @dataclass(frozen=True)
@@ -245,7 +373,8 @@ async def run_agent_in_docker_sandbox(
     Steps
     -----
     1. Calls :func:`_setup_sandbox_dir` to populate the sandbox directory.
-    2. Resolves the ``prpl-mono`` submodule path from the repo root.
+    2. Resolves the ``third-party/kindergarden`` submodule path from the repo
+       root.
     3. Launches ``docker run`` with:
 
        * ``--cap-add=NET_ADMIN --cap-add=NET_RAW`` for the iptables firewall
@@ -253,7 +382,7 @@ async def run_agent_in_docker_sandbox(
          bind-mount, or OpenCode ``~/.local/share/opencode`` / API key env
          vars)
        * ``-v <sandbox_dir>:/sandbox`` (writable bind-mount)
-       * ``-v <prpl_mono>:/robocode/prpl-mono:ro`` (read-only bind-mount)
+       * ``-v <kindergarden>:/robocode/third-party/kindergarden:ro`` (read-only)
        * ``-w /sandbox`` as the working directory
        * The container's entrypoint runs ``init-firewall.sh`` then the
          agent CLI command
@@ -279,71 +408,37 @@ async def run_agent_in_docker_sandbox(
 
     _setup_sandbox_dir(config)
 
-    repo_root = _find_repo_root()
-    prpl_mono = repo_root / "prpl-mono"
-    if not prpl_mono.exists():
-        raise RuntimeError(
-            f"prpl-mono not found at {prpl_mono}; "
-            "run: git submodule update --init --recursive"
-        )
-
-    src_dir = repo_root / "src"
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    # Create filtered copies: prpl-mono without tests, src without oracles.
-    tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
-    filtered_prpl_mono = Path(tmp_dir) / "prpl-mono"
-    filtered_src = Path(tmp_dir) / "src"
-    try:
-        _copy_prpl_mono_without_tests(prpl_mono, filtered_prpl_mono)
-        _copy_src_without_oracles(src_dir, filtered_src)
-        prpl_mono_abs = str(filtered_prpl_mono.resolve())
-        src_abs = str(filtered_src.resolve())
-
+    with _filtered_repo_mounts() as (filtered_src, filtered_kindergarden):
         # --- Authentication ---
         auth_args, auth_env = _build_docker_auth_args(backend_name)
 
         # --- Firewall extra domains ---
         firewall_domains: list[str] = []
         if backend_name == "opencode":
-            firewall_domains = firewall_domains_for_model(config.model)
+            firewall_domains = firewall_domains_for_provider(
+                provider_from_model(config.model)
+            )
             # OpenCode also needs access to its own telemetry/update servers.
             # firewall_domains.append("registry.npmjs.org")
 
-        docker_cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "--name",
+        docker_cmd = _docker_run_prefix(
             container_name,
-            "--cap-add=NET_ADMIN",
-            "--cap-add=NET_RAW",
-            "-e",
-            f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
-            "-e",
-            f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
-        ]
-
-        if firewall_domains:
-            docker_cmd += [
-                "-e",
-                f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
-            ]
-
-        docker_cmd += auth_args
-
-        docker_cmd += [
-            "-v",
-            f"{sandbox_abs}:/sandbox",
-            "-v",
-            f"{src_abs}:/robocode/src",
-            "-v",
-            f"{prpl_mono_abs}:/robocode/prpl-mono",
-            "-w",
-            "/sandbox",
             config.docker_image,
-        ]
+            config.sandbox_dir,
+            filtered_src,
+            filtered_kindergarden,
+            auth_args,
+            firewall_domains,
+            env_args=[
+                "-e",
+                f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
+                "-e",
+                f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+            ],
+        )
 
         # Build the agent CLI command.
         agent_cmd = backend.build_cli_cmd(
@@ -402,5 +497,3 @@ async def run_agent_in_docker_sandbox(
         return _stream_result_to_sandbox_result(
             stream, config.sandbox_dir, config.output_filename
         )
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)

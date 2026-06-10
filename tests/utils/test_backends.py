@@ -14,7 +14,7 @@ from robocode.utils.backends import (
     DEFAULT_OPENCODE_CFG,
     PROVIDERS,
     create_backend,
-    firewall_domains_for_model,
+    firewall_domains_for_provider,
     provider_from_model,
 )
 from robocode.utils.backends.claude import _RATE_LIMIT_RE, ClaudeBackend
@@ -394,21 +394,29 @@ class TestProviderUtils:
 
     def test_firewall_domains_for_known_providers(self) -> None:
         """Known providers return their API domains."""
-        assert "api.openai.com" in firewall_domains_for_model("openai/gpt-4o")
-        assert "api.anthropic.com" in firewall_domains_for_model(
-            "anthropic/claude-sonnet-4-5"
-        )
-        assert "generativelanguage.googleapis.com" in firewall_domains_for_model(
-            "google/gemini-2.5-pro"
-        )
+        assert firewall_domains_for_provider("openai") == ["api.openai.com"]
+        assert firewall_domains_for_provider("anthropic") == ["api.anthropic.com"]
+        assert firewall_domains_for_provider("google") == [
+            "generativelanguage.googleapis.com"
+        ]
 
     def test_firewall_domains_for_unknown_provider(self) -> None:
-        """Unknown providers return an empty list."""
-        assert not firewall_domains_for_model("custom/my-model")
+        """Unknown providers (including local Ollama) return an empty list."""
+        assert not firewall_domains_for_provider("cli")
+        assert not firewall_domains_for_provider("custom")
+        assert not firewall_domains_for_provider(provider_from_model("ollama/qwen3.5"))
 
-    def test_firewall_domains_for_local_model(self) -> None:
-        """Local Ollama models return an empty list."""
-        assert not firewall_domains_for_model("ollama/qwen3.5")
+    def test_firewall_domains_for_model_string(self) -> None:
+        """Composing with provider_from_model covers 'provider/model' strings."""
+        assert firewall_domains_for_provider(provider_from_model("openai/gpt-4o")) == [
+            "api.openai.com"
+        ]
+
+    def test_firewall_domains_with_base_url(self) -> None:
+        """A base_url adds its hostname to the provider domains."""
+        assert firewall_domains_for_provider(
+            "openai", "https://my-vllm.example.com:8000/v1"
+        ) == ["api.openai.com", "my-vllm.example.com"]
 
     def test_providers_registry_has_expected_keys(self) -> None:
         """Registry contains the three core providers with valid metadata."""

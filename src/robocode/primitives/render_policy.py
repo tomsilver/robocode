@@ -42,7 +42,7 @@ def render_policy(
 
     saved_state = env.get_state()
     try:
-        _, frames = run_episode(env, approach, seed, max_steps, render=True)
+        _, frames, _ = run_episode(env, approach, seed, max_steps, render=True)
     finally:
         env.set_state(saved_state)
 
