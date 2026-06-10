@@ -107,7 +107,7 @@ def _main(cfg: DictConfig) -> float:
     render = cfg.render_videos
     per_episode = []
     for i, s in enumerate(eval_seeds):
-        episode_result, frames = run_episode(
+        episode_result, frames, _ = run_episode(
             env, approach, s, cfg.max_steps, render=render
         )
         per_episode.append(episode_result)
