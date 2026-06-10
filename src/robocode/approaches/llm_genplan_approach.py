@@ -62,8 +62,7 @@ _SUMMARY_PROMPT = "Write a short summary of this environment in words."
 
 _STRATEGY_PROMPT = (
     "There is a simple strategy for solving all instances of this environment "
-    "without using search or learning. What is that strategy? Describe it in "
-    "words; do not write code yet."
+    "without using search. What is that strategy?"
 )
 
 
@@ -141,7 +140,14 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         messages: list[dict[str, str]] = []
         if self._skip_chain_of_thought:
             messages.append(
-                {"role": "user", "content": f"{context}\n\n{_INTERFACE_SPEC}"}
+                {
+                    "role": "user",
+                    "content": (
+                        f"{context}\n\nThere is a simple strategy for solving "
+                        "all instances of this environment without using "
+                        f"search. {_INTERFACE_SPEC}"
+                    ),
+                }
             )
         else:
             self._exchange(messages, f"{context}\n\n{_SUMMARY_PROMPT}", sandbox_dir, 0)
@@ -200,13 +206,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 return
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
             messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        f"{failure['feedback']}\nFix the code. Return the complete, "
-                        "corrected GeneratedApproach class as a single code block."
-                    ),
-                }
+                {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
             )
 
     # ------------------------------------------------------------------ prompt
@@ -223,10 +223,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         )
         parts.append(
             "## Example initial states\n\n"
-            "Each instance below is one task (env.reset(seed=...)). Only the "
-            "initial state varies across instances; the GOAL is fixed by the "
-            "environment (see the Reward/termination logic in the source above) "
-            "and any goal-relevant features are part of the observation itself."
+            "Each instance below is one task (env.reset(seed=...))."
         )
         for s in prompt_seeds:
             obs, _ = self._env.reset(seed=s)
