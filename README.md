@@ -196,6 +196,8 @@ The agent runs inside a Docker container (`robocode-sandbox`) that provides full
 | Network | `init-firewall.sh` whitelists API endpoints for the configured provider (Anthropic, OpenAI, Google, etc.), GitHub IPs, and telemetry; blocks everything else via iptables. Extra domains are passed via `ROBOCODE_FIREWALL_EXTRA_DOMAINS`. |
 | Write hook | Claude backend: `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox`. OpenCode backend: `"permission": "allow"` in `opencode.json` (Docker provides the isolation). |
 
+The Apptainer backend (`container_backend=apptainer`, for HPC clusters with no Docker daemon) keeps the same filesystem isolation but has **no network firewall**: unprivileged Apptainer cannot grant `CAP_NET_ADMIN`, so `init-firewall.sh` is skipped and generated code runs with unrestricted network egress. Use Docker where the iptables allowlist matters.
+
 ### What the agent sees
 
 | Path | Contents |

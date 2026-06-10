@@ -114,9 +114,9 @@ def test_build_cmd_no_firewall_when_empty(tmp_path: Path) -> None:
 
 
 def test_build_cmd_auth_args_inserted(tmp_path: Path) -> None:
-    """Caller-supplied auth args (e.g. --env or --bind) appear in the cmd."""
+    """Caller-supplied auth args (e.g. a --bind) appear in the cmd."""
     config = ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    auth_args = ["--env", "CLAUDE_CODE_OAUTH_TOKEN=tok-123"]
+    auth_args = ["--bind", "/home/u/.claude:/home/node/.claude"]
     cmd = _build_apptainer_cmd(
         config,
         sandbox_abs="/host/sandbox",
@@ -126,24 +126,25 @@ def test_build_cmd_auth_args_inserted(tmp_path: Path) -> None:
         firewall_domains=[],
         agent_cmd=["claude"],
     )
-    assert "CLAUDE_CODE_OAUTH_TOKEN=tok-123" in cmd
+    assert "/home/u/.claude:/home/node/.claude" in cmd
 
 
 def test_opencode_auth_passes_api_keys(monkeypatch) -> None:  # type: ignore
-    """For OpenCode, set provider API keys become --env KEY=val entries."""
+    """Provider API keys are forwarded via APPTAINERENV_ env vars, not argv."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-value")
     args, env = _build_apptainer_auth_args("opencode")
-    assert env.get("ANTHROPIC_API_KEY") == "sk-test-value"
-    assert "--env" in args
-    assert "ANTHROPIC_API_KEY=sk-test-value" in args
+    assert env.get("APPTAINERENV_ANTHROPIC_API_KEY") == "sk-test-value"
+    # The secret must not appear on the command line.
+    assert not any("sk-test-value" in a for a in args)
 
 
 def test_claude_auth_uses_env_token(monkeypatch) -> None:  # type: ignore
-    """CLAUDE_CODE_OAUTH_TOKEN, when set, is forwarded via --env (no bind)."""
+    """CLAUDE_CODE_OAUTH_TOKEN is forwarded via APPTAINERENV_, never on argv."""
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
     args, env = _build_apptainer_auth_args("claude")
-    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test"
-    assert "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test" in args
+    assert env.get("APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test"
+    # The token must not appear on the command line (visible via `ps`).
+    assert not any("sk-ant-oat01-test" in a for a in args)
     assert not any("--bind" in a for a in args)
 
 

@@ -25,6 +25,7 @@ from robocode.utils.docker_sandbox import (
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
 from robocode.utils.sandbox import SandboxConfig
+from robocode.utils.sandbox_types import resolve_container_backend
 
 logger = logging.getLogger(__name__)
 
@@ -230,15 +231,9 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
-        # container_backend takes precedence; use_docker kept for back-compat.
-        if container_backend is None:
-            container_backend = "docker" if use_docker else "local"
-        if container_backend not in ("docker", "apptainer", "local"):
-            raise ValueError(
-                f"Invalid container_backend {container_backend!r}; "
-                "expected 'docker', 'apptainer', or 'local'"
-            )
-        self._container_backend = container_backend
+        self._container_backend = resolve_container_backend(
+            container_backend, use_docker
+        )
         self._geometry_prompt = geometry_prompt
         self._modular_code_prompt = modular_code_prompt
         self._mcp_tools = mcp_tools

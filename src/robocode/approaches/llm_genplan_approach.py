@@ -28,6 +28,7 @@ from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.genplan_validate import render_state, validate_tasks
 from robocode.utils.llm import LLMClient, LLMResponse, create_llm_client
+from robocode.utils.sandbox_types import resolve_container_backend
 from robocode.utils.source_deps import collect_local_deps
 
 logger = logging.getLogger(__name__)
@@ -99,15 +100,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         )
         self._seed = seed
         self._completion_cfg = completion
-        # container_backend takes precedence; use_docker kept for back-compat.
-        if container_backend is None:
-            container_backend = "docker" if use_docker else "local"
-        if container_backend not in ("docker", "apptainer", "local"):
-            raise ValueError(
-                f"Invalid container_backend {container_backend!r}; "
-                "expected 'docker', 'apptainer', or 'local'"
-            )
-        self._container_backend = container_backend
+        self._container_backend = resolve_container_backend(
+            container_backend, use_docker
+        )
         # Sandboxed runs build the client inside the container, so the host
         # needs no client/key.
         self._client: LLMClient | None = (

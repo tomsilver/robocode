@@ -7,6 +7,24 @@ the sandbox module and the backend implementations.
 from dataclasses import dataclass, field
 from pathlib import Path
 
+CONTAINER_BACKENDS = ("docker", "apptainer", "local")
+
+
+def resolve_container_backend(container_backend: str | None, use_docker: bool) -> str:
+    """Resolve and validate an approach's sandbox backend selection.
+
+    ``container_backend`` takes precedence; ``use_docker`` is the legacy
+    boolean kept for back-compat (True -> docker, False -> local).
+    """
+    if container_backend is None:
+        container_backend = "docker" if use_docker else "local"
+    if container_backend not in CONTAINER_BACKENDS:
+        raise ValueError(
+            f"Invalid container_backend {container_backend!r}; "
+            f"expected one of {CONTAINER_BACKENDS}"
+        )
+    return container_backend
+
 
 @dataclass(frozen=True)
 class SandboxConfig:

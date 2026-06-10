@@ -112,10 +112,13 @@ def _build_apptainer_auth_args(
 ) -> tuple[list[str], dict[str, str]]:
     """Return Apptainer CLI args and env vars for backend authentication.
 
-    Mirrors :func:`docker_sandbox._build_docker_auth_args` but emits
-    ``--env`` / ``--bind`` flags. Apptainer doesn't read host env vars
-    automatically (we pass ``--cleanenv``), so the actual value is passed
-    via ``--env KEY=val``.
+    Mirrors :func:`docker_sandbox._build_docker_auth_args`. Secrets (the
+    Claude OAuth token, provider API keys) are returned as host env vars
+    with Apptainer's ``APPTAINERENV_`` prefix rather than inline ``--env``
+    flags: Apptainer injects ``APPTAINERENV_*`` into the container even
+    under ``--cleanenv``, and the value never reaches argv (world-readable
+    via ``ps`` / ``/proc/<pid>/cmdline`` on shared nodes). Only non-secret
+    bind mounts are returned as CLI args.
 
     The ``~/.claude`` bind-mount fallback relies on the image being built
     with build.sh / build_sif.sh (which pass USER_UID/USER_GID build args
@@ -129,8 +132,10 @@ def _build_apptainer_auth_args(
     if backend_name == "claude":
         oauth_token = _get_claude_oauth_token()
         if oauth_token:
-            apptainer_args += ["--env", f"CLAUDE_CODE_OAUTH_TOKEN={oauth_token}"]
-            extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+            # APPTAINERENV_ prefix, not an inline --env flag, so the secret is
+            # injected into the container (surviving --cleanenv) without ever
+            # appearing on the command line.
+            extra_env["APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
         else:
             logger.warning(
                 "No Claude OAuth token found; falling back to ~/.claude "
@@ -154,8 +159,9 @@ def _build_apptainer_auth_args(
             if info.api_key_env:
                 val = os.environ.get(info.api_key_env)
                 if val:
-                    apptainer_args += ["--env", f"{info.api_key_env}={val}"]
-                    extra_env[info.api_key_env] = val
+                    # APPTAINERENV_ prefix keeps the key off argv (see the
+                    # OAuth token note above).
+                    extra_env[f"APPTAINERENV_{info.api_key_env}"] = val
 
     return apptainer_args, extra_env
 
