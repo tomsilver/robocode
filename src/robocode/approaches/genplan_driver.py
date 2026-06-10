@@ -50,6 +50,11 @@ def main() -> None:
         use_docker=False,  # already isolated; run the loop in-process here
     )
     approach.train()
+    # The host approach reads this back; the container is the only place the
+    # accumulated API cost exists.
+    (_SANDBOX / "cost.json").write_text(
+        json.dumps({"total_cost_usd": approach.total_cost_usd})
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ containers for authentication.
 """
 
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from omegaconf import DictConfig
 
@@ -26,7 +27,7 @@ __all__ = [
     "CLAUDE_PROMPT_SUFFIX",
     "OPENCODE_PROMPT_SUFFIX",
     "create_backend",
-    "firewall_domains_for_model",
+    "firewall_domains_for_provider",
     "provider_from_model",
 ]
 
@@ -95,11 +96,20 @@ def provider_from_model(model: str) -> str:
     return ""
 
 
-def firewall_domains_for_model(model: str) -> list[str]:
-    """Return the API domains that must be whitelisted for *model*."""
-    provider = provider_from_model(model)
+def firewall_domains_for_provider(provider: str, base_url: str = "") -> list[str]:
+    """Return the API domains that must be whitelisted for *provider*.
+
+    Callers with a ``"provider/model"`` string get the provider via
+    :func:`provider_from_model`. A *base_url* (self-hosted or proxy endpoint)
+    adds its hostname to the provider's registry domains.
+    """
     info = PROVIDERS.get(provider)
-    return list(info.domains) if info else []
+    domains = list(info.domains) if info else []
+    if base_url:
+        hostname = urlparse(base_url).hostname
+        assert hostname is not None, f"base_url has no hostname: {base_url}"
+        domains.append(hostname)
+    return domains
 
 
 # Backend-specific system prompt suffixes.

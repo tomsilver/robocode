@@ -173,6 +173,8 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         }
         (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
         run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
+        cost = json.loads((sandbox_dir / "cost.json").read_text(encoding="utf-8"))
+        self.total_cost_usd = cost["total_cost_usd"]
 
     def _debug_loop(
         self,

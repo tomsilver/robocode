@@ -128,6 +128,32 @@ def test_debug_loop_fixes_broken_policy(tmp_path):
     assert terminated
 
 
+def test_docker_cost_readback(tmp_path, monkeypatch):
+    """With use_docker, the cost written by the container is read back."""
+    env = _ToyEnv()
+    approach = LLMGenPlanApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=0,
+        primitives={},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env_cfg="{}",
+        output_dir=str(tmp_path),
+        use_docker=True,
+    )
+
+    def fake_run(sandbox_dir, completion_cfg, image):
+        del completion_cfg, image
+        sandbox_dir.joinpath("approach.py").write_text(_parse_python_code(_FIXED))
+        sandbox_dir.joinpath("cost.json").write_text('{"total_cost_usd": 0.05}')
+
+    monkeypatch.setattr(
+        "robocode.approaches.llm_genplan_approach.run_genplan_in_docker", fake_run
+    )
+    approach.train()
+    assert approach.total_cost_usd == pytest.approx(0.05)
+
+
 def test_cot_adds_summary_and_strategy_turns(tmp_path):
     """With CoT on, summary and strategy exchanges precede the code."""
     env = _ToyEnv()
