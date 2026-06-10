@@ -11,7 +11,7 @@ run_eval() {
     echo ">>> Running: $dir (env=$env, seed=$seed, primitives=$primitives)"
     python experiments/run_experiment.py \
         approach=agentic_cdl \
-        approach.use_docker=true \
+        approach.container_backend=docker \
         approach.max_budget_usd=20.0 \
         seed="$seed" \
         num_eval_tasks=100 \

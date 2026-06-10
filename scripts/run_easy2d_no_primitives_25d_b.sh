@@ -3,7 +3,7 @@ set -euo pipefail
 
 python experiments/run_experiment.py -m \
     approach=agentic \
-    approach.use_docker=true \
+    approach.container_backend=docker \
     approach.max_budget_usd=25 \
     seed=424,222 \
     'primitives=[]' \

@@ -228,7 +228,7 @@ bash docker/build.sh
 
 ### Using the OS-level sandbox (legacy)
 
-The original macOS Seatbelt / Linux bubblewrap sandbox is still available (`use_docker: false` in `agentic.yaml`) but has a known limitation: it restricts filesystem *writes* but allows *reads* of the entire host filesystem.
+The original macOS Seatbelt / Linux bubblewrap sandbox is still available (`container_backend: local` in `agentic.yaml`) but has a known limitation: it restricts filesystem *writes* but allows *reads* of the entire host filesystem.
 
 Red team the sandbox:
 ```bash
@@ -280,7 +280,7 @@ Available backend presets: `claude_sonnet` (default), `claude_opus`, `opencode_g
 
 To use the legacy OS-level sandbox instead:
 ```bash
-python experiments/run_experiment.py approach=agentic environment=small_maze approach.use_docker=false
+python experiments/run_experiment.py approach=agentic environment=small_maze approach.container_backend=local
 ```
 
 To skip re-generation and load a previously generated approach:
@@ -298,7 +298,7 @@ Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run
 ```bash
 python experiments/run_experiment.py -m \
     approach=agentic \
-    approach.use_docker=true \
+    approach.container_backend=docker \
     seed=42,24,424,444,222 \
     'primitives=[]' \
     environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
