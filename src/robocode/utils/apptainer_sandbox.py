@@ -81,6 +81,7 @@ class ApptainerSandboxConfig(SandboxConfig):
     sif_path: Path = _DEFAULT_SIF
     primitive_names: tuple[str, ...] = ()
     mcp_tools: tuple[str, ...] = ()
+    blackbox: bool = False
 
 
 def _setup_sandbox_dir(config: ApptainerSandboxConfig) -> None:
@@ -241,7 +242,10 @@ async def run_agent_in_apptainer_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     run_id = f"apptainer-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts() as (filtered_src, filtered_kindergarden):
+    with _filtered_repo_mounts(blackbox=config.blackbox) as (
+        filtered_src,
+        filtered_kindergarden,
+    ):
         auth_args, auth_env = _build_apptainer_auth_args(backend_name)
 
         firewall_domains: list[str] = []

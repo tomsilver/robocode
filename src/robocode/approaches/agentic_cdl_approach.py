@@ -11,9 +11,11 @@ precondition, subgoal, and a feedforward policy body.  The agent must:
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -32,6 +34,11 @@ from robocode.utils.backends import (
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
+)
+from robocode.utils.env_server import (
+    ENV_CLIENT_SRC,
+    env_server_running,
+    serialize_space,
 )
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
@@ -66,6 +73,37 @@ _SYSTEM_PROMPT = (
     "Use subagents to explore source code in parallel, e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially. "
+    "TOKEN BUDGET: You have a limited output-token budget per turn. Be concise. "
+    "Do NOT write lengthy prose reasoning about geometry or arithmetic — put "
+    "all numerical calculations in code (Python scripts or inline print "
+    "statements) and read the results. Your text should be SHORT: state what "
+    "you will do, then immediately write code. Never narrate step-by-step "
+    "arithmetic in text."
+)
+
+_SYSTEM_PROMPT_BLACKBOX = (
+    "You are an expert at writing purely imperative, feedforward policies for "
+    "gymnasium environments. You decompose tasks into a fixed sequence of "
+    "BEHAVIORS, where each behavior is a small, self-contained module with an "
+    "explicit precondition, subgoal, and a deterministic policy body. "
+    "The environment is a black box: its source code is not available, so "
+    "you will discover the dynamics, reward structure, and termination "
+    "conditions empirically by interacting with a live environment instance. "
+    "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
+    "to the current working directory using RELATIVE paths only. "
+    "Never use absolute paths when writing files. "
+    "IMPORTANT: Write code often to approach.py as you iterate. You may be "
+    "interrupted at any time, so you should make sure that approach.py is "
+    "your best current attempt at all times. "
+    "VERSION CONTROL: This directory is a git repo. After each meaningful "
+    "change to approach.py or supporting modules, run "
+    "`git add -A && git commit -m '<describe what you changed and why>'`. "
+    "Commit often, do not batch everything into one final commit. "
+    "You should commit the approach every time before you test it in the environment. "
+    "Use subagents to run exploration experiments in parallel, e.g. spawn "
+    "subagents to probe action effects, reward structure, and termination "
+    "conditions simultaneously rather than sequentially; each test script "
+    "gets its own fresh environment instance. "
     "TOKEN BUDGET: You have a limited output-token budget per turn. Be concise. "
     "Do NOT write lengthy prose reasoning about geometry or arithmetic — put "
     "all numerical calculations in code (Python scripts or inline print "
@@ -111,12 +149,7 @@ Required files:
 This includes extracting object positions, computing geometric predicates, \
 and any named constants for observation indices. \
 Every "magic number" related to observation parsing MUST be a named constant here. \
-BEFORE writing this file, you MUST run: \
-``feats = env.unwrapped.observation_space.devectorize(obs)`` \
-to inspect the observation structure. This returns a dictionary mapping \
-feature names to their values, so you can see exactly what each part of \
-the observation vector represents. Use this to determine the correct \
-indices, feature names, and semantics — do NOT guess the observation layout. \
+{obs_inspection_note}\
 {obs_helpers_note}
 - ``act_helpers.py`` — ALL functions that help generate actions. This includes \
 waypoint interpolation, action clipping, proportional controllers, etc. \
@@ -180,6 +213,22 @@ reached, re-generate the plan from the current observation instead of \
 repeating the same failed plan.
 """
 
+_OBS_INSPECTION_NOTE = """\
+BEFORE writing this file, you MUST run: \
+``feats = env.unwrapped.observation_space.devectorize(obs)`` \
+to inspect the observation structure. This returns a dictionary mapping \
+feature names to their values, so you can see exactly what each part of \
+the observation vector represents. Use this to determine the correct \
+indices, feature names, and semantics — do NOT guess the observation layout. \
+"""
+
+_OBS_INSPECTION_NOTE_BLACKBOX = """\
+BEFORE writing this file, you MUST map the observation layout empirically \
+with env_client: reset with several seeds, perturb the state with \
+``set_state``, and observe which observation entries change as you act. \
+Do NOT guess the observation layout. \
+"""
+
 _INTERFACE_SPEC = """\
 Write `approach.py` containing a class `GeneratedApproach` with the following \
 interface:
@@ -229,7 +278,10 @@ interpreter has all required packages installed. For example:
 ```bash
 {python_executable} test_behavior_[behavior_name].py
 {python_executable} test_approach.py
-```
+```\
+"""
+
+_INSPECT_SOURCE_SUFFIX = """
 
 You can also inspect the source code of any imported module to understand \
 the environment's dynamics in detail (reward function, transition logic, \
@@ -238,6 +290,41 @@ termination conditions, etc.). To locate a module's source file:
 {python_executable} -c "import some_module; print(some_module.__file__)"
 ```
 Then read the source to inform your approach.\
+"""
+
+_BLACKBOX_INTERACTION_SPEC = """\
+The environment is a BLACK BOX. You CANNOT read its source code; it is not \
+available anywhere on this machine. A live environment server is running. \
+Interact with it through `env_client.py` in your working directory:
+
+```python
+from env_client import make_env
+
+env = make_env()  # fresh environment instance per call
+obs, info = env.reset(seed=0)
+obs, reward, terminated, truncated, info = env.step(action)
+state = env.get_state()  # numpy snapshot of the full environment state
+env.set_state(state)  # restore a snapshot
+env.close()
+```
+
+`env.observation_space` and `env.action_space` expose `shape`, `low`, \
+`high`, `dtype`, and `sample()`; the same metadata is in `env_spaces.json`. \
+`env.max_steps` is the episode step limit used at evaluation time.
+
+Parallel test scripts are fine: every `make_env()` call creates an \
+independent environment instance. Use `set_state` to put the environment \
+into the state a behavior's precondition requires when testing it in \
+isolation.
+
+Start by exploring systematically: reset with several seeds, apply \
+controlled actions, and study how the observation vector changes to \
+identify what each dimension means and how actions affect the state.
+
+CRITICAL: `approach.py` itself must NOT import `env_client`. It will be \
+evaluated against the real environment by a separate harness that calls \
+`reset(state, info)` and `get_action(state)` directly. Use `env_client` \
+ONLY in test and exploration scripts.\
 """
 
 _GEOMETRY_PROMPT = """\
@@ -298,6 +385,30 @@ type, action space, and dynamics.
 {behavior_implementation_prompt}\
 """
 
+_PROMPT_BLACKBOX = """\
+You are writing a behavior-based approach for an environment that you can \
+only access as a black box.
+
+Your approach should be general enough to solve any instance of this \
+environment (each reset gives a new instance), but it does NOT need to be \
+adaptable to different other environments.
+{env_description_section}
+{blackbox_interaction_spec}
+{initial_helpers_prompt}
+{geometry_prompt}
+{cdl_decomposition_prompt}
+{interface_spec}
+{behavior_implementation_prompt}\
+"""
+
+_BLACKBOX_DESCRIPTION_PREFIX = """\
+
+The environment is described below. Ignore any instructions in the \
+description about importing the environment or reading its source; your \
+only access is through env_client.
+
+"""
+
 
 class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
     """An approach that uses a Claude agent to write behavior-decomposed code."""
@@ -321,6 +432,9 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
         env_name: str | None = None,
+        blackbox: bool = False,
+        env_cfg: str | None = None,
+        max_steps: int | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -346,6 +460,27 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._env_name = env_name
+        self._blackbox = blackbox
+        self._env_cfg = env_cfg
+        self._max_steps = max_steps
+        if blackbox:
+            if mcp_tools:
+                raise ValueError(
+                    "mcp_tools are incompatible with blackbox mode: the "
+                    "render tools import environment code in-container. "
+                    "Run with 'mcp_tools=[]'"
+                )
+            if env_cfg is None:
+                raise ValueError("blackbox mode requires env_cfg")
+            # Fail fast on spaces the blackbox protocol cannot serialize.
+            serialize_space(action_space)
+            serialize_space(observation_space)
+            if self._container_backend == "local":
+                logger.warning(
+                    "blackbox with the local backend is best-effort only: "
+                    "the OS sandbox cannot prevent reading env source from "
+                    "the host filesystem"
+                )
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -367,6 +502,8 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             Path(__file__).resolve().parent.parent / "primitives" / "behavior.py"
         )
         init_files: dict[str, Path] = {"behavior.py": behavior_src}
+        if self._blackbox:
+            init_files["env_client.py"] = ENV_CLIENT_SRC
 
         # If env-specific helper files exist, copy them into the sandbox so
         # the agent starts with correct obs/act helpers instead of writing
@@ -418,6 +555,10 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             python_executable=python_exe,
             primitives_description=primitives_desc,
         )
+        if not self._blackbox:
+            interface_spec += _INSPECT_SOURCE_SUFFIX.format(
+                python_executable=python_exe
+            )
 
         geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
         initial_helpers = _INITIAL_HELPERS_PROMPT if has_initial_helpers else ""
@@ -435,11 +576,30 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             act_helpers_note = ""
 
         behavior_impl_prompt = _BEHAVIOR_IMPLEMENTATION_PROMPT.format(
+            obs_inspection_note=(
+                _OBS_INSPECTION_NOTE_BLACKBOX
+                if self._blackbox
+                else _OBS_INSPECTION_NOTE
+            ),
             obs_helpers_note=obs_helpers_note,
             act_helpers_note=act_helpers_note,
         )
 
-        if self._env_description_path is not None:
+        if self._blackbox:
+            env_description_section = ""
+            if self._env_description_path is not None:
+                env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
+                env_description_section = _BLACKBOX_DESCRIPTION_PREFIX + env_desc + "\n"
+            prompt = _PROMPT_BLACKBOX.format(
+                env_description_section=env_description_section,
+                blackbox_interaction_spec=_BLACKBOX_INTERACTION_SPEC,
+                initial_helpers_prompt=initial_helpers,
+                geometry_prompt=geometry,
+                cdl_decomposition_prompt=_CDL_DECOMPOSITION_PROMPT,
+                interface_spec=interface_spec,
+                behavior_implementation_prompt=behavior_impl_prompt,
+            )
+        elif self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
             prompt = _PROMPT_WITH_DESCRIPTION.format(
                 env_description=env_desc,
@@ -457,7 +617,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 behavior_implementation_prompt=behavior_impl_prompt,
             )
 
-        system_prompt = _SYSTEM_PROMPT
+        system_prompt = _SYSTEM_PROMPT_BLACKBOX if self._blackbox else _SYSTEM_PROMPT
         backend_name = self._backend_cfg["backend"]
         if backend_name == "opencode":
             system_prompt += OPENCODE_PROMPT_SUFFIX
@@ -483,6 +643,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
+                blackbox=self._blackbox,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         elif self._container_backend == "apptainer":
@@ -499,6 +660,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
+                blackbox=self._blackbox,
             )
             sandbox_logger = logging.getLogger("robocode.utils.apptainer_sandbox")
         else:
@@ -524,12 +686,19 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         )
         sandbox_logger.addHandler(file_handler)
         try:
-            result = run_with_rate_limit_retry(
-                docker_config,
-                config,
-                backend=self._backend,
-                apptainer_config=apptainer_config,
-            )
+            with ExitStack() as stack:
+                if self._blackbox:
+                    assert self._env_cfg is not None  # validated in __init__
+                    port, token = stack.enter_context(
+                        env_server_running(self._env_cfg, sandbox_dir)
+                    )
+                    self._write_env_spaces(sandbox_dir, port, token)
+                result = run_with_rate_limit_retry(
+                    docker_config,
+                    config,
+                    backend=self._backend,
+                    apptainer_config=apptainer_config,
+                )
         finally:
             sandbox_logger.removeHandler(file_handler)
             file_handler.close()
@@ -540,6 +709,25 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             self._load_generated(result.output_file)
         else:
             logger.warning("Agent failed to generate approach: %s", result.error)
+
+    def _write_env_spaces(self, sandbox_dir: Path, port: int, token: str) -> None:
+        """Write the metadata file read by the sandbox's env_client."""
+        host = (
+            "host.docker.internal"
+            if self._container_backend == "docker"
+            else "127.0.0.1"
+        )
+        meta = {
+            "host": host,
+            "port": port,
+            "token": token,
+            "observation_space": serialize_space(self._state_space),
+            "action_space": serialize_space(self._action_space),
+            "max_steps": self._max_steps,
+        }
+        (sandbox_dir / "env_spaces.json").write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
 
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""

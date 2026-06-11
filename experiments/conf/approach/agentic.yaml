@@ -11,3 +11,4 @@ geometry_prompt: true
 modular_code_prompt: false
 max_output_tokens: 16384
 autocompact_pct: 80
+blackbox: false  # hide env source; interact via host-side env server

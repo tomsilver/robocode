@@ -10,3 +10,4 @@ container_backend: docker  # docker | apptainer | local
 geometry_prompt: true
 max_output_tokens: 32000
 autocompact_pct: 80
+blackbox: false  # hide env source; interact via host-side env server

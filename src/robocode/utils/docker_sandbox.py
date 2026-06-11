@@ -129,24 +129,37 @@ def _find_repo_root() -> Path:
     )
 
 
-def _copy_kindergarden_without_tests(kindergarden: Path, dest: Path) -> None:
-    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``."""
+def _copy_kindergarden_without_tests(
+    kindergarden: Path, dest: Path, *, blackbox: bool = False
+) -> None:
+    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``.
+
+    With *blackbox*, also skips ``kinder/envs/`` (all environment dynamics,
+    rewards, and scene generation) and ``demos/`` (recorded solution
+    trajectories) so the agent cannot read them. The package skeleton
+    (pyproject.toml, ``kinder/core.py`` etc.) stays so the entrypoint's
+    ``uv sync --frozen`` still succeeds.
+    """
+    skip = ("tests", "docs", "envs", "demos") if blackbox else ("tests", "docs")
     shutil.copytree(
         kindergarden,
         dest,
-        ignore=shutil.ignore_patterns("tests", "docs"),
+        ignore=shutil.ignore_patterns(*skip),
     )
 
 
 @contextmanager
 def _filtered_repo_mounts(
-    *, keep_primitives: bool = False
+    *, keep_primitives: bool = False, blackbox: bool = False
 ) -> Iterator[tuple[Path, Path]]:
     """Yield filtered copies of ``src/`` and ``kindergarden/`` to bind-mount.
 
     ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
-    *keep_primitives*); ``kindergarden`` without tests/docs. The copies live in
-    a temp dir that is removed on exit.
+    *keep_primitives*); ``kindergarden`` without tests/docs. With *blackbox*,
+    environment source (``robocode/environments/``, ``kinder/envs/``, demos)
+    is also excluded so the agent can only interact with the env through the
+    host-side env server. The copies live in a temp dir that is removed on
+    exit.
     """
     repo_root = _find_repo_root()
     kindergarden = repo_root / "third-party" / "kindergarden"
@@ -159,8 +172,15 @@ def _filtered_repo_mounts(
     filtered_src = Path(tmp_dir) / "src"
     filtered_kindergarden = Path(tmp_dir) / "kindergarden"
     try:
-        _copy_src(repo_root / "src", filtered_src, keep_primitives=keep_primitives)
-        _copy_kindergarden_without_tests(kindergarden, filtered_kindergarden)
+        _copy_src(
+            repo_root / "src",
+            filtered_src,
+            keep_primitives=keep_primitives,
+            blackbox=blackbox,
+        )
+        _copy_kindergarden_without_tests(
+            kindergarden, filtered_kindergarden, blackbox=blackbox
+        )
         yield filtered_src, filtered_kindergarden
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -175,10 +195,14 @@ def _docker_run_prefix(
     auth_args: list[str],
     firewall_domains: list[str],
     env_args: list[str] | None = None,
+    blackbox: bool = False,
 ) -> list[str]:
     """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
 
     Callers append the in-container command (agent CLI or genplan driver).
+    With *blackbox*, ``host.docker.internal`` is mapped to the host gateway
+    so the agent's env_client can reach the host-side env server (the name
+    is built into Docker Desktop but needs --add-host on Linux).
     """
     cmd = [
         "docker",
@@ -190,6 +214,8 @@ def _docker_run_prefix(
         "--cap-add=NET_RAW",
         *(env_args or []),
     ]
+    if blackbox:
+        cmd += ["--add-host", "host.docker.internal:host-gateway"]
     if firewall_domains:
         cmd += [
             "-e",
@@ -259,7 +285,9 @@ def run_genplan_in_docker(
         )
 
 
-def _copy_src(src: Path, dest: Path, *, keep_primitives: bool = False) -> None:
+def _copy_src(
+    src: Path, dest: Path, *, keep_primitives: bool = False, blackbox: bool = False
+) -> None:
     """Copy ``src/`` to *dest*, always skipping ``oracles/`` (solution code).
 
     The agent mount also skips ``primitives/`` so the author cannot read all
@@ -267,8 +295,14 @@ def _copy_src(src: Path, dest: Path, *, keep_primitives: bool = False) -> None:
     :func:`_setup_sandbox_dir`). The genplan container sets ``keep_primitives``
     so its driver can call ``build_primitives`` in-container exactly as eval does
     on the host -- it is non-agentic, so there is no author to expose them to.
+    With *blackbox*, ``environments/`` is also skipped so the agent cannot
+    read the environment source.
     """
-    skip = ("oracles",) if keep_primitives else ("oracles", "primitives")
+    skip: tuple[str, ...] = (
+        ("oracles",) if keep_primitives else ("oracles", "primitives")
+    )
+    if blackbox:
+        skip += ("environments",)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
 
 
@@ -284,6 +318,7 @@ class DockerSandboxConfig(SandboxConfig):
     docker_image: str = _DEFAULT_IMAGE
     primitive_names: tuple[str, ...] = ()
     mcp_tools: tuple[str, ...] = ()
+    blackbox: bool = False
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -414,7 +449,10 @@ async def run_agent_in_docker_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts() as (filtered_src, filtered_kindergarden):
+    with _filtered_repo_mounts(blackbox=config.blackbox) as (
+        filtered_src,
+        filtered_kindergarden,
+    ):
         # --- Authentication ---
         auth_args, auth_env = _build_docker_auth_args(backend_name)
 
@@ -441,6 +479,7 @@ async def run_agent_in_docker_sandbox(
                 "-e",
                 f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
             ],
+            blackbox=config.blackbox,
         )
 
         # Build the agent CLI command.

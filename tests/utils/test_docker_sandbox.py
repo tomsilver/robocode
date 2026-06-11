@@ -35,6 +35,7 @@ from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
     _copy_src,
+    _filtered_repo_mounts,
     _find_repo_root,
     _setup_sandbox_dir,
 )
@@ -151,6 +152,64 @@ def test_find_repo_root_has_pyproject() -> None:
     """_find_repo_root() returns a directory containing pyproject.toml."""
     root = _find_repo_root()
     assert (root / "pyproject.toml").exists()
+
+
+def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
+    """Blackbox mounts contain no environment source anywhere."""
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+        assert not (src / "robocode" / "environments").exists()
+        assert not (src / "robocode" / "oracles").exists()
+        assert not (kindergarden / "src" / "kinder" / "envs").exists()
+        assert not (kindergarden / "demos").exists()
+        # The package skeleton survives so the entrypoint's uv sync works.
+        assert (src / "robocode" / "__init__.py").exists()
+        assert (kindergarden / "pyproject.toml").exists()
+        assert (kindergarden / "src" / "kinder" / "core.py").exists()
+
+
+def test_filtered_repo_mounts_default_keeps_env_source() -> None:
+    """Non-blackbox mounts keep the environment source."""
+    with _filtered_repo_mounts() as (src, kindergarden):
+        assert (src / "robocode" / "environments").exists()
+        assert (kindergarden / "src" / "kinder" / "envs").exists()
+
+
+@requires_docker
+def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
+    """With blackbox mounts, uv sync still works but env code is gone."""
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/bash",
+                "-v",
+                f"{tmp_path.resolve()}:/sandbox",
+                "-v",
+                f"{src.resolve()}:/robocode/src",
+                "-v",
+                f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                "-w",
+                "/sandbox",
+                _DOCKER_IMAGE,
+                "-c",
+                "cd /robocode && uv sync --frozen --python python3.11 && "
+                f"{DOCKER_PYTHON} -c 'import robocode.utils' && "
+                f"! {DOCKER_PYTHON} -c 'import robocode.environments' "
+                "2>/dev/null && "
+                f"! {DOCKER_PYTHON} -c 'import kinder.envs' 2>/dev/null && "
+                "! find / -name '*.py' 2>/dev/null "
+                "| grep -E 'robocode/environments|kinder/envs' -q && "
+                "echo BLACKBOX_OK",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    assert "BLACKBOX_OK" in result.stdout, result.stdout + result.stderr
 
 
 def test_setup_creates_sandbox_dir(tmp_path: Path) -> None:
