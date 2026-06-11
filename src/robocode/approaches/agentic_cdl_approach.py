@@ -23,6 +23,7 @@ from omegaconf import DictConfig
 from robocode.approaches.base_approach import BaseApproach
 from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
 from robocode.primitives import PRIMITIVE_DESCRIPTIONS
+from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import (
     CLAUDE_PROMPT_SUFFIX,
     OPENCODE_PROMPT_SUFFIX,
@@ -35,6 +36,7 @@ from robocode.utils.docker_sandbox import (
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
 from robocode.utils.sandbox import SandboxConfig
+from robocode.utils.sandbox_types import resolve_container_backend
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +315,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         output_dir: str = ".",
         load_dir: str | None = None,
         use_docker: bool = False,
+        container_backend: str | None = None,
         geometry_prompt: bool = True,
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
@@ -335,7 +338,9 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
-        self._use_docker = use_docker
+        self._container_backend = resolve_container_backend(
+            container_backend, use_docker
+        )
         self._geometry_prompt = geometry_prompt
         self._mcp_tools = mcp_tools
         self._max_output_tokens = max_output_tokens
@@ -406,7 +411,9 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                     mcp_lines.append(f"- {tool_descs[name]}")
             primitives_desc += "\n".join(mcp_lines)
 
-        python_exe = DOCKER_PYTHON if self._use_docker else sys.executable
+        python_exe = (
+            DOCKER_PYTHON if self._container_backend != "local" else sys.executable
+        )
         interface_spec = _INTERFACE_SPEC.format(
             python_executable=python_exe,
             primitives_description=primitives_desc,
@@ -460,8 +467,9 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
 
         docker_config: DockerSandboxConfig | None = None
+        apptainer_config: ApptainerSandboxConfig | None = None
         config: SandboxConfig | None = None
-        if self._use_docker:
+        if self._container_backend == "docker":
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
                 init_files=init_files,
@@ -477,6 +485,22 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 autocompact_pct=self._autocompact_pct,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
+        elif self._container_backend == "apptainer":
+            apptainer_config = ApptainerSandboxConfig(
+                sandbox_dir=sandbox_dir,
+                init_files=init_files,
+                output_filename="approach.py",
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=self._model,
+                max_budget_usd=self._max_budget_usd,
+                max_turns=self._max_turns,
+                primitive_names=tuple(self._primitives),
+                mcp_tools=self._mcp_tools,
+                max_output_tokens=self._max_output_tokens,
+                autocompact_pct=self._autocompact_pct,
+            )
+            sandbox_logger = logging.getLogger("robocode.utils.apptainer_sandbox")
         else:
             config = SandboxConfig(
                 sandbox_dir=sandbox_dir,
@@ -501,9 +525,10 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_logger.addHandler(file_handler)
         try:
             result = run_with_rate_limit_retry(
-                docker_config if self._use_docker else None,
-                config if not self._use_docker else None,
+                docker_config,
+                config,
                 backend=self._backend,
+                apptainer_config=apptainer_config,
             )
         finally:
             sandbox_logger.removeHandler(file_handler)

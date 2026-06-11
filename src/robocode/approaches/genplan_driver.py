@@ -47,7 +47,7 @@ def main() -> None:
         max_debug_attempts=cfg["max_debug_attempts"],
         skip_chain_of_thought=cfg["skip_chain_of_thought"],
         episode_timeout_s=cfg["episode_timeout_s"],
-        use_docker=False,  # already isolated; run the loop in-process here
+        container_backend="local",  # already isolated; run the loop in-process
     )
     approach.train()
     # The host approach reads this back; the container is the only place the

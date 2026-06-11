@@ -6,7 +6,7 @@ ENV=obstruction2d_medium
 
 python experiments/run_experiment.py \
     approach=agentic_cdl \
-    approach.use_docker=true \
+    approach.container_backend=docker \
     approach.max_budget_usd=20.0 \
     environment=stickbutton2d_medium \
     record_approach_history=true \

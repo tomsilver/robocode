@@ -29,6 +29,17 @@ ENV TZ="$TZ"
 ARG CLAUDE_CODE_VERSION=latest
 ARG OPENCODE_VERSION=latest
 
+# Remap the node user's UID/GID to match the host's at build time so that
+# bind-mounted host files (e.g. ~/.claude) are readable inside the container
+# without needing host UID 1000. build.sh / build_sif.sh pass
+# --build-arg USER_UID=$(id -u) USER_GID=$(id -g).
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
+        groupmod --gid "$USER_GID" node \
+        && usermod --uid "$USER_UID" --gid "$USER_GID" node; \
+    fi
+
 # ---------------------------------------------------------------------------
 # System packages
 #   - git, sudo, curl: basic dev tools

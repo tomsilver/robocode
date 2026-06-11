@@ -3,14 +3,17 @@
 Example usage:
 
     python experiments/run_experiment.py approach=agentic environment=motion2d_easy
-    python experiments/run_experiment.py approach=agentic approach.use_docker=true \
-        'primitives=[]' environment=motion2d_easy
+    python experiments/run_experiment.py approach=agentic \
+        approach.container_backend=docker 'primitives=[]' environment=motion2d_easy
+
+The sandbox backend is selected with approach.container_backend=docker|apptainer|local
+(default docker for agentic and llm_genplan; local runs unsandboxed in-process).
 
 Parallel sweep with joblib launcher:
 
     python experiments/run_experiment.py -m \
         approach=agentic \
-        approach.use_docker=true \
+        approach.container_backend=docker \
         seed=42,24,424,444,222 \
         'primitives=[]' \
         environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy \

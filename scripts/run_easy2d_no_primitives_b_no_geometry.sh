@@ -4,7 +4,7 @@ set -euo pipefail
 
 python experiments/run_experiment.py -m \
     approach=agentic \
-    approach.use_docker=true \
+    approach.container_backend=docker \
     approach.geometry_prompt=false \
     seed=424,222 \
     'primitives=[]' \

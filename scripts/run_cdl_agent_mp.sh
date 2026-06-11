@@ -6,7 +6,7 @@ DATE=$(date +%m-%d)
 
 python experiments/run_experiment.py -m \
     approach=agentic_cdl \
-    approach.use_docker=true \
+    approach.container_backend=docker \
     approach.max_budget_usd=20.0 \
     seed=42,24,444 \
     num_eval_tasks=100 \

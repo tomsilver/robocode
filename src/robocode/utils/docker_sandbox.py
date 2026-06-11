@@ -79,17 +79,20 @@ _DEFAULT_IMAGE: str = "robocode-sandbox"
 
 
 def _get_claude_oauth_token() -> str | None:
-    """Extract the Claude Code OAuth access token from the macOS Keychain.
+    """Resolve the Claude Code OAuth access token.
 
-    Returns ``None`` on non-macOS platforms or when the token cannot be
-    found or parsed.  On macOS, ``claude login`` stores credentials in the
-    Keychain under the service name ``"Claude Code-credentials"`` as a JSON
-    object with key ``claudeAiOauth.accessToken``.
+    Checked in order:
+      1. ``CLAUDE_CODE_OAUTH_TOKEN`` env var (works on every platform).
+      2. macOS Keychain (service ``"Claude Code-credentials"``, key
+         ``claudeAiOauth.accessToken``) populated by ``claude login``.
 
-    The returned token is forwarded to the container via the
-    ``CLAUDE_CODE_OAUTH_TOKEN`` environment variable, which the Claude CLI
-    checks before any filesystem credential store.
+    Returns ``None`` when neither is available. The returned token is
+    forwarded to the container via the ``CLAUDE_CODE_OAUTH_TOKEN`` env var,
+    which the Claude CLI checks before any filesystem credential store.
     """
+    env_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if env_token:
+        return env_token
     platform: str = sys.platform
     if platform != "darwin":
         return None

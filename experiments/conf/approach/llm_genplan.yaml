@@ -11,6 +11,7 @@ max_debug_attempts: 4
 skip_chain_of_thought: false
 episode_timeout_s: 30.0
 # Run the whole genplan loop inside one sandbox container (like the agentic
-# approach), so generated code never executes on the host. false runs on the host.
-use_docker: true
+# approach), so generated code never executes on the host. local runs in-process.
+container_backend: docker  # docker | apptainer | local
 docker_image: robocode-sandbox
+sif_path: null  # null -> <repo_root>/robocode-sandbox.sif
