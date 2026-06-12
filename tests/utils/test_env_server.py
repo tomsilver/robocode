@@ -176,6 +176,55 @@ def test_wrong_token_rejected(
         client.reset(seed=0)
 
 
+def test_render_state_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) -> None:
+    """render_state proxies to the host, writes a PNG, returns a sandbox path."""
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox_dir) as (port, token):
+        meta = {
+            "host": "127.0.0.1",
+            "port": port,
+            "token": token,
+            "observation_space": serialize_space(direct_env.observation_space),
+            "action_space": serialize_space(direct_env.action_space),
+            "max_steps": 200,
+        }
+        with BlackboxEnv(meta) as client:
+            rel = client.render_state(seed=7, label="probe")
+        assert rel == "mcp_renders/state_seed7_probe.png"
+        assert (sandbox_dir / rel).exists()
+
+
+def test_render_policy_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) -> None:
+    """render_policy loads approach.py on the host and saves frames."""
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    (sandbox_dir / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox_dir) as (port, token):
+        meta = {
+            "host": "127.0.0.1",
+            "port": port,
+            "token": token,
+            "observation_space": serialize_space(direct_env.observation_space),
+            "action_space": serialize_space(direct_env.action_space),
+            "max_steps": 3,
+        }
+        with BlackboxEnv(meta) as client:
+            paths = client.render_policy(seed=1, max_steps=3, max_frames=5)
+    assert paths
+    assert all((sandbox_dir / p).exists() for p in paths)
+
+
 def test_server_lifecycle(tmp_path: Path) -> None:
     """env_server_running writes the port file and tears the server down."""
     sandbox_dir = tmp_path / "sandbox"

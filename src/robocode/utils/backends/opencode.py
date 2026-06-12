@@ -93,6 +93,7 @@ class OpenCodeBackend(AgentBackend):
                 mcp_python_cmd,
                 mcp_env_config_path,
                 log_path,
+                blackbox=config.blackbox,
             )
         return args
 

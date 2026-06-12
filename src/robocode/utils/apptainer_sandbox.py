@@ -81,7 +81,6 @@ class ApptainerSandboxConfig(SandboxConfig):
     sif_path: Path = _DEFAULT_SIF
     primitive_names: tuple[str, ...] = ()
     mcp_tools: tuple[str, ...] = ()
-    blackbox: bool = False
 
 
 def _setup_sandbox_dir(config: ApptainerSandboxConfig) -> None:

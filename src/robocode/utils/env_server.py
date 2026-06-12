@@ -146,15 +146,18 @@ def serialize_space(space: Space[Any]) -> dict[str, Any]:
 
 
 class _EnvServer(socketserver.ThreadingTCPServer):
-    """TCP server holding the env config and the per-run auth token."""
+    """TCP server holding the env config, auth token, and sandbox dir."""
 
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, env_config: dict[str, Any], token: str) -> None:
+    def __init__(
+        self, env_config: dict[str, Any], token: str, sandbox_dir: Path
+    ) -> None:
         super().__init__(("0.0.0.0", 0), _EnvRequestHandler)
         self.env_config = env_config
         self.token = token
+        self.sandbox_dir = sandbox_dir
 
 
 class _EnvRequestHandler(socketserver.StreamRequestHandler):
@@ -165,6 +168,9 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         logger.info("New connection from %s", self.client_address)
         env = instantiate(OmegaConf.create(self.server.env_config))
+        # Reset once so get_state/set_state/render work before the client
+        # issues its own reset (mirrors the MCP server's env setup).
+        env.reset(seed=0)
         try:
             for line in self.rfile:
                 request = json.loads(line)
@@ -178,7 +184,7 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
                 # wire (and must not leak env source lines via traceback
                 # frames), not kill the connection.
                 try:
-                    payload = _dispatch(env, request)
+                    payload = _dispatch(env, request, self.server.sandbox_dir)
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.error(
                         "Request %s failed:\n%s", request, traceback.format_exc()
@@ -190,7 +196,7 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
             logger.info("Connection from %s closed", self.client_address)
 
 
-def _dispatch(env: Any, request: dict[str, Any]) -> dict[str, Any]:
+def _dispatch(env: Any, request: dict[str, Any], sandbox_dir: Path) -> dict[str, Any]:
     """Execute one decoded request against the env and encode the reply."""
     cmd = request["cmd"]
     if cmd == "reset":
@@ -210,7 +216,107 @@ def _dispatch(env: Any, request: dict[str, Any]) -> dict[str, Any]:
     if cmd == "set_state":
         env.set_state(decode(request["state"]))
         return {"ok": True}
+    if cmd == "render_state":
+        return {
+            "path": _render_state(
+                env,
+                sandbox_dir,
+                request.get("seed", 42),
+                request.get("state"),
+                request.get("label", ""),
+            )
+        }
+    if cmd == "render_policy":
+        return {
+            "paths": _render_policy(
+                env,
+                sandbox_dir,
+                request.get("seed", 42),
+                request.get("max_steps", 1000),
+                request.get("max_frames", 100),
+            )
+        }
     raise ValueError(f"Unknown command: {cmd!r}")
+
+
+def _unique_render_path(directory: Path, stem: str, ext: str = ".png") -> Path:
+    """Return ``directory/stem.ext``, appending _1, _2, ... if taken."""
+    candidate = directory / f"{stem}{ext}"
+    i = 1
+    while candidate.exists():
+        candidate = directory / f"{stem}_{i}{ext}"
+        i += 1
+    return candidate
+
+
+def _render_state(
+    env: Any,
+    sandbox_dir: Path,
+    seed: int,
+    state: list[float] | None,
+    label: str,
+) -> str:
+    """Render a state to a PNG under ``mcp_renders/``; return the relative path.
+
+    Mirrors the in-container render_state MCP tool, but runs on the host
+    where the environment source and render code live. The PNG lands in the
+    bind-mounted sandbox dir so the container sees it too. Render code is
+    imported lazily to avoid a circular import with the approaches and to
+    keep matplotlib/imageio off the env-server startup path.
+    """
+    # pylint: disable=import-outside-toplevel
+    import imageio.v3 as iio
+
+    from robocode.primitives.render_state import render_state as render_state_fn
+
+    if state is not None:
+        env_state = np.array(state, dtype=np.float32)
+        env.set_state(env_state)
+        stem = "state_custom"
+    else:
+        env.reset(seed=seed)
+        env_state = env.get_state()
+        stem = f"state_seed{seed}"
+    if label:
+        stem += f"_{label}"
+
+    frame = render_state_fn(env, env_state)
+    out_dir = sandbox_dir / "mcp_renders"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = _unique_render_path(out_dir, stem)
+    iio.imwrite(str(out), frame)
+    return str(out.relative_to(sandbox_dir))
+
+
+def _render_policy(
+    env: Any,
+    sandbox_dir: Path,
+    seed: int,
+    max_steps: int,
+    max_frames: int,
+) -> list[str]:
+    """Render a policy episode to PNGs; return paths relative to the sandbox.
+
+    Loads ``approach.py`` from the sandbox dir and runs one episode on the
+    host. Imports are lazy for the same reasons as :func:`_render_state`.
+    """
+    # pylint: disable=import-outside-toplevel
+    from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
+    from robocode.primitives.render_policy import render_policy as render_policy_fn
+
+    primitives = build_primitives(env, list(PRIMITIVE_NAME_TO_FILE))
+    out = sandbox_dir / "mcp_renders" / f"policy_seed{seed}"
+    out.mkdir(parents=True, exist_ok=True)
+    filenames = render_policy_fn(
+        env,
+        primitives,
+        str(sandbox_dir),
+        seed,
+        str(out),
+        max_steps=max_steps,
+        max_frames=max_frames,
+    )
+    return [str((out / f).relative_to(sandbox_dir)) for f in filenames]
 
 
 @contextmanager
@@ -244,6 +350,8 @@ def env_server_running(
                 token,
                 "--port-file",
                 str(port_file),
+                "--sandbox-dir",
+                str(sandbox_dir.resolve()),
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -283,6 +391,11 @@ def main() -> None:
     parser.add_argument(
         "--port-file", required=True, help="File to write the chosen port to"
     )
+    parser.add_argument(
+        "--sandbox-dir",
+        required=True,
+        help="Sandbox dir where render PNGs and approach.py live",
+    )
     args = parser.parse_args()
 
     env_config = json.loads(Path(args.env_config).read_text(encoding="utf-8"))
@@ -293,7 +406,7 @@ def main() -> None:
     serialize_space(env.action_space)
     env.close()
 
-    server = _EnvServer(env_config, args.token)
+    server = _EnvServer(env_config, args.token, Path(args.sandbox_dir))
     port = server.server_address[1]
     Path(args.port_file).write_text(str(port), encoding="utf-8")
     logger.info("Serving env %s on port %d", env_config.get("_target_"), port)

@@ -36,19 +36,19 @@ def test_accepts_run_experiment_kwargs():
 
 
 def test_blackbox_validation():
-    """blackbox rejects mcp_tools, missing env_cfg, and non-Box spaces."""
+    """blackbox rejects missing env_cfg and non-Box spaces; allows mcp_tools."""
     env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
-    with pytest.raises(ValueError, match="incompatible with blackbox"):
-        AgenticCDLApproach(
-            action_space=env.action_space,
-            observation_space=env.observation_space,
-            seed=123,
-            primitives={},
-            backend=DEFAULT_BACKEND_CFG,
-            blackbox=True,
-            env_cfg=_BLACKBOX_ENV_CFG,
-            mcp_tools=("render_state",),
-        )
+    # mcp_tools now coexist with blackbox (render tools proxy to the host).
+    AgenticCDLApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=123,
+        primitives={},
+        backend=DEFAULT_BACKEND_CFG,
+        blackbox=True,
+        env_cfg=_BLACKBOX_ENV_CFG,
+        mcp_tools=("render_state",),
+    )
     with pytest.raises(ValueError, match="env_cfg"):
         AgenticCDLApproach(
             action_space=env.action_space,

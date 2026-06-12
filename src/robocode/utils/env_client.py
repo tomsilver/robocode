@@ -127,6 +127,35 @@ class BlackboxEnv:
         """Return a snapshot of the full environment state."""
         return self._request({"cmd": "get_state"})["state"]
 
+    def render_state(self, seed: int = 42, state: Any = None, label: str = "") -> str:
+        """Render a state on the host; returns a PNG path inside the sandbox.
+
+        Either pass ``seed`` to render the initial state after a reset, or
+        ``state`` (a flat list of floats, as from ``get_state().tolist()``)
+        to render an arbitrary state. The path is relative to the sandbox dir.
+        """
+        if state is not None and isinstance(state, np.ndarray):
+            state = state.tolist()
+        return self._request(
+            {"cmd": "render_state", "seed": seed, "state": state, "label": label}
+        )["path"]
+
+    def render_policy(
+        self, seed: int = 42, max_steps: int = 1000, max_frames: int = 100
+    ) -> list[str]:
+        """Render an episode of the sandbox's approach.py on the host.
+
+        Returns the list of PNG paths (relative to the sandbox dir).
+        """
+        return self._request(
+            {
+                "cmd": "render_policy",
+                "seed": seed,
+                "max_steps": max_steps,
+                "max_frames": max_frames,
+            }
+        )["paths"]
+
     def set_state(self, state: Any) -> None:
         """Restore a state snapshot previously returned by get_state()."""
         self._request({"cmd": "set_state", "state": _encode(np.asarray(state))})
@@ -146,7 +175,12 @@ class BlackboxEnv:
         self.close()
 
 
-def make_env() -> BlackboxEnv:
-    """Connect to the environment server; returns a fresh env instance."""
-    meta = json.loads(_METADATA_PATH.read_text(encoding="utf-8"))
+def make_env(metadata_path: Any = None) -> BlackboxEnv:
+    """Connect to the environment server; returns a fresh env instance.
+
+    *metadata_path* defaults to ``env_spaces.json`` next to this module
+    (the agent's sandbox copy); the MCP server passes an explicit path.
+    """
+    path = Path(metadata_path) if metadata_path is not None else _METADATA_PATH
+    meta = json.loads(path.read_text(encoding="utf-8"))
     return BlackboxEnv(meta)

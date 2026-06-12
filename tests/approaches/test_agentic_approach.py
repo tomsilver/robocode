@@ -158,20 +158,20 @@ def test_load_generated_with_sibling_modules(tmp_path):
     assert approach._generated._computed == 20  # pylint: disable=protected-access
 
 
-def test_blackbox_rejects_mcp_tools():
-    """blackbox and mcp_tools cannot be combined."""
+def test_blackbox_allows_mcp_tools():
+    """blackbox and mcp_tools coexist: render tools proxy to the host server."""
     env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
-    with pytest.raises(ValueError, match="incompatible with blackbox"):
-        AgenticApproach(
-            action_space=env.action_space,
-            observation_space=env.observation_space,
-            seed=123,
-            primitives={},
-            backend=DEFAULT_BACKEND_CFG,
-            blackbox=True,
-            env_cfg=_BLACKBOX_ENV_CFG,
-            mcp_tools=("render_state",),
-        )
+    approach = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=123,
+        primitives={},
+        backend=DEFAULT_BACKEND_CFG,
+        blackbox=True,
+        env_cfg=_BLACKBOX_ENV_CFG,
+        mcp_tools=("render_state",),
+    )
+    assert approach.total_cost_usd is None
     env.close()
 
 

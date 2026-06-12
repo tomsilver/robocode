@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ import pytest
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.mcp.server import create_server
+from robocode.utils.env_server import env_server_running, serialize_space
 
 _ENV_CONFIG = {
     "_target_": "robocode.environments.kinder_geom2d_env.KinderGeom2DEnv",
@@ -84,6 +86,36 @@ def test_render_state_deduplicates_filenames(renders_dir: Path) -> None:
     assert path1 != path2
     assert Path(path1).exists()
     assert Path(path2).exists()
+
+
+def _write_env_spaces(sandbox: Path, port: int, token: str) -> Path:
+    """Write an env_spaces.json mirroring what the blackbox approach writes."""
+    env = KinderGeom2DEnv(_ENV_CONFIG["env_id"])
+    meta = {
+        "host": "127.0.0.1",
+        "port": port,
+        "token": token,
+        "observation_space": serialize_space(env.observation_space),
+        "action_space": serialize_space(env.action_space),
+        "max_steps": 5,
+    }
+    env.close()
+    path = sandbox / "env_spaces.json"
+    path.write_text(json.dumps(meta))
+    return path
+
+
+def test_blackbox_render_state_proxies_to_host(tmp_path: Path) -> None:
+    """In blackbox mode, render_state proxies to the host env server."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox) as (port, token):
+        env_spaces = _write_env_spaces(sandbox, port, token)
+        srv = create_server(None, ["render_state"], blackbox_env_spaces=env_spaces)
+        path = _call_tool(srv, "render_state", {"seed": 42})
+    assert path.endswith(".png")
+    assert Path(path).exists()
+    assert Path(path).parent == sandbox / "mcp_renders"
 
 
 def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) -> None:

@@ -464,12 +464,6 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         self._env_cfg = env_cfg
         self._max_steps = max_steps
         if blackbox:
-            if mcp_tools:
-                raise ValueError(
-                    "mcp_tools are incompatible with blackbox mode: the "
-                    "render tools import environment code in-container. "
-                    "Run with 'mcp_tools=[]'"
-                )
             if env_cfg is None:
                 raise ValueError("blackbox mode requires env_cfg")
             # Fail fast on spaces the blackbox protocol cannot serialize.

@@ -81,14 +81,38 @@ def _logged_tool(fn):  # type: ignore[type-arg]
 
 
 def create_server(
-    env_config: dict[str, Any],
+    env_config: dict[str, Any] | None,
     tool_names: list[str],
     renders_dir: Path | None = None,
+    blackbox_env_spaces: Path | None = None,
 ) -> FastMCP:
-    """Create and configure the MCP server with the requested tools."""
+    """Create and configure the MCP server with the requested tools.
+
+    In normal mode the environment is instantiated in-process and the render
+    tools run locally. In blackbox mode (*blackbox_env_spaces* given) the
+    environment source is absent from this container, so the render tools
+    proxy to the host-side env server (via ``env_client``) and translate the
+    returned sandbox-relative paths back to absolute paths in this container.
+    """
     logger.info("Creating MCP server, requested tools: %s", tool_names)
     server = FastMCP(MCP_SERVER_NAME)
-    env, primitives = _build_env_and_primitives(env_config)
+
+    client = None
+    sandbox_root: Path | None = None
+    env: Any = None
+    primitives: dict[str, Any] = {}
+    if blackbox_env_spaces is not None:
+        from robocode.utils.env_client import (  # pylint: disable=import-outside-toplevel
+            BlackboxEnv,
+        )
+
+        meta = json.loads(blackbox_env_spaces.read_text(encoding="utf-8"))
+        client = BlackboxEnv(meta)
+        sandbox_root = blackbox_env_spaces.resolve().parent
+        logger.info("MCP server in blackbox mode, proxying to host env server")
+    else:
+        assert env_config is not None
+        env, primitives = _build_env_and_primitives(env_config)
     out_dir = renders_dir or Path("mcp_renders")
 
     if "render_state" in tool_names:
@@ -138,6 +162,10 @@ def create_server(
 
             Returns the file path of the saved PNG image.
             """
+            if client is not None:
+                assert sandbox_root is not None
+                rel = client.render_state(seed=seed, state=state, label=label)
+                return str(sandbox_root / rel)
             if state is not None:
                 env_state = np.array(state, dtype=np.float32)
                 env.set_state(env_state)
@@ -175,6 +203,12 @@ def create_server(
             Returns the list of saved PNG file paths. Use a subagent to read and analyze
             the frames — do NOT read them directly to avoid context bloat.
             """
+            if client is not None:
+                assert sandbox_root is not None
+                rels = client.render_policy(
+                    seed=seed, max_steps=max_steps, max_frames=max_frames
+                )
+                return [str(sandbox_root / r) for r in rels]
             out = out_dir / f"policy_seed{seed}"
             out.mkdir(parents=True, exist_ok=True)
             filenames = _render_policy_fn(
@@ -199,8 +233,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--env-config",
-        required=True,
-        help="Path to JSON file with Hydra env config",
+        default="",
+        help="Path to JSON file with Hydra env config (normal mode)",
+    )
+    parser.add_argument(
+        "--blackbox",
+        action="store_true",
+        help="Proxy render tools to the host env server (no local env)",
+    )
+    parser.add_argument(
+        "--env-spaces",
+        default="",
+        help="Path to env_spaces.json with the host env server connection "
+        "info (blackbox mode)",
     )
     parser.add_argument(
         "--tools",
@@ -218,17 +263,22 @@ def main() -> None:
     logger.info("MCP server starting: args=%s", vars(args))
 
     try:
-        env_config_path = Path(args.env_config).resolve()
-        logger.info("Loading env config from %s", env_config_path)
-        env_config = json.loads(env_config_path.read_text(encoding="utf-8"))
         tool_names = [t.strip() for t in args.tools.split(",")]
-
-        # Place renders next to the sandbox
-        # (env_config is at <sandbox>/.mcp/env_config.json).
-        sandbox_dir = env_config_path.parent.parent
-        renders_dir = sandbox_dir / "mcp_renders"
-
-        server = create_server(env_config, tool_names, renders_dir=renders_dir)
+        if args.blackbox:
+            env_spaces_path = Path(args.env_spaces).resolve()
+            logger.info("Loading env server connection info from %s", env_spaces_path)
+            server = create_server(
+                None, tool_names, blackbox_env_spaces=env_spaces_path
+            )
+        else:
+            env_config_path = Path(args.env_config).resolve()
+            logger.info("Loading env config from %s", env_config_path)
+            env_config = json.loads(env_config_path.read_text(encoding="utf-8"))
+            # Place renders next to the sandbox
+            # (env_config is at <sandbox>/.mcp/env_config.json).
+            sandbox_dir = env_config_path.parent.parent
+            renders_dir = sandbox_dir / "mcp_renders"
+            server = create_server(env_config, tool_names, renders_dir=renders_dir)
         logger.info("Starting stdio transport")
         server.run(transport="stdio")
         logger.info("MCP server shut down")

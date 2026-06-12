@@ -318,7 +318,6 @@ class DockerSandboxConfig(SandboxConfig):
     docker_image: str = _DEFAULT_IMAGE
     primitive_names: tuple[str, ...] = ()
     mcp_tools: tuple[str, ...] = ()
-    blackbox: bool = False
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:

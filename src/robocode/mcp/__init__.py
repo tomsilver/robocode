@@ -126,30 +126,46 @@ def setup_mcp_config(
     python_cmd: str,
     env_config_path: str,
     log_file_path: str,
+    blackbox: bool = False,
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
-    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
-    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
+    In normal mode, copies ``env_config.json`` from *sandbox_dir*'s parent
+    into ``.mcp/`` so the server can instantiate the env locally. In blackbox
+    mode the env source is absent from the container, so the server instead
+    proxies render tools to the host env server using the connection info in
+    ``env_spaces.json`` (written by the approach at the sandbox root).
+    Returns the path to ``mcp_config.json``.
     """
     mcp_dir = sandbox_dir / ".mcp"
     mcp_dir.mkdir(exist_ok=True)
 
-    shutil.copy2(
-        sandbox_dir.parent / "env_config.json",
-        mcp_dir / "env_config.json",
-    )
-
     # Use a shell wrapper so that stderr (import errors, tracebacks) is also
     # captured in the log file even if the Python process never reaches main().
     stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
-    server_cmd = (
-        f"{python_cmd} -m robocode.mcp.server"
-        f" --env-config {env_config_path}"
-        f" --tools {','.join(tool_names)}"
-        f" --log-file {log_file_path}"
-        f" 2>>{stderr_log_path}"
-    )
+    if blackbox:
+        # env_config_path is <container_sandbox>/.mcp/env_config.json; the
+        # env_spaces.json the approach wrote sits at the sandbox root.
+        env_spaces_path = Path(env_config_path).parent.parent / "env_spaces.json"
+        server_cmd = (
+            f"{python_cmd} -m robocode.mcp.server --blackbox"
+            f" --env-spaces {env_spaces_path}"
+            f" --tools {','.join(tool_names)}"
+            f" --log-file {log_file_path}"
+            f" 2>>{stderr_log_path}"
+        )
+    else:
+        shutil.copy2(
+            sandbox_dir.parent / "env_config.json",
+            mcp_dir / "env_config.json",
+        )
+        server_cmd = (
+            f"{python_cmd} -m robocode.mcp.server"
+            f" --env-config {env_config_path}"
+            f" --tools {','.join(tool_names)}"
+            f" --log-file {log_file_path}"
+            f" 2>>{stderr_log_path}"
+        )
     mcp_config = {
         "mcpServers": {
             MCP_SERVER_NAME: {

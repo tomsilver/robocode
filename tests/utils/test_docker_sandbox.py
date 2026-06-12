@@ -212,6 +212,85 @@ def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
     assert "BLACKBOX_OK" in result.stdout, result.stdout + result.stderr
 
 
+@requires_docker
+def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
+    """A blackbox container renders via the host env server over TCP.
+
+    Exercises the same cross-container path the MCP render tools use: the
+    in-container env_client connects to the host env server, which renders
+    and writes the PNG into the bind-mounted sandbox dir.
+    """
+    import json  # pylint: disable=import-outside-toplevel
+    import shutil  # pylint: disable=import-outside-toplevel
+
+    from robocode.environments.kinder_geom2d_env import (  # pylint: disable=import-outside-toplevel
+        KinderGeom2DEnv,
+    )
+    from robocode.utils.env_server import (  # pylint: disable=import-outside-toplevel
+        ENV_CLIENT_SRC,
+        env_server_running,
+        serialize_space,
+    )
+
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    shutil.copy2(ENV_CLIENT_SRC, sandbox / "env_client.py")
+    env_cfg = json.dumps(
+        {
+            "_target_": "robocode.environments.kinder_geom2d_env.KinderGeom2DEnv",
+            "env_id": "kinder/Motion2D-p0-v0",
+        }
+    )
+    with env_server_running(env_cfg, sandbox) as (port, token):
+        env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
+        (sandbox / "env_spaces.json").write_text(
+            json.dumps(
+                {
+                    "host": "host.docker.internal",
+                    "port": port,
+                    "token": token,
+                    "observation_space": serialize_space(env.observation_space),
+                    "action_space": serialize_space(env.action_space),
+                    "max_steps": 5,
+                }
+            )
+        )
+        env.close()
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--entrypoint",
+                    "/bin/bash",
+                    "-v",
+                    f"{sandbox.resolve()}:/sandbox",
+                    "-v",
+                    f"{src.resolve()}:/robocode/src",
+                    "-v",
+                    f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                    "-w",
+                    "/sandbox",
+                    _DOCKER_IMAGE,
+                    "-c",
+                    "cd /robocode && uv sync --frozen --python python3.11 "
+                    ">/dev/null 2>&1 && cd /sandbox && "
+                    f'{DOCKER_PYTHON} -c "from env_client import make_env; '
+                    'print(make_env().render_state(seed=0))"',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+    assert result.returncode == 0, result.stdout + result.stderr
+    rel = result.stdout.strip().splitlines()[-1]
+    assert (sandbox / rel).exists(), f"render output {rel!r} missing"
+
+
 def test_setup_creates_sandbox_dir(tmp_path: Path) -> None:
     """_setup_sandbox_dir() creates the sandbox directory if absent."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")

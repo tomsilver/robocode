@@ -41,6 +41,7 @@ class SandboxConfig:
     mcp_tools: tuple[str, ...] = ()
     max_output_tokens: int = 16384
     autocompact_pct: int = 80
+    blackbox: bool = False
 
 
 @dataclass(frozen=True)

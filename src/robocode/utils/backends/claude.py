@@ -144,6 +144,7 @@ class ClaudeBackend(AgentBackend):
                 mcp_python_cmd,
                 mcp_env_config_path,
                 log_path,
+                blackbox=config.blackbox,
             )
             cli_path = mcp_config_cli_path or str(config_path.resolve())
             args += ["--mcp-config", cli_path, "--strict-mcp-config"]
