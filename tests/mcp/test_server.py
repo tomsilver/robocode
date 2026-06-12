@@ -12,7 +12,8 @@ from typing import Any
 import pytest
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
-from robocode.mcp.server import create_server
+from robocode.mcp.local_render import build_local_server
+from robocode.mcp.server import build_blackbox_server
 from robocode.utils.env_server import env_server_running, serialize_space
 
 _ENV_CONFIG = {
@@ -35,7 +36,7 @@ def renders_dir(tmp_path: Path) -> Path:
 
 def test_create_server_registers_requested_tools() -> None:
     """Only the requested tools are registered."""
-    srv = create_server(_ENV_CONFIG, ["render_state"])
+    srv = build_local_server(["render_state"], _ENV_CONFIG)
     tools = asyncio.run(srv.list_tools())
     names = {t.name for t in tools}
     assert "render_state" in names
@@ -44,7 +45,7 @@ def test_create_server_registers_requested_tools() -> None:
 
 def test_create_server_registers_both_tools() -> None:
     """Both tools are registered when both are requested."""
-    srv = create_server(_ENV_CONFIG, ["render_state", "render_policy"])
+    srv = build_local_server(["render_state", "render_policy"], _ENV_CONFIG)
     tools = asyncio.run(srv.list_tools())
     names = {t.name for t in tools}
     assert names == {"render_state", "render_policy"}
@@ -52,7 +53,7 @@ def test_create_server_registers_both_tools() -> None:
 
 def test_render_state_returns_png_path(renders_dir: Path) -> None:
     """render_state tool returns a path to a PNG that exists on disk."""
-    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    srv = build_local_server(["render_state"], _ENV_CONFIG, renders_dir=renders_dir)
     path = _call_tool(srv, "render_state", {"seed": 42})
     assert path.endswith(".png")
     assert Path(path).exists()
@@ -64,7 +65,7 @@ def test_render_state_with_arbitrary_state(renders_dir: Path) -> None:
     env.reset(seed=0)
     state_list = env.get_state().tolist()
 
-    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    srv = build_local_server(["render_state"], _ENV_CONFIG, renders_dir=renders_dir)
     path = _call_tool(srv, "render_state", {"state": state_list})
     assert path.endswith(".png")
     assert Path(path).exists()
@@ -73,14 +74,14 @@ def test_render_state_with_arbitrary_state(renders_dir: Path) -> None:
 
 def test_render_state_label(renders_dir: Path) -> None:
     """The label parameter is reflected in the output filename."""
-    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    srv = build_local_server(["render_state"], _ENV_CONFIG, renders_dir=renders_dir)
     path = _call_tool(srv, "render_state", {"seed": 0, "label": "my_label"})
     assert "my_label" in Path(path).name
 
 
 def test_render_state_deduplicates_filenames(renders_dir: Path) -> None:
     """Calling render_state twice with the same args produces distinct files."""
-    srv = create_server(_ENV_CONFIG, ["render_state"], renders_dir=renders_dir)
+    srv = build_local_server(["render_state"], _ENV_CONFIG, renders_dir=renders_dir)
     path1 = _call_tool(srv, "render_state", {"seed": 7})
     path2 = _call_tool(srv, "render_state", {"seed": 7})
     assert path1 != path2
@@ -111,7 +112,7 @@ def test_blackbox_render_state_proxies_to_host(tmp_path: Path) -> None:
     sandbox.mkdir()
     with env_server_running(json.dumps(_ENV_CONFIG), sandbox) as (port, token):
         env_spaces = _write_env_spaces(sandbox, port, token)
-        srv = create_server(None, ["render_state"], blackbox_env_spaces=env_spaces)
+        srv = build_blackbox_server(["render_state"], env_spaces)
         path = _call_tool(srv, "render_state", {"seed": 42})
     assert path.endswith(".png")
     assert Path(path).exists()
@@ -131,7 +132,7 @@ def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) ->
         "    def get_action(self, state):\n"
         "        return self._action_space.sample()\n"
     )
-    srv = create_server(_ENV_CONFIG, ["render_policy"], renders_dir=renders_dir)
+    srv = build_local_server(["render_policy"], _ENV_CONFIG, renders_dir=renders_dir)
     paths = _call_tool(
         srv,
         "render_policy",

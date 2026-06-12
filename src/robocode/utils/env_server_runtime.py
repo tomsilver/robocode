@@ -132,7 +132,10 @@ def _dispatch(env: Any, request: dict[str, Any], sandbox_dir: Path) -> dict[str,
 
 
 def _unique_render_path(directory: Path, stem: str, ext: str = ".png") -> Path:
-    """Return ``directory/stem.ext``, appending _1, _2, ... if taken."""
+    """Return ``directory/stem.ext``, appending _1, _2, ...
+
+    if taken.
+    """
     candidate = directory / f"{stem}{ext}"
     i = 1
     while candidate.exists():
@@ -150,9 +153,9 @@ def _render_state(
 ) -> str:
     """Render a state to a PNG under ``mcp_renders/``; return the relative path.
 
-    Mirrors the in-container render_state MCP tool, but runs on the host
-    where the environment source and render code live. The PNG lands in the
-    bind-mounted sandbox dir so the container sees it too.
+    Mirrors the in-container render_state MCP tool, but runs on the host where the
+    environment source and render code live. The PNG lands in the bind-mounted sandbox
+    dir so the container sees it too.
     """
     if state is not None:
         env_state = np.array(state, dtype=np.float32)

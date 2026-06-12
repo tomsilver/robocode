@@ -61,7 +61,7 @@ def _make_client(
 
 
 def test_codec_roundtrip() -> None:
-    """encode/decode roundtrips ndarrays, scalars, and nested containers."""
+    """Encode/decode roundtrips ndarrays, scalars, and nested containers."""
     arr = np.arange(6, dtype=np.float32).reshape(2, 3)
     obj = {"a": arr, "b": [np.int64(3), 1.5, "x", None, True], "c": {"d": arr}}
     wire = json.loads(json.dumps(encode(obj)))
@@ -102,7 +102,7 @@ def test_reset_matches_direct_env(
 def test_step_and_state_roundtrip(
     server: tuple[int, str], direct_env: KinderGeom2DEnv
 ) -> None:
-    """step returns gymnasium-style types; set_state restores a snapshot."""
+    """Step returns gymnasium-style types; set_state restores a snapshot."""
     with _make_client(server, direct_env) as client:
         obs, _ = client.reset(seed=0)
         state = client.get_state()

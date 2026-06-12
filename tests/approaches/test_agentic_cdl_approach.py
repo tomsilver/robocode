@@ -36,7 +36,7 @@ def test_accepts_run_experiment_kwargs():
 
 
 def test_blackbox_validation():
-    """blackbox rejects missing env_cfg and non-Box spaces; allows mcp_tools."""
+    """Blackbox rejects missing env_cfg and non-Box spaces; allows mcp_tools."""
     env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
     # mcp_tools now coexist with blackbox (render tools proxy to the host).
     AgenticCDLApproach(
@@ -73,7 +73,7 @@ def test_blackbox_validation():
 
 
 def test_blackbox_train_wires_sandbox(tmp_path, monkeypatch):
-    """train() in blackbox mode starts the server and prepares the sandbox."""
+    """Train() in blackbox mode starts the server and prepares the sandbox."""
     env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
     captured = {}
 

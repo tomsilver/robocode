@@ -203,8 +203,12 @@ def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
                 "-c",
                 "cd /robocode && uv sync --frozen --python python3.11 && "
                 f"{DOCKER_PYTHON} -c 'import robocode.utils' && "
+                # The blackbox MCP server must stay importable even though the
+                # env source and primitives are gone (it proxies to the host).
+                f"{DOCKER_PYTHON} -c 'import robocode.mcp.server' && "
                 f"! {DOCKER_PYTHON} -c 'import robocode.environments' "
                 "2>/dev/null && "
+                f"! {DOCKER_PYTHON} -c 'import robocode.primitives' 2>/dev/null && "
                 f"! {DOCKER_PYTHON} -c 'import kinder.envs' 2>/dev/null && "
                 "! find / -name '*.py' 2>/dev/null "
                 "| grep -E 'robocode/environments|kinder/envs' -q && "

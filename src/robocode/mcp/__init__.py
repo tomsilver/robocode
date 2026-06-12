@@ -144,11 +144,14 @@ def setup_mcp_config(
     # captured in the log file even if the Python process never reaches main().
     stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
     if blackbox:
-        # env_config_path is <container_sandbox>/.mcp/env_config.json; the
-        # env_spaces.json the approach wrote sits at the sandbox root.
+        # The blackbox MCP server (robocode.mcp.server) imports only
+        # env_client, so it stays importable in a container with the env
+        # source stripped. env_config_path is
+        # <container_sandbox>/.mcp/env_config.json; the env_spaces.json the
+        # approach wrote sits at the sandbox root.
         env_spaces_path = Path(env_config_path).parent.parent / "env_spaces.json"
         server_cmd = (
-            f"{python_cmd} -m robocode.mcp.server --blackbox"
+            f"{python_cmd} -m robocode.mcp.server"
             f" --env-spaces {env_spaces_path}"
             f" --tools {','.join(tool_names)}"
             f" --log-file {log_file_path}"
@@ -159,8 +162,10 @@ def setup_mcp_config(
             sandbox_dir.parent / "env_config.json",
             mcp_dir / "env_config.json",
         )
+        # The local variant (robocode.mcp.local_render) instantiates the env
+        # and renders in-process, so it needs the env source and primitives.
         server_cmd = (
-            f"{python_cmd} -m robocode.mcp.server"
+            f"{python_cmd} -m robocode.mcp.local_render"
             f" --env-config {env_config_path}"
             f" --tools {','.join(tool_names)}"
             f" --log-file {log_file_path}"

@@ -176,7 +176,7 @@ def test_blackbox_allows_mcp_tools():
 
 
 def test_blackbox_requires_env_cfg():
-    """blackbox needs env_cfg to start the env server."""
+    """Blackbox needs env_cfg to start the env server."""
     env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
     with pytest.raises(ValueError, match="env_cfg"):
         AgenticApproach(
@@ -191,7 +191,7 @@ def test_blackbox_requires_env_cfg():
 
 
 def test_blackbox_rejects_unsupported_spaces():
-    """blackbox fails loudly for spaces the protocol cannot serialize."""
+    """Blackbox fails loudly for spaces the protocol cannot serialize."""
     env = MazeEnv(5, 8, 5, 8)
     with pytest.raises(TypeError, match="serialize_space"):
         AgenticApproach(
@@ -206,7 +206,7 @@ def test_blackbox_rejects_unsupported_spaces():
 
 
 def test_blackbox_train_wires_sandbox(tmp_path, monkeypatch):
-    """train() in blackbox mode starts the server and prepares the sandbox."""
+    """Train() in blackbox mode starts the server and prepares the sandbox."""
     env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
     captured = {}
 
