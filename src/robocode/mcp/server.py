@@ -32,6 +32,7 @@ from robocode.mcp import MCP_SERVER_NAME
 from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
 from robocode.primitives.render_policy import render_policy as _render_policy_fn
 from robocode.primitives.render_state import render_state as _render_state_fn
+from robocode.utils.env_client import BlackboxEnv
 
 logger = logging.getLogger(MCP_SERVER_NAME)
 
@@ -102,10 +103,6 @@ def create_server(
     env: Any = None
     primitives: dict[str, Any] = {}
     if blackbox_env_spaces is not None:
-        from robocode.utils.env_client import (  # pylint: disable=import-outside-toplevel
-            BlackboxEnv,
-        )
-
         meta = json.loads(blackbox_env_spaces.read_text(encoding="utf-8"))
         client = BlackboxEnv(meta)
         sandbox_root = blackbox_env_spaces.resolve().parent

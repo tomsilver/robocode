@@ -141,13 +141,12 @@ def test_concurrent_clients_are_independent(
 def test_error_travels_over_wire_and_connection_survives(
     server: tuple[int, str], direct_env: KinderGeom2DEnv
 ) -> None:
-    """A bad request raises client-side and does not kill the connection."""
+    """A server-side error raises client-side and does not kill the connection."""
     with _make_client(server, direct_env) as client:
         client.reset(seed=0)
+        bad_action = np.zeros(client.action_space.shape[0] + 5, dtype=np.float32)
         with pytest.raises(RuntimeError, match="Environment server error"):
-            client._request(  # pylint: disable=protected-access
-                {"cmd": "no_such_command"}
-            )
+            client.step(bad_action)
         # The same connection still works afterwards.
         obs, _ = client.reset(seed=0)
         assert isinstance(obs, np.ndarray)
@@ -159,10 +158,9 @@ def test_error_reply_has_no_source_paths(
     """Error replies must not leak env source via traceback frames."""
     with _make_client(server, direct_env) as client:
         client.reset(seed=0)
+        bad_action = np.zeros(client.action_space.shape[0] + 5, dtype=np.float32)
         with pytest.raises(RuntimeError) as exc_info:
-            client._request(  # pylint: disable=protected-access
-                {"cmd": "step", "action": "garbage"}
-            )
+            client.step(bad_action)
         assert 'File "' not in str(exc_info.value)
         assert ".py" not in str(exc_info.value)
 

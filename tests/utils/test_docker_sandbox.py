@@ -24,12 +24,15 @@ Integration tests are skipped automatically when the image is unavailable;
 build it with ``bash docker/build.sh`` to run them.
 """
 
+import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.utils.backends import DEFAULT_BACKEND
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
@@ -38,6 +41,11 @@ from robocode.utils.docker_sandbox import (
     _filtered_repo_mounts,
     _find_repo_root,
     _setup_sandbox_dir,
+)
+from robocode.utils.env_server import (
+    ENV_CLIENT_SRC,
+    env_server_running,
+    serialize_space,
 )
 
 _DOCKER_IMAGE = "robocode-sandbox"
@@ -125,8 +133,6 @@ def _run_in_container(
             check=False,
         )
     finally:
-        import shutil  # pylint: disable=import-outside-toplevel
-
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -220,18 +226,6 @@ def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
     in-container env_client connects to the host env server, which renders
     and writes the PNG into the bind-mounted sandbox dir.
     """
-    import json  # pylint: disable=import-outside-toplevel
-    import shutil  # pylint: disable=import-outside-toplevel
-
-    from robocode.environments.kinder_geom2d_env import (  # pylint: disable=import-outside-toplevel
-        KinderGeom2DEnv,
-    )
-    from robocode.utils.env_server import (  # pylint: disable=import-outside-toplevel
-        ENV_CLIENT_SRC,
-        env_server_running,
-        serialize_space,
-    )
-
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
     shutil.copy2(ENV_CLIENT_SRC, sandbox / "env_client.py")
