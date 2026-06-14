@@ -2,6 +2,7 @@
 
 import json
 import socket
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import pytest
 from gymnasium.spaces import Discrete
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
+from robocode.primitives import blackbox_primitive_manifest, build_primitives
 from robocode.utils.env_client import BlackboxEnv
 from robocode.utils.env_server import (
     decode,
@@ -85,6 +87,28 @@ def test_serialize_space(direct_env: KinderGeom2DEnv) -> None:
     assert tuple(spec["shape"]) == direct_env.observation_space.shape
     with pytest.raises(TypeError, match="serialize_space"):
         serialize_space(Discrete(4))
+
+
+def test_blackbox_primitive_manifest() -> None:
+    """The manifest tags env-dependent primitives and names generic sources."""
+    manifest = blackbox_primitive_manifest(["check_action_collision", "csp", "BiRRT"])
+    by_name = {spec["name"]: spec for spec in manifest}
+    assert by_name["check_action_collision"] == {
+        "name": "check_action_collision",
+        "kind": "host_proxy",
+    }
+    assert by_name["csp"] == {
+        "name": "csp",
+        "kind": "generic",
+        "module": "csp",
+        "attr": None,
+    }
+    assert by_name["BiRRT"] == {
+        "name": "BiRRT",
+        "kind": "generic",
+        "module": "motion_planning",
+        "attr": "BiRRT",
+    }
 
 
 def test_reset_matches_direct_env(
@@ -193,8 +217,95 @@ def test_render_state_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) -> 
         assert (sandbox_dir / rel).exists()
 
 
+def test_check_action_collision_matches_host_primitive(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """The proxy returns the same bool as the host-side collision primitive."""
+    host_primitive = build_primitives(direct_env, ["check_action_collision"])[
+        "check_action_collision"
+    ]
+    with _make_client(server, direct_env) as client:
+        client.reset(seed=0)
+        state = client.get_state()
+        for action in (
+            np.zeros(client.action_space.shape, dtype=np.float32),
+            client.action_space.high,
+        ):
+            got = client.check_action_collision(state, action)
+            direct_env.reset(seed=0)
+            expected = host_primitive(direct_env.get_state(), action)
+            assert isinstance(got, bool)
+            assert got == expected
+
+
+def test_check_action_collision_error_has_no_source_paths(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """A bad action surfaces as a clean error, leaking no env source lines."""
+    with _make_client(server, direct_env) as client:
+        client.reset(seed=0)
+        state = client.get_state()
+        bad_action = np.zeros(client.action_space.shape[0] + 5, dtype=np.float32)
+        with pytest.raises(RuntimeError) as exc_info:
+            client.check_action_collision(state, bad_action)
+        assert 'File "' not in str(exc_info.value)
+        assert ".py" not in str(exc_info.value)
+
+
+def test_make_primitives_builds_eval_dict(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv, tmp_path: Path
+) -> None:
+    """make_primitives proxies env-dependent primitives and imports generic ones.
+
+    A toy generic source stands in for the copied primitive files so the test exercises
+    the module/attr import paths without depending on real primitive internals.
+    """
+    sandbox = tmp_path / "sandbox"
+    (sandbox / "primitives").mkdir(parents=True)
+    (sandbox / "primitives" / "toy.py").write_text(
+        "VALUE = 42\n\n\nclass Thing:\n    pass\n", encoding="utf-8"
+    )
+    manifest = [
+        {"name": "check_action_collision", "kind": "host_proxy"},
+        {"name": "toy", "kind": "generic", "module": "toy", "attr": None},
+        {"name": "Thing", "kind": "generic", "module": "toy", "attr": "Thing"},
+    ]
+    port, token = server
+    meta: dict[str, Any] = {
+        "host": "127.0.0.1",
+        "port": port,
+        "token": token,
+        "observation_space": serialize_space(direct_env.observation_space),
+        "action_space": serialize_space(direct_env.action_space),
+        "max_steps": 200,
+        "primitives": manifest,
+    }
+    try:
+        with BlackboxEnv(meta, sandbox_root=sandbox) as client:
+            primitives = client.make_primitives()
+            assert set(primitives) == {"check_action_collision", "toy", "Thing"}
+            assert primitives["toy"].VALUE == 42
+            assert primitives["Thing"].__name__ == "Thing"
+            # The host-proxy entry is the live, callable collision check.
+            client.reset(seed=0)
+            collision = primitives["check_action_collision"](
+                client.get_state(),
+                np.zeros(client.action_space.shape, dtype=np.float32),
+            )
+            assert isinstance(collision, bool)
+    finally:
+        sys.modules.pop("primitives", None)
+        sys.modules.pop("primitives.toy", None)
+        sys.path[:] = [p for p in sys.path if p != str(sandbox.resolve())]
+
+
 def test_render_policy_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) -> None:
-    """render_policy loads approach.py on the host and saves frames."""
+    """render_policy runs approach.py in-process with real primitives.
+
+    The approach calls ``primitives['check_action_collision']`` each step, so
+    rendering only succeeds if render_policy supplies the eval-time primitives
+    (an empty dict, the old behavior, would raise a KeyError).
+    """
     sandbox_dir = tmp_path / "sandbox"
     sandbox_dir.mkdir()
     (sandbox_dir / "approach.py").write_text(
@@ -202,11 +313,14 @@ def test_render_policy_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) ->
         "class GeneratedApproach:\n"
         "    def __init__(self, action_space, observation_space, primitives):\n"
         "        self._action_space = action_space\n"
+        "        self._collision = primitives['check_action_collision']\n"
         "    def reset(self, state, info):\n"
         "        pass\n"
         "    def get_action(self, state):\n"
-        "        return np.zeros(self._action_space.shape,"
+        "        action = np.zeros(self._action_space.shape,"
         " dtype=self._action_space.dtype)\n"
+        "        self._collision(state, action)\n"
+        "        return action\n"
     )
     with env_server_running(json.dumps(_ENV_CONFIG), sandbox_dir) as (port, token):
         meta = {
@@ -216,11 +330,28 @@ def test_render_policy_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) ->
             "observation_space": serialize_space(direct_env.observation_space),
             "action_space": serialize_space(direct_env.action_space),
             "max_steps": 3,
+            "primitives": blackbox_primitive_manifest(["check_action_collision"]),
         }
-        with BlackboxEnv(meta) as client:
+        with BlackboxEnv(meta, sandbox_root=sandbox_dir) as client:
             paths = client.render_policy(seed=1, max_steps=3, max_frames=5)
     assert paths
     assert all((sandbox_dir / p).exists() for p in paths)
+
+
+def test_server_rejects_render_policy_command(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """The host has no render_policy command: it never execs approach.py.
+
+    The policy episode runs in the sandbox; the host only renders states. A
+    leftover host-side render_policy would re-introduce host execution of
+    agent code, so guard against it.
+    """
+    with _make_client(server, direct_env) as client:
+        with pytest.raises(RuntimeError, match="Unknown command"):
+            client._request(  # pylint: disable=protected-access
+                {"cmd": "render_policy", "seed": 1}
+            )
 
 
 def test_server_lifecycle(tmp_path: Path) -> None:

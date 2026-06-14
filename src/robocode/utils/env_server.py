@@ -11,6 +11,9 @@ connects to this server over TCP and speaks a JSON-lines protocol:
   ``{"obs": ..., "reward": ..., "terminated": ..., "truncated": ..., "info": ...}``
 * ``{"cmd": "get_state"}`` -> ``{"state": ...}``
 * ``{"cmd": "set_state", "state": ...}`` -> ``{"ok": true}``
+* ``{"cmd": "check_action_collision", "state": ..., "action": ...}`` ->
+  ``{"collision": ...}`` (runs the env-dependent collision primitive on the
+  host so the sandbox can use it without the env source)
 * ``{"cmd": "close"}`` -> closes the connection
 
 Every request must carry the per-run ``token`` so that other hosts on the
@@ -33,6 +36,7 @@ light. The serving loop lives in
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import subprocess
@@ -136,6 +140,42 @@ def serialize_space(space: Space[Any]) -> dict[str, Any]:
         "currently supports Box spaces. Add a branch in "
         "robocode.utils.env_server.serialize_space and mirror it in "
         "env_client.SpaceInfo"
+    )
+
+
+def write_env_spaces(
+    sandbox_dir: Path,
+    *,
+    container_backend: str,
+    port: int,
+    token: str,
+    observation_space: Space[Any],
+    action_space: Space[Any],
+    max_steps: int | None,
+    primitives_manifest: list[dict[str, Any]] | None = None,
+) -> None:
+    """Write ``env_spaces.json``, the metadata the sandbox's env_client reads.
+
+    The host is ``host.docker.internal`` for Docker (mapped to the host
+    gateway via ``--add-host``) and ``127.0.0.1`` for the apptainer and local
+    backends, which share the host's loopback. *primitives_manifest* (from
+    :func:`robocode.primitives.blackbox_primitive_manifest`) tells the sandbox
+    how to rebuild the eval-time primitives; the caller passes it rather than
+    this module importing the primitives package, keeping the host process
+    free of environment imports.
+    """
+    host = "host.docker.internal" if container_backend == "docker" else "127.0.0.1"
+    meta = {
+        "host": host,
+        "port": port,
+        "token": token,
+        "observation_space": serialize_space(observation_space),
+        "action_space": serialize_space(action_space),
+        "max_steps": max_steps,
+        "primitives": primitives_manifest or [],
+    }
+    (sandbox_dir / "env_spaces.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8"
     )
 
 

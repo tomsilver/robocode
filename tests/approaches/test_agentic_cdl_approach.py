@@ -119,3 +119,53 @@ def test_blackbox_train_wires_sandbox(tmp_path, monkeypatch):
     meta = json.loads((tmp_path / "sandbox" / "env_spaces.json").read_text())
     assert meta["host"] == "host.docker.internal"
     assert meta["max_steps"] == 50
+
+
+def test_blackbox_omits_initial_helpers(tmp_path, monkeypatch):
+    """Blackbox withholds the pre-written obs/act helpers.
+
+    They spell out the observation layout, which is exactly what the agent must discover
+    empirically when the source is hidden.
+    """
+    env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
+    captured = {}
+
+    def fake_run(docker_config, config, backend=None, apptainer_config=None):
+        del config, backend, apptainer_config
+        captured["config"] = docker_config
+        return SandboxResult(success=False, output_file=None, error="skipped")
+
+    monkeypatch.setattr(
+        "robocode.approaches.agentic_cdl_approach.run_with_rate_limit_retry",
+        fake_run,
+    )
+
+    def init_files_for(blackbox: bool) -> dict:
+        approach = AgenticCDLApproach(
+            action_space=env.action_space,
+            observation_space=env.observation_space,
+            seed=123,
+            primitives={},
+            backend=DEFAULT_BACKEND_CFG,
+            container_backend="docker",
+            env_name="obstruction2d_medium",  # ships obs/act helpers
+            blackbox=blackbox,
+            env_cfg=_BLACKBOX_ENV_CFG,
+            max_steps=50,
+            output_dir=str(tmp_path / ("bb" if blackbox else "wb")),
+        )
+        approach.train()
+        return captured["config"].init_files
+
+    # Normal mode seeds the helpers...
+    normal_files = init_files_for(blackbox=False)
+    assert "obs_helpers.py" in normal_files
+    assert "act_helpers.py" in normal_files
+
+    # ...but blackbox mode must withhold them so the layout stays hidden.
+    blackbox_files = init_files_for(blackbox=True)
+    assert "obs_helpers.py" not in blackbox_files
+    assert "act_helpers.py" not in blackbox_files
+    assert "env_client.py" in blackbox_files
+
+    env.close()

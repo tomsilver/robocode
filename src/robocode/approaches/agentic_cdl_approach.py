@@ -11,7 +11,6 @@ precondition, subgoal, and a feedforward policy body.  The agent must:
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 from collections.abc import Callable
@@ -24,7 +23,7 @@ from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
 from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
-from robocode.primitives import PRIMITIVE_DESCRIPTIONS
+from robocode.primitives import PRIMITIVE_DESCRIPTIONS, blackbox_primitive_manifest
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import (
     CLAUDE_PROMPT_SUFFIX,
@@ -39,6 +38,7 @@ from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
     env_server_running,
     serialize_space,
+    write_env_spaces,
 )
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
@@ -312,6 +312,11 @@ env.close()
 `high`, `dtype`, and `sample()`; the same metadata is in `env_spaces.json`. \
 `env.max_steps` is the episode step limit used at evaluation time.
 
+`env.make_primitives()` returns the SAME `primitives` dict the evaluation \
+harness passes to `GeneratedApproach.__init__` (env-dependent primitives run \
+on the host); use it in test scripts so behaviors exercise the real \
+primitives.
+
 Parallel test scripts are fine: every `make_env()` call creates an \
 independent environment instance. Use `set_state` to put the environment \
 into the state a behavior's precondition requires when testing it in \
@@ -499,9 +504,11 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
 
         # If env-specific helper files exist, copy them into the sandbox so
         # the agent starts with correct obs/act helpers instead of writing
-        # them from scratch.
+        # them from scratch. Skipped in blackbox mode: these helpers spell out
+        # the observation layout (feature names and indices), which is exactly
+        # what the agent must discover empirically when the source is withheld.
         has_initial_helpers = False
-        if self._env_name is not None:
+        if self._env_name is not None and not self._blackbox:
             helpers_dir = (
                 Path(__file__).resolve().parent.parent / "primitives" / self._env_name
             )
@@ -684,7 +691,18 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                     port, token = stack.enter_context(
                         env_server_running(self._env_cfg, sandbox_dir)
                     )
-                    self._write_env_spaces(sandbox_dir, port, token)
+                    write_env_spaces(
+                        sandbox_dir,
+                        container_backend=self._container_backend,
+                        port=port,
+                        token=token,
+                        observation_space=self._state_space,
+                        action_space=self._action_space,
+                        max_steps=self._max_steps,
+                        primitives_manifest=blackbox_primitive_manifest(
+                            list(self._primitives)
+                        ),
+                    )
                 result = run_with_rate_limit_retry(
                     docker_config,
                     config,
@@ -701,25 +719,6 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             self._load_generated(result.output_file)
         else:
             logger.warning("Agent failed to generate approach: %s", result.error)
-
-    def _write_env_spaces(self, sandbox_dir: Path, port: int, token: str) -> None:
-        """Write the metadata file read by the sandbox's env_client."""
-        host = (
-            "host.docker.internal"
-            if self._container_backend == "docker"
-            else "127.0.0.1"
-        )
-        meta = {
-            "host": host,
-            "port": port,
-            "token": token,
-            "observation_space": serialize_space(self._state_space),
-            "action_space": serialize_space(self._action_space),
-            "max_steps": self._max_steps,
-        }
-        (sandbox_dir / "env_spaces.json").write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
-        )
 
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""

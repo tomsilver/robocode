@@ -155,8 +155,8 @@ def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastM
     absolute paths in this container.
     """
     meta = json.loads(env_spaces_path.read_text(encoding="utf-8"))
-    client = BlackboxEnv(meta)
     sandbox_root = env_spaces_path.resolve().parent
+    client = BlackboxEnv(meta, sandbox_root=sandbox_root)
     logger.info("MCP server in blackbox mode, proxying to host env server")
 
     def render_state_impl(seed: int, state: list[float] | None, label: str) -> str:
@@ -166,7 +166,8 @@ def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastM
     def render_policy_impl(
         _approach_dir: str, seed: int, max_steps: int, max_frames: int
     ) -> list[str]:
-        # The host always renders the sandbox's own approach.py, so the
+        # render_policy runs the sandbox's own approach.py in this container
+        # (only the per-state render is proxied to the host), so the
         # agent-supplied approach_dir does not apply in blackbox mode.
         rels = client.render_policy(
             seed=seed, max_steps=max_steps, max_frames=max_frames

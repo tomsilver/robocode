@@ -2,12 +2,17 @@
 
 Launched by :func:`robocode.utils.env_server.env_server_running` as
 ``python -m robocode.utils.env_server_runtime``. This module holds the
-serving loop and the render handlers, which depend on the environment
-source, the approaches, and matplotlib/imageio. Keeping it separate from
-``env_server`` (the import-facing API used by the approaches) means the
-main experiment process never transitively imports any of that heavy code,
-and avoids the import cycle env_server -> render_policy -> agentic_approach
--> env_server.
+serving loop, the render_state handler, and the env-dependent
+check_action_collision primitive, all of which depend on the environment
+source (and render needs matplotlib/imageio). Keeping it separate from
+``env_server`` (the import-facing API used by the approaches) means the main
+experiment process never transitively imports any of that heavy code.
+
+The policy render (``render_policy``) runs entirely in the sandbox, not
+here: the client drives the env step by step and asks this server only to
+render the states it visits via ``render_state``. That way no agent code
+runs host-side, so a black-box agent cannot reach the env source through
+rendering.
 
 See :mod:`robocode.utils.env_server` for the wire protocol.
 """
@@ -28,8 +33,7 @@ import numpy as np
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
-from robocode.primitives.render_policy import render_policy as render_policy_fn
+from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.render_state import render_state as render_state_fn
 from robocode.utils.env_server import decode, encode, serialize_space
 
@@ -108,6 +112,11 @@ def _dispatch(env: Any, request: dict[str, Any], sandbox_dir: Path) -> dict[str,
     if cmd == "set_state":
         env.set_state(decode(request["state"]))
         return {"ok": True}
+    if cmd == "check_action_collision":
+        collision = check_action_collision(
+            env, decode(request["state"]), decode(request["action"])
+        )
+        return {"collision": bool(collision)}
     if cmd == "render_state":
         return {
             "path": _render_state(
@@ -116,16 +125,6 @@ def _dispatch(env: Any, request: dict[str, Any], sandbox_dir: Path) -> dict[str,
                 request.get("seed", 42),
                 request.get("state"),
                 request.get("label", ""),
-            )
-        }
-    if cmd == "render_policy":
-        return {
-            "paths": _render_policy(
-                env,
-                sandbox_dir,
-                request.get("seed", 42),
-                request.get("max_steps", 1000),
-                request.get("max_frames", 100),
             )
         }
     raise ValueError(f"Unknown command: {cmd!r}")
@@ -174,33 +173,6 @@ def _render_state(
     out = _unique_render_path(out_dir, stem)
     iio.imwrite(str(out), frame)
     return str(out.relative_to(sandbox_dir))
-
-
-def _render_policy(
-    env: Any,
-    sandbox_dir: Path,
-    seed: int,
-    max_steps: int,
-    max_frames: int,
-) -> list[str]:
-    """Render a policy episode to PNGs; return paths relative to the sandbox.
-
-    Loads ``approach.py`` from the sandbox dir and runs one episode on the
-    host.
-    """
-    primitives = build_primitives(env, list(PRIMITIVE_NAME_TO_FILE))
-    out = sandbox_dir / "mcp_renders" / f"policy_seed{seed}"
-    out.mkdir(parents=True, exist_ok=True)
-    filenames = render_policy_fn(
-        env,
-        primitives,
-        str(sandbox_dir),
-        seed,
-        str(out),
-        max_steps=max_steps,
-        max_frames=max_frames,
-    )
-    return [str((out / f).relative_to(sandbox_dir)) for f in filenames]
 
 
 def main() -> None:

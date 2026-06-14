@@ -44,9 +44,16 @@ source frames leak to the agent.
 `utils/env_client.py` is copied into the sandbox as an init file. Its
 `make_env()` reads `env_spaces.json`, opens a TCP socket, and returns a gym-like
 `BlackboxEnv` exposing `reset`, `step`, `get_state`, `set_state`,
-`render_state`, `render_policy`, and `close`. Test scripts import it.
-**`approach.py` must not import it**, since the generated approach has to run
-later without the server.
+`check_action_collision`, `make_primitives`, `render_state`, `render_policy`,
+and `close`. Test scripts import it. **`approach.py` must not import it**,
+since the generated approach has to run later without the server.
+
+`make_primitives()` rebuilds the same `primitives` dict the eval harness passes
+to `GeneratedApproach`: env-dependent primitives (currently just
+`check_action_collision`) proxy to the host over the wire, while generic ones
+(e.g. `csp`, `BiRRT`) are imported from their copies under `primitives/`. The
+host-side specs come from `robocode.primitives.blackbox_primitive_manifest`,
+written into `env_spaces.json`.
 
 ## Wire protocol
 
@@ -59,9 +66,19 @@ carrying the auth token.
 | `step` | `action` | `{obs, reward, terminated, truncated, info}` |
 | `get_state` | (none) | `{state}` |
 | `set_state` | `state` | `{ok: true}` |
+| `check_action_collision` | `state`, `action` | `{collision}` |
 | `render_state` | `seed`, `state`, `label` | `{path}` (relative) |
-| `render_policy` | `seed`, `max_steps`, `max_frames` | `{paths}` (relative) |
 | `close` | (none) | connection closes |
+
+`check_action_collision` runs the env-dependent collision primitive on the host
+(it needs the env source) against this connection's env, saving and restoring
+state so it has no side effects; the sandbox reaches it via
+`make_primitives()`. It is the same surface as `step` (it steps the env with an
+agent-supplied action), so it adds no new code-execution path.
+
+There is no `render_policy` command: the client runs the policy episode itself
+and renders each visited state with `render_state` (see below), so the server
+never executes agent code.
 
 Numpy arrays are encoded as `{"__ndarray__": [...], "dtype": "..."}`. Errors come
 back as `{"error": "ExceptionType: message"}`.
@@ -108,11 +125,14 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
 - **Normal:** `python -m robocode.mcp.local_render --env-config ...` renders
   in-process, which needs the env source.
 - **Blackbox:** `python -m robocode.mcp.server --env-spaces ...`. This server
-  cannot import env source, so its tool implementations hold a `BlackboxEnv` and
-  **proxy the render call to the host env-server over the same JSON-over-TCP
-  protocol**. The runtime renders the PNG into the bind-mounted
+  cannot import env source, so its tool implementations hold a `BlackboxEnv`.
+  `render_state` **proxies to the host env-server** over the JSON-over-TCP
+  protocol; the runtime renders the PNG into the bind-mounted
   `sandbox_dir/mcp_renders/`, returns a *relative* path, and the MCP server
-  rewrites it to an absolute `/sandbox/...` path for the agent.
+  rewrites it to an absolute `/sandbox/...` path for the agent. `render_policy`
+  runs the episode **in the container** (it execs the sandbox's `approach.py`
+  and steps the env over the protocol), then renders each visited state via
+  `render_state`. The host therefore never executes `approach.py`.
 
 ## Diagram
 
@@ -132,7 +152,7 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
   |   |   ThreadingTCPServer @ 0.0.0.0:<ephemeral>                   |  |
   |   |   * token-checked   * fresh env PER connection               |  |
   |   |   * reset/step/get_state/set_state                           |  |
-  |   |   * render_state/render_policy -> writes PNGs --+            |  |
+  |   |   * render_state (trusted; no agent code) -> writes PNG --+  |  |
   |   |   * imports env + matplotlib + render prims     |            |  |
   |   +---------------^---------------------------------+------------+  |
   |                   | JSON-lines over TCP             | writes        |
@@ -157,8 +177,9 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
   |      | MCP stdio                                                    |
   |      v                                                              |
   |   robocode.mcp.server (blackbox)        reads env_spaces.json       |
-  |     render_state / render_policy                                    |
-  |       +- BlackboxEnv ----------------------> (same TCP to host) ----+
+  |     render_state -> BlackboxEnv ----------> (same TCP to host) -----+
+  |     render_policy -> execs approach.py here, steps env over TCP,    |
+  |                      renders each visited state via render_state    |
   |       +- rewrites "mcp_renders/x.png" -> "/sandbox/mcp_renders/x.png"
   +---------------------------------------------------------------------+
 
@@ -178,3 +199,22 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
 - **Isolation is layered.** Withheld source mounts, JSON-only codec, per-run
   token, per-connection fresh env, and a default-deny firewall. The `local`
   backend is best-effort only.
+
+## Threat model and limits
+
+Blackbox mode is a *methodological* constraint first: it stops the agent from
+reading environment source so it must discover the dynamics empirically. The
+isolation behind it (withheld mounts, JSON-only codec, per-run token,
+per-connection env, default-deny firewall) is real. The host never executes
+agent code: the only things it runs are env stepping and `render_state`, both
+trusted. `render_policy` deliberately runs in the container, so an agent that
+writes a malicious `approach.py` cannot reach the env source through rendering
+(there is no env source in the container, and the host never execs the file).
+The `blackbox_render_*` red-team tests exercise exactly this path.
+
+One limit is worth stating plainly:
+
+- **The env server listens on all interfaces.** It binds
+  `0.0.0.0:<ephemeral>` and the container firewall opens the host's `/24`, so
+  the port is reachable from that LAN segment, not just the container. The
+  per-run 32-hex token is the only access control on the port.

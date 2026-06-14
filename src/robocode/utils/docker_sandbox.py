@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robocode.primitives import PRIMITIVE_NAME_TO_FILE
+from robocode.primitives import ENV_DEPENDENT_PRIMITIVES, PRIMITIVE_NAME_TO_FILE
 from robocode.utils.backends import (
     PROVIDERS,
     AgentBackend,
@@ -334,11 +334,16 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
     """
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
 
-    # Copy only the primitive source files that were provided.
+    # Copy only the primitive source files that were provided. In black-box
+    # mode, skip env-dependent primitives: their source imports the hidden env
+    # (so it would not import here) and would leak its structure; the sandbox
+    # builds them as host proxies via env_client.make_primitives instead.
     if config.primitive_names:
         primitives_dest = config.sandbox_dir / "primitives"
         primitives_dest.mkdir(exist_ok=True)
         for name in config.primitive_names:
+            if config.blackbox and name in ENV_DEPENDENT_PRIMITIVES:
+                continue
             file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
             if file_stem is None:
                 logger.warning("No source file mapping for primitive %r", name)

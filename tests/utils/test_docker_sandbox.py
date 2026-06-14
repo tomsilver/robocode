@@ -289,6 +289,85 @@ def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
     assert (sandbox / rel).exists(), f"render output {rel!r} missing"
 
 
+@requires_docker
+def test_container_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> None:
+    """render_policy runs approach.py inside the blackbox container.
+
+    The policy episode executes in the container (which has no env source); only the
+    per-state render crosses to the host. Confirms the frames come back without the host
+    ever executing approach.py.
+    """
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    shutil.copy2(ENV_CLIENT_SRC, sandbox / "env_client.py")
+    (sandbox / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    env_cfg = json.dumps(
+        {
+            "_target_": "robocode.environments.kinder_geom2d_env.KinderGeom2DEnv",
+            "env_id": "kinder/Motion2D-p0-v0",
+        }
+    )
+    with env_server_running(env_cfg, sandbox) as (port, token):
+        env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
+        (sandbox / "env_spaces.json").write_text(
+            json.dumps(
+                {
+                    "host": "host.docker.internal",
+                    "port": port,
+                    "token": token,
+                    "observation_space": serialize_space(env.observation_space),
+                    "action_space": serialize_space(env.action_space),
+                    "max_steps": 5,
+                }
+            )
+        )
+        env.close()
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--entrypoint",
+                    "/bin/bash",
+                    "-v",
+                    f"{sandbox.resolve()}:/sandbox",
+                    "-v",
+                    f"{src.resolve()}:/robocode/src",
+                    "-v",
+                    f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                    "-w",
+                    "/sandbox",
+                    _DOCKER_IMAGE,
+                    "-c",
+                    "cd /robocode && uv sync --frozen --python python3.11 "
+                    ">/dev/null 2>&1 && cd /sandbox && "
+                    f'{DOCKER_PYTHON} -c "from env_client import make_env; '
+                    "paths = make_env().render_policy(seed=0, max_steps=3); "
+                    'print(paths[-1])"',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+    assert result.returncode == 0, result.stdout + result.stderr
+    rel = result.stdout.strip().splitlines()[-1]
+    assert (sandbox / rel).exists(), f"render output {rel!r} missing"
+
+
 def test_setup_creates_sandbox_dir(tmp_path: Path) -> None:
     """_setup_sandbox_dir() creates the sandbox directory if absent."""
     config = DockerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
@@ -343,6 +422,24 @@ def test_setup_copies_only_requested_primitives(tmp_path: Path) -> None:
     assert primitives_dir.is_dir()
     copied = {f.name for f in primitives_dir.glob("*.py")}
     assert copied == {"csp.py", "check_action_collision.py"}
+
+
+def test_setup_blackbox_skips_env_dependent_primitives(tmp_path: Path) -> None:
+    """Blackbox setup omits env-dependent primitive source, keeps generic ones.
+
+    check_action_collision imports the (hidden) env, so its source cannot be copied into
+    a blackbox sandbox; the sandbox builds it as a host proxy via
+    env_client.make_primitives instead. Generic primitives are still copied.
+    """
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        primitive_names=("csp", "check_action_collision", "BiRRT"),
+        blackbox=True,
+    )
+    _setup_sandbox_dir(config)
+    copied = {f.name for f in (config.sandbox_dir / "primitives").glob("*.py")}
+    assert copied == {"csp.py", "motion_planning.py"}
+    assert "check_action_collision.py" not in copied
 
 
 def test_setup_no_primitives_dir_when_none_requested(tmp_path: Path) -> None:

@@ -119,6 +119,34 @@ def test_blackbox_render_state_proxies_to_host(tmp_path: Path) -> None:
     assert Path(path).parent == sandbox / "mcp_renders"
 
 
+def test_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> None:
+    """In blackbox mode, render_policy runs approach.py locally, not on the host.
+
+    The tool execs the sandbox's approach.py here and only renders the visited states on
+    the host, returning absolute frame paths.
+    """
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    (sandbox / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox) as (port, token):
+        env_spaces = _write_env_spaces(sandbox, port, token)
+        srv = build_blackbox_server(["render_policy"], env_spaces)
+        paths = _call_tool(srv, "render_policy", {"seed": 1, "max_steps": 3})
+    assert paths
+    assert all(Path(p).exists() for p in paths)
+    assert all(Path(p).parent == sandbox / "mcp_renders" for p in paths)
+
+
 def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) -> None:
     """render_policy tool returns a list of PNG paths."""
     sandbox = tmp_path / "sandbox"

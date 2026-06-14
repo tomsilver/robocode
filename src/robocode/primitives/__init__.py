@@ -21,6 +21,22 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "BiRRT": "motion_planning",
 }
 
+# Primitives whose construction needs the live environment. In black-box mode
+# the sandbox has no env source, so these run on the host via the env server
+# (see env_client.BlackboxEnv) and their source is NOT copied into the sandbox:
+# it would not import (it imports the hidden env) and it would leak the env
+# structure. Every other primitive is generic and imported directly.
+ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset({"check_action_collision"})
+
+# For generic primitives, the attribute to pull from the source module named in
+# PRIMITIVE_NAME_TO_FILE. None means the primitive IS the module object.
+_GENERIC_PRIMITIVE_ATTR: dict[str, str | None] = {
+    "csp": None,
+    "crv_motion_planning": None,
+    "crv_motion_planning_grasp": None,
+    "BiRRT": "BiRRT",
+}
+
 # Descriptions shown to the Claude agent so it knows how to call each
 # primitive. Keyed by the same names as PRIMITIVE_NAME_TO_FILE.
 PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
@@ -96,6 +112,33 @@ def build_primitives(env: Any, names: list[str] | tuple[str, ...]) -> dict[str, 
     """Build a primitives dict containing only the requested *names*."""
     all_prims = _all_primitives(env)
     return {name: all_prims[name] for name in names}
+
+
+def blackbox_primitive_manifest(
+    names: list[str] | tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Describe how a black-box sandbox should build each requested primitive.
+
+    Returns a JSON-serializable spec list for ``env_spaces.json`` that
+    ``env_client.BlackboxEnv.make_primitives`` consumes to reconstruct the same
+    dict ``build_primitives`` produces at eval time. Env-dependent primitives
+    become host proxies (run on the host via the env server); generic ones name
+    the source module (and attribute) the sandbox imports from its copy.
+    """
+    manifest: list[dict[str, Any]] = []
+    for name in names:
+        if name in ENV_DEPENDENT_PRIMITIVES:
+            manifest.append({"name": name, "kind": "host_proxy"})
+        else:
+            manifest.append(
+                {
+                    "name": name,
+                    "kind": "generic",
+                    "module": PRIMITIVE_NAME_TO_FILE[name],
+                    "attr": _GENERIC_PRIMITIVE_ATTR[name],
+                }
+            )
+    return manifest
 
 
 def format_primitives_description(names: list[str]) -> str:

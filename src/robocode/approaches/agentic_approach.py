@@ -1,6 +1,5 @@
 """An approach that uses an LLM coding agent to generate approach code."""
 
-import json
 import logging
 import sys
 from collections.abc import Callable
@@ -13,7 +12,10 @@ from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
 from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
-from robocode.primitives import format_primitives_description
+from robocode.primitives import (
+    blackbox_primitive_manifest,
+    format_primitives_description,
+)
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import (
     CLAUDE_PROMPT_SUFFIX,
@@ -28,6 +30,7 @@ from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
     env_server_running,
     serialize_space,
+    write_env_spaces,
 )
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
@@ -149,6 +152,17 @@ env.close()
 `env.observation_space` and `env.action_space` expose `shape`, `low`, \
 `high`, `dtype`, and `sample()`; the same metadata is in `env_spaces.json`. \
 `env.max_steps` is the episode step limit used at evaluation time.
+
+`env.make_primitives()` returns the SAME `primitives` dict the evaluation \
+harness passes to `GeneratedApproach.__init__`. Use it in test scripts so \
+they exercise the real primitives (env-dependent ones run on the host):
+
+```python
+from env_client import make_env
+
+env = make_env()
+primitives = env.make_primitives()
+```
 
 Parallel test scripts are fine: every `make_env()` call creates an \
 independent environment instance.
@@ -495,7 +509,18 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                     port, token = stack.enter_context(
                         env_server_running(self._env_cfg, sandbox_dir)
                     )
-                    self._write_env_spaces(sandbox_dir, port, token)
+                    write_env_spaces(
+                        sandbox_dir,
+                        container_backend=self._container_backend,
+                        port=port,
+                        token=token,
+                        observation_space=self._state_space,
+                        action_space=self._action_space,
+                        max_steps=self._max_steps,
+                        primitives_manifest=blackbox_primitive_manifest(
+                            list(self._primitives)
+                        ),
+                    )
                 result = run_with_rate_limit_retry(
                     docker_config,
                     config,
@@ -512,25 +537,6 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             self._load_generated(result.output_file)
         else:
             logger.warning("Agent failed to generate approach: %s", result.error)
-
-    def _write_env_spaces(self, sandbox_dir: Path, port: int, token: str) -> None:
-        """Write the metadata file read by the sandbox's env_client."""
-        host = (
-            "host.docker.internal"
-            if self._container_backend == "docker"
-            else "127.0.0.1"
-        )
-        meta = {
-            "host": host,
-            "port": port,
-            "token": token,
-            "observation_space": serialize_space(self._state_space),
-            "action_space": serialize_space(self._action_space),
-            "max_steps": self._max_steps,
-        }
-        (sandbox_dir / "env_spaces.json").write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
-        )
 
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""
