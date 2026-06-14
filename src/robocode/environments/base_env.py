@@ -18,6 +18,16 @@ class BaseEnv(Env[_StateType, _ActType]):
         """Optional markdown description of this environment for an agent."""
         return None
 
+    @property
+    def env_description_blackbox(self) -> str | None:
+        """Description used in blackbox mode; defaults to the full description.
+
+        Environments whose env_description points at source files or direct-import
+        examples override this to omit them, since a blackbox agent has access to
+        neither.
+        """
+        return self.env_description
+
     @abc.abstractmethod
     def set_state(self, state: _StateType) -> None:
         """Reset the internal state of the environment to the given one."""

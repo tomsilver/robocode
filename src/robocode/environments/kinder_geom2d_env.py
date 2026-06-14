@@ -62,14 +62,31 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     @property
     def env_description(self) -> str:
         """Markdown description of this environment for an agent."""
+        return self._describe(include_access=True)
+
+    @property
+    def env_description_blackbox(self) -> str:
+        """Description for blackbox mode.
+
+        Omits the direct-import example usage and the source-code pointers; in blackbox
+        mode the agent has access to neither and interacts with the environment only
+        through env_client.
+        """
+        return self._describe(include_access=False)
+
+    def _describe(self, include_access: bool) -> str:
         md = self._kinder_env.metadata
-        return (
+        description = (
             f"# {self._env_id}\n\n"
             f"{md.get('description', '')}\n\n"
             f"## Variant\n\n{md.get('variant_specific_description', '')}\n\n"
             f"## Observation Space\n\n{md.get('observation_space_description', '')}\n\n"
             f"## Action Space\n\n{md.get('action_space_description', '')}\n\n"
             f"## Reward\n\n{md.get('reward_description', '')}\n\n"
+        )
+        if not include_access:
+            return description
+        return description + (
             f"## Example Usage\n\n"
             f"```python\n"
             f"import numpy as np\n"

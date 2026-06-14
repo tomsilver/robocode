@@ -48,11 +48,15 @@ def _main(cfg: DictConfig) -> float:
     env = hydra.utils.instantiate(cfg.environment)
 
     # If the environment provides a description (e.g. kinder envs), write it
-    # to a file so the agentic approach can read it in its sandbox.
+    # to a file so the agentic approach can read it in its sandbox. In blackbox
+    # mode, use the variant that omits source-code pointers and direct-import
+    # examples, since the agent has access to neither.
+    blackbox = bool(cfg.approach.get("blackbox", False))
+    description = env.env_description_blackbox if blackbox else env.env_description
     env_description_path: str | None = None
-    if env.env_description is not None:
+    if description is not None:
         desc_path = output_dir / "env_description.md"
-        desc_path.write_text(env.env_description)
+        desc_path.write_text(description)
         env_description_path = str(desc_path)
 
     primitives = build_primitives(env, cfg.primitives)
