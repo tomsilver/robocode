@@ -21,10 +21,13 @@ from __future__ import annotations
 
 import logging
 import shutil
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+from robocode.mcp import MCP_START_SCRIPT
 from robocode.utils.backends import AgentBackend
 from robocode.utils.sandbox_types import (
     SandboxConfig,
@@ -33,6 +36,53 @@ from robocode.utils.sandbox_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _free_port() -> int:
+    """Return a currently-free loopback TCP port.
+
+    Shared by the sandbox backends that pre-start the render http server on the
+    host network namespace (local here, apptainer) so it cannot collide with the
+    host or a concurrent run. Lives here (not in docker_sandbox) because that
+    module imports from this one.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _start_local_http_mcp(
+    sandbox_dir: Path, port: int, env: dict[str, str]
+) -> subprocess.Popen[bytes]:
+    """Start the http render MCP server as a host process; wait until it serves.
+
+    Runs ``.mcp/<MCP_START_SCRIPT>`` (which ``exec``s the server, so the Popen
+    pid IS the server) with its output off the agent's pipes, then polls *port*
+    until it accepts a connection. Raises if the server exits or never binds.
+    The caller terminates the returned process when the agent run ends.
+    """
+    script = sandbox_dir / ".mcp" / MCP_START_SCRIPT
+    proc = subprocess.Popen(  # pylint: disable=consider-using-with
+        ["bash", str(script)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(
+                f"render MCP server exited at startup; see "
+                f"{sandbox_dir / '.mcp' / 'mcp_server.stderr.log'}"
+            )
+        try:
+            socket.create_connection(("127.0.0.1", port), 0.3).close()
+            return proc
+        except OSError:
+            time.sleep(0.1)
+    proc.terminate()
+    raise RuntimeError(f"render MCP server did not bind port {port} within 30s")
 
 
 _SANDBOX_GITIGNORE = """\
@@ -208,12 +258,19 @@ async def run_agent_in_sandbox(
     # build_cli_cmd must run before setup_sandbox_files because it writes
     # .mcp/mcp_config.json which setup_sandbox_files reads to convert MCP
     # config for OpenCode's opencode.json.
+    # Pre-start the render MCP server over http and point the CLI at it (see
+    # docker_sandbox for why: a CLI-spawned stdio server can still be importing
+    # when the CLI snapshots its tools). The server runs on the host, so use a
+    # free port to avoid colliding with the host or a concurrent run.
+    mcp_port = _free_port()
     cmd = backend.build_cli_cmd(
         config,
         mcp_python_cmd=sys.executable,
         mcp_env_config_path=str(
             (config.sandbox_dir / ".mcp" / "env_config.json").resolve()
         ),
+        mcp_transport="http",
+        mcp_port=mcp_port,
     )
     backend.setup_sandbox_files(config)
     _initial_commit(config.sandbox_dir)
@@ -225,21 +282,34 @@ async def run_agent_in_sandbox(
     logger.info("System prompt:\n%s", config.system_prompt)
     logger.info("Prompt:\n%s", config.prompt)
 
-    proc = subprocess.Popen(  # pylint: disable=consider-using-with
-        cmd,
-        cwd=sandbox_abs,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
+    server_proc = (
+        _start_local_http_mcp(config.sandbox_dir, mcp_port, env)
+        if config.mcp_tools
+        else None
     )
+    try:
+        proc = subprocess.Popen(  # pylint: disable=consider-using-with
+            cmd,
+            cwd=sandbox_abs,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
 
-    stream = backend.parse_stream(
-        proc,
-        stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
-    )
+        stream = backend.parse_stream(
+            proc,
+            stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+        )
+    finally:
+        if server_proc is not None:
+            server_proc.terminate()
+            try:
+                server_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server_proc.kill()
 
     logger.info(
         "Session done: turns=%d, cost=$%s, error=%s",

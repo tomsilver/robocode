@@ -40,7 +40,6 @@ import json
 import logging
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -420,18 +419,6 @@ def _build_docker_auth_args(
                     extra_env[info.api_key_env] = val
 
     return docker_args, extra_env
-
-
-def _free_port() -> int:
-    """Return a currently-free loopback TCP port.
-
-    Used by sandbox backends that share the host network namespace (apptainer,
-    local) so the render http server cannot collide with the host or a
-    concurrent run. Docker has its own netns, so it can use the fixed default.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> list[str]:

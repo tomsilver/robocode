@@ -54,7 +54,6 @@ from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     _filtered_repo_mounts,
     _find_repo_root,
-    _free_port,
     _get_claude_oauth_token,
     _mcp_prestart_wrapper,
 )
@@ -62,6 +61,7 @@ from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _final_commit,
+    _free_port,
     _initial_commit,
     _setup_sandbox_common,
     _stream_result_to_sandbox_result,
