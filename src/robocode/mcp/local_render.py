@@ -37,7 +37,13 @@ from mcp.server.fastmcp import FastMCP
 from omegaconf import OmegaConf
 
 from robocode.mcp import MCP_SERVER_NAME
-from robocode.mcp.server import _setup_logging, logger, register_tools
+from robocode.mcp.server import (
+    _setup_logging,
+    add_transport_args,
+    logger,
+    register_tools,
+    run_server,
+)
 from robocode.primitive_specs import (
     ENV_DEPENDENT_PRIMITIVES,
     GENERIC_PRIMITIVE_ATTR,
@@ -170,6 +176,7 @@ def main() -> None:
         required=True,
         help="Path to write server-side log (stdout is reserved for MCP stdio)",
     )
+    add_transport_args(parser)
     args = parser.parse_args()
 
     _setup_logging(Path(args.log_file))
@@ -191,8 +198,7 @@ def main() -> None:
             renders_dir=renders_dir,
             primitives_dir=primitives_dir,
         )
-        logger.info("Starting stdio transport")
-        server.run(transport="stdio")
+        run_server(server, args.transport, args.host, args.port)
         logger.info("MCP server shut down")
     except Exception:
         logger.critical("MCP server crashed:\n%s", traceback.format_exc())

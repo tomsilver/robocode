@@ -50,6 +50,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from robocode.mcp import (
+    MCP_HTTP_HOST,
+    MCP_HTTP_PORT,
+    MCP_START_SCRIPT,
+    MCP_STARTUP_TIMEOUT_MS,
+)
 from robocode.primitives import (
     ENV_DEPENDENT_PRIMITIVES,
     PRIMITIVE_NAME_TO_FILE,
@@ -415,6 +421,29 @@ def _build_docker_auth_args(
     return docker_args, extra_env
 
 
+def _mcp_prestart_wrapper(agent_cmd: list[str]) -> list[str]:
+    """Wrap *agent_cmd* so the http render server starts and is healthy first.
+
+    Returns a container command that runs ``.mcp/<MCP_START_SCRIPT>`` in the
+    background, waits (up to ~20s) for ``MCP_HTTP_PORT`` to accept connections,
+    then ``exec``s the agent CLI. Starting and health-checking the server before
+    the CLI is what makes the render tools connected on the agent's first turn.
+    The CLI argv is passed positionally (``exec "$@"``) so it needs no quoting.
+    """
+    start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
+    probe = (
+        f"{DOCKER_PYTHON} -c "
+        f'"import socket; socket.create_connection('
+        f"('{MCP_HTTP_HOST}', {MCP_HTTP_PORT}), 0.3).close()\""
+    )
+    script = (
+        f"bash {start_script} & "
+        f"for _ in $(seq 1 200); do {probe} 2>/dev/null && break; sleep 0.1; done; "
+        'exec "$@"'
+    )
+    return ["bash", "-c", script, "bash", *agent_cmd]
+
+
 async def run_agent_in_docker_sandbox(
     config: DockerSandboxConfig,
     backend: AgentBackend,
@@ -491,19 +520,30 @@ async def run_agent_in_docker_sandbox(
                 f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
                 "-e",
                 f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+                # Wait for the render MCP server to connect before the CLI
+                # snapshots its tools, else render tools race and can vanish.
+                "-e",
+                f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
             ],
             blackbox=config.blackbox,
         )
 
-        # Build the agent CLI command.
+        # Build the agent CLI command. Use the http MCP transport: the render
+        # server is started and health-checked BELOW, before the CLI, so its
+        # tools are connected on the agent's first turn (a CLI-spawned stdio
+        # server can still be importing then and its tools register too late).
         agent_cmd = backend.build_cli_cmd(
             config,
             mcp_python_cmd=DOCKER_PYTHON,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
+            mcp_transport="http",
         )
-        docker_cmd += agent_cmd
+        if config.mcp_tools:
+            docker_cmd += _mcp_prestart_wrapper(agent_cmd)
+        else:
+            docker_cmd += agent_cmd
 
         # Write backend config files (opencode.json, AGENTS.md, etc.)
         # AFTER build_cli_cmd so .mcp/mcp_config.json exists for conversion.

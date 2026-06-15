@@ -3,10 +3,32 @@
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 # Server name used by FastMCP and to build Claude CLI tool names
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
+
+# Startup wait (milliseconds) the agent CLI is given for the render MCP server
+# to connect, passed as the ``MCP_TIMEOUT`` env var by every backend. The server
+# imports the MCP framework plus the env/render stack (~2s) before it can answer
+# the stdio handshake; if the CLI snapshots its tool list before that, the render
+# tools are silently absent for the whole run ("No such tool available"). A
+# generous timeout makes the CLI wait for the server instead of racing it; the
+# CLI still proceeds as soon as the server connects, so this only adds latency
+# when the server is genuinely slow.
+MCP_STARTUP_TIMEOUT_MS = 60000
+
+# HTTP transport. Instead of letting the agent CLI spawn the render server over
+# stdio (which can still be importing when the CLI snapshots its tools, so the
+# render tools are missing on the first turn), the launch flow starts a
+# standalone streamable-http server and health-checks it BEFORE the CLI, so its
+# tools are connected on turn 1. A fixed loopback port is safe: the server is the
+# only one in its isolated sandbox. The launch flow runs MCP_START_SCRIPT (under
+# <sandbox>/.mcp/), waits for the port, then execs the CLI.
+MCP_HTTP_HOST = "127.0.0.1"
+MCP_HTTP_PORT = 8765
+MCP_START_SCRIPT = "start_server.sh"
 
 # Tool description templates. Use {render_state} and {render_policy}
 # placeholders for the backend-specific tool names (Claude uses
@@ -194,6 +216,7 @@ def setup_mcp_config(
     env_config_path: str,
     log_file_path: str,
     blackbox: bool = False,
+    transport: str = "stdio",
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
@@ -202,7 +225,13 @@ def setup_mcp_config(
     mode the env source is absent from the container, so the server instead
     proxies render tools to the host env server using the connection info in
     ``env_spaces.json`` (written by the approach at the sandbox root).
-    Returns the path to ``mcp_config.json``.
+
+    With ``transport="http"`` the agent CLI is pointed at a standalone
+    streamable-http server on ``127.0.0.1:MCP_HTTP_PORT`` and the server-start
+    command is written to ``.mcp/MCP_START_SCRIPT`` for the launch flow to start
+    and health-check BEFORE the CLI (so the render tools are connected on the
+    agent's first turn). With the default ``"stdio"`` the agent CLI spawns the
+    server itself. Returns the path to ``mcp_config.json``.
     """
     mcp_dir = sandbox_dir / ".mcp"
     mcp_dir.mkdir(exist_ok=True)
@@ -210,6 +239,11 @@ def setup_mcp_config(
     # Use a shell wrapper so that stderr (import errors, tracebacks) is also
     # captured in the log file even if the Python process never reaches main().
     stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
+    transport_args = (
+        f" --transport http --host {MCP_HTTP_HOST} --port {MCP_HTTP_PORT}"
+        if transport == "http"
+        else ""
+    )
     if blackbox:
         # The blackbox MCP server (robocode.mcp.server) imports only
         # env_client, so it stays importable in a container with the env
@@ -222,6 +256,7 @@ def setup_mcp_config(
             f" --env-spaces {env_spaces_path}"
             f" --tools {','.join(tool_names)}"
             f" --log-file {log_file_path}"
+            f"{transport_args}"
             f" 2>>{stderr_log_path}"
         )
     else:
@@ -236,16 +271,29 @@ def setup_mcp_config(
             f" --env-config {env_config_path}"
             f" --tools {','.join(tool_names)}"
             f" --log-file {log_file_path}"
+            f"{transport_args}"
             f" 2>>{stderr_log_path}"
         )
-    mcp_config = {
-        "mcpServers": {
-            MCP_SERVER_NAME: {
-                "command": "bash",
-                "args": ["-c", server_cmd],
+    if transport == "http":
+        # The launch flow starts this and waits for the port before the CLI.
+        (mcp_dir / MCP_START_SCRIPT).write_text(server_cmd + "\n", encoding="utf-8")
+        mcp_config: dict[str, Any] = {
+            "mcpServers": {
+                MCP_SERVER_NAME: {
+                    "type": "http",
+                    "url": f"http://{MCP_HTTP_HOST}:{MCP_HTTP_PORT}/mcp",
+                }
             }
         }
-    }
+    else:
+        mcp_config = {
+            "mcpServers": {
+                MCP_SERVER_NAME: {
+                    "command": "bash",
+                    "args": ["-c", server_cmd],
+                }
+            }
+        }
     config_path = mcp_dir / "mcp_config.json"
     config_path.write_text(json.dumps(mcp_config, indent=2))
     return config_path

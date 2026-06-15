@@ -180,8 +180,34 @@ def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastM
     return server
 
 
+def add_transport_args(parser: argparse.ArgumentParser) -> None:
+    """Add the shared --transport/--host/--port options to a server CLI parser.
+
+    ``stdio`` (default) is spawned by the agent CLI; ``http`` runs a standalone
+    streamable-http server that the launch flow starts and health-checks BEFORE
+    the agent CLI boots, so its tools are connected on the agent's first turn
+    (a spawned stdio server can still be importing then, and its tools register
+    too late -- see robocode.mcp.setup_mcp_config).
+    """
+    parser.add_argument("--transport", choices=("stdio", "http"), default="stdio")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for http transport")
+    parser.add_argument("--port", type=int, default=0, help="Port for http transport")
+
+
+def run_server(server: FastMCP, transport: str, host: str, port: int) -> None:
+    """Run *server* over the given transport (``stdio`` or ``http``)."""
+    if transport == "http":
+        server.settings.host = host
+        server.settings.port = port
+        logger.info("Starting streamable-http transport on %s:%d", host, port)
+        server.run(transport="streamable-http")
+    else:
+        logger.info("Starting stdio transport")
+        server.run(transport="stdio")
+
+
 def main() -> None:
-    """Parse CLI args and start the blackbox MCP server over stdio."""
+    """Parse CLI args and start the blackbox MCP server."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--env-spaces",
@@ -198,6 +224,7 @@ def main() -> None:
         required=True,
         help="Path to write server-side log (stdout is reserved for MCP stdio)",
     )
+    add_transport_args(parser)
     args = parser.parse_args()
 
     _setup_logging(Path(args.log_file))
@@ -208,8 +235,7 @@ def main() -> None:
         env_spaces_path = Path(args.env_spaces).resolve()
         logger.info("Loading env server connection info from %s", env_spaces_path)
         server = build_blackbox_server(tool_names, env_spaces_path)
-        logger.info("Starting stdio transport")
-        server.run(transport="stdio")
+        run_server(server, args.transport, args.host, args.port)
         logger.info("MCP server shut down")
     except Exception:
         logger.critical("MCP server crashed:\n%s", traceback.format_exc())

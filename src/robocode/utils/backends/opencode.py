@@ -60,6 +60,7 @@ class OpenCodeBackend(AgentBackend):
         mcp_env_config_path: str = "",
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
+        mcp_transport: str = "stdio",
     ) -> list[str]:
         """Build the OpenCode CLI command."""
         self._max_budget_usd = config.max_budget_usd

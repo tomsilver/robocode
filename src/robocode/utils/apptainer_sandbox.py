@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from robocode.mcp import MCP_STARTUP_TIMEOUT_MS
 from robocode.primitives import (
     ENV_DEPENDENT_PRIMITIVES,
     PRIMITIVE_NAME_TO_FILE,
@@ -211,6 +212,10 @@ def _build_apptainer_cmd(
         f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
         "--env",
         f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+        # Wait for the render MCP server to connect before the CLI snapshots its
+        # tools (--containall drops the host env, so this must be explicit).
+        "--env",
+        f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
         "--env",
         "ROBOCODE_SKIP_FIREWALL=1",
     ]

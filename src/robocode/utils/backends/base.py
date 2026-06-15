@@ -29,6 +29,7 @@ class AgentBackend(Protocol):
         mcp_env_config_path: str = "",
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
+        mcp_transport: str = "stdio",
     ) -> list[str]:
         """Return the full CLI command (binary + args) to run the agent."""
 

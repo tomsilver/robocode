@@ -15,7 +15,12 @@ from pathlib import Path
 
 from omegaconf import DictConfig
 
-from robocode.mcp import MCP_SERVER_NAME, mcp_tool_cli_names, setup_mcp_config
+from robocode.mcp import (
+    MCP_SERVER_NAME,
+    MCP_STARTUP_TIMEOUT_MS,
+    mcp_tool_cli_names,
+    setup_mcp_config,
+)
 from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
@@ -106,6 +111,7 @@ class ClaudeBackend(AgentBackend):
         mcp_env_config_path: str = "",
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
+        mcp_transport: str = "stdio",
     ) -> list[str]:
         """Build the Claude CLI command."""
         self._max_turns = config.max_turns
@@ -145,6 +151,7 @@ class ClaudeBackend(AgentBackend):
                 mcp_env_config_path,
                 log_path,
                 blackbox=config.blackbox,
+                transport=mcp_transport,
             )
             cli_path = mcp_config_cli_path or str(config_path.resolve())
             args += ["--mcp-config", cli_path, "--strict-mcp-config"]
@@ -159,6 +166,9 @@ class ClaudeBackend(AgentBackend):
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDECODE")}
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(config.max_output_tokens)
         env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(config.autocompact_pct)
+        # Give the render MCP server time to connect before the CLI snapshots
+        # its tool list (local backend; docker/apptainer pass this via -e/--env).
+        env["MCP_TIMEOUT"] = str(MCP_STARTUP_TIMEOUT_MS)
         env.update(
             anthropic_compatible_env(
                 self._base_url, self._auth_token, self._ollama_keep_alive
@@ -277,7 +287,20 @@ class ClaudeBackend(AgentBackend):
                         name = srv.get("name")
                         if name != MCP_SERVER_NAME:
                             continue
-                        if status != "connected":
+                        if status == "connected":
+                            logger.info("MCP server %s: %s", name, status)
+                        elif status == "pending":
+                            # Expected transient: the render MCP server needs a
+                            # couple of seconds to import and answer the stdio
+                            # handshake; the CLI waits up to MCP_TIMEOUT and
+                            # registers its tools once it connects. A genuine
+                            # failure surfaces later as "No such tool".
+                            logger.info(
+                                "MCP server %s still connecting (pending); the "
+                                "CLI waits up to MCP_TIMEOUT for it.",
+                                name,
+                            )
+                        else:
                             logger.warning("MCP server %s: %s", name, status)
                             logger.warning("MCP server %s full status: %s", name, srv)
                             logger.warning(
@@ -285,13 +308,14 @@ class ClaudeBackend(AgentBackend):
                                 mcp_log,
                             )
                             logger.warning(
-                                "If running in Docker, try rebuilding the "
-                                "image with `bash docker/build.sh`, as the "
-                                "robocode package (including MCP server code) "
-                                "is baked into the image at build time."
+                                "Possible causes: the server did not connect "
+                                "before the CLI snapshotted its tools (raise "
+                                "MCP_TIMEOUT), or, if running in Docker, the "
+                                "image is stale -- rebuild with "
+                                "`bash docker/build.sh`, as the robocode package "
+                                "(including MCP server code) is baked into the "
+                                "image at build time."
                             )
-                        else:
-                            logger.info("MCP server %s: %s", name, status)
                 elif subtype == "compact_boundary":
                     meta = msg.get("compact_metadata", {})
                     logger.info(
@@ -344,10 +368,13 @@ class ClaudeBackend(AgentBackend):
                         logger.warning("Tool result: %s", tool_use_result)
                         if "No such tool" in tool_use_result:
                             logger.warning(
-                                "Tool not found, if running in Docker, try "
-                                "rebuilding the image with "
-                                "`bash docker/build.sh`. "
-                                "Check %s for server-side details.",
+                                "MCP render tool was unavailable when called. "
+                                "Likely the server had not finished connecting "
+                                "before the CLI snapshotted its tools (raise "
+                                "MCP_TIMEOUT); or, if running in Docker, the "
+                                "image may be stale -- rebuild with "
+                                "`bash docker/build.sh`. Check the server log "
+                                "and its .stderr.log: %s",
                                 mcp_log,
                             )
                     elif "mcp_renders" in tool_use_result:
