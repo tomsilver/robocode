@@ -126,6 +126,20 @@ def test_blackbox_render_state_proxies_to_host(tmp_path: Path) -> None:
     assert Path(path).parent == sandbox / "mcp_renders"
 
 
+def test_blackbox_render_state_label_cannot_escape_sandbox(tmp_path: Path) -> None:
+    """A label with path separators is sanitized; the PNG stays in mcp_renders."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox) as (port, token):
+        env_spaces = _write_env_spaces(sandbox, port, token)
+        srv = build_blackbox_server(["render_state"], env_spaces)
+        path = _call_tool(srv, "render_state", {"seed": 0, "label": "../../escape"})
+    written = Path(path)
+    assert written.exists()
+    assert written.parent == sandbox / "mcp_renders"
+    assert ".." not in written.name
+
+
 def test_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> None:
     """In blackbox mode, render_policy runs approach.py locally, not on the host.
 
@@ -185,18 +199,25 @@ def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) ->
         assert Path(p).exists()
 
 
-def test_mcp_tool_descriptions_blackbox_drops_layout_concepts() -> None:
-    """The blackbox render_state description omits the env-source layout API."""
+def test_mcp_tool_descriptions_blackbox_uses_handle_api() -> None:
+    """Blackbox render_state keeps devectorize but describes the host handle API."""
     normal = mcp_tool_descriptions("claude")["render_state"]
     assert "devectorize" in normal
     assert "vectorize" in normal
     assert "ObjectCentricState" in normal
+    # The from-scratch layout API needs the env source, which blackbox lacks.
+    assert "constant_objects" in normal
+    assert "type_features" in normal
 
     blackbox = mcp_tool_descriptions("claude", blackbox=True)["render_state"]
-    assert "devectorize" not in blackbox
-    assert "vectorize" not in blackbox
-    assert "ObjectCentricState" not in blackbox
+    # devectorize/vectorize are proxied to the host, so they stay available...
+    assert "devectorize" in blackbox
+    assert "vectorize" in blackbox
+    assert "ObjectCentricState" in blackbox
+    assert "get_object_names" in blackbox
+    # ...but the build-from-scratch layout concepts do not.
     assert "constant_objects" not in blackbox
+    assert "type_features" not in blackbox
     # render_policy is shared and does not reference layout concepts either way.
     assert (
         mcp_tool_descriptions("claude", blackbox=True)["render_policy"]
@@ -204,11 +225,11 @@ def test_mcp_tool_descriptions_blackbox_drops_layout_concepts() -> None:
     )
 
 
-def test_mcp_system_prompt_suffix_blackbox_drops_devectorize() -> None:
-    """The blackbox system-prompt suffix omits the devectorize/vectorize sentence."""
+def test_mcp_system_prompt_suffix_blackbox_keeps_devectorize() -> None:
+    """The blackbox system-prompt suffix keeps the devectorize/vectorize guidance."""
     assert "devectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
-    assert "devectorize" not in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
-    assert "vectorize" not in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+    assert "devectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+    assert "vectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
     assert "render_policy" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
 
 

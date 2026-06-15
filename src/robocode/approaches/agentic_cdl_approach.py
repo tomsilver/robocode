@@ -685,6 +685,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
+                blackbox=self._blackbox,
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import secrets
 import socketserver
 import sys
@@ -367,6 +368,18 @@ def _dispatch(
     raise ValueError(f"Unknown command: {cmd!r}")
 
 
+def _safe_label(label: str) -> str:
+    """Reduce an agent-supplied label to a filename-safe token.
+
+    The label is interpolated into the render output filename. This handler runs
+    on the host (not in the container), so a label with path separators or ``..``
+    would let a black-box agent steer the PNG write outside the sandbox. Keep
+    only alphanumerics, dashes, and underscores; collapse everything else to
+    ``_``.
+    """
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", label)
+
+
 def _unique_render_path(directory: Path, stem: str, ext: str = ".png") -> Path:
     """Return ``directory/stem.ext``, appending _1, _2, ...
 
@@ -405,7 +418,7 @@ def _render_state(
             env_state = env.get_state()
             stem = f"state_seed{seed}"
         if label:
-            stem += f"_{label}"
+            stem += f"_{_safe_label(label)}"
 
         with _RENDER_LOCK:
             frame = render_state_fn(env, env_state)
