@@ -37,6 +37,9 @@ import numpy as np
 
 _METADATA_PATH = Path(__file__).resolve().parent / "env_spaces.json"
 _NDARRAY_TAG = "__ndarray__"
+_HANDLE_TAG = "__handle__"
+_MODULE_TAG = "__module__"
+_SET_TAG = "__set__"
 
 
 def _encode(obj: Any) -> Any:
@@ -63,6 +66,28 @@ def _decode(obj: Any) -> Any:
     return obj
 
 
+def _encode_ref(obj: Any) -> Any:
+    """Encode args/targets for the remote-object proxy commands.
+
+    Same as ``_encode`` but ``_RemoteHandle`` objects serialize to their
+    ``{"__handle__": id}`` token so the host resolves them from its registry.
+    Used only by devectorize/vectorize/getattr/call requests.
+    """
+    if isinstance(obj, _RemoteHandle):
+        return {_HANDLE_TAG: obj._handle_id}  # pylint: disable=protected-access
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return {_NDARRAY_TAG: obj.tolist(), "dtype": str(obj.dtype)}
+    if isinstance(obj, dict):
+        return {key: _encode_ref(value) for key, value in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_encode_ref(value) for value in obj]
+    if isinstance(obj, (set, frozenset)):
+        return {_SET_TAG: [_encode_ref(value) for value in obj]}
+    return obj
+
+
 class SpaceInfo:
     """Metadata for a Box space: shape, low, high, dtype, and sample()."""
 
@@ -84,11 +109,114 @@ class SpaceInfo:
         return rng.uniform(self.low, self.high).astype(self.dtype)
 
 
+class _RemoteHandle:
+    """A reference to a host-side object, used over the env server.
+
+    Attribute access and calls are proxied to the host: ``handle.method(...)``
+    issues a ``getattr`` (returning another handle for the bound method) then a
+    ``call``. Returned values are decoded the same way as any response, so a
+    scalar/ndarray comes back inline and another object comes back as a nested
+    ``_RemoteHandle``. Private/dunder attributes are refused client-side, both
+    to avoid surprise round-trips and to mirror the host security guard.
+    """
+
+    def __init__(self, client: "BlackboxEnv", handle_id: str) -> None:
+        # Use object.__setattr__-free plain assignment; __getattr__ only fires
+        # for names not found normally, and these two are set here.
+        self._client = client
+        self._handle_id = handle_id
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(
+                f"refusing private/dunder attribute access on remote handle: "
+                f"{name!r}"
+            )
+        response = self._client._request(  # pylint: disable=protected-access
+            {
+                "cmd": "getattr",
+                "target": {_HANDLE_TAG: self._handle_id},
+                "name": name,
+            }
+        )
+        return self._client._decode_ref(  # pylint: disable=protected-access
+            response["result"]
+        )
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        response = self._client._request(  # pylint: disable=protected-access
+            {
+                "cmd": "call",
+                "target": {_HANDLE_TAG: self._handle_id},
+                "args": _encode_ref(list(args)),
+                "kwargs": _encode_ref(kwargs),
+            }
+        )
+        return self._client._decode_ref(  # pylint: disable=protected-access
+            response["result"]
+        )
+
+
+class _RemoteModule:
+    """A reference to a whitelisted host module (e.g. crv_motion_planning).
+
+    Attribute access proxies a ``getattr`` against the ``{"__module__": name}``
+    target, so ``module.plan_crv_actions`` returns a callable handle the agent
+    can invoke. Mirrors how a remote-module primitive is used at eval time,
+    where ``primitives['crv_motion_planning']`` is the real module.
+    """
+
+    def __init__(self, client: "BlackboxEnv", short_name: str) -> None:
+        self._client = client
+        self._short_name = short_name
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(
+                f"refusing private/dunder attribute access on remote module: "
+                f"{name!r}"
+            )
+        response = self._client._request(  # pylint: disable=protected-access
+            {
+                "cmd": "getattr",
+                "target": {_MODULE_TAG: self._short_name},
+                "name": name,
+            }
+        )
+        return self._client._decode_ref(  # pylint: disable=protected-access
+            response["result"]
+        )
+
+
+class _BlackboxObservationSpace(SpaceInfo):
+    """Box-space metadata plus client-backed devectorize/vectorize.
+
+    Stands in for the eval-time ``ObjectCentricBoxSpace``: it keeps the
+    shape/low/high/dtype/sample() of a plain ``SpaceInfo`` and adds
+    ``devectorize(obs)`` / ``vectorize(ocs)`` that proxy to the host. The agent
+    writes ``observation_space.devectorize(obs)`` exactly as it would at eval.
+    """
+
+    def __init__(self, spec: dict[str, Any], client: "BlackboxEnv") -> None:
+        super().__init__(spec)
+        self._client = client
+
+    def devectorize(self, obs: Any) -> Any:
+        """Return an object-centric view of *obs* as a remote handle."""
+        return self._client.devectorize(obs)
+
+    def vectorize(self, state: Any) -> np.ndarray:
+        """Return the flat observation vector for an object-centric state."""
+        return self._client.vectorize(state)
+
+
 class BlackboxEnv:
     """A live environment instance, accessed over the wire."""
 
     def __init__(self, meta: dict[str, Any], sandbox_root: Any = None) -> None:
-        self.observation_space = SpaceInfo(meta["observation_space"])
+        self.observation_space = _BlackboxObservationSpace(
+            meta["observation_space"], self
+        )
         self.action_space = SpaceInfo(meta["action_space"])
         self.max_steps: int | None = meta["max_steps"]
         # How make_primitives rebuilds the eval-time primitives dict (see
@@ -116,6 +244,43 @@ class BlackboxEnv:
         if "error" in response:
             raise RuntimeError(f"Environment server error: {response['error']}")
         return _decode(response)
+
+    def _decode_ref(self, obj: Any) -> Any:
+        """Decode a remote-command result, mapping handles to _RemoteHandle.
+
+        ``_request`` already ran ``_decode`` over the response (so ndarrays are
+        arrays), but it leaves ``{"__handle__": id}`` dicts intact since it does
+        not know the handle tag. Here we turn those into ``_RemoteHandle``
+        objects and recurse through the remaining containers.
+        """
+        if isinstance(obj, dict):
+            if _HANDLE_TAG in obj:
+                return _RemoteHandle(self, obj[_HANDLE_TAG])
+            if _SET_TAG in obj:
+                return {self._decode_ref(value) for value in obj[_SET_TAG]}
+            return {key: self._decode_ref(value) for key, value in obj.items()}
+        if isinstance(obj, list):
+            return [self._decode_ref(value) for value in obj]
+        return obj
+
+    def devectorize(self, obs: Any) -> _RemoteHandle:
+        """Return an object-centric view of *obs* (a remote ObjectCentricState).
+
+        Proxies ``observation_space.devectorize`` to the host. The returned
+        handle exposes the public ObjectCentricState API (``get_object_names``,
+        ``get_object_from_name``, ``get_objects``, ``get``, ``set``, ``copy``,
+        ...) over the wire. Pass it straight to the CRV planners from
+        ``make_primitives``.
+        """
+        response = self._request(
+            {"cmd": "devectorize", "obs": _encode(np.asarray(obs))}
+        )
+        return self._decode_ref(response["result"])
+
+    def vectorize(self, state: Any) -> np.ndarray:
+        """Return the flat observation vector for an object-centric state handle."""
+        response = self._request({"cmd": "vectorize", "state": _encode_ref(state)})
+        return self._decode_ref(response["result"])
 
     def reset(
         self, seed: int | None = None, options: dict[str, Any] | None = None
@@ -235,6 +400,10 @@ class BlackboxEnv:
         for spec in self._primitive_manifest:
             if spec["kind"] == "host_proxy":
                 primitives[spec["name"]] = getattr(self, spec["name"])
+            elif spec["kind"] == "remote_module":
+                # The module source is withheld from the sandbox; reach it on
+                # the host via a remote-module proxy (e.g. crv_motion_planning).
+                primitives[spec["name"]] = _RemoteModule(self, spec["module"])
             else:
                 module = importlib.import_module(f"primitives.{spec['module']}")
                 primitives[spec["name"]] = (

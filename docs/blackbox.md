@@ -68,6 +68,10 @@ carrying the auth token.
 | `set_state` | `state` | `{ok: true}` |
 | `check_action_collision` | `state`, `action` | `{collision}` |
 | `render_state` | `seed`, `state`, `label` | `{path}` (relative) |
+| `devectorize` | `obs` | `{result}` (a handle to an `ObjectCentricState`) |
+| `vectorize` | `state` (a handle) | `{result}` (a flat ndarray) |
+| `getattr` | `target`, `name` | `{result}` (handle-encoded) |
+| `call` | `target`, `args`, `kwargs` | `{result}` (handle-encoded) |
 | `close` | (none) | connection closes |
 
 `check_action_collision` runs the env-dependent collision primitive on the host
@@ -82,6 +86,49 @@ never executes agent code.
 
 Numpy arrays are encoded as `{"__ndarray__": [...], "dtype": "..."}`. Errors come
 back as `{"error": "ExceptionType: message"}`.
+
+### Remote object handles
+
+`devectorize`, `vectorize`, `getattr`, and `call` form a small remote-object
+proxy so host-side Python objects can be used from the sandbox *by reference*.
+The agent never receives a host object's bytes: anything that is not a JSON
+scalar, ndarray, list, dict, or set is stored in a **per-connection handle
+registry** on the host and represented on the wire by an opaque
+`{"__handle__": "h0", "type": "..."}` token (the `type` field is informational).
+A later request names the handle and the host resolves it from the registry.
+Client-side, a handle becomes a `_RemoteHandle` whose attribute access and calls
+issue `getattr` / `call` requests, so `ocs.get_object_from_name("robot")` and
+`crv.plan_crv_actions(ocs, cfg, ...)` work transparently. Sets (e.g.
+`get_object_names()`) are tagged `{"__set__": [...]}` so the agent sees a real
+`set`, identical to eval. The registry is dropped when the connection closes.
+
+This is what makes `observation_space.devectorize(obs)` / `vectorize(ocs)` and
+the `crv_motion_planning` / `crv_motion_planning_grasp` primitives usable in
+black-box mode: the CRV module source imports the withheld env, so it is *not*
+copied into the sandbox; instead the sandbox calls into it on the host through a
+remote-module proxy. Because the real `observation_space` (a relational-structs
+`ObjectCentricBoxSpace`) and the real CRV modules are passed to
+`GeneratedApproach` at eval, **`approach.py` is identical** whether run in the
+sandbox (proxied) or at eval (native).
+
+**Security.** This path runs on the host, which has the full filesystem and the
+env source, so the reachable surface is an explicit **allowlist**, not a
+denylist. A denylist such as "block dunder attributes" is insufficient: the
+planner modules do `import numpy as np` and import `kinder.envs` types at module
+scope, so a non-underscore attribute like `crv_motion_planning.np` would hand the
+agent the live numpy module (`np.load` with pickle is host RCE; `np.fromfile` /
+`save` are host file I/O), and `crv_motion_planning.SE2Pose` would leak the very
+env types black-box withholds. The guards are: (1) a module target must be a
+**whitelisted** short name (`crv_motion_planning`, `crv_motion_planning_grasp`),
+and the attribute must be in that module's **public-API allowlist** (the planner
+entry points and `CRVConfig` / `CRVActionLimits` / `RelativeGraspPose`); (2) a
+handle target's attribute must be in a **per-type allowlist** keyed by the domain
+type (`ObjectCentricState`, `Object`, `Type`, and the CRV value dataclasses),
+each exposing only safe, value-returning members; (3) a `call` target must be a
+handle already vetted by a prior allowlisted `getattr`; (4) the registry is
+per-connection and cleared on close. Anything outside the allowlists (including
+every dunder, `np`, and the imported env types) is refused, bounding reachable
+host code to the safe public domain API.
 
 ## Wiring per backend
 
@@ -102,9 +149,10 @@ The approach, in `train()`:
    `envs/` and `demos/`, plus the always-excluded `oracles/`, `primitives/`,
    `tests/`, and `docs/`.
 
-The Docker firewall stays default-deny but adds an allow rule for the host's
-`/24` (derived from the default gateway) so the container can reach the
-ephemeral env-server port:
+The Docker firewall stays default-deny but already includes an allow rule for
+the host's `/24` (derived from the default gateway, in
+`docker/init-firewall.sh`, not added by blackbox mode) so the container can
+reach the ephemeral env-server port:
 
 ```bash
 HOST_IP=$(ip route | grep default | awk '{print $3}' | head -1)
@@ -123,7 +171,13 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
 `setup_mcp_config(..., blackbox=...)`:
 
 - **Normal:** `python -m robocode.mcp.local_render --env-config ...` renders
-  in-process, which needs the env source.
+  in-process, which needs the env source. Its render code lives in
+  `robocode/rendering/` (not the `primitives/` package), so it can render
+  without importing the sandbox-stripped `robocode.primitives`; the source-free
+  metadata it still needs (e.g. `PRIMITIVE_NAME_TO_FILE`) comes from
+  `robocode.primitive_specs`. `render_policy` builds its primitives dict from
+  the in-sandbox copied top-level `primitives/` package (the subset the sandbox
+  setup copies), not from `robocode.primitives`.
 - **Blackbox:** `python -m robocode.mcp.server --env-spaces ...`. This server
   cannot import env source, so its tool implementations hold a `BlackboxEnv`.
   `render_state` **proxies to the host env-server** over the JSON-over-TCP

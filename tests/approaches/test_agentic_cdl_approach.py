@@ -110,7 +110,9 @@ def test_blackbox_train_wires_sandbox(tmp_path, monkeypatch):
     assert "behavior.py" in cfg.init_files
     assert "BLACK BOX" in cfg.prompt
     assert "must NOT import `env_client`" in cfg.prompt
-    assert "devectorize" not in cfg.prompt
+    # devectorize is now proxied to the host, so the blackbox agent may use
+    # observation_space.devectorize(obs); the interaction spec documents it.
+    assert "devectorize" in cfg.prompt
     assert "map the observation layout empirically" in cfg.prompt
     assert "Read the environment source files" not in cfg.prompt
     assert "inspect the source code" not in cfg.prompt

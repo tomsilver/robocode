@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,11 @@ from typing import Any
 import pytest
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
+from robocode.mcp import (
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
+    mcp_tool_descriptions,
+)
 from robocode.mcp.local_render import build_local_server
 from robocode.mcp.server import build_blackbox_server
 from robocode.utils.env_server import env_server_running, serialize_space
@@ -176,3 +183,71 @@ def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) ->
     for p in paths:
         assert p.endswith(".png")
         assert Path(p).exists()
+
+
+def test_mcp_tool_descriptions_blackbox_drops_layout_concepts() -> None:
+    """The blackbox render_state description omits the env-source layout API."""
+    normal = mcp_tool_descriptions("claude")["render_state"]
+    assert "devectorize" in normal
+    assert "vectorize" in normal
+    assert "ObjectCentricState" in normal
+
+    blackbox = mcp_tool_descriptions("claude", blackbox=True)["render_state"]
+    assert "devectorize" not in blackbox
+    assert "vectorize" not in blackbox
+    assert "ObjectCentricState" not in blackbox
+    assert "constant_objects" not in blackbox
+    # render_policy is shared and does not reference layout concepts either way.
+    assert (
+        mcp_tool_descriptions("claude", blackbox=True)["render_policy"]
+        == mcp_tool_descriptions("claude")["render_policy"]
+    )
+
+
+def test_mcp_system_prompt_suffix_blackbox_drops_devectorize() -> None:
+    """The blackbox system-prompt suffix omits the devectorize/vectorize sentence."""
+    assert "devectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+    assert "devectorize" not in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+    assert "vectorize" not in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+    assert "render_policy" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+
+
+def _module_imports(module_name: str) -> set[str]:
+    """Return the set of module names imported by *module_name*'s source.
+
+    Parses the module file with ``ast`` (without executing it) and collects the
+    target of every ``import`` and ``from ... import`` statement.
+    """
+    spec = importlib.util.find_spec(module_name)
+    assert spec is not None and spec.origin is not None
+    tree = ast.parse(Path(spec.origin).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported.add(node.module)
+    return imported
+
+
+def test_local_render_does_not_import_robocode_primitives() -> None:
+    """The normal-mode render modules must not import the stripped primitives pkg.
+
+    The agentic Docker mount strips ``robocode/primitives/``, so the normal-mode
+    MCP render server (and the render helpers it uses) must render without
+    importing it. A source-level check is deterministic and does not require a
+    sandbox; render primitives instead come from the in-sandbox ``primitives/``
+    package copied by the sandbox setup.
+    """
+    for module_name in (
+        "robocode.mcp.local_render",
+        "robocode.rendering.render_state",
+        "robocode.rendering.render_policy",
+    ):
+        imports = _module_imports(module_name)
+        offending = {
+            name
+            for name in imports
+            if name == "robocode.primitives" or name.startswith("robocode.primitives.")
+        }
+        assert not offending, f"{module_name} imports {offending}"

@@ -50,7 +50,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robocode.primitives import ENV_DEPENDENT_PRIMITIVES, PRIMITIVE_NAME_TO_FILE
+from robocode.primitives import (
+    ENV_DEPENDENT_PRIMITIVES,
+    PRIMITIVE_NAME_TO_FILE,
+    REMOTE_MODULE_PRIMITIVES,
+)
 from robocode.utils.backends import (
     PROVIDERS,
     AgentBackend,
@@ -215,6 +219,8 @@ def _docker_run_prefix(
         *(env_args or []),
     ]
     if blackbox:
+        # Reaching the host env server also depends on the unconditional host
+        # /24 allow rule in docker/init-firewall.sh (default-deny otherwise).
         cmd += ["--add-host", "host.docker.internal:host-gateway"]
     if firewall_domains:
         cmd += [
@@ -335,14 +341,17 @@ def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
     _setup_sandbox_common(config.sandbox_dir, config.init_files)
 
     # Copy only the primitive source files that were provided. In black-box
-    # mode, skip env-dependent primitives: their source imports the hidden env
-    # (so it would not import here) and would leak its structure; the sandbox
-    # builds them as host proxies via env_client.make_primitives instead.
+    # mode, skip env-dependent and remote-module primitives: their source
+    # imports the hidden env (so it would not import here) and would leak its
+    # structure; the sandbox reaches them via env_client.make_primitives instead
+    # (per-callable host proxies and whole-module remote proxies).
     if config.primitive_names:
         primitives_dest = config.sandbox_dir / "primitives"
         primitives_dest.mkdir(exist_ok=True)
         for name in config.primitive_names:
-            if config.blackbox and name in ENV_DEPENDENT_PRIMITIVES:
+            if config.blackbox and name in (
+                ENV_DEPENDENT_PRIMITIVES | REMOTE_MODULE_PRIMITIVES
+            ):
                 continue
             file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
             if file_stem is None:

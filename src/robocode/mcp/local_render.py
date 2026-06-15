@@ -3,9 +3,13 @@
 Launched as a subprocess by the Claude CLI inside the sandbox when the
 environment source IS available in the container. It instantiates the env
 in-process and renders locally, which is why it depends on the environment
-source, the primitives, and matplotlib/imageio. The tool registration and
-logging are shared with :mod:`robocode.mcp.server` (the import-safe core);
-this module only provides the local render implementations and entry point.
+source and matplotlib/imageio. It does NOT import ``robocode.primitives`` (the
+agentic mount strips that package); render code comes from the
+``robocode.rendering`` package, source-free metadata from
+``robocode.primitive_specs``, and the primitives dict is built from the
+in-sandbox copied ``primitives/`` package. The tool registration and logging
+are shared with :mod:`robocode.mcp.server` (the import-safe core); this module
+only provides the local render implementations and entry point.
 
 Usage::
 
@@ -18,7 +22,10 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import functools
+import importlib
 import json
+import sys
 import traceback
 from pathlib import Path
 from typing import Any
@@ -31,21 +38,51 @@ from omegaconf import OmegaConf
 
 from robocode.mcp import MCP_SERVER_NAME
 from robocode.mcp.server import _setup_logging, logger, register_tools
-from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
-from robocode.primitives.render_policy import render_policy as _render_policy_fn
-from robocode.primitives.render_state import render_state as _render_state_fn
+from robocode.primitive_specs import (
+    ENV_DEPENDENT_PRIMITIVES,
+    GENERIC_PRIMITIVE_ATTR,
+    PRIMITIVE_NAME_TO_FILE,
+)
+from robocode.rendering.render_policy import render_policy as _render_policy_fn
+from robocode.rendering.render_state import render_state as _render_state_fn
 
 
-def _build_env_and_primitives(
-    env_config: dict[str, Any],
-) -> tuple[Any, dict[str, Any]]:
-    """Instantiate the environment and build the primitives dict."""
-    logger.info("Building environment and primitives from config")
+def _build_env(env_config: dict[str, Any]) -> Any:
+    """Instantiate the environment and reset it once."""
+    logger.info("Building environment from config")
     cfg = OmegaConf.create(env_config)
     env = instantiate(cfg)
     env.reset(seed=0)
     logger.info("Environment instantiated: %s", type(env).__name__)
-    return env, build_primitives(env, list(PRIMITIVE_NAME_TO_FILE))
+    return env
+
+
+def _build_sandbox_primitives(env: Any, primitives_dir: Path | None) -> dict[str, Any]:
+    """Build the primitives dict from the copied in-sandbox `primitives/` package.
+
+    Mirrors robocode.primitives.build_primitives but imports the generic
+    primitive modules from the sandbox's top-level `primitives` package (the
+    subset copied by the sandbox setup) instead of the stripped robocode.primitives.
+    Returns an empty dict when no primitives were copied.
+    """
+    if primitives_dir is None or not primitives_dir.exists():
+        return {}
+    sandbox_root = str(primitives_dir.parent.resolve())
+    if sandbox_root not in sys.path:
+        sys.path.insert(0, sandbox_root)
+    file_to_names: dict[str, list[str]] = {}
+    for prim_name, file_stem in PRIMITIVE_NAME_TO_FILE.items():
+        file_to_names.setdefault(file_stem, []).append(prim_name)
+    out: dict[str, Any] = {}
+    for py in sorted(primitives_dir.glob("*.py")):
+        for prim_name in file_to_names.get(py.stem, []):
+            module = importlib.import_module(f"primitives.{py.stem}")
+            if prim_name in ENV_DEPENDENT_PRIMITIVES:
+                out[prim_name] = functools.partial(getattr(module, prim_name), env)
+            else:
+                attr = GENERIC_PRIMITIVE_ATTR[prim_name]
+                out[prim_name] = module if attr is None else getattr(module, attr)
+    return out
 
 
 def _unique_path(directory: Path, stem: str, ext: str) -> Path:
@@ -65,9 +102,11 @@ def build_local_server(
     tool_names: list[str],
     env_config: dict[str, Any],
     renders_dir: Path | None = None,
+    primitives_dir: Path | None = None,
 ) -> FastMCP:
     """Create an MCP server that instantiates the env and renders locally."""
-    env, primitives = _build_env_and_primitives(env_config)
+    env = _build_env(env_config)
+    primitives = _build_sandbox_primitives(env, primitives_dir)
     out_dir = renders_dir or Path("mcp_renders")
 
     def render_state_impl(seed: int, state: list[float] | None, label: str) -> str:
@@ -145,7 +184,13 @@ def main() -> None:
         # (env_config is at <sandbox>/.mcp/env_config.json).
         sandbox_dir = env_config_path.parent.parent
         renders_dir = sandbox_dir / "mcp_renders"
-        server = build_local_server(tool_names, env_config, renders_dir=renders_dir)
+        primitives_dir = sandbox_dir / "primitives"
+        server = build_local_server(
+            tool_names,
+            env_config,
+            renders_dir=renders_dir,
+            primitives_dir=primitives_dir,
+        )
         logger.info("Starting stdio transport")
         server.run(transport="stdio")
         logger.info("MCP server shut down")

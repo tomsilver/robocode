@@ -15,7 +15,7 @@ import pytest
 from robocode.environments.base_env import BaseEnv
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.primitives.check_action_collision import check_action_collision
-from robocode.primitives.render_state import render_state
+from robocode.rendering.render_state import render_state
 from robocode.utils.approach_history import get_snapshots, record_episodes
 
 _APPROACH_V1 = """\

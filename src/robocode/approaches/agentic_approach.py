@@ -11,7 +11,11 @@ from gymnasium.spaces import Space
 from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
+from robocode.mcp import (
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
+    mcp_tool_descriptions,
+)
 from robocode.primitives import (
     blackbox_primitive_manifest,
     format_primitives_description,
@@ -163,6 +167,15 @@ from env_client import make_env
 env = make_env()
 primitives = env.make_primitives()
 ```
+
+You can also call `env.observation_space.devectorize(obs)` to get an \
+object-centric view of an observation. It returns an `ObjectCentricState` \
+with `get_object_names()`, `get_object_from_name(name)`, `get_objects(type)`, \
+and `get(obj, feature)`; iterate objects via `get_objects(...)`, NOT \
+`for obj in ocs`. Call `env.observation_space.vectorize(ocs)` to go back to a \
+flat array. The evaluation harness passes the SAME `observation_space` to \
+`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically \
+there, and `approach.py` can use it directly.
 
 Parallel test scripts are fine: every `make_env()` call creates an \
 independent environment instance.
@@ -374,11 +387,13 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         # Build the prompt. If we have an env description, inline it so the
         # agent knows exactly which environment to target.  Otherwise fall
         # back to asking the agent to read source files.
-        primitives_desc = format_primitives_description(list(self._primitives))
+        primitives_desc = format_primitives_description(
+            list(self._primitives), blackbox=self._blackbox
+        )
 
         if self._mcp_tools:
             backend_name = self._backend_cfg["backend"]
-            tool_descs = mcp_tool_descriptions(backend_name)
+            tool_descs = mcp_tool_descriptions(backend_name, blackbox=self._blackbox)
             mcp_lines = [
                 "\n\nYou also have MCP tools for visual debugging (they do NOT "
                 "affect your test scripts):\n",
@@ -443,7 +458,11 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         else:
             system_prompt += CLAUDE_PROMPT_SUFFIX
         if self._mcp_tools:
-            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            system_prompt += (
+                MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+                if self._blackbox
+                else MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            )
 
         if self._container_backend == "docker":
             docker_config = DockerSandboxConfig(

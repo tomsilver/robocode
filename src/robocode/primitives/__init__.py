@@ -1,100 +1,43 @@
-"""Robocode primitives — canonical registry, descriptions, and factory."""
+"""Robocode primitives — source-importing factory; metadata re-exported.
+
+The primitive metadata (names, file mapping, descriptions, manifest/description
+builders) lives in the source-free ``robocode.primitive_specs`` module so it
+stays importable where this package's source is stripped (the agentic sandbox).
+This module adds the heavy factory (``build_primitives``), which imports the
+actual primitive implementations, and re-exports the metadata names so every
+existing ``from robocode.primitives import ...`` keeps working.
+"""
 
 from __future__ import annotations
 
 from functools import partial
 from typing import Any
 
+from robocode.primitive_specs import (
+    ENV_DEPENDENT_PRIMITIVES,
+    GENERIC_PRIMITIVE_ATTR,
+    PRIMITIVE_DESCRIPTIONS,
+    PRIMITIVE_NAME_TO_FILE,
+    REMOTE_MODULE_PRIMITIVES,
+    blackbox_primitive_manifest,
+    format_primitives_description,
+)
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
 from robocode.primitives import crv_motion_planning_grasp as crv_grasp_module
 from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
 
-# Mapping from primitive name (as used in the primitives dict) to the source
-# file basename (without .py) under ``src/robocode/primitives/``.
-PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
-    "check_action_collision": "check_action_collision",
-    "csp": "csp",
-    "crv_motion_planning": "crv_motion_planning",
-    "crv_motion_planning_grasp": "crv_motion_planning_grasp",
-    "BiRRT": "motion_planning",
-}
-
-# Primitives whose construction needs the live environment. In black-box mode
-# the sandbox has no env source, so these run on the host via the env server
-# (see env_client.BlackboxEnv) and their source is NOT copied into the sandbox:
-# it would not import (it imports the hidden env) and it would leak the env
-# structure. Every other primitive is generic and imported directly.
-ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset({"check_action_collision"})
-
-# For generic primitives, the attribute to pull from the source module named in
-# PRIMITIVE_NAME_TO_FILE. None means the primitive IS the module object.
-_GENERIC_PRIMITIVE_ATTR: dict[str, str | None] = {
-    "csp": None,
-    "crv_motion_planning": None,
-    "crv_motion_planning_grasp": None,
-    "BiRRT": "BiRRT",
-}
-
-# Descriptions shown to the Claude agent so it knows how to call each
-# primitive. Keyed by the same names as PRIMITIVE_NAME_TO_FILE.
-PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
-    "check_action_collision": (
-        "`check_action_collision(state, action) -> bool` returns True when "
-        "taking `action` in `state` would cause a collision (i.e. the agent "
-        "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
-        "planning algorithms, skip actions that collide."
-    ),
-    "csp": (
-        "`csp` is a module providing a constraint satisfaction problem (CSP) "
-        "solver. Use it to sample configurations (e.g. placements, grasps) "
-        "that satisfy constraints (e.g. collision-free). Key classes:\n"
-        "  - `csp.CSPVariable(name, domain)` \u2014 a variable with a "
-        "`gymnasium.spaces.Space` domain.\n"
-        "  - `csp.FunctionalCSPConstraint(name, variables, fn)` \u2014 a "
-        "constraint where `fn(*vals) -> bool`.\n"
-        "  - `csp.CSP(variables, constraints, cost=None)` \u2014 the problem.\n"
-        "  - `csp.FunctionalCSPSampler(fn, csp, sampled_vars)` \u2014 a "
-        "sampler where `fn(current_vals, rng) -> dict | None`.\n"
-        "  - `csp.RandomWalkCSPSolver(seed)` \u2014 solver; call "
-        "`.solve(csp, initialization, samplers)` to get a satisfying "
-        "assignment or None.\n"
-        "  - `csp.CSPCost(name, variables, cost_fn)` \u2014 optional cost to "
-        "minimize.\n"
-        "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
-        "threshold)` \u2014 constraint from log probabilities.\n"
-        "  Access via `primitives['csp']`, e.g. "
-        "`primitives['csp'].CSPVariable(...)`."
-    ),
-    "crv_motion_planning": (
-        "`crv_motion_planning` is a module with generic CRV robot motion "
-        "planners. Use `plan_crv_actions(...)` with object-centric state and a "
-        "target `CRVConfig` to get collision-free action sequences, and set "
-        "`carrying=True` for holding-aware planning. Compatibility wrappers "
-        "`plan_crv_base_actions(...)` and `plan_crv_holding_actions(...)` are "
-        "also available. The module exports `CRVConfig`, `CRVActionLimits`, and "
-        "helpers to convert between pose plans and action plans."
-    ),
-    "crv_motion_planning_grasp": (
-        "`crv_motion_planning_grasp` is a module that plans one CRV grasp "
-        "maneuver from an object-centric state, a target object, a relative "
-        "grasp pose, and a grasp arm length. Use `plan_crv_grasp(...)` to get "
-        "collision-free grasp waypoints, and handle the explicit suction "
-        "failure errors."
-    ),
-    "BiRRT": (
-        "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
-        "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
-        "planner. Construct one, then call `birrt.query(start, goal)` to get "
-        "a collision-free path (list of states) or None. "
-        "`sample_fn(state) -> state` samples a random state, "
-        "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
-        "`collision_fn(state) -> bool` returns True if state is in collision, "
-        "`distance_fn(s1, s2) -> float` returns distance between states, "
-        "`rng` is a `np.random.Generator`."
-    ),
-}
+__all__ = [
+    "ENV_DEPENDENT_PRIMITIVES",
+    "GENERIC_PRIMITIVE_ATTR",
+    "PRIMITIVE_DESCRIPTIONS",
+    "PRIMITIVE_NAME_TO_FILE",
+    "REMOTE_MODULE_PRIMITIVES",
+    "blackbox_primitive_manifest",
+    "build_primitives",
+    "format_primitives_description",
+]
 
 
 def _all_primitives(env: Any) -> dict[str, Any]:
@@ -112,50 +55,3 @@ def build_primitives(env: Any, names: list[str] | tuple[str, ...]) -> dict[str, 
     """Build a primitives dict containing only the requested *names*."""
     all_prims = _all_primitives(env)
     return {name: all_prims[name] for name in names}
-
-
-def blackbox_primitive_manifest(
-    names: list[str] | tuple[str, ...],
-) -> list[dict[str, Any]]:
-    """Describe how a black-box sandbox should build each requested primitive.
-
-    Returns a JSON-serializable spec list for ``env_spaces.json`` that
-    ``env_client.BlackboxEnv.make_primitives`` consumes to reconstruct the same
-    dict ``build_primitives`` produces at eval time. Env-dependent primitives
-    become host proxies (run on the host via the env server); generic ones name
-    the source module (and attribute) the sandbox imports from its copy.
-    """
-    manifest: list[dict[str, Any]] = []
-    for name in names:
-        if name in ENV_DEPENDENT_PRIMITIVES:
-            manifest.append({"name": name, "kind": "host_proxy"})
-        else:
-            manifest.append(
-                {
-                    "name": name,
-                    "kind": "generic",
-                    "module": PRIMITIVE_NAME_TO_FILE[name],
-                    "attr": _GENERIC_PRIMITIVE_ATTR[name],
-                }
-            )
-    return manifest
-
-
-def format_primitives_description(names: list[str]) -> str:
-    """Markdown describing the ``primitives`` dict passed to GeneratedApproach.
-
-    Shared by the agentic and llm_genplan prompts so both describe primitives the same
-    way.
-    """
-    if not names:
-        return "`primitives` is an empty dict."
-    lines = ["`primitives` is a dict with these callables:\n"]
-    for name in sorted(names):
-        lines.append(f"- {PRIMITIVE_DESCRIPTIONS.get(name, f'`{name}`')}")
-    listed = ", ".join(f"`{n}`" for n in sorted(names))
-    lines.append(
-        f"\nIMPORTANT: Your approach MUST use the following primitives: {listed}. "
-        "These are essential for solving this environment. Read their descriptions "
-        "above and integrate them into your solution."
-    )
-    return "\n".join(lines)

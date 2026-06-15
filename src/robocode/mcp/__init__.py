@@ -69,6 +69,41 @@ _TOOL_DESC_TEMPLATES: dict[str, str] = {
     ),
 }
 
+# Per-tool blackbox overrides, merged over _TOOL_DESC_TEMPLATES. In blackbox
+# mode the agent has no env source, so the env_client SpaceInfo only exposes
+# shape/low/high/dtype/sample; there is no devectorize/vectorize/
+# ObjectCentricState/constant_objects. The render_state tool still accepts a
+# flat float list, so describe states only as such. render_policy needs no
+# override (it never references devectorize), so it stays shared.
+_TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
+    "render_state": (
+        "`{render_state}(seed=42, state=None, "
+        'label="")`: renders an environment state as a PNG and returns '
+        "the file path.\n"
+        "  Two modes:\n"
+        "  1. **Reset mode** (default): pass `seed` to render the initial "
+        "state after `env.reset(seed=seed)`.\n"
+        "  2. **Arbitrary state mode**: pass `state` as a flat list of floats "
+        "to render any state you want. `seed` is ignored when `state` is "
+        "provided.\n"
+        "  The optional `label` parameter is included in the output filename "
+        'for easier identification (e.g. label="after_grasp").\n'
+        "  Use reset mode to visually understand the spatial layout, obstacle "
+        "placement, and goal positions. Use arbitrary state mode to visualize "
+        "intermediate states during debugging, e.g. after applying actions or "
+        "to verify a planned trajectory.\n"
+        "  How to get a state list (a flat list of floats):\n"
+        "  - From an existing observation: `obs.tolist()`\n"
+        "  - From the live env: `env.get_state().tolist()`\n"
+        "  You must discover what each entry of the state vector means "
+        "empirically by driving the env; there are no named features.\n"
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
+        "NOT available inside subagents. Call it yourself, then delegate "
+        "image reading to a subagent: have it Read the PNG, describe the "
+        "scene, and return a concise summary. Delete the file when done."
+    ),
+}
+
 
 def mcp_tool_name_claude(tool: str) -> str:
     """Claude Code MCP tool name: ``mcp__robocode-tools__<tool>``."""
@@ -80,17 +115,22 @@ def mcp_tool_name_opencode(tool: str) -> str:
     return f"{MCP_SERVER_NAME}_{tool}"
 
 
-def mcp_tool_descriptions(backend_name: str) -> dict[str, str]:
-    """Return MCP tool descriptions with backend-specific tool names."""
+def mcp_tool_descriptions(backend_name: str, blackbox: bool = False) -> dict[str, str]:
+    """Return MCP tool descriptions with backend-specific tool names.
+
+    In blackbox mode the render_state description drops the
+    devectorize/vectorize/ObjectCentricState guidance, since the sandbox has no env
+    source to expose those layout concepts.
+    """
     if backend_name == "opencode":
         namer = mcp_tool_name_opencode
     else:
         namer = mcp_tool_name_claude
-    names = {tool: namer(tool) for tool in _TOOL_DESC_TEMPLATES}
-    return {
-        tool: template.format(**names)
-        for tool, template in _TOOL_DESC_TEMPLATES.items()
-    }
+    templates = dict(_TOOL_DESC_TEMPLATES)
+    if blackbox:
+        templates.update(_TOOL_DESC_TEMPLATES_BLACKBOX)
+    names = {tool: namer(tool) for tool in templates}
+    return {tool: template.format(**names) for tool, template in templates.items()}
 
 
 # Backward compat: descriptions with Claude naming (used by existing code
@@ -109,6 +149,21 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     "passing a flat list of floats to render_state's `state` parameter; use "
     "devectorize/vectorize on env.observation_space to construct or modify "
     "states with named features. "
+    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
+    "called from inside subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a subagent."
+)
+
+# Blackbox variant: drops the devectorize/vectorize sentence (the sandbox has
+# no env source, so env.observation_space exposes no named features); keeps the
+# render_state/render_policy workflow and the subagent guidance.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "Start by calling render_state to see the environment before writing code. "
+    "When your approach fails, call render_policy to visually diagnose the "
+    "failure BEFORE guessing at fixes. You can also render arbitrary states by "
+    "passing a flat list of floats (e.g. from obs.tolist() or "
+    "env.get_state().tolist()) to render_state's `state` parameter. "
     "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
     "called from inside subagents. Always call MCP tools yourself, then "
     "delegate image reading to a subagent."

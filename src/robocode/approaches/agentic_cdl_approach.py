@@ -22,8 +22,15 @@ from gymnasium.spaces import Space
 from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
-from robocode.primitives import PRIMITIVE_DESCRIPTIONS, blackbox_primitive_manifest
+from robocode.mcp import (
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
+    mcp_tool_descriptions,
+)
+from robocode.primitives import (
+    blackbox_primitive_manifest,
+    format_primitives_description,
+)
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import (
     CLAUDE_PROMPT_SUFFIX,
@@ -317,6 +324,15 @@ harness passes to `GeneratedApproach.__init__` (env-dependent primitives run \
 on the host); use it in test scripts so behaviors exercise the real \
 primitives.
 
+You can also call `env.observation_space.devectorize(obs)` to get an \
+object-centric view of an observation. It returns an `ObjectCentricState` \
+with `get_object_names()`, `get_object_from_name(name)`, `get_objects(type)`, \
+and `get(obj, feature)`; iterate objects via `get_objects(...)`, NOT \
+`for obj in ocs`. Call `env.observation_space.vectorize(ocs)` to go back to a \
+flat array. The evaluation harness passes the SAME `observation_space` to \
+`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically \
+there, and `approach.py` can use it directly.
+
 Parallel test scripts are fine: every `make_env()` call creates an \
 independent environment instance. Use `set_state` to put the environment \
 into the state a behavior's precondition requires when testing it in \
@@ -518,26 +534,16 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                     init_files[helper_name] = helper_path
                     has_initial_helpers = True
 
-        # Build primitives description.
-        if self._primitives:
-            lines = ["`primitives` is a dict with these callables:\n"]
-            for name in sorted(self._primitives):
-                desc = PRIMITIVE_DESCRIPTIONS.get(name, f"`{name}`")
-                lines.append(f"- {desc}")
-            primitives_desc = "\n".join(lines)
-            names = ", ".join(f"`{n}`" for n in sorted(self._primitives))
-            primitives_desc += (
-                f"\n\nIMPORTANT: Your approach MUST use the following "
-                f"primitives: {names}. These are essential for solving "
-                f"this environment. Read their descriptions above and "
-                f"integrate them into your solution."
-            )
-        else:
-            primitives_desc = "`primitives` is an empty dict."
+        # Build primitives description (shared with AgenticApproach; the
+        # blackbox flag appends per-primitive black-box notes, e.g. how to feed
+        # the CRV planners the devectorized state).
+        primitives_desc = format_primitives_description(
+            list(self._primitives), blackbox=self._blackbox
+        )
 
         if self._mcp_tools:
             backend_name = self._backend_cfg["backend"]
-            tool_descs = mcp_tool_descriptions(backend_name)
+            tool_descs = mcp_tool_descriptions(backend_name, blackbox=self._blackbox)
             mcp_lines = [
                 "\n\nYou also have MCP tools for visual debugging (they do NOT "
                 "affect your test scripts):\n",
@@ -623,7 +629,11 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         else:
             system_prompt += CLAUDE_PROMPT_SUFFIX
         if self._mcp_tools:
-            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            system_prompt += (
+                MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+                if self._blackbox
+                else MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            )
 
         docker_config: DockerSandboxConfig | None = None
         apptainer_config: ApptainerSandboxConfig | None = None

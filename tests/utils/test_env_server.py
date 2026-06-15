@@ -5,11 +5,12 @@ import socket
 import sys
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
 from gymnasium.spaces import Discrete
+from relational_structs.spaces import ObjectCentricBoxSpace
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.primitives import blackbox_primitive_manifest, build_primitives
@@ -217,6 +218,30 @@ def test_render_state_roundtrip(tmp_path: Path, direct_env: KinderGeom2DEnv) -> 
         assert (sandbox_dir / rel).exists()
 
 
+def test_render_state_leaves_connection_env_unchanged(
+    tmp_path: Path, direct_env: KinderGeom2DEnv
+) -> None:
+    """render_state restores the connection's env state (no side effect)."""
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox_dir) as (port, token):
+        meta = {
+            "host": "127.0.0.1",
+            "port": port,
+            "token": token,
+            "observation_space": serialize_space(direct_env.observation_space),
+            "action_space": serialize_space(direct_env.action_space),
+            "max_steps": 200,
+        }
+        with BlackboxEnv(meta) as client:
+            client.reset(seed=0)
+            before = client.get_state()
+            custom = np.asarray(before, dtype=np.float32) + 0.1
+            client.render_state(seed=5)
+            client.render_state(state=custom.tolist())
+            np.testing.assert_array_equal(client.get_state(), before)
+
+
 def test_check_action_collision_matches_host_primitive(
     server: tuple[int, str], direct_env: KinderGeom2DEnv
 ) -> None:
@@ -375,3 +400,177 @@ def test_server_fails_fast_on_bad_config(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="env server exited at startup"):
         with env_server_running(bad_config, sandbox_dir):
             pass
+
+
+def test_devectorize_matches_direct_env(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """Devectorize over the wire matches the direct env's object-centric state.
+
+    The returned handle exposes the public ObjectCentricState API, and vectorize round-
+    trips back to the original observation.
+    """
+    with _make_client(server, direct_env) as client:
+        obs, _ = client.reset(seed=0)
+        ocs = client.observation_space.devectorize(obs)
+
+        direct_env.reset(seed=0)
+        direct_space = cast(ObjectCentricBoxSpace, direct_env.observation_space)
+        direct_ocs = direct_space.devectorize(direct_env.get_state())
+        assert ocs.get_object_names() == direct_ocs.get_object_names()
+
+        robot = ocs.get_object_from_name("robot")
+        direct_robot = direct_ocs.get_object_from_name("robot")
+        for feature in ("x", "y", "theta"):
+            assert ocs.get(robot, feature) == pytest.approx(
+                float(direct_ocs.get(direct_robot, feature))
+            )
+
+        vec = client.observation_space.vectorize(ocs)
+        assert isinstance(vec, np.ndarray)
+        np.testing.assert_allclose(vec, obs, atol=1e-6)
+
+
+def test_remote_handle_method_chaining(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """A handle's methods chain over the wire: ocs -> robot -> get(feature)."""
+    with _make_client(server, direct_env) as client:
+        obs, _ = client.reset(seed=0)
+        ocs = client.observation_space.devectorize(obs)
+        robot = ocs.get_object_from_name("robot")
+        assert robot.name == "robot"
+
+        direct_env.reset(seed=0)
+        direct_space = cast(ObjectCentricBoxSpace, direct_env.observation_space)
+        direct_ocs = direct_space.devectorize(direct_env.get_state())
+        direct_robot = direct_ocs.get_object_from_name("robot")
+        assert ocs.get(robot, "x") == pytest.approx(
+            float(direct_ocs.get(direct_robot, "x"))
+        )
+
+
+def test_crv_motion_planning_through_proxy(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """plan_crv_actions runs on the host via the remote-module proxy.
+
+    The state, the CRVConfig, and the result all cross the wire as remote handles /
+    tagged values. We assert the proxy returns a valid result type (a list of action-
+    shaped arrays, or None) rather than a specific plan, since planner success depends
+    on the env's constant objects (out of scope here).
+    """
+    manifest = blackbox_primitive_manifest(["crv_motion_planning"])
+    port, token = server
+    meta: dict[str, Any] = {
+        "host": "127.0.0.1",
+        "port": port,
+        "token": token,
+        "observation_space": serialize_space(direct_env.observation_space),
+        "action_space": serialize_space(direct_env.action_space),
+        "max_steps": 200,
+        "primitives": manifest,
+    }
+    with BlackboxEnv(meta) as client:
+        obs, _ = client.reset(seed=0)
+        ocs = client.observation_space.devectorize(obs)
+        crv = client.make_primitives()["crv_motion_planning"]
+        robot = ocs.get_object_from_name("robot")
+        cfg = crv.CRVConfig(
+            x=float(ocs.get(robot, "x")),
+            y=float(ocs.get(robot, "y")),
+            theta=float(ocs.get(robot, "theta")),
+        )
+        actions = crv.plan_crv_actions(ocs, cfg, carrying=False, seed=0)
+        assert actions is None or (
+            isinstance(actions, list)
+            and all(
+                isinstance(a, np.ndarray) and a.shape == client.action_space.shape
+                for a in actions
+            )
+        )
+
+
+def test_remote_proxy_refuses_attr_outside_allowlist(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """The server allowlists handle attributes; everything else is refused.
+
+    _RemoteHandle.__getattr__ blocks underscore names client-side, so we craft raw
+    requests to exercise the SERVER guard directly (an attacker could speak the protocol
+    without the client). The guard is an ALLOWLIST, not a denylist:
+    obj.__class__.__bases__[0].__subclasses__() is the classic path from any object to
+    os.system, and a bare "block dunders" denylist would still leak non-underscore
+    members. Both a dunder and a plausible-but-unlisted public name must be refused.
+    """
+    with _make_client(server, direct_env) as client:
+        obs, _ = client.reset(seed=0)
+        ocs = client.observation_space.devectorize(obs)
+        handle_id = ocs._handle_id  # pylint: disable=protected-access
+        for name in ("__class__", "data", "from_vec"):
+            with pytest.raises(RuntimeError, match="Refusing attribute"):
+                client._request(  # pylint: disable=protected-access
+                    {
+                        "cmd": "getattr",
+                        "target": {"__handle__": handle_id},
+                        "name": name,
+                    }
+                )
+
+
+def test_remote_proxy_refuses_module_imported_attr(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """A module proxy exposes only the public planner API, not its imports.
+
+    The planner modules do ``import numpy as np`` and import kinder.envs types
+    at module scope. Without an allowlist, ``crv_motion_planning.np`` would hand
+    the agent the live numpy module (np.load is host RCE; np.fromfile/save are
+    host file I/O) and ``crv_motion_planning.SE2Pose`` would leak the withheld
+    env types. Both must be refused; the real planner entry point is allowed.
+    """
+    with _make_client(server, direct_env) as client:
+        client.reset(seed=0)
+        for name in ("np", "SE2Pose", "MultiBody2D", "__loader__"):
+            with pytest.raises(RuntimeError, match="public planner API"):
+                client._request(  # pylint: disable=protected-access
+                    {
+                        "cmd": "getattr",
+                        "target": {"__module__": "crv_motion_planning"},
+                        "name": name,
+                    }
+                )
+
+
+def test_remote_proxy_refuses_non_whitelisted_module(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """The server refuses module targets outside the CRV whitelist (e.g. os)."""
+    with _make_client(server, direct_env) as client:
+        client.reset(seed=0)
+        with pytest.raises(RuntimeError, match="non-whitelisted module"):
+            client._request(  # pylint: disable=protected-access
+                {
+                    "cmd": "getattr",
+                    "target": {"__module__": "os"},
+                    "name": "system",
+                }
+            )
+
+
+def test_blackbox_primitive_manifest_remote_module() -> None:
+    """CRV primitives are tagged as remote modules (run on the host)."""
+    manifest = blackbox_primitive_manifest(
+        ["crv_motion_planning", "crv_motion_planning_grasp"]
+    )
+    by_name = {spec["name"]: spec for spec in manifest}
+    assert by_name["crv_motion_planning"] == {
+        "name": "crv_motion_planning",
+        "kind": "remote_module",
+        "module": "crv_motion_planning",
+    }
+    assert by_name["crv_motion_planning_grasp"] == {
+        "name": "crv_motion_planning_grasp",
+        "kind": "remote_module",
+        "module": "crv_motion_planning_grasp",
+    }

@@ -235,4 +235,8 @@ def env_server_running(
     finally:
         if proc.poll() is None:
             proc.terminate()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
