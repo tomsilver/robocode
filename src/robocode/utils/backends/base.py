@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
+from robocode.mcp import MCP_HTTP_PORT
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
 
@@ -30,6 +31,7 @@ class AgentBackend(Protocol):
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
         mcp_transport: str = "stdio",
+        mcp_port: int = MCP_HTTP_PORT,
     ) -> list[str]:
         """Return the full CLI command (binary + args) to run the agent."""
 

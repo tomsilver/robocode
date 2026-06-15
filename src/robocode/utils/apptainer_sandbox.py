@@ -54,7 +54,9 @@ from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     _filtered_repo_mounts,
     _find_repo_root,
+    _free_port,
     _get_claude_oauth_token,
+    _mcp_prestart_wrapper,
 )
 from robocode.utils.sandbox import (
     SandboxConfig,
@@ -277,13 +279,23 @@ async def run_agent_in_apptainer_sandbox(
                 provider_from_model(config.model)
             )
 
+        # Apptainer shares the host network namespace (even with --containall),
+        # so use a free loopback port for the render http server to avoid
+        # colliding with the host or a concurrent run.
+        mcp_port = _free_port()
         agent_cmd = backend.build_cli_cmd(
             config,
             mcp_python_cmd=APPTAINER_PYTHON,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
+            mcp_transport="http",
+            mcp_port=mcp_port,
         )
+        # Start and health-check the render server before the CLI (same wrapper
+        # as docker) so its tools are connected on the agent's first turn.
+        if config.mcp_tools:
+            agent_cmd = _mcp_prestart_wrapper(agent_cmd, port=mcp_port)
 
         apptainer_cmd = _build_apptainer_cmd(
             config,

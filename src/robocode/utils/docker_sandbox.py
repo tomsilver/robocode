@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -421,25 +422,43 @@ def _build_docker_auth_args(
     return docker_args, extra_env
 
 
-def _mcp_prestart_wrapper(agent_cmd: list[str]) -> list[str]:
+def _free_port() -> int:
+    """Return a currently-free loopback TCP port.
+
+    Used by sandbox backends that share the host network namespace (apptainer,
+    local) so the render http server cannot collide with the host or a
+    concurrent run. Docker has its own netns, so it can use the fixed default.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> list[str]:
     """Wrap *agent_cmd* so the http render server starts and is healthy first.
 
-    Returns a container command that runs ``.mcp/<MCP_START_SCRIPT>`` in the
-    background, waits (up to ~20s) for ``MCP_HTTP_PORT`` to accept connections,
-    then ``exec``s the agent CLI. Starting and health-checking the server before
-    the CLI is what makes the render tools connected on the agent's first turn.
-    The CLI argv is passed positionally (``exec "$@"``) so it needs no quoting.
+    Returns a container command that starts ``.mcp/<MCP_START_SCRIPT>`` in the
+    background (its output redirected to a file so it cannot hold the CLI's
+    stdout pipe), waits (up to ~20s) for *port* to accept connections, then runs
+    the agent CLI in the foreground and kills the server when it exits. Starting
+    and health-checking the server before the CLI is what makes the render tools
+    connected on the agent's first turn. The CLI argv is passed positionally
+    (``"$@"``) so it needs no quoting. Shared by docker and apptainer (same
+    in-container python path and ``/sandbox`` bind); the explicit kill matters
+    for apptainer, which shares the host pid namespace (no container teardown to
+    reap the server).
     """
     start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
+    server_log = "/sandbox/.mcp/mcp_server.boot.log"
     probe = (
         f"{DOCKER_PYTHON} -c "
         f'"import socket; socket.create_connection('
-        f"('{MCP_HTTP_HOST}', {MCP_HTTP_PORT}), 0.3).close()\""
+        f"('{MCP_HTTP_HOST}', {port}), 0.3).close()\""
     )
     script = (
-        f"bash {start_script} & "
+        f"bash {start_script} >>{server_log} 2>&1 & srv=$!; "
         f"for _ in $(seq 1 200); do {probe} 2>/dev/null && break; sleep 0.1; done; "
-        'exec "$@"'
+        '"$@"; rc=$?; kill "$srv" 2>/dev/null; exit "$rc"'
     )
     return ["bash", "-c", script, "bash", *agent_cmd]
 

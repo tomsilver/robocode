@@ -24,7 +24,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig
 
-from robocode.mcp import setup_mcp_config
+from robocode.mcp import MCP_HTTP_PORT, setup_mcp_config
 from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
@@ -61,6 +61,7 @@ class OpenCodeBackend(AgentBackend):
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
         mcp_transport: str = "stdio",
+        mcp_port: int = MCP_HTTP_PORT,
     ) -> list[str]:
         """Build the OpenCode CLI command."""
         self._max_budget_usd = config.max_budget_usd

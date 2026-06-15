@@ -217,6 +217,7 @@ def setup_mcp_config(
     log_file_path: str,
     blackbox: bool = False,
     transport: str = "stdio",
+    port: int = MCP_HTTP_PORT,
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
@@ -240,7 +241,7 @@ def setup_mcp_config(
     # captured in the log file even if the Python process never reaches main().
     stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
     transport_args = (
-        f" --transport http --host {MCP_HTTP_HOST} --port {MCP_HTTP_PORT}"
+        f" --transport http --host {MCP_HTTP_HOST} --port {port}"
         if transport == "http"
         else ""
     )
@@ -276,12 +277,17 @@ def setup_mcp_config(
         )
     if transport == "http":
         # The launch flow starts this and waits for the port before the CLI.
-        (mcp_dir / MCP_START_SCRIPT).write_text(server_cmd + "\n", encoding="utf-8")
+        # ``exec`` so the script's pid IS the server, letting the wrapper kill
+        # it by pid when the CLI exits (apptainer shares the host pid namespace,
+        # so a backgrounded server would otherwise leak after the run).
+        (mcp_dir / MCP_START_SCRIPT).write_text(
+            f"exec {server_cmd}\n", encoding="utf-8"
+        )
         mcp_config: dict[str, Any] = {
             "mcpServers": {
                 MCP_SERVER_NAME: {
                     "type": "http",
-                    "url": f"http://{MCP_HTTP_HOST}:{MCP_HTTP_PORT}/mcp",
+                    "url": f"http://{MCP_HTTP_HOST}:{port}/mcp",
                 }
             }
         }

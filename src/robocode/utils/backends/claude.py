@@ -16,6 +16,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from robocode.mcp import (
+    MCP_HTTP_PORT,
     MCP_SERVER_NAME,
     MCP_STARTUP_TIMEOUT_MS,
     mcp_tool_cli_names,
@@ -112,6 +113,7 @@ class ClaudeBackend(AgentBackend):
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
         mcp_transport: str = "stdio",
+        mcp_port: int = MCP_HTTP_PORT,
     ) -> list[str]:
         """Build the Claude CLI command."""
         self._max_turns = config.max_turns
@@ -152,6 +154,7 @@ class ClaudeBackend(AgentBackend):
                 log_path,
                 blackbox=config.blackbox,
                 transport=mcp_transport,
+                port=mcp_port,
             )
             cli_path = mcp_config_cli_path or str(config_path.resolve())
             args += ["--mcp-config", cli_path, "--strict-mcp-config"]
