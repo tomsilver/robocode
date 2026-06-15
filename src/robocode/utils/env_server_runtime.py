@@ -4,9 +4,10 @@ Launched by :func:`robocode.utils.env_server.env_server_running` as
 ``python -m robocode.utils.env_server_runtime``. This module holds the
 serving loop, the render_state handler, and the env-dependent
 check_action_collision primitive, all of which depend on the environment
-source (and render needs matplotlib/imageio). Keeping it separate from
-``env_server`` (the import-facing API used by the approaches) means the main
-experiment process never transitively imports any of that heavy code.
+source (and render needs matplotlib/imageio). It is kept separate from
+``env_server`` (the import-facing API the approaches import) because these
+render/primitive imports reach back into the approaches, so folding them into
+``env_server`` would create an import cycle.
 
 The policy render (``render_policy``) runs entirely in the sandbox, not
 here: the client drives the env step by step and asks this server only to

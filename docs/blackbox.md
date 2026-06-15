@@ -21,8 +21,10 @@ The work is split across a host-side server and a sandbox-side client.
 
 ### Host env-server
 
-Deliberately split into two modules so the heavy environment imports stay out
-of the main experiment process:
+Deliberately split into two modules to avoid an import cycle: the approaches
+import `env_server`, and the runtime's render/primitive imports reach back into
+the approaches, so folding them together would loop. Keeping them separate also
+keeps those imports out of the runtime's import-clean API layer:
 
 - `utils/env_server.py`: lightweight, import-clean API layer. Owns the codec
   (`encode` / `decode`, with numpy arrays tagged as

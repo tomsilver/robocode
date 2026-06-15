@@ -27,11 +27,11 @@ traceback frames include environment source lines that the agent must not
 see; full tracebacks go to the server log on the host.
 
 This module is the import-facing API (codecs, space serialization, and
-:func:`env_server_running`); it deliberately imports nothing from the
-environment, primitives, or approaches so the main experiment process stays
-light. The serving loop lives in
-:mod:`robocode.utils.env_server_runtime`, which
-:func:`env_server_running` launches as a subprocess.
+:func:`env_server_running`) and is imported by the approaches. The serving
+loop lives in :mod:`robocode.utils.env_server_runtime`, which
+:func:`env_server_running` launches as a subprocess. It is split out because
+the runtime's render/primitive imports reach back into the approaches, so
+folding it in here would create an import cycle.
 """
 
 from __future__ import annotations

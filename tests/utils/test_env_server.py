@@ -3,9 +3,13 @@
 import json
 import socket
 import sys
+import threading
+import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -14,6 +18,7 @@ from relational_structs.spaces import ObjectCentricBoxSpace
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.primitives import blackbox_primitive_manifest, build_primitives
+from robocode.utils import env_server_runtime
 from robocode.utils.env_client import BlackboxEnv
 from robocode.utils.env_server import (
     decode,
@@ -163,6 +168,81 @@ def test_concurrent_clients_are_independent(
         np.testing.assert_array_equal(client_a.get_state(), obs_a)
 
 
+def _replay(client: BlackboxEnv, seed: int, actions: list[np.ndarray]) -> np.ndarray:
+    """Reset to *seed*, apply *actions*, return the stacked obs trajectory.
+
+    Stops early if the episode ends; being deterministic, that happens at the same step
+    in every run of the same (seed, actions).
+    """
+    obs, _ = client.reset(seed=seed)
+    traj = [obs]
+    for action in actions:
+        obs, _, terminated, truncated, _ = client.step(action)
+        traj.append(obs)
+        if terminated or truncated:
+            break
+    return np.stack(traj)
+
+
+def _replay_on_new_client(
+    server: tuple[int, str],
+    direct_env: KinderGeom2DEnv,
+    seed: int,
+    actions: list[np.ndarray],
+    barrier: threading.Barrier,
+) -> np.ndarray:
+    """Open a fresh client, wait for all peers at *barrier*, then replay.
+
+    Run from a worker thread; the barrier makes every worker start stepping at the same
+    instant so concurrent requests genuinely overlap on the server.
+    """
+    with _make_client(server, direct_env) as client:
+        barrier.wait(timeout=30)
+        return _replay(client, seed, actions)
+
+
+def test_concurrent_clients_are_race_safe(
+    server: tuple[int, str], direct_env: KinderGeom2DEnv
+) -> None:
+    """Clients stepping simultaneously match the same runs done in isolation.
+
+    Each connection is served in its own ThreadingTCPServer thread. If any env state (or
+    handle registry) leaked across connections, a worker's concurrent trajectory would
+    diverge from replaying the same (seed, actions) alone. The barrier lines all workers
+    up to step at once to widen the race window.
+    """
+    n_workers, n_steps = 8, 40
+
+    # A distinct deterministic action sequence per worker, replayed identically
+    # in the concurrent run and the isolated sequential reference.
+    with _make_client(server, direct_env) as sampler:
+        space = sampler.action_space
+        worker_actions = []
+        for w in range(n_workers):
+            rng = np.random.default_rng(1000 + w)
+            worker_actions.append([space.sample(rng) for _ in range(n_steps)])
+
+    # Reference: each worker run alone, one connection at a time.
+    reference = []
+    for w in range(n_workers):
+        with _make_client(server, direct_env) as client:
+            reference.append(_replay(client, w, worker_actions[w]))
+
+    # Concurrent: every worker on its own thread and connection at once.
+    barrier = threading.Barrier(n_workers)
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = [
+            pool.submit(
+                _replay_on_new_client, server, direct_env, w, worker_actions[w], barrier
+            )
+            for w in range(n_workers)
+        ]
+        concurrent = [future.result(timeout=60) for future in futures]
+
+    for w in range(n_workers):
+        np.testing.assert_allclose(concurrent[w], reference[w], atol=1e-6)
+
+
 def test_error_travels_over_wire_and_connection_survives(
     server: tuple[int, str], direct_env: KinderGeom2DEnv
 ) -> None:
@@ -240,6 +320,55 @@ def test_render_state_leaves_connection_env_unchanged(
             client.render_state(seed=5)
             client.render_state(state=custom.tolist())
             np.testing.assert_array_equal(client.get_state(), before)
+
+
+def test_render_lock_serializes_renders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_RENDER_LOCK lets only one render_state_fn run at a time across threads.
+
+    render_state_fn drives matplotlib's global pyplot state, which is not
+    thread-safe, so _render_state serializes it behind _RENDER_LOCK. Swap the
+    render for a probe that records how many calls overlap, then drive
+    _render_state from several threads lined up on a barrier: the lock must cap
+    the peak overlap at one. Removing the lock lets the peak exceed one, which
+    fails this test (verified by neutralizing the lock). This is checked in
+    process rather than end to end because the real Agg render tolerates
+    concurrency under the GIL, so an end-to-end test would not reliably fail
+    without the lock.
+    """
+    active = 0
+    peak = 0
+    counter_lock = threading.Lock()
+
+    def probe(_env: Any, _state: np.ndarray) -> np.ndarray:
+        nonlocal active, peak
+        with counter_lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        with counter_lock:
+            active -= 1
+        return np.zeros((2, 2, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(env_server_runtime, "render_state_fn", probe)
+
+    n_workers = 6
+    barrier = threading.Barrier(n_workers)
+
+    def render(worker: int) -> None:
+        barrier.wait(timeout=30)
+        # The env is only get_state/set_state'd around the (probed) render, so a
+        # bare Mock stands in; each thread gets its own, as real connections do.
+        env_server_runtime._render_state(  # pylint: disable=protected-access
+            Mock(), tmp_path, seed=worker, state=[0.0, 0.0], label=f"x{worker}"
+        )
+
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        for future in [pool.submit(render, w) for w in range(n_workers)]:
+            future.result(timeout=30)
+
+    assert peak == 1
 
 
 def test_check_action_collision_matches_host_primitive(
