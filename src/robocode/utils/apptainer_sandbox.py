@@ -192,9 +192,16 @@ def _build_apptainer_cmd(
     Split out from :func:`run_agent_in_apptainer_sandbox` so unit tests
     can inspect the constructed command without running anything.
     """
-    cmd: list[str] = [
-        "apptainer",
-        "exec",
+    cmd: list[str] = ["apptainer", "exec"]
+    if config.blackbox:
+        # --no-home alone is NOT enough to withhold the env source: many
+        # apptainer.conf setups still bind the host /home, so a blackbox agent
+        # could read the real source straight off /home/<user>/.../src/robocode/
+        # environments (verified by the --apptainer-blackbox red-team). --containall
+        # drops ALL default binds (home, tmp, cwd), leaving only the filtered
+        # mounts below, so the stripped env source is the only source present.
+        cmd.append("--containall")
+    cmd += [
         "--writable-tmpfs",
         "--no-home",
         "--cleanenv",

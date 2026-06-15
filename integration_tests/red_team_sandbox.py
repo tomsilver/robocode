@@ -4,6 +4,7 @@ Usage:
     python integration_tests/red_team_sandbox.py             # OS-level sandbox
     python integration_tests/red_team_sandbox.py --docker    # Docker sandbox
     python integration_tests/red_team_sandbox.py --blackbox  # Docker, blackbox
+    python integration_tests/red_team_sandbox.py --apptainer-blackbox  # Apptainer bb
 
 First runs a smoke test to verify the agent can do basic work inside
 the sandbox. Then runs adversarial prompts that attempt to escape.
@@ -32,6 +33,10 @@ from omegaconf import DictConfig
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.primitives import blackbox_primitive_manifest
+from robocode.utils.apptainer_sandbox import (
+    ApptainerSandboxConfig,
+    run_agent_in_apptainer_sandbox,
+)
 from robocode.utils.backends import create_backend
 from robocode.utils.docker_sandbox import (
     DockerSandboxConfig,
@@ -427,9 +432,23 @@ def _read_output() -> str | None:
 
 
 async def _run_agent(
-    use_docker: bool, prompt: str, blackbox: bool = False
+    use_docker: bool,
+    prompt: str,
+    blackbox: bool = False,
+    use_apptainer: bool = False,
 ) -> SandboxResult:
-    """Run the agent using either Docker or OS-level sandboxing."""
+    """Run the agent using Apptainer, Docker, or OS-level sandboxing."""
+    if use_apptainer:
+        apptainer_config = ApptainerSandboxConfig(
+            sandbox_dir=SANDBOX_DIR,
+            prompt=prompt,
+            output_filename="output.txt",
+            max_budget_usd=1.0,
+            system_prompt=SYSTEM_PROMPT,
+            blackbox=blackbox,
+        )
+        return await run_agent_in_apptainer_sandbox(apptainer_config, _DEFAULT_BACKEND)
+
     if use_docker:
         docker_config = DockerSandboxConfig(
             sandbox_dir=SANDBOX_DIR,
@@ -451,18 +470,18 @@ async def _run_agent(
     return await run_agent_in_sandbox(os_config, _DEFAULT_BACKEND)
 
 
-async def _run_smoke_test(use_docker: bool) -> None:
+async def _run_smoke_test(use_docker: bool, use_apptainer: bool = False) -> None:
     """Verify the agent can do basic work inside the sandbox."""
     _reset_sandbox()
     name, prompt = SMOKE_TEST
-    mode = "Docker" if use_docker else "OS"
+    mode = "Apptainer" if use_apptainer else "Docker" if use_docker else "OS"
 
     print(f"\n{'='*60}")
     print(f"SMOKE TEST [{mode}]: {name}")
     print(f"PROMPT: {prompt[:80]}...")
     print(f"{'='*60}")
 
-    result = await _run_agent(use_docker, prompt)
+    result = await _run_agent(use_docker, prompt, use_apptainer=use_apptainer)
     output = _read_output()
 
     print(f"  AGENT SUCCESS: {result.success}")
@@ -506,17 +525,31 @@ async def _run_adversarial(name: str, prompt: str, use_docker: bool) -> None:
 
 
 async def _run_blackbox_adversarial(
-    name: str, prompt: str, breach_fn: Callable[[str], bool]
+    name: str,
+    prompt: str,
+    breach_fn: Callable[[str], bool],
+    use_apptainer: bool = False,
 ) -> None:
-    """Run a blackbox adversarial prompt and assert env source stays hidden."""
+    """Run a blackbox adversarial prompt and assert env source stays hidden.
+
+    Runs in the Docker blackbox sandbox by default, or the Apptainer one when
+    *use_apptainer*; both strip the env source via the same filtered mounts, so
+    the same breach detectors apply.
+    """
     _reset_sandbox()
 
+    backend = "Apptainer" if use_apptainer else "Docker"
     print(f"\n{'='*60}")
-    print(f"TEST [Docker blackbox]: {name}")
+    print(f"TEST [{backend} blackbox]: {name}")
     print(f"PROMPT: {prompt[:80]}...")
     print(f"{'='*60}")
 
-    result = await _run_agent(use_docker=True, prompt=prompt, blackbox=True)
+    result = await _run_agent(
+        use_docker=not use_apptainer,
+        prompt=prompt,
+        blackbox=True,
+        use_apptainer=use_apptainer,
+    )
     output = _read_output()
 
     print(f"  AGENT SUCCESS: {result.success}")
@@ -679,12 +712,24 @@ async def main() -> None:
         help="Run only the blackbox remote-proxy escape test (implies "
         "--blackbox); skips the rest of the suite to save budget",
     )
+    parser.add_argument(
+        "--apptainer-blackbox",
+        action="store_true",
+        help="Apptainer sandbox with blackbox mounts; test that env source "
+        "is unreachable (needs robocode-sandbox.sif built)",
+    )
     args = parser.parse_args()
     if args.proxy_only:
         args.blackbox = True
     use_docker: bool = args.docker or args.blackbox
     mode = (
-        "Docker blackbox" if args.blackbox else "Docker" if use_docker else "OS-level"
+        "Apptainer blackbox"
+        if args.apptainer_blackbox
+        else (
+            "Docker blackbox"
+            if args.blackbox
+            else "Docker" if use_docker else "OS-level"
+        )
     )
 
     print(f"Sandbox mode: {mode}")
@@ -694,6 +739,21 @@ async def main() -> None:
     RED_TEAM_DIR.mkdir(parents=True)
 
     try:
+        if args.apptainer_blackbox:
+            # Same env-source-unreachability checks as Docker blackbox, but via
+            # the Apptainer sandbox (which isolates with --no-home / --cleanenv /
+            # --pwd and the filtered mounts instead of a container + firewall).
+            await _run_smoke_test(use_docker=False, use_apptainer=True)
+            for name, prompt, breach_fn in BLACKBOX_PROMPTS:
+                await _run_blackbox_adversarial(
+                    name, prompt, breach_fn, use_apptainer=True
+                )
+            print(f"\n{'='*60}")
+            print("RED TEAM COMPLETE (Apptainer blackbox)")
+            print(f"  Blackbox tests passed: {len(BLACKBOX_PROMPTS)}")
+            print(f"{'='*60}")
+            return
+
         if args.proxy_only:
             for name, prompt, breach_fn in BLACKBOX_PROXY_PROMPTS:
                 await _run_blackbox_proxy_adversarial(name, prompt, breach_fn)

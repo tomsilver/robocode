@@ -161,8 +161,40 @@ iptables -A INPUT  -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 ```
 
-The `local` backend is supported but logged as best-effort only: an OS sandbox
-cannot prevent reading env source straight off the host filesystem.
+### Isolation per backend
+
+The blackbox wiring (env server, env_client, env_spaces.json, the proxies) is
+backend-agnostic and works for all three backends, but the *isolation* that
+makes blackbox meaningful differs:
+
+- **docker** (default): full isolation. Env source is stripped from the filtered
+  mounts, and the container reaches the host env server via
+  `host.docker.internal` behind the default-deny firewall (plus the host `/24`
+  allow rule above). The `blackbox_proxy_module_escape` and `blackbox_*`
+  red-team tests cover this.
+- **apptainer**: real isolation too. Same stripped filtered mounts, and
+  `apptainer exec` is run with `--no-home` (the host home, hence the real repo
+  under it, is never mounted), `--cleanenv`, and `--pwd /sandbox`, with only the
+  filtered `src`/`kindergarden` + sandbox bound. It reaches the env server over
+  `127.0.0.1` (apptainer shares the host network namespace, so no
+  `--add-host`/firewall is needed; note this also means apptainer does not apply
+  the default-deny network firewall). Run
+  `python integration_tests/red_team_sandbox.py --apptainer-blackbox` (needs
+  `robocode-sandbox.sif` built) to verify env source stays unreachable.
+- **local**: best-effort ONLY, isolation is NOT enforced. The OS-level sandbox
+  (`utils/sandbox.py`) restricts filesystem *writes* to the sandbox dir but
+  allows *reads* of the whole host filesystem, so a `local` agent can read the
+  env source directly (`cat src/robocode/environments/...`,
+  `import robocode.environments`) and bypass the blackbox premise entirely. It
+  also does not copy a `primitives/` dir into the sandbox, so
+  `env_client.make_primitives()` cannot import the generic primitives there
+  (the host-proxy and remote-module primitives still work over the wire, and the
+  agent can use `robocode.primitives` directly since the repo is readable).
+  There is no way to make an OS sandbox withhold host reads, so this is left as a
+  documented best-effort mode rather than a hard failure; the approach `__init__`
+  logs a warning when `blackbox` is combined with the `local` backend. Use it
+  only for quick local iteration, not for results that depend on the agent not
+  having read the source. Use `docker` or `apptainer` for enforced isolation.
 
 ## MCP render tools in blackbox
 
