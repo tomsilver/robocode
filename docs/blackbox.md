@@ -173,10 +173,14 @@ makes blackbox meaningful differs:
   allow rule above). The `blackbox_proxy_module_escape` and `blackbox_*`
   red-team tests cover this.
 - **apptainer**: real isolation too. Same stripped filtered mounts, and
-  `apptainer exec` is run with `--no-home` (the host home, hence the real repo
-  under it, is never mounted), `--cleanenv`, and `--pwd /sandbox`, with only the
-  filtered `src`/`kindergarden` + sandbox bound. It reaches the env server over
-  `127.0.0.1` (apptainer shares the host network namespace, so no
+  `apptainer exec` is run with `--containall` (blackbox only), `--cleanenv`,
+  `--no-home`, and `--pwd /sandbox`, with only the filtered `src`/`kindergarden`
+  + sandbox bound. `--no-home` alone is *not* enough to withhold the env source:
+  many `apptainer.conf` setups still bind the host `/home`, so the agent could
+  read the real source straight off `/home/<user>/.../environments`.
+  `--containall` is what fixes this, dropping all default binds (home, tmp, cwd)
+  so the stripped source is the only source present. It reaches the env server
+  over `127.0.0.1` (apptainer shares the host network namespace, so no
   `--add-host`/firewall is needed; note this also means apptainer does not apply
   the default-deny network firewall). Run
   `python integration_tests/red_team_sandbox.py --apptainer-blackbox` (needs
