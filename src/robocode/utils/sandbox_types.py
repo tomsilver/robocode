@@ -42,6 +42,11 @@ class SandboxConfig:
     max_output_tokens: int = 16384
     autocompact_pct: int = 80
     blackbox: bool = False
+    # Address the sandbox uses to reach a service on the host loopback (a local
+    # model server, ollama/vLLM). 127.0.0.1 for the local and apptainer backends
+    # (they share the host network namespace); DockerSandboxConfig overrides this
+    # to host.docker.internal (mapped to the host gateway via --add-host).
+    local_model_host: str = "127.0.0.1"
 
 
 @dataclass(frozen=True)

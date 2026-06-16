@@ -196,6 +196,16 @@ def _filtered_repo_mounts(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _is_local_model(model: str) -> bool:
+    """True when *model* is served by a local server on the host (ollama/vllm).
+
+    Such runs need the container to reach a host-loopback model server, so the
+    docker launch maps ``host.docker.internal`` to the host gateway (like
+    blackbox does for the env server).
+    """
+    return model.split("/", 1)[0] in ("ollama", "vllm")
+
+
 def _docker_run_prefix(
     container_name: str,
     image: str,
@@ -205,14 +215,15 @@ def _docker_run_prefix(
     auth_args: list[str],
     firewall_domains: list[str],
     env_args: list[str] | None = None,
-    blackbox: bool = False,
+    map_host_gateway: bool = False,
 ) -> list[str]:
     """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
 
     Callers append the in-container command (agent CLI or genplan driver).
-    With *blackbox*, ``host.docker.internal`` is mapped to the host gateway
-    so the agent's env_client can reach the host-side env server (the name
-    is built into Docker Desktop but needs --add-host on Linux).
+    With *map_host_gateway*, ``host.docker.internal`` is mapped to the host
+    gateway so the container can reach host-loopback services: the blackbox
+    env server and/or a local model server (ollama/vLLM). The name is built
+    into Docker Desktop but needs ``--add-host`` on Linux.
     """
     cmd = [
         "docker",
@@ -224,9 +235,9 @@ def _docker_run_prefix(
         "--cap-add=NET_RAW",
         *(env_args or []),
     ]
-    if blackbox:
-        # Reaching the host env server also depends on the unconditional host
-        # /24 allow rule in docker/init-firewall.sh (default-deny otherwise).
+    if map_host_gateway:
+        # Reaching a host service also depends on the unconditional host /24
+        # allow rule in docker/init-firewall.sh (default-deny otherwise).
         cmd += ["--add-host", "host.docker.internal:host-gateway"]
     if firewall_domains:
         cmd += [
@@ -330,6 +341,9 @@ class DockerSandboxConfig(SandboxConfig):
     docker_image: str = _DEFAULT_IMAGE
     primitive_names: tuple[str, ...] = ()
     mcp_tools: tuple[str, ...] = ()
+    # The container reaches host-loopback services (env server, local model
+    # server) via the gateway, mapped to this name by --add-host.
+    local_model_host: str = "host.docker.internal"
 
 
 def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
@@ -539,7 +553,9 @@ async def run_agent_in_docker_sandbox(
                 "-e",
                 f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
             ],
-            blackbox=config.blackbox,
+            # Map the host gateway for blackbox (env server) and local model
+            # runs (ollama/vLLM on the host), which both reach host loopback.
+            map_host_gateway=config.blackbox or _is_local_model(config.model),
         )
 
         # Build the agent CLI command. Use the http MCP transport: the render

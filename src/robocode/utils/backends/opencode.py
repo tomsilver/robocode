@@ -37,6 +37,20 @@ _RATE_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Local model servers reachable on the host, keyed by the model-id prefix
+# (e.g. "ollama/qwen3:0.6b", "vllm/Qwen/Qwen2.5-0.5B"). Each maps to the port
+# its OpenAI-compatible endpoint listens on. Ollama is auto-started by the
+# backend (ensure_ollama); vLLM is started by the user. The host part of the
+# baseURL is supplied per container backend (127.0.0.1 for local/apptainer,
+# which share the host loopback; host.docker.internal for docker).
+_LOCAL_MODEL_PORTS = {"ollama": 11434, "vllm": 8000}
+
+
+def _local_model_provider(model: str) -> str | None:
+    """Return the local-model provider id (e.g. ``"ollama"``) for *model*, else None."""
+    provider = model.split("/", 1)[0]
+    return provider if provider in _LOCAL_MODEL_PORTS else None
+
 
 class OpenCodeBackend(AgentBackend):
     """OpenCode CLI agent backend."""
@@ -115,7 +129,7 @@ class OpenCodeBackend(AgentBackend):
         # Prevent OpenCode from reading the host's CLAUDE.md as a fallback
         # instruction file, since we write our own AGENTS.md.
         env["OPENCODE_DISABLE_CLAUDE_CODE"] = "1"
-        if config.model.startswith("ollama/"):
+        if _local_model_provider(config.model) == "ollama":
             ensure_ollama(keep_alive=self._ollama_keep_alive or "5m")
         if extra:
             env.update(extra)
@@ -137,13 +151,19 @@ class OpenCodeBackend(AgentBackend):
             "compaction": {"auto": True, "prune": True},
         }
 
-        # Auto-configure Ollama provider when model uses ollama/ prefix.
-        if config.model.startswith("ollama/"):
+        # Auto-configure a local-model provider (ollama/vllm) when the model id
+        # uses that prefix. Both expose an OpenAI-compatible endpoint; the host
+        # part of the baseURL depends on the container backend.
+        provider = _local_model_provider(config.model)
+        if provider:
             model_name = config.model.split("/", 1)[1]
+            port = _LOCAL_MODEL_PORTS[provider]
             oc_config["provider"] = {
-                "ollama": {
+                provider: {
                     "npm": "@ai-sdk/openai-compatible",
-                    "options": {"baseURL": "http://localhost:11434/v1"},
+                    "options": {
+                        "baseURL": f"http://{config.local_model_host}:{port}/v1"
+                    },
                     "models": {model_name: {"name": model_name}},
                 },
             }

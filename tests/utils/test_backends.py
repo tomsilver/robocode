@@ -332,7 +332,10 @@ class TestOpenCodeBackend:
         assert "/venv/bin/python" in text
 
     def test_setup_sandbox_files_ollama_provider_injected(self, tmp_path: Path) -> None:
-        """opencode.json gets an Ollama provider block for ollama/ models."""
+        """opencode.json gets an Ollama provider block for ollama/ models.
+
+        Default host is the loopback (local/apptainer share the host network).
+        """
         cfg = DictConfig({"backend": "opencode", "model": "ollama/qwen3.5:27b"})
         config = SandboxConfig(sandbox_dir=tmp_path, model="ollama/qwen3.5:27b")
         OpenCodeBackend(cfg).setup_sandbox_files(config)
@@ -340,13 +343,37 @@ class TestOpenCodeBackend:
         assert "provider" in oc
         assert "ollama" in oc["provider"]
         ollama_cfg = oc["provider"]["ollama"]
-        assert ollama_cfg["options"]["baseURL"] == "http://localhost:11434/v1"
+        assert ollama_cfg["options"]["baseURL"] == "http://127.0.0.1:11434/v1"
         assert "qwen3.5:27b" in ollama_cfg["models"]
 
-    def test_setup_sandbox_files_no_provider_for_non_ollama(
+    def test_setup_sandbox_files_ollama_docker_host(self, tmp_path: Path) -> None:
+        """The baseURL host comes from config.local_model_host (docker override)."""
+        cfg = DictConfig({"backend": "opencode", "model": "ollama/qwen3:0.6b"})
+        config = SandboxConfig(
+            sandbox_dir=tmp_path,
+            model="ollama/qwen3:0.6b",
+            local_model_host="host.docker.internal",
+        )
+        OpenCodeBackend(cfg).setup_sandbox_files(config)
+        oc = json.loads((tmp_path / "opencode.json").read_text())
+        url = oc["provider"]["ollama"]["options"]["baseURL"]
+        assert url == "http://host.docker.internal:11434/v1"
+
+    def test_setup_sandbox_files_vllm_provider_injected(self, tmp_path: Path) -> None:
+        """opencode.json gets a vLLM provider block (port 8000) for vllm/ models."""
+        cfg = DictConfig({"backend": "opencode", "model": "vllm/Qwen/Qwen2.5-0.5B"})
+        config = SandboxConfig(sandbox_dir=tmp_path, model="vllm/Qwen/Qwen2.5-0.5B")
+        OpenCodeBackend(cfg).setup_sandbox_files(config)
+        oc = json.loads((tmp_path / "opencode.json").read_text())
+        assert "vllm" in oc["provider"]
+        vllm_cfg = oc["provider"]["vllm"]
+        assert vllm_cfg["options"]["baseURL"] == "http://127.0.0.1:8000/v1"
+        assert "Qwen/Qwen2.5-0.5B" in vllm_cfg["models"]
+
+    def test_setup_sandbox_files_no_provider_for_remote_model(
         self, tmp_path: Path
     ) -> None:
-        """opencode.json does NOT get a provider block for non-Ollama models."""
+        """opencode.json does NOT get a provider block for remote (API) models."""
         config = SandboxConfig(sandbox_dir=tmp_path, model="openai/gpt-4o")
         OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(config)
         oc = json.loads((tmp_path / "opencode.json").read_text())
@@ -371,6 +398,15 @@ class TestOpenCodeBackend:
     def test_build_env_skips_ensure_ollama_for_non_ollama(self) -> None:
         """build_env does NOT call ensure_ollama for non-Ollama models."""
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"), model="openai/gpt-4o")
+        with patch("robocode.utils.backends.opencode.ensure_ollama") as mock_ensure:
+            OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(config)
+        mock_ensure.assert_not_called()
+
+    def test_build_env_skips_ensure_ollama_for_vllm(self) -> None:
+        """build_env does NOT auto-start ollama for vLLM models (user-managed)."""
+        config = SandboxConfig(
+            sandbox_dir=Path("/tmp/test"), model="vllm/Qwen/Qwen2.5-0.5B"
+        )
         with patch("robocode.utils.backends.opencode.ensure_ollama") as mock_ensure:
             OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(config)
         mock_ensure.assert_not_called()

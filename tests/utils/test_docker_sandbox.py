@@ -40,6 +40,7 @@ from robocode.utils.docker_sandbox import (
     _copy_src,
     _filtered_repo_mounts,
     _find_repo_root,
+    _is_local_model,
     _setup_sandbox_dir,
 )
 from robocode.utils.env_server import (
@@ -152,6 +153,9 @@ def test_config_defaults() -> None:
     assert config.output_filename == ""
     assert not config.init_files
     assert not config.primitive_names
+    # Docker reaches host-loopback services via the gateway alias; the base
+    # SandboxConfig (local) and apptainer keep the loopback default.
+    assert config.local_model_host == "host.docker.internal"
 
 
 def test_find_repo_root_has_pyproject() -> None:
@@ -178,6 +182,15 @@ def test_filtered_repo_mounts_default_keeps_env_source() -> None:
     with _filtered_repo_mounts() as (src, kindergarden):
         assert (src / "robocode" / "environments").exists()
         assert (kindergarden / "src" / "kinder" / "envs").exists()
+
+
+def test_is_local_model() -> None:
+    """Local model servers (ollama/vllm) are detected; remote API models are not."""
+    assert _is_local_model("ollama/qwen3:0.6b")
+    assert _is_local_model("vllm/Qwen/Qwen2.5-0.5B")
+    assert not _is_local_model("openai/gpt-4o")
+    assert not _is_local_model("anthropic/claude-sonnet-4-6")
+    assert not _is_local_model("sonnet")
 
 
 @requires_docker

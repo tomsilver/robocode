@@ -56,6 +56,9 @@ class AgentBackend(Protocol):
 
         For Claude: .claude/settings.json (hooks), CLAUDE.md
         For OpenCode: opencode.json (permissions, MCP, tools), AGENTS.md
+
+        The host address for reaching a local model server lives on the config
+        (``config.local_model_host``), so backends that need it read it there.
         """
 
     def parse_stream(
