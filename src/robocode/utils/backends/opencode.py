@@ -96,6 +96,8 @@ class OpenCodeBackend(AgentBackend):
                 mcp_env_config_path,
                 log_path,
                 blackbox=config.blackbox,
+                transport=mcp_transport,
+                port=mcp_port,
             )
         return args
 
@@ -152,14 +154,23 @@ class OpenCodeBackend(AgentBackend):
             if mcp_config_path.exists():
                 claude_mcp = json.loads(mcp_config_path.read_text())
                 servers = claude_mcp.get("mcpServers", {})
-                # Convert Claude MCP format to OpenCode format.
+                # Convert Claude MCP format to OpenCode format. The http
+                # transport (pre-started and health-checked before the CLI)
+                # maps to an OpenCode "remote" server; stdio maps to "local".
                 oc_mcp: dict = {}
                 for name, srv in servers.items():
-                    oc_mcp[name] = {
-                        "type": "local",
-                        "command": [srv["command"]] + srv.get("args", []),
-                        "enabled": True,
-                    }
+                    if srv.get("type") == "http":
+                        oc_mcp[name] = {
+                            "type": "remote",
+                            "url": srv["url"],
+                            "enabled": True,
+                        }
+                    else:
+                        oc_mcp[name] = {
+                            "type": "local",
+                            "command": [srv["command"]] + srv.get("args", []),
+                            "enabled": True,
+                        }
                 oc_config["mcp"] = oc_mcp
 
         (config.sandbox_dir / "opencode.json").write_text(

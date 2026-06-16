@@ -413,11 +413,17 @@ class BlackboxEnv:
 
     def close(self) -> None:
         """Close the connection (and the server-side environment)."""
-        self._file.write(
-            json.dumps({"cmd": "close", "token": self._token}).encode("utf-8") + b"\n"
-        )
-        self._file.flush()
-        self._sock.close()
+        try:
+            self._file.write(
+                json.dumps({"cmd": "close", "token": self._token}).encode("utf-8")
+                + b"\n"
+            )
+            self._file.flush()
+        finally:
+            # makefile() wraps a dup of the socket; close it too so the buffered
+            # file object does not leak (ResourceWarning) when close() runs.
+            self._file.close()
+            self._sock.close()
 
     def __enter__(self) -> "BlackboxEnv":
         return self

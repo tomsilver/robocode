@@ -429,11 +429,13 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
     stdout pipe), waits (up to ~20s) for *port* to accept connections, then runs
     the agent CLI in the foreground and kills the server when it exits. Starting
     and health-checking the server before the CLI is what makes the render tools
-    connected on the agent's first turn. The CLI argv is passed positionally
-    (``"$@"``) so it needs no quoting. Shared by docker and apptainer (same
-    in-container python path and ``/sandbox`` bind); the explicit kill matters
-    for apptainer, which shares the host pid namespace (no container teardown to
-    reap the server).
+    connected on the agent's first turn. If the server dies or never binds the
+    port, the wrapper kills it and exits non-zero instead of launching the CLI
+    anyway (which would silently reintroduce the first-turn tool race). The CLI
+    argv is passed positionally (``"$@"``) so it needs no quoting. Shared by
+    docker and apptainer (same in-container python path and ``/sandbox`` bind);
+    the explicit kill matters for apptainer, which shares the host pid namespace
+    (no container teardown to reap the server).
     """
     start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
     server_log = "/sandbox/.mcp/mcp_server.boot.log"
@@ -443,8 +445,14 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
         f"('{MCP_HTTP_HOST}', {port}), 0.3).close()\""
     )
     script = (
-        f"bash {start_script} >>{server_log} 2>&1 & srv=$!; "
-        f"for _ in $(seq 1 200); do {probe} 2>/dev/null && break; sleep 0.1; done; "
+        f"bash {start_script} >>{server_log} 2>&1 & srv=$!; ok=0; "
+        f"for _ in $(seq 1 200); do "
+        f'kill -0 "$srv" 2>/dev/null || break; '
+        f"{probe} 2>/dev/null && {{ ok=1; break; }}; sleep 0.1; "
+        f"done; "
+        f'if [ "$ok" -ne 1 ]; then '
+        f'echo "render MCP server did not bind port {port}; see {server_log}" >&2; '
+        f'kill "$srv" 2>/dev/null; exit 1; fi; '
         '"$@"; rc=$?; kill "$srv" 2>/dev/null; exit "$rc"'
     )
     return ["bash", "-c", script, "bash", *agent_cmd]

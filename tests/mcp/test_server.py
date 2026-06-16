@@ -168,6 +168,49 @@ def test_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> None:
     assert all(Path(p).parent == sandbox / "mcp_renders" for p in paths)
 
 
+def test_blackbox_render_policy_honors_approach_dir(tmp_path: Path) -> None:
+    """render_policy renders the approach.py under the requested approach_dir.
+
+    The approach lives only in a candidate subdirectory, so a render that ignored
+    approach_dir (and used the sandbox-root approach.py) would fail to find it.
+    """
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    candidate = sandbox / "candidate"
+    candidate.mkdir()
+    (candidate / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox) as (port, token):
+        env_spaces = _write_env_spaces(sandbox, port, token)
+        srv = build_blackbox_server(["render_policy"], env_spaces)
+        paths = _call_tool(
+            srv,
+            "render_policy",
+            {"approach_dir": "candidate", "seed": 1, "max_steps": 3},
+        )
+    assert paths
+    assert all(Path(p).exists() for p in paths)
+
+
+def test_local_render_state_label_cannot_escape_renders_dir(renders_dir: Path) -> None:
+    """A label with path separators is sanitized; the PNG stays in renders_dir."""
+    srv = build_local_server(["render_state"], _ENV_CONFIG, renders_dir=renders_dir)
+    path = _call_tool(srv, "render_state", {"seed": 0, "label": "../../escape"})
+    written = Path(path)
+    assert written.exists()
+    assert written.parent == renders_dir
+    assert ".." not in written.name
+
+
 def test_render_policy_returns_frame_paths(tmp_path: Path, renders_dir: Path) -> None:
     """render_policy tool returns a list of PNG paths."""
     sandbox = tmp_path / "sandbox"

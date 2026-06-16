@@ -265,6 +265,56 @@ class TestOpenCodeBackend:
         assert "You are a policy writer" in text
         assert "relative paths" in text
 
+    def test_setup_sandbox_files_mcp_http_uses_remote(self, tmp_path: Path) -> None:
+        """Http MCP transport maps to an OpenCode "remote" server in opencode.json."""
+        sandbox_dir = tmp_path / "sandbox"
+        sandbox_dir.mkdir()
+        (tmp_path / "env_config.json").write_text("{}")
+        config = SandboxConfig(
+            sandbox_dir=sandbox_dir,
+            model="openai/gpt-4o",
+            mcp_tools=("render_state",),
+        )
+        backend = OpenCodeBackend(DEFAULT_OPENCODE_CFG)
+        backend.build_cli_cmd(
+            config,
+            mcp_python_cmd="python",
+            mcp_env_config_path=str(sandbox_dir / ".mcp" / "env_config.json"),
+            mcp_transport="http",
+            mcp_port=8799,
+        )
+        # The http transport must emit the start script the pre-start flow runs.
+        assert (sandbox_dir / ".mcp" / "start_server.sh").exists()
+        backend.setup_sandbox_files(config)
+        oc = json.loads((sandbox_dir / "opencode.json").read_text())
+        server = oc["mcp"]["robocode-tools"]
+        assert server["type"] == "remote"
+        assert server["url"] == "http://127.0.0.1:8799/mcp"
+        assert server["enabled"] is True
+
+    def test_setup_sandbox_files_mcp_stdio_uses_local(self, tmp_path: Path) -> None:
+        """Default stdio MCP transport maps to an OpenCode "local" command server."""
+        sandbox_dir = tmp_path / "sandbox"
+        sandbox_dir.mkdir()
+        (tmp_path / "env_config.json").write_text("{}")
+        config = SandboxConfig(
+            sandbox_dir=sandbox_dir,
+            model="openai/gpt-4o",
+            mcp_tools=("render_state",),
+        )
+        backend = OpenCodeBackend(DEFAULT_OPENCODE_CFG)
+        backend.build_cli_cmd(
+            config,
+            mcp_python_cmd="python",
+            mcp_env_config_path=str(sandbox_dir / ".mcp" / "env_config.json"),
+        )
+        assert not (sandbox_dir / ".mcp" / "start_server.sh").exists()
+        backend.setup_sandbox_files(config)
+        oc = json.loads((sandbox_dir / "opencode.json").read_text())
+        server = oc["mcp"]["robocode-tools"]
+        assert server["type"] == "local"
+        assert server["command"][0] == "bash"
+
     def test_setup_sandbox_files_no_claude_files(self, tmp_path: Path) -> None:
         """OpenCode backend should NOT create .claude/ or CLAUDE.md."""
         config = SandboxConfig(sandbox_dir=tmp_path)

@@ -25,6 +25,7 @@ import argparse
 import functools
 import importlib
 import json
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -91,6 +92,16 @@ def _build_sandbox_primitives(env: Any, primitives_dir: Path | None) -> dict[str
     return out
 
 
+def _safe_label(label: str) -> str:
+    """Reduce an agent-supplied label to a filename-safe token.
+
+    The label is interpolated into the render output filename, so a label with
+    path separators or ``..`` could otherwise write the PNG outside the renders
+    directory (and, in the local backend, outside the sandbox on the host).
+    """
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", label)
+
+
 def _unique_path(directory: Path, stem: str, ext: str) -> Path:
     """Return ``directory/stem.ext``, appending _1, _2, ...
 
@@ -125,7 +136,8 @@ def build_local_server(
 
         frame = _render_state_fn(env, env_state)
 
-        suffix = f"_{label}" if label else ""
+        safe = _safe_label(label)
+        suffix = f"_{safe}" if safe else ""
         if state is not None:
             stem = f"state_custom{suffix}"
         else:

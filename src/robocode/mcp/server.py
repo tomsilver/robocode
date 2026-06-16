@@ -164,13 +164,18 @@ def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastM
         return str(sandbox_root / rel)
 
     def render_policy_impl(
-        _approach_dir: str, seed: int, max_steps: int, max_frames: int
+        approach_dir: str, seed: int, max_steps: int, max_frames: int
     ) -> list[str]:
-        # render_policy runs the sandbox's own approach.py in this container
-        # (only the per-state render is proxied to the host), so the
-        # agent-supplied approach_dir does not apply in blackbox mode.
+        # The policy runs in this container (only the per-state render is proxied
+        # to the host), but honor the agent-supplied approach_dir so a requested
+        # candidate directory is rendered rather than always the sandbox-root
+        # approach.py (default approach_dir="." resolves to that same file).
+        approach_path = sandbox_root / approach_dir / "approach.py"
         rels = client.render_policy(
-            seed=seed, max_steps=max_steps, max_frames=max_frames
+            seed=seed,
+            max_steps=max_steps,
+            max_frames=max_frames,
+            approach_path=approach_path,
         )
         return [str(sandbox_root / r) for r in rels]
 
