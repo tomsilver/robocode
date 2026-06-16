@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 import secrets
 import socketserver
 import sys
@@ -47,6 +46,7 @@ from robocode.primitives.crv_motion_planning_grasp import (
 )
 from robocode.rendering.render_state import render_state as render_state_fn
 from robocode.utils.env_server import decode, encode, serialize_space
+from robocode.utils.render_paths import safe_label, unique_path
 
 logger = logging.getLogger(__name__)
 
@@ -369,31 +369,6 @@ def _dispatch(
     raise ValueError(f"Unknown command: {cmd!r}")
 
 
-def _safe_label(label: str) -> str:
-    """Reduce an agent-supplied label to a filename-safe token.
-
-    The label is interpolated into the render output filename. This handler runs
-    on the host (not in the container), so a label with path separators or ``..``
-    would let a black-box agent steer the PNG write outside the sandbox. Keep
-    only alphanumerics, dashes, and underscores; collapse everything else to
-    ``_``.
-    """
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", label)
-
-
-def _unique_render_path(directory: Path, stem: str, ext: str = ".png") -> Path:
-    """Return ``directory/stem.ext``, appending _1, _2, ...
-
-    if taken.
-    """
-    candidate = directory / f"{stem}{ext}"
-    i = 1
-    while candidate.exists():
-        candidate = directory / f"{stem}_{i}{ext}"
-        i += 1
-    return candidate
-
-
 def _render_state(
     env: Any,
     sandbox_dir: Path,
@@ -419,13 +394,13 @@ def _render_state(
             env_state = env.get_state()
             stem = f"state_seed{seed}"
         if label:
-            stem += f"_{_safe_label(label)}"
+            stem += f"_{safe_label(label)}"
 
         with _RENDER_LOCK:
             frame = render_state_fn(env, env_state)
         out_dir = sandbox_dir / "mcp_renders"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out = _unique_render_path(out_dir, stem)
+        out = unique_path(out_dir, stem)
         iio.imwrite(str(out), frame)
         return str(out.relative_to(sandbox_dir))
     finally:

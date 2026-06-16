@@ -25,7 +25,6 @@ import argparse
 import functools
 import importlib
 import json
-import re
 import sys
 import traceback
 from pathlib import Path
@@ -52,6 +51,7 @@ from robocode.primitive_specs import (
 )
 from robocode.rendering.render_policy import render_policy as _render_policy_fn
 from robocode.rendering.render_state import render_state as _render_state_fn
+from robocode.utils.render_paths import safe_label, unique_path
 
 
 def _build_env(env_config: dict[str, Any]) -> Any:
@@ -92,29 +92,6 @@ def _build_sandbox_primitives(env: Any, primitives_dir: Path | None) -> dict[str
     return out
 
 
-def _safe_label(label: str) -> str:
-    """Reduce an agent-supplied label to a filename-safe token.
-
-    The label is interpolated into the render output filename, so a label with
-    path separators or ``..`` could otherwise write the PNG outside the renders
-    directory (and, in the local backend, outside the sandbox on the host).
-    """
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", label)
-
-
-def _unique_path(directory: Path, stem: str, ext: str) -> Path:
-    """Return ``directory/stem.ext``, appending _1, _2, ...
-
-    if taken.
-    """
-    candidate = directory / f"{stem}{ext}"
-    i = 1
-    while candidate.exists():
-        candidate = directory / f"{stem}_{i}{ext}"
-        i += 1
-    return candidate
-
-
 def build_local_server(
     tool_names: list[str],
     env_config: dict[str, Any],
@@ -136,7 +113,7 @@ def build_local_server(
 
         frame = _render_state_fn(env, env_state)
 
-        safe = _safe_label(label)
+        safe = safe_label(label)
         suffix = f"_{safe}" if safe else ""
         if state is not None:
             stem = f"state_custom{suffix}"
@@ -144,7 +121,7 @@ def build_local_server(
             stem = f"state_seed{seed}{suffix}"
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        out = _unique_path(out_dir, stem, ".png")
+        out = unique_path(out_dir, stem, ".png")
         iio.imwrite(str(out), frame)
         return str(out)
 

@@ -56,11 +56,6 @@ from robocode.mcp import (
     MCP_START_SCRIPT,
     MCP_STARTUP_TIMEOUT_MS,
 )
-from robocode.primitives import (
-    ENV_DEPENDENT_PRIMITIVES,
-    PRIMITIVE_NAME_TO_FILE,
-    REMOTE_MODULE_PRIMITIVES,
-)
 from robocode.utils.backends import (
     PROVIDERS,
     AgentBackend,
@@ -72,14 +67,11 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _final_commit,
     _initial_commit,
-    _setup_sandbox_common,
+    _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
 )
 
 logger = logging.getLogger(__name__)
-
-# Path to the primitive source files that are copied into the sandbox.
-_PRIMITIVES_SRC: Path = Path(__file__).parent.parent / "primitives"
 
 # Python interpreter inside the Docker container.
 DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
@@ -334,58 +326,13 @@ class DockerSandboxConfig(SandboxConfig):
     """Configuration for a Docker-sandboxed agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with
-    ``docker_image`` for Docker-based sandboxing and ``primitive_names``
-    to control which primitive source files are copied into the sandbox.
+    ``docker_image`` for Docker-based sandboxing.
     """
 
     docker_image: str = _DEFAULT_IMAGE
-    primitive_names: tuple[str, ...] = ()
-    mcp_tools: tuple[str, ...] = ()
     # The container reaches host-loopback services (env server, local model
     # server) via the gateway, mapped to this name by --add-host.
     local_model_host: str = "host.docker.internal"
-
-
-def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
-    """Populate *config.sandbox_dir* with the standard sandbox scaffolding.
-
-    Creates (idempotently):
-
-    * ``primitives/*.py`` -- copied from ``src/robocode/primitives/``
-    * Backend-specific config files (CLAUDE.md + .claude/, or AGENTS.md +
-      opencode.json)
-    * ``.git/`` -- so the agent CLI treats ``/sandbox`` as the project root
-
-    Also copies any files listed in ``config.init_files``.
-    """
-    _setup_sandbox_common(config.sandbox_dir, config.init_files)
-
-    # Copy only the primitive source files that were provided. In black-box
-    # mode, skip env-dependent and remote-module primitives: their source
-    # imports the hidden env (so it would not import here) and would leak its
-    # structure; the sandbox reaches them via env_client.make_primitives instead
-    # (per-callable host proxies and whole-module remote proxies).
-    if config.primitive_names:
-        primitives_dest = config.sandbox_dir / "primitives"
-        primitives_dest.mkdir(exist_ok=True)
-        for name in config.primitive_names:
-            if config.blackbox and name in (
-                ENV_DEPENDENT_PRIMITIVES | REMOTE_MODULE_PRIMITIVES
-            ):
-                continue
-            file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
-            if file_stem is None:
-                logger.warning("No source file mapping for primitive %r", name)
-                continue
-            src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
-            if src_file.exists():
-                shutil.copy2(src_file, primitives_dest / src_file.name)
-            else:
-                raise RuntimeError(f"Primitive source file not found: {src_file}")
-
-    # NOTE: backend.setup_sandbox_files() is NOT called here because it
-    # needs .mcp/mcp_config.json to exist first (written by build_cli_cmd).
-    # The caller (run_agent_in_docker_sandbox) calls it after build_cli_cmd.
 
 
 def _build_docker_auth_args(

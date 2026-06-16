@@ -28,6 +28,11 @@ import time
 from pathlib import Path
 
 from robocode.mcp import MCP_START_SCRIPT
+from robocode.primitive_specs import (
+    ENV_DEPENDENT_PRIMITIVES,
+    PRIMITIVE_NAME_TO_FILE,
+    REMOTE_MODULE_PRIMITIVES,
+)
 from robocode.utils.backends import AgentBackend
 from robocode.utils.sandbox_types import (
     SandboxConfig,
@@ -37,14 +42,16 @@ from robocode.utils.sandbox_types import (
 
 logger = logging.getLogger(__name__)
 
+_PRIMITIVES_SRC: Path = Path(__file__).parent.parent / "primitives"
+
 
 def _free_port() -> int:
     """Return a currently-free loopback TCP port.
 
-    Shared by the sandbox backends that pre-start the render http server on the
-    host network namespace (local here, apptainer) so it cannot collide with the
-    host or a concurrent run. Lives here (not in docker_sandbox) because that
-    module imports from this one.
+    Shared by the sandbox backends that pre-start the render http server on the host
+    network namespace (local here, apptainer) so it cannot collide with the host or a
+    concurrent run. Lives here (not in docker_sandbox) because that module imports from
+    this one.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -136,6 +143,47 @@ def _setup_sandbox_common(sandbox_dir: Path, init_files: dict[str, Path]) -> Non
     gitignore = sandbox_dir / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(_SANDBOX_GITIGNORE)
+
+
+def _setup_sandbox_dir(config: SandboxConfig) -> None:
+    """Populate ``config.sandbox_dir`` with the standard sandbox scaffolding.
+
+    Shared by the docker and apptainer backends. Via
+    :func:`_setup_sandbox_common`, creates (idempotently) the sandbox directory,
+    any ``config.init_files``, a ``.git`` repo (so the agent CLI treats it as the
+    project root), and a ``.gitignore``. Then copies the requested primitive
+    source files into ``sandbox_dir/primitives/``.
+
+    In black-box mode, env-dependent and remote-module primitives are skipped:
+    their source imports the hidden env (so it would not import in the sandbox)
+    and would leak its structure; the sandbox reaches them via
+    env_client.make_primitives instead (per-callable host proxies and
+    whole-module remote proxies).
+
+    Backend-specific config files (CLAUDE.md, settings.json, AGENTS.md,
+    opencode.json) are NOT written here; callers invoke
+    ``backend.setup_sandbox_files()`` afterward, since it needs files written
+    later in the launch (e.g. ``.mcp/mcp_config.json`` from build_cli_cmd).
+    """
+    _setup_sandbox_common(config.sandbox_dir, config.init_files)
+    if not config.primitive_names:
+        return
+    primitives_dest = config.sandbox_dir / "primitives"
+    primitives_dest.mkdir(exist_ok=True)
+    for name in config.primitive_names:
+        if config.blackbox and name in (
+            ENV_DEPENDENT_PRIMITIVES | REMOTE_MODULE_PRIMITIVES
+        ):
+            continue
+        file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
+        if file_stem is None:
+            logger.warning("No source file mapping for primitive %r", name)
+            continue
+        src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
+        if src_file.exists():
+            shutil.copy2(src_file, primitives_dest / src_file.name)
+        else:
+            raise RuntimeError(f"Primitive source file not found: {src_file}")
 
 
 def _initial_commit(sandbox_dir: Path) -> None:

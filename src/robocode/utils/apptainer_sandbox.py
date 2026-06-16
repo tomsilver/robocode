@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -38,11 +37,6 @@ from pathlib import Path
 from typing import Any
 
 from robocode.mcp import MCP_STARTUP_TIMEOUT_MS
-from robocode.primitives import (
-    ENV_DEPENDENT_PRIMITIVES,
-    PRIMITIVE_NAME_TO_FILE,
-    REMOTE_MODULE_PRIMITIVES,
-)
 from robocode.utils.backends import (
     PROVIDERS,
     AgentBackend,
@@ -50,7 +44,6 @@ from robocode.utils.backends import (
     provider_from_model,
 )
 from robocode.utils.docker_sandbox import (
-    _PRIMITIVES_SRC,
     DOCKER_PYTHON,
     _filtered_repo_mounts,
     _find_repo_root,
@@ -63,7 +56,7 @@ from robocode.utils.sandbox import (
     _final_commit,
     _free_port,
     _initial_commit,
-    _setup_sandbox_common,
+    _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
 )
 
@@ -81,45 +74,10 @@ class ApptainerSandboxConfig(SandboxConfig):
     """Configuration for an Apptainer-sandboxed agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with ``sif_path``
-    for the SIF image and ``primitive_names`` to control which primitive
-    source files are copied into the sandbox.
+    for the SIF image.
     """
 
     sif_path: Path = _DEFAULT_SIF
-    primitive_names: tuple[str, ...] = ()
-    mcp_tools: tuple[str, ...] = ()
-
-
-def _setup_sandbox_dir(config: ApptainerSandboxConfig) -> None:
-    """Populate ``config.sandbox_dir`` with the standard sandbox scaffolding.
-
-    Mirrors :func:`robocode.utils.docker_sandbox._setup_sandbox_dir`; kept
-    separate so it accepts :class:`ApptainerSandboxConfig` without making
-    docker_sandbox.py aware of this module.
-    """
-    _setup_sandbox_common(config.sandbox_dir, config.init_files)
-
-    if config.primitive_names:
-        primitives_dest = config.sandbox_dir / "primitives"
-        primitives_dest.mkdir(exist_ok=True)
-        for name in config.primitive_names:
-            # Skip env-dependent and remote-module primitives in black-box mode
-            # (see the docker_sandbox counterpart): unimportable here and they
-            # leak the env structure; env_client.make_primitives proxies them
-            # instead (host proxies and remote-module proxies).
-            if config.blackbox and name in (
-                ENV_DEPENDENT_PRIMITIVES | REMOTE_MODULE_PRIMITIVES
-            ):
-                continue
-            file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
-            if file_stem is None:
-                logger.warning("No source file mapping for primitive %r", name)
-                continue
-            src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
-            if src_file.exists():
-                shutil.copy2(src_file, primitives_dest / src_file.name)
-            else:
-                raise RuntimeError(f"Primitive source file not found: {src_file}")
 
 
 def _build_apptainer_auth_args(
