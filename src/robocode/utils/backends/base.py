@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
+from robocode.mcp import MCP_HTTP_PORT
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
 
@@ -29,6 +30,8 @@ class AgentBackend(Protocol):
         mcp_env_config_path: str = "",
         mcp_config_cli_path: str | None = None,
         mcp_log_file_path: str = "",
+        mcp_transport: str = "stdio",
+        mcp_port: int = MCP_HTTP_PORT,
     ) -> list[str]:
         """Return the full CLI command (binary + args) to run the agent."""
 
@@ -53,6 +56,9 @@ class AgentBackend(Protocol):
 
         For Claude: .claude/settings.json (hooks), CLAUDE.md
         For OpenCode: opencode.json (permissions, MCP, tools), AGENTS.md
+
+        The host address for reaching a local model server lives on the config
+        (``config.local_model_host``), so backends that need it read it there.
         """
 
     def parse_stream(

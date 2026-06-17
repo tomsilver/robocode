@@ -1,4 +1,4 @@
-"""Tests for render_state primitive."""
+"""Tests for the render_state rendering helper."""
 
 # pylint: disable=redefined-outer-name
 
@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
-from robocode.primitives.render_state import render_state
+from robocode.rendering.render_state import render_state
 
 
 @pytest.fixture()

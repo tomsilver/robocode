@@ -24,19 +24,29 @@ Integration tests are skipped automatically when the image is unavailable;
 build it with ``bash docker/build.sh`` to run them.
 """
 
+import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.utils.backends import DEFAULT_BACKEND
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
     _copy_src,
+    _filtered_repo_mounts,
     _find_repo_root,
+    _is_local_model,
     _setup_sandbox_dir,
+)
+from robocode.utils.env_server import (
+    ENV_CLIENT_SRC,
+    env_server_running,
+    serialize_space,
 )
 
 _DOCKER_IMAGE = "robocode-sandbox"
@@ -124,8 +134,6 @@ def _run_in_container(
             check=False,
         )
     finally:
-        import shutil  # pylint: disable=import-outside-toplevel
-
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -145,12 +153,232 @@ def test_config_defaults() -> None:
     assert config.output_filename == ""
     assert not config.init_files
     assert not config.primitive_names
+    # Docker reaches host-loopback services via the gateway alias; the base
+    # SandboxConfig (local) and apptainer keep the loopback default.
+    assert config.local_model_host == "host.docker.internal"
 
 
 def test_find_repo_root_has_pyproject() -> None:
     """_find_repo_root() returns a directory containing pyproject.toml."""
     root = _find_repo_root()
     assert (root / "pyproject.toml").exists()
+
+
+def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
+    """Blackbox mounts contain no environment source anywhere."""
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+        assert not (src / "robocode" / "environments").exists()
+        assert not (src / "robocode" / "oracles").exists()
+        assert not (kindergarden / "src" / "kinder" / "envs").exists()
+        assert not (kindergarden / "demos").exists()
+        # The package skeleton survives so the entrypoint's uv sync works.
+        assert (src / "robocode" / "__init__.py").exists()
+        assert (kindergarden / "pyproject.toml").exists()
+        assert (kindergarden / "src" / "kinder" / "core.py").exists()
+
+
+def test_filtered_repo_mounts_default_keeps_env_source() -> None:
+    """Non-blackbox mounts keep the environment source."""
+    with _filtered_repo_mounts() as (src, kindergarden):
+        assert (src / "robocode" / "environments").exists()
+        assert (kindergarden / "src" / "kinder" / "envs").exists()
+
+
+def test_is_local_model() -> None:
+    """Local model servers (ollama/vllm) are detected; remote API models are not."""
+    assert _is_local_model("ollama/qwen3:0.6b")
+    assert _is_local_model("vllm/Qwen/Qwen2.5-0.5B")
+    assert not _is_local_model("openai/gpt-4o")
+    assert not _is_local_model("anthropic/claude-sonnet-4-6")
+    assert not _is_local_model("sonnet")
+
+
+@requires_docker
+def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
+    """With blackbox mounts, uv sync still works but env code is gone."""
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/bash",
+                "-v",
+                f"{tmp_path.resolve()}:/sandbox",
+                "-v",
+                f"{src.resolve()}:/robocode/src",
+                "-v",
+                f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                "-w",
+                "/sandbox",
+                _DOCKER_IMAGE,
+                "-c",
+                "cd /robocode && uv sync --frozen --python python3.11 && "
+                f"{DOCKER_PYTHON} -c 'import robocode.utils' && "
+                # The blackbox MCP server must stay importable even though the
+                # env source and primitives are gone (it proxies to the host).
+                f"{DOCKER_PYTHON} -c 'import robocode.mcp.server' && "
+                f"! {DOCKER_PYTHON} -c 'import robocode.environments' "
+                "2>/dev/null && "
+                f"! {DOCKER_PYTHON} -c 'import robocode.primitives' 2>/dev/null && "
+                f"! {DOCKER_PYTHON} -c 'import kinder.envs' 2>/dev/null && "
+                "! find / -name '*.py' 2>/dev/null "
+                "| grep -E 'robocode/environments|kinder/envs' -q && "
+                "echo BLACKBOX_OK",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    assert "BLACKBOX_OK" in result.stdout, result.stdout + result.stderr
+
+
+@requires_docker
+def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
+    """A blackbox container renders via the host env server over TCP.
+
+    Exercises the same cross-container path the MCP render tools use: the
+    in-container env_client connects to the host env server, which renders
+    and writes the PNG into the bind-mounted sandbox dir.
+    """
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    shutil.copy2(ENV_CLIENT_SRC, sandbox / "env_client.py")
+    env_cfg = json.dumps(
+        {
+            "_target_": "robocode.environments.kinder_geom2d_env.KinderGeom2DEnv",
+            "env_id": "kinder/Motion2D-p0-v0",
+        }
+    )
+    with env_server_running(env_cfg, sandbox) as (port, token):
+        env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
+        (sandbox / "env_spaces.json").write_text(
+            json.dumps(
+                {
+                    "host": "host.docker.internal",
+                    "port": port,
+                    "token": token,
+                    "observation_space": serialize_space(env.observation_space),
+                    "action_space": serialize_space(env.action_space),
+                    "max_steps": 5,
+                }
+            )
+        )
+        env.close()
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--entrypoint",
+                    "/bin/bash",
+                    "-v",
+                    f"{sandbox.resolve()}:/sandbox",
+                    "-v",
+                    f"{src.resolve()}:/robocode/src",
+                    "-v",
+                    f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                    "-w",
+                    "/sandbox",
+                    _DOCKER_IMAGE,
+                    "-c",
+                    "cd /robocode && uv sync --frozen --python python3.11 "
+                    ">/dev/null 2>&1 && cd /sandbox && "
+                    f'{DOCKER_PYTHON} -c "from env_client import make_env; '
+                    'print(make_env().render_state(seed=0))"',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+    assert result.returncode == 0, result.stdout + result.stderr
+    rel = result.stdout.strip().splitlines()[-1]
+    assert (sandbox / rel).exists(), f"render output {rel!r} missing"
+
+
+@requires_docker
+def test_container_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> None:
+    """render_policy runs approach.py inside the blackbox container.
+
+    The policy episode executes in the container (which has no env source); only the
+    per-state render crosses to the host. Confirms the frames come back without the host
+    ever executing approach.py.
+    """
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    shutil.copy2(ENV_CLIENT_SRC, sandbox / "env_client.py")
+    (sandbox / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    env_cfg = json.dumps(
+        {
+            "_target_": "robocode.environments.kinder_geom2d_env.KinderGeom2DEnv",
+            "env_id": "kinder/Motion2D-p0-v0",
+        }
+    )
+    with env_server_running(env_cfg, sandbox) as (port, token):
+        env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
+        (sandbox / "env_spaces.json").write_text(
+            json.dumps(
+                {
+                    "host": "host.docker.internal",
+                    "port": port,
+                    "token": token,
+                    "observation_space": serialize_space(env.observation_space),
+                    "action_space": serialize_space(env.action_space),
+                    "max_steps": 5,
+                }
+            )
+        )
+        env.close()
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--entrypoint",
+                    "/bin/bash",
+                    "-v",
+                    f"{sandbox.resolve()}:/sandbox",
+                    "-v",
+                    f"{src.resolve()}:/robocode/src",
+                    "-v",
+                    f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                    "-w",
+                    "/sandbox",
+                    _DOCKER_IMAGE,
+                    "-c",
+                    "cd /robocode && uv sync --frozen --python python3.11 "
+                    ">/dev/null 2>&1 && cd /sandbox && "
+                    f'{DOCKER_PYTHON} -c "from env_client import make_env; '
+                    "paths = make_env().render_policy(seed=0, max_steps=3); "
+                    'print(paths[-1])"',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+    assert result.returncode == 0, result.stdout + result.stderr
+    rel = result.stdout.strip().splitlines()[-1]
+    assert (sandbox / rel).exists(), f"render output {rel!r} missing"
 
 
 def test_setup_creates_sandbox_dir(tmp_path: Path) -> None:
@@ -207,6 +435,24 @@ def test_setup_copies_only_requested_primitives(tmp_path: Path) -> None:
     assert primitives_dir.is_dir()
     copied = {f.name for f in primitives_dir.glob("*.py")}
     assert copied == {"csp.py", "check_action_collision.py"}
+
+
+def test_setup_blackbox_skips_env_dependent_primitives(tmp_path: Path) -> None:
+    """Blackbox setup omits env-dependent primitive source, keeps generic ones.
+
+    check_action_collision imports the (hidden) env, so its source cannot be copied into
+    a blackbox sandbox; the sandbox builds it as a host proxy via
+    env_client.make_primitives instead. Generic primitives are still copied.
+    """
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        primitive_names=("csp", "check_action_collision", "BiRRT"),
+        blackbox=True,
+    )
+    _setup_sandbox_dir(config)
+    copied = {f.name for f in (config.sandbox_dir / "primitives").glob("*.py")}
+    assert copied == {"csp.py", "motion_planning.py"}
+    assert "check_action_collision.py" not in copied
 
 
 def test_setup_no_primitives_dir_when_none_requested(tmp_path: Path) -> None:

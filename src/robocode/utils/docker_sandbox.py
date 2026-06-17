@@ -50,7 +50,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robocode.primitives import PRIMITIVE_NAME_TO_FILE
+from robocode.mcp import (
+    MCP_HTTP_HOST,
+    MCP_HTTP_PORT,
+    MCP_START_SCRIPT,
+    MCP_STARTUP_TIMEOUT_MS,
+)
 from robocode.utils.backends import (
     PROVIDERS,
     AgentBackend,
@@ -62,14 +67,11 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _final_commit,
     _initial_commit,
-    _setup_sandbox_common,
+    _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
 )
 
 logger = logging.getLogger(__name__)
-
-# Path to the primitive source files that are copied into the sandbox.
-_PRIMITIVES_SRC: Path = Path(__file__).parent.parent / "primitives"
 
 # Python interpreter inside the Docker container.
 DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
@@ -129,24 +131,37 @@ def _find_repo_root() -> Path:
     )
 
 
-def _copy_kindergarden_without_tests(kindergarden: Path, dest: Path) -> None:
-    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``."""
+def _copy_kindergarden_without_tests(
+    kindergarden: Path, dest: Path, *, blackbox: bool = False
+) -> None:
+    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``.
+
+    With *blackbox*, also skips ``kinder/envs/`` (all environment dynamics,
+    rewards, and scene generation) and ``demos/`` (recorded solution
+    trajectories) so the agent cannot read them. The package skeleton
+    (pyproject.toml, ``kinder/core.py`` etc.) stays so the entrypoint's
+    ``uv sync --frozen`` still succeeds.
+    """
+    skip = ("tests", "docs", "envs", "demos") if blackbox else ("tests", "docs")
     shutil.copytree(
         kindergarden,
         dest,
-        ignore=shutil.ignore_patterns("tests", "docs"),
+        ignore=shutil.ignore_patterns(*skip),
     )
 
 
 @contextmanager
 def _filtered_repo_mounts(
-    *, keep_primitives: bool = False
+    *, keep_primitives: bool = False, blackbox: bool = False
 ) -> Iterator[tuple[Path, Path]]:
     """Yield filtered copies of ``src/`` and ``kindergarden/`` to bind-mount.
 
     ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
-    *keep_primitives*); ``kindergarden`` without tests/docs. The copies live in
-    a temp dir that is removed on exit.
+    *keep_primitives*); ``kindergarden`` without tests/docs. With *blackbox*,
+    environment source (``robocode/environments/``, ``kinder/envs/``, demos)
+    is also excluded so the agent can only interact with the env through the
+    host-side env server. The copies live in a temp dir that is removed on
+    exit.
     """
     repo_root = _find_repo_root()
     kindergarden = repo_root / "third-party" / "kindergarden"
@@ -159,11 +174,28 @@ def _filtered_repo_mounts(
     filtered_src = Path(tmp_dir) / "src"
     filtered_kindergarden = Path(tmp_dir) / "kindergarden"
     try:
-        _copy_src(repo_root / "src", filtered_src, keep_primitives=keep_primitives)
-        _copy_kindergarden_without_tests(kindergarden, filtered_kindergarden)
+        _copy_src(
+            repo_root / "src",
+            filtered_src,
+            keep_primitives=keep_primitives,
+            blackbox=blackbox,
+        )
+        _copy_kindergarden_without_tests(
+            kindergarden, filtered_kindergarden, blackbox=blackbox
+        )
         yield filtered_src, filtered_kindergarden
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _is_local_model(model: str) -> bool:
+    """True when *model* is served by a local server on the host (ollama/vllm).
+
+    Such runs need the container to reach a host-loopback model server, so the
+    docker launch maps ``host.docker.internal`` to the host gateway (like
+    blackbox does for the env server).
+    """
+    return model.split("/", 1)[0] in ("ollama", "vllm")
 
 
 def _docker_run_prefix(
@@ -175,10 +207,15 @@ def _docker_run_prefix(
     auth_args: list[str],
     firewall_domains: list[str],
     env_args: list[str] | None = None,
+    map_host_gateway: bool = False,
 ) -> list[str]:
     """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
 
     Callers append the in-container command (agent CLI or genplan driver).
+    With *map_host_gateway*, ``host.docker.internal`` is mapped to the host
+    gateway so the container can reach host-loopback services: the blackbox
+    env server and/or a local model server (ollama/vLLM). The name is built
+    into Docker Desktop but needs ``--add-host`` on Linux.
     """
     cmd = [
         "docker",
@@ -190,6 +227,10 @@ def _docker_run_prefix(
         "--cap-add=NET_RAW",
         *(env_args or []),
     ]
+    if map_host_gateway:
+        # Reaching a host service also depends on the unconditional host /24
+        # allow rule in docker/init-firewall.sh (default-deny otherwise).
+        cmd += ["--add-host", "host.docker.internal:host-gateway"]
     if firewall_domains:
         cmd += [
             "-e",
@@ -259,7 +300,9 @@ def run_genplan_in_docker(
         )
 
 
-def _copy_src(src: Path, dest: Path, *, keep_primitives: bool = False) -> None:
+def _copy_src(
+    src: Path, dest: Path, *, keep_primitives: bool = False, blackbox: bool = False
+) -> None:
     """Copy ``src/`` to *dest*, always skipping ``oracles/`` (solution code).
 
     The agent mount also skips ``primitives/`` so the author cannot read all
@@ -267,8 +310,14 @@ def _copy_src(src: Path, dest: Path, *, keep_primitives: bool = False) -> None:
     :func:`_setup_sandbox_dir`). The genplan container sets ``keep_primitives``
     so its driver can call ``build_primitives`` in-container exactly as eval does
     on the host -- it is non-agentic, so there is no author to expose them to.
+    With *blackbox*, ``environments/`` is also skipped so the agent cannot
+    read the environment source.
     """
-    skip = ("oracles",) if keep_primitives else ("oracles", "primitives")
+    skip: tuple[str, ...] = (
+        ("oracles",) if keep_primitives else ("oracles", "primitives")
+    )
+    if blackbox:
+        skip += ("environments",)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
 
 
@@ -277,47 +326,13 @@ class DockerSandboxConfig(SandboxConfig):
     """Configuration for a Docker-sandboxed agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with
-    ``docker_image`` for Docker-based sandboxing and ``primitive_names``
-    to control which primitive source files are copied into the sandbox.
+    ``docker_image`` for Docker-based sandboxing.
     """
 
     docker_image: str = _DEFAULT_IMAGE
-    primitive_names: tuple[str, ...] = ()
-    mcp_tools: tuple[str, ...] = ()
-
-
-def _setup_sandbox_dir(config: DockerSandboxConfig) -> None:
-    """Populate *config.sandbox_dir* with the standard sandbox scaffolding.
-
-    Creates (idempotently):
-
-    * ``primitives/*.py`` -- copied from ``src/robocode/primitives/``
-    * Backend-specific config files (CLAUDE.md + .claude/, or AGENTS.md +
-      opencode.json)
-    * ``.git/`` -- so the agent CLI treats ``/sandbox`` as the project root
-
-    Also copies any files listed in ``config.init_files``.
-    """
-    _setup_sandbox_common(config.sandbox_dir, config.init_files)
-
-    # Copy only the primitive source files that were provided.
-    if config.primitive_names:
-        primitives_dest = config.sandbox_dir / "primitives"
-        primitives_dest.mkdir(exist_ok=True)
-        for name in config.primitive_names:
-            file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
-            if file_stem is None:
-                logger.warning("No source file mapping for primitive %r", name)
-                continue
-            src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
-            if src_file.exists():
-                shutil.copy2(src_file, primitives_dest / src_file.name)
-            else:
-                raise RuntimeError(f"Primitive source file not found: {src_file}")
-
-    # NOTE: backend.setup_sandbox_files() is NOT called here because it
-    # needs .mcp/mcp_config.json to exist first (written by build_cli_cmd).
-    # The caller (run_agent_in_docker_sandbox) calls it after build_cli_cmd.
+    # The container reaches host-loopback services (env server, local model
+    # server) via the gateway, mapped to this name by --add-host.
+    local_model_host: str = "host.docker.internal"
 
 
 def _build_docker_auth_args(
@@ -367,6 +382,43 @@ def _build_docker_auth_args(
     return docker_args, extra_env
 
 
+def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> list[str]:
+    """Wrap *agent_cmd* so the http render server starts and is healthy first.
+
+    Returns a container command that starts ``.mcp/<MCP_START_SCRIPT>`` in the
+    background (its output redirected to a file so it cannot hold the CLI's
+    stdout pipe), waits (up to ~20s) for *port* to accept connections, then runs
+    the agent CLI in the foreground and kills the server when it exits. Starting
+    and health-checking the server before the CLI is what makes the render tools
+    connected on the agent's first turn. If the server dies or never binds the
+    port, the wrapper kills it and exits non-zero instead of launching the CLI
+    anyway (which would silently reintroduce the first-turn tool race). The CLI
+    argv is passed positionally (``"$@"``) so it needs no quoting. Shared by
+    docker and apptainer (same in-container python path and ``/sandbox`` bind);
+    the explicit kill matters for apptainer, which shares the host pid namespace
+    (no container teardown to reap the server).
+    """
+    start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
+    server_log = "/sandbox/.mcp/mcp_server.boot.log"
+    probe = (
+        f"{DOCKER_PYTHON} -c "
+        f'"import socket; socket.create_connection('
+        f"('{MCP_HTTP_HOST}', {port}), 0.3).close()\""
+    )
+    script = (
+        f"bash {start_script} >>{server_log} 2>&1 & srv=$!; ok=0; "
+        f"for _ in $(seq 1 200); do "
+        f'kill -0 "$srv" 2>/dev/null || break; '
+        f"{probe} 2>/dev/null && {{ ok=1; break; }}; sleep 0.1; "
+        f"done; "
+        f'if [ "$ok" -ne 1 ]; then '
+        f'echo "render MCP server did not bind port {port}; see {server_log}" >&2; '
+        f'kill "$srv" 2>/dev/null; exit 1; fi; '
+        '"$@"; rc=$?; kill "$srv" 2>/dev/null; exit "$rc"'
+    )
+    return ["bash", "-c", script, "bash", *agent_cmd]
+
+
 async def run_agent_in_docker_sandbox(
     config: DockerSandboxConfig,
     backend: AgentBackend,
@@ -414,7 +466,10 @@ async def run_agent_in_docker_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts() as (filtered_src, filtered_kindergarden):
+    with _filtered_repo_mounts(blackbox=config.blackbox) as (
+        filtered_src,
+        filtered_kindergarden,
+    ):
         # --- Authentication ---
         auth_args, auth_env = _build_docker_auth_args(backend_name)
 
@@ -440,18 +495,32 @@ async def run_agent_in_docker_sandbox(
                 f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
                 "-e",
                 f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+                # Wait for the render MCP server to connect before the CLI
+                # snapshots its tools, else render tools race and can vanish.
+                "-e",
+                f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
             ],
+            # Map the host gateway for blackbox (env server) and local model
+            # runs (ollama/vLLM on the host), which both reach host loopback.
+            map_host_gateway=config.blackbox or _is_local_model(config.model),
         )
 
-        # Build the agent CLI command.
+        # Build the agent CLI command. Use the http MCP transport: the render
+        # server is started and health-checked BELOW, before the CLI, so its
+        # tools are connected on the agent's first turn (a CLI-spawned stdio
+        # server can still be importing then and its tools register too late).
         agent_cmd = backend.build_cli_cmd(
             config,
             mcp_python_cmd=DOCKER_PYTHON,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
+            mcp_transport="http",
         )
-        docker_cmd += agent_cmd
+        if config.mcp_tools:
+            docker_cmd += _mcp_prestart_wrapper(agent_cmd)
+        else:
+            docker_cmd += agent_cmd
 
         # Write backend config files (opencode.json, AGENTS.md, etc.)
         # AFTER build_cli_cmd so .mcp/mcp_config.json exists for conversion.

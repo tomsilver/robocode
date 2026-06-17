@@ -1,4 +1,4 @@
-"""Tests for render_policy primitive."""
+"""Tests for the render_policy rendering helper."""
 
 # pylint: disable=redefined-outer-name
 
@@ -13,8 +13,8 @@ import pytest
 from robocode.environments.base_env import BaseEnv
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.primitives.check_action_collision import check_action_collision
-from robocode.primitives.render_policy import render_policy
-from robocode.primitives.render_state import render_state
+from robocode.rendering.render_policy import render_policy
+from robocode.rendering.render_state import render_state
 
 
 @pytest.fixture()

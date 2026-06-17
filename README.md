@@ -265,6 +265,8 @@ By default the agent uses the Claude Code CLI backend and runs in the Docker san
 python experiments/run_experiment.py approach=agentic environment=motion2d_easy
 ```
 
+Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
+
 To use a different backend/model, override the `approach/backend` config:
 
 ```bash

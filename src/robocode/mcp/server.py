@@ -1,13 +1,21 @@
-"""MCP server exposing robocode debugging tools.
+"""MCP server exposing robocode debugging tools (black-box entry point).
 
 Launched as a subprocess by the Claude CLI inside the sandbox.
-Reads environment config from a JSON file, instantiates the env, and
-serves rendering tools over stdio.
 
-Usage::
+This module is the import-facing core: it registers the render tools and
+serves the BLACK-BOX variant, where the environment source is absent from
+the container so the tools proxy to the host-side env server via
+``env_client``. It deliberately imports nothing from the environment,
+primitives, or approaches, so it stays importable in a stripped blackbox
+container. The local-rendering variant (which needs the env source,
+primitives, and matplotlib/imageio) lives in
+:mod:`robocode.mcp.local_render`, which reuses :func:`register_tools` from
+here. This mirrors the env_server / env_server_runtime split.
+
+Usage (blackbox)::
 
     python -m robocode.mcp.server \
-        --env-config /sandbox/.mcp/env_config.json \
+        --env-spaces /sandbox/env_spaces.json \
         --tools render_state,render_policy \
         --log-file /path/to/mcp_server.log
 """
@@ -19,21 +27,19 @@ import functools
 import json
 import logging
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import imageio.v3 as iio
-import numpy as np
-from hydra.utils import instantiate
 from mcp.server.fastmcp import FastMCP
-from omegaconf import OmegaConf
 
 from robocode.mcp import MCP_SERVER_NAME
-from robocode.primitives import PRIMITIVE_NAME_TO_FILE, build_primitives
-from robocode.primitives.render_policy import render_policy as _render_policy_fn
-from robocode.primitives.render_state import render_state as _render_state_fn
+from robocode.utils.env_client import BlackboxEnv
 
 logger = logging.getLogger(MCP_SERVER_NAME)
+
+RenderStateImpl = Callable[[int, "list[float] | None", str], str]
+RenderPolicyImpl = Callable[[str, int, int, int], "list[str]"]
 
 
 def _setup_logging(log_file: Path) -> None:
@@ -49,18 +55,6 @@ def _setup_logging(log_file: Path) -> None:
         logging.Formatter("[%(asctime)s][%(name)s][%(levelname)s] - %(message)s")
     )
     logger.addHandler(handler)
-
-
-def _build_env_and_primitives(
-    env_config: dict[str, Any],
-) -> tuple[Any, dict[str, Any]]:
-    """Instantiate the environment and build the primitives dict."""
-    logger.info("Building environment and primitives from config")
-    cfg = OmegaConf.create(env_config)
-    env = instantiate(cfg)
-    env.reset(seed=0)
-    logger.info("Environment instantiated: %s", type(env).__name__)
-    return env, build_primitives(env, list(PRIMITIVE_NAME_TO_FILE))
 
 
 def _logged_tool(fn):  # type: ignore[type-arg]
@@ -80,30 +74,20 @@ def _logged_tool(fn):  # type: ignore[type-arg]
     return wrapper
 
 
-def create_server(
-    env_config: dict[str, Any],
+def register_tools(
+    server: FastMCP,
     tool_names: list[str],
-    renders_dir: Path | None = None,
-) -> FastMCP:
-    """Create and configure the MCP server with the requested tools."""
-    logger.info("Creating MCP server, requested tools: %s", tool_names)
-    server = FastMCP(MCP_SERVER_NAME)
-    env, primitives = _build_env_and_primitives(env_config)
-    out_dir = renders_dir or Path("mcp_renders")
+    render_state_impl: RenderStateImpl,
+    render_policy_impl: RenderPolicyImpl,
+) -> None:
+    """Register the requested render tools, delegating to the given impls.
+
+    The tool signatures and docstrings (what the agent sees) live here and are shared by
+    the local and blackbox variants; only the implementations differ.
+    """
+    logger.info("Registering tools: %s", tool_names)
 
     if "render_state" in tool_names:
-
-        def _unique_path(directory: Path, stem: str, ext: str) -> Path:
-            """Return ``directory/stem.ext``, appending _1, _2, ...
-
-            if taken.
-            """
-            candidate = directory / f"{stem}{ext}"
-            i = 1
-            while candidate.exists():
-                candidate = directory / f"{stem}_{i}{ext}"
-                i += 1
-            return candidate
 
         @server.tool()
         @_logged_tool
@@ -138,25 +122,7 @@ def create_server(
 
             Returns the file path of the saved PNG image.
             """
-            if state is not None:
-                env_state = np.array(state, dtype=np.float32)
-                env.set_state(env_state)
-            else:
-                env.reset(seed=seed)
-                env_state = env.get_state()
-
-            frame = _render_state_fn(env, env_state)
-
-            suffix = f"_{label}" if label else ""
-            if state is not None:
-                stem = f"state_custom{suffix}"
-            else:
-                stem = f"state_seed{seed}{suffix}"
-
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out = _unique_path(out_dir, stem, ".png")
-            iio.imwrite(str(out), frame)
-            return str(out)
+            return render_state_impl(seed, state, label)
 
         logger.info("Registered tool: render_state")
 
@@ -175,32 +141,83 @@ def create_server(
             Returns the list of saved PNG file paths. Use a subagent to read and analyze
             the frames — do NOT read them directly to avoid context bloat.
             """
-            out = out_dir / f"policy_seed{seed}"
-            out.mkdir(parents=True, exist_ok=True)
-            filenames = _render_policy_fn(
-                env,
-                primitives,
-                approach_dir,
-                seed,
-                str(out),
-                max_steps=max_steps,
-                max_frames=max_frames,
-            )
-            return [str(out / f) for f in filenames]
+            return render_policy_impl(approach_dir, seed, max_steps, max_frames)
 
         logger.info("Registered tool: render_policy")
 
+
+def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastMCP:
+    """Create an MCP server whose render tools proxy to the host env server.
+
+    The environment source is absent from this container, so rendering runs
+    on the host (via ``env_client``), which writes PNGs into the shared
+    sandbox mount. The returned sandbox-relative paths are translated back to
+    absolute paths in this container.
+    """
+    meta = json.loads(env_spaces_path.read_text(encoding="utf-8"))
+    sandbox_root = env_spaces_path.resolve().parent
+    client = BlackboxEnv(meta, sandbox_root=sandbox_root)
+    logger.info("MCP server in blackbox mode, proxying to host env server")
+
+    def render_state_impl(seed: int, state: list[float] | None, label: str) -> str:
+        rel = client.render_state(seed=seed, state=state, label=label)
+        return str(sandbox_root / rel)
+
+    def render_policy_impl(
+        approach_dir: str, seed: int, max_steps: int, max_frames: int
+    ) -> list[str]:
+        # The policy runs in this container (only the per-state render is proxied
+        # to the host), but honor the agent-supplied approach_dir so a requested
+        # candidate directory is rendered rather than always the sandbox-root
+        # approach.py (default approach_dir="." resolves to that same file).
+        approach_path = sandbox_root / approach_dir / "approach.py"
+        rels = client.render_policy(
+            seed=seed,
+            max_steps=max_steps,
+            max_frames=max_frames,
+            approach_path=approach_path,
+        )
+        return [str(sandbox_root / r) for r in rels]
+
+    server = FastMCP(MCP_SERVER_NAME)
+    register_tools(server, tool_names, render_state_impl, render_policy_impl)
     logger.info("MCP server created successfully")
     return server
 
 
+def add_transport_args(parser: argparse.ArgumentParser) -> None:
+    """Add the shared --transport/--host/--port options to a server CLI parser.
+
+    ``stdio`` (default) is spawned by the agent CLI; ``http`` runs a standalone
+    streamable-http server that the launch flow starts and health-checks BEFORE
+    the agent CLI boots, so its tools are connected on the agent's first turn
+    (a spawned stdio server can still be importing then, and its tools register
+    too late -- see robocode.mcp.setup_mcp_config).
+    """
+    parser.add_argument("--transport", choices=("stdio", "http"), default="stdio")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for http transport")
+    parser.add_argument("--port", type=int, default=0, help="Port for http transport")
+
+
+def run_server(server: FastMCP, transport: str, host: str, port: int) -> None:
+    """Run *server* over the given transport (``stdio`` or ``http``)."""
+    if transport == "http":
+        server.settings.host = host
+        server.settings.port = port
+        logger.info("Starting streamable-http transport on %s:%d", host, port)
+        server.run(transport="streamable-http")
+    else:
+        logger.info("Starting stdio transport")
+        server.run(transport="stdio")
+
+
 def main() -> None:
-    """Parse CLI args and start the MCP server over stdio."""
+    """Parse CLI args and start the blackbox MCP server."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--env-config",
+        "--env-spaces",
         required=True,
-        help="Path to JSON file with Hydra env config",
+        help="Path to env_spaces.json with the host env server connection info",
     )
     parser.add_argument(
         "--tools",
@@ -212,25 +229,18 @@ def main() -> None:
         required=True,
         help="Path to write server-side log (stdout is reserved for MCP stdio)",
     )
+    add_transport_args(parser)
     args = parser.parse_args()
 
     _setup_logging(Path(args.log_file))
-    logger.info("MCP server starting: args=%s", vars(args))
+    logger.info("MCP server starting (blackbox): args=%s", vars(args))
 
     try:
-        env_config_path = Path(args.env_config).resolve()
-        logger.info("Loading env config from %s", env_config_path)
-        env_config = json.loads(env_config_path.read_text(encoding="utf-8"))
         tool_names = [t.strip() for t in args.tools.split(",")]
-
-        # Place renders next to the sandbox
-        # (env_config is at <sandbox>/.mcp/env_config.json).
-        sandbox_dir = env_config_path.parent.parent
-        renders_dir = sandbox_dir / "mcp_renders"
-
-        server = create_server(env_config, tool_names, renders_dir=renders_dir)
-        logger.info("Starting stdio transport")
-        server.run(transport="stdio")
+        env_spaces_path = Path(args.env_spaces).resolve()
+        logger.info("Loading env server connection info from %s", env_spaces_path)
+        server = build_blackbox_server(tool_names, env_spaces_path)
+        run_server(server, args.transport, args.host, args.port)
         logger.info("MCP server shut down")
     except Exception:
         logger.critical("MCP server crashed:\n%s", traceback.format_exc())

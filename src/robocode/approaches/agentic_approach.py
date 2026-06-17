@@ -3,6 +3,7 @@
 import logging
 import sys
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -10,8 +11,15 @@ from gymnasium.spaces import Space
 from omegaconf import DictConfig
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.mcp import MCP_TOOLS_SYSTEM_PROMPT_SUFFIX, mcp_tool_descriptions
-from robocode.primitives import format_primitives_description
+from robocode.mcp import (
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
+    mcp_tool_descriptions,
+)
+from robocode.primitives import (
+    blackbox_primitive_manifest,
+    format_primitives_description,
+)
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import (
     CLAUDE_PROMPT_SUFFIX,
@@ -21,6 +29,12 @@ from robocode.utils.backends import (
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
+)
+from robocode.utils.env_server import (
+    ENV_CLIENT_SRC,
+    env_server_running,
+    serialize_space,
+    write_env_spaces,
 )
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
@@ -50,6 +64,29 @@ _SYSTEM_PROMPT = (
     "Use subagents to explore source code in parallel, e.g. spawn "
     "subagents to read environment dynamics, reward functions, and object "
     "types simultaneously rather than sequentially."
+)
+
+_SYSTEM_PROMPT_BLACKBOX = (
+    "You are an expert at writing policies for gymnasium environments. "
+    "The environment is a black box: its source code is not available, so "
+    "you will discover the dynamics, reward structure, and termination "
+    "conditions empirically by interacting with a live environment "
+    "instance, and write an optimal approach class. "
+    "IMPORTANT: You MUST write ALL files (approach.py, test scripts, etc.) "
+    "to the current working directory using RELATIVE paths only. "
+    "Never use absolute paths when writing files. "
+    "IMPORTANT: Write code often to approach.py as you iterate. You may be "
+    "interrupted at any time, so you should make sure that approach.py is "
+    "your best current attempt at all times. "
+    "VERSION CONTROL: This directory is a git repo. After each meaningful "
+    "change to approach.py or supporting modules, run "
+    "`git add -A && git commit -m '<describe what you changed and why>'`. "
+    "Commit often, do not batch everything into one final commit. "
+    "You should commit the approach every time before you test it in the environment. "
+    "Use subagents to run exploration experiments in parallel, e.g. spawn "
+    "subagents to probe action effects, reward structure, and termination "
+    "conditions simultaneously rather than sequentially; each test script "
+    "gets its own fresh environment instance."
 )
 
 _INTERFACE_SPEC = """\
@@ -86,7 +123,10 @@ IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:
 ```bash
 {python_executable} test_approach.py
-```
+```\
+"""
+
+_INSPECT_SOURCE_SUFFIX = """
 
 You can also inspect the source code of any imported module to understand \
 the environment's dynamics in detail (reward function, transition logic, \
@@ -95,6 +135,59 @@ termination conditions, etc.). To locate a module's source file:
 {python_executable} -c "import some_module; print(some_module.__file__)"
 ```
 Then read the source to inform your approach.\
+"""
+
+_BLACKBOX_INTERACTION_SPEC = """\
+The environment is a BLACK BOX. You CANNOT read its source code; it is not \
+available anywhere on this machine. A live environment server is running. \
+Interact with it through `env_client.py` in your working directory:
+
+```python
+from env_client import make_env
+
+env = make_env()  # fresh environment instance per call
+obs, info = env.reset(seed=0)
+obs, reward, terminated, truncated, info = env.step(action)
+state = env.get_state()  # numpy snapshot of the full environment state
+env.set_state(state)  # restore a snapshot
+env.close()
+```
+
+`env.observation_space` and `env.action_space` expose `shape`, `low`, \
+`high`, `dtype`, and `sample()`; the same metadata is in `env_spaces.json`. \
+`env.max_steps` is the episode step limit used at evaluation time.
+
+`env.make_primitives()` returns the SAME `primitives` dict the evaluation \
+harness passes to `GeneratedApproach.__init__`. Use it in test scripts so \
+they exercise the real primitives (env-dependent ones run on the host):
+
+```python
+from env_client import make_env
+
+env = make_env()
+primitives = env.make_primitives()
+```
+
+You can also call `env.observation_space.devectorize(obs)` to get an \
+object-centric view of an observation. It returns an `ObjectCentricState` \
+with `get_object_names()`, `get_object_from_name(name)`, `get_objects(type)`, \
+and `get(obj, feature)`; iterate objects via `get_objects(...)`, NOT \
+`for obj in ocs`. Call `env.observation_space.vectorize(ocs)` to go back to a \
+flat array. The evaluation harness passes the SAME `observation_space` to \
+`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically \
+there, and `approach.py` can use it directly.
+
+Parallel test scripts are fine: every `make_env()` call creates an \
+independent environment instance.
+
+Start by exploring systematically: reset with several seeds, apply \
+controlled actions, and study how the observation vector changes to \
+identify what each dimension means and how actions affect the state.
+
+CRITICAL: `approach.py` itself must NOT import `env_client`. It will be \
+evaluated against the real environment by a separate harness that calls \
+`reset(state, info)` and `get_action(state)` directly. Use `env_client` \
+ONLY in test and exploration scripts.\
 """
 
 _GEOMETRY_PROMPT = """\
@@ -192,6 +285,26 @@ type, action space, and dynamics.
 {modular_code_prompt}\
 """
 
+_PROMPT_BLACKBOX = """\
+You are writing an approach for an environment that you can only access as \
+a black box.
+
+Your approach should be general enough to solve any instance of this \
+environment (each reset gives a new instance), but it does NOT need to be \
+adaptable to different other environments.
+{env_description_section}
+{blackbox_interaction_spec}
+{geometry_prompt}
+{interface_spec}
+{modular_code_prompt}\
+"""
+
+_BLACKBOX_DESCRIPTION_PREFIX = """\
+
+The environment is described below.
+
+"""
+
 
 class AgenticApproach(BaseApproach[_ObsType, _ActType]):
     """An approach that uses an LLM coding agent to write approach code."""
@@ -215,6 +328,9 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
+        blackbox: bool = False,
+        env_cfg: str | None = None,
+        max_steps: int | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -239,6 +355,21 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self._mcp_tools = mcp_tools
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
+        self._blackbox = blackbox
+        self._env_cfg = env_cfg
+        self._max_steps = max_steps
+        if blackbox:
+            if env_cfg is None:
+                raise ValueError("blackbox mode requires env_cfg")
+            # Fail fast on spaces the blackbox protocol cannot serialize.
+            serialize_space(action_space)
+            serialize_space(observation_space)
+            if self._container_backend == "local":
+                logger.warning(
+                    "blackbox with the local backend is best-effort only: "
+                    "the OS sandbox cannot prevent reading env source from "
+                    "the host filesystem"
+                )
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -256,11 +387,13 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         # Build the prompt. If we have an env description, inline it so the
         # agent knows exactly which environment to target.  Otherwise fall
         # back to asking the agent to read source files.
-        primitives_desc = format_primitives_description(list(self._primitives))
+        primitives_desc = format_primitives_description(
+            list(self._primitives), blackbox=self._blackbox
+        )
 
         if self._mcp_tools:
             backend_name = self._backend_cfg["backend"]
-            tool_descs = mcp_tool_descriptions(backend_name)
+            tool_descs = mcp_tool_descriptions(backend_name, blackbox=self._blackbox)
             mcp_lines = [
                 "\n\nYou also have MCP tools for visual debugging (they do NOT "
                 "affect your test scripts):\n",
@@ -277,10 +410,27 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             python_executable=python_exe,
             primitives_description=primitives_desc,
         )
+        if not self._blackbox:
+            interface_spec += _INSPECT_SOURCE_SUFFIX.format(
+                python_executable=python_exe
+            )
 
         modular = _MODULAR_CODE_PROMPT if self._modular_code_prompt else ""
 
-        if self._env_description_path is not None:
+        if self._blackbox:
+            env_description_section = ""
+            if self._env_description_path is not None:
+                env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
+                env_description_section = _BLACKBOX_DESCRIPTION_PREFIX + env_desc + "\n"
+            geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
+            prompt = _PROMPT_BLACKBOX.format(
+                env_description_section=env_description_section,
+                blackbox_interaction_spec=_BLACKBOX_INTERACTION_SPEC,
+                geometry_prompt=geometry,
+                interface_spec=interface_spec,
+                modular_code_prompt=modular,
+            )
+        elif self._env_description_path is not None:
             env_desc = Path(self._env_description_path).read_text(encoding="utf-8")
             geometry = _GEOMETRY_PROMPT if self._geometry_prompt else ""
             prompt = _PROMPT_WITH_DESCRIPTION.format(
@@ -298,18 +448,26 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         docker_config: DockerSandboxConfig | None = None
         apptainer_config: ApptainerSandboxConfig | None = None
         config: SandboxConfig | None = None
-        system_prompt = _SYSTEM_PROMPT
+        system_prompt = _SYSTEM_PROMPT_BLACKBOX if self._blackbox else _SYSTEM_PROMPT
+        init_files: dict[str, Path] = {}
+        if self._blackbox:
+            init_files["env_client.py"] = ENV_CLIENT_SRC
         backend_name = self._backend_cfg["backend"]
         if backend_name == "opencode":
             system_prompt += OPENCODE_PROMPT_SUFFIX
         else:
             system_prompt += CLAUDE_PROMPT_SUFFIX
         if self._mcp_tools:
-            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            system_prompt += (
+                MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+                if self._blackbox
+                else MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
+            )
 
         if self._container_backend == "docker":
             docker_config = DockerSandboxConfig(
                 sandbox_dir=sandbox_dir,
+                init_files=init_files,
                 output_filename="approach.py",
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -320,11 +478,13 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
+                blackbox=self._blackbox,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         elif self._container_backend == "apptainer":
             apptainer_config = ApptainerSandboxConfig(
                 sandbox_dir=sandbox_dir,
+                init_files=init_files,
                 output_filename="approach.py",
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -335,11 +495,13 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
+                blackbox=self._blackbox,
             )
             sandbox_logger = logging.getLogger("robocode.utils.apptainer_sandbox")
         else:
             config = SandboxConfig(
                 sandbox_dir=sandbox_dir,
+                init_files=init_files,
                 output_filename="approach.py",
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -349,6 +511,7 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
                 mcp_tools=self._mcp_tools,
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
+                blackbox=self._blackbox,
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
@@ -360,12 +523,30 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         )
         sandbox_logger.addHandler(file_handler)
         try:
-            result = run_with_rate_limit_retry(
-                docker_config,
-                config,
-                backend=self._backend,
-                apptainer_config=apptainer_config,
-            )
+            with ExitStack() as stack:
+                if self._blackbox:
+                    assert self._env_cfg is not None  # validated in __init__
+                    port, token = stack.enter_context(
+                        env_server_running(self._env_cfg, sandbox_dir)
+                    )
+                    write_env_spaces(
+                        sandbox_dir,
+                        container_backend=self._container_backend,
+                        port=port,
+                        token=token,
+                        observation_space=self._state_space,
+                        action_space=self._action_space,
+                        max_steps=self._max_steps,
+                        primitives_manifest=blackbox_primitive_manifest(
+                            list(self._primitives)
+                        ),
+                    )
+                result = run_with_rate_limit_retry(
+                    docker_config,
+                    config,
+                    backend=self._backend,
+                    apptainer_config=apptainer_config,
+                )
         finally:
             sandbox_logger.removeHandler(file_handler)
             file_handler.close()

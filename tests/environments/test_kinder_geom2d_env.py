@@ -66,3 +66,28 @@ def test_kinder_geom2d_sample_next_state(env_id: str) -> None:
     assert env.observation_space.contains(next_state)
 
     env.close()
+
+
+def test_kinder_geom2d_blackbox_description_omits_source() -> None:
+    """The blackbox description drops source pointers and direct-import usage."""
+    env = KinderGeom2DEnv("kinder/Motion2D-p0-v0")
+    full = env.env_description
+    blackbox = env.env_description_blackbox
+    env.close()
+
+    # The full description points the agent at the source and a direct import.
+    assert "## Source Code" in full
+    assert "## Example Usage" in full
+    assert "from robocode.environments" in full
+    assert "object_types.py" in full
+
+    # The blackbox description keeps the conceptual sections but omits anything
+    # that assumes filesystem or direct-import access.
+    assert "## Reward" in blackbox
+    assert "## Source Code" not in blackbox
+    assert "## Example Usage" not in blackbox
+    assert "from robocode.environments" not in blackbox
+    assert "kinematic2d" not in blackbox
+
+    # The blackbox description is exactly the leading conceptual slice.
+    assert full.startswith(blackbox)

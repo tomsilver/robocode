@@ -83,6 +83,37 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
     assert cmd[-3:] == ["claude", "--print", "hello"]
 
 
+def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
+    """Blackbox mode adds --containall; --no-home alone leaks the host /home.
+
+    Without --containall, many apptainer.conf setups still bind the host /home,
+    so a blackbox agent could read the real env source at
+    /home/<user>/.../src/robocode/environments. --containall drops all default
+    binds so only the filtered mounts remain. The default (non-blackbox) command
+    keeps its existing flags.
+    """
+    blackbox_cmd = _build_apptainer_cmd(
+        ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox", blackbox=True),
+        sandbox_abs="/host/sandbox",
+        src_abs="/host/src",
+        kindergarden_abs="/host/kindergarden",
+        auth_args=[],
+        firewall_domains=[],
+        agent_cmd=["claude"],
+    )
+    default_cmd = _build_apptainer_cmd(
+        ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox"),
+        sandbox_abs="/host/sandbox",
+        src_abs="/host/src",
+        kindergarden_abs="/host/kindergarden",
+        auth_args=[],
+        firewall_domains=[],
+        agent_cmd=["claude"],
+    )
+    assert "--containall" in blackbox_cmd
+    assert "--containall" not in default_cmd
+
+
 def test_build_cmd_firewall_domains(tmp_path: Path) -> None:
     """Firewall domains, when present, are forwarded via --env."""
     config = ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox")

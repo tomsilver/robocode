@@ -30,14 +30,13 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robocode.primitives import PRIMITIVE_NAME_TO_FILE
+from robocode.mcp import MCP_STARTUP_TIMEOUT_MS
 from robocode.utils.backends import (
     PROVIDERS,
     AgentBackend,
@@ -45,18 +44,19 @@ from robocode.utils.backends import (
     provider_from_model,
 )
 from robocode.utils.docker_sandbox import (
-    _PRIMITIVES_SRC,
     DOCKER_PYTHON,
     _filtered_repo_mounts,
     _find_repo_root,
     _get_claude_oauth_token,
+    _mcp_prestart_wrapper,
 )
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _final_commit,
+    _free_port,
     _initial_commit,
-    _setup_sandbox_common,
+    _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
 )
 
@@ -74,37 +74,10 @@ class ApptainerSandboxConfig(SandboxConfig):
     """Configuration for an Apptainer-sandboxed agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with ``sif_path``
-    for the SIF image and ``primitive_names`` to control which primitive
-    source files are copied into the sandbox.
+    for the SIF image.
     """
 
     sif_path: Path = _DEFAULT_SIF
-    primitive_names: tuple[str, ...] = ()
-    mcp_tools: tuple[str, ...] = ()
-
-
-def _setup_sandbox_dir(config: ApptainerSandboxConfig) -> None:
-    """Populate ``config.sandbox_dir`` with the standard sandbox scaffolding.
-
-    Mirrors :func:`robocode.utils.docker_sandbox._setup_sandbox_dir`; kept
-    separate so it accepts :class:`ApptainerSandboxConfig` without making
-    docker_sandbox.py aware of this module.
-    """
-    _setup_sandbox_common(config.sandbox_dir, config.init_files)
-
-    if config.primitive_names:
-        primitives_dest = config.sandbox_dir / "primitives"
-        primitives_dest.mkdir(exist_ok=True)
-        for name in config.primitive_names:
-            file_stem = PRIMITIVE_NAME_TO_FILE.get(name)
-            if file_stem is None:
-                logger.warning("No source file mapping for primitive %r", name)
-                continue
-            src_file = _PRIMITIVES_SRC / f"{file_stem}.py"
-            if src_file.exists():
-                shutil.copy2(src_file, primitives_dest / src_file.name)
-            else:
-                raise RuntimeError(f"Primitive source file not found: {src_file}")
 
 
 def _build_apptainer_auth_args(
@@ -180,9 +153,16 @@ def _build_apptainer_cmd(
     Split out from :func:`run_agent_in_apptainer_sandbox` so unit tests
     can inspect the constructed command without running anything.
     """
-    cmd: list[str] = [
-        "apptainer",
-        "exec",
+    cmd: list[str] = ["apptainer", "exec"]
+    if config.blackbox:
+        # --no-home alone is NOT enough to withhold the env source: many
+        # apptainer.conf setups still bind the host /home, so a blackbox agent
+        # could read the real source straight off /home/<user>/.../src/robocode/
+        # environments (verified by the --apptainer-blackbox red-team). --containall
+        # drops ALL default binds (home, tmp, cwd), leaving only the filtered
+        # mounts below, so the stripped env source is the only source present.
+        cmd.append("--containall")
+    cmd += [
         "--writable-tmpfs",
         "--no-home",
         "--cleanenv",
@@ -192,6 +172,10 @@ def _build_apptainer_cmd(
         f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
         "--env",
         f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+        # Wait for the render MCP server to connect before the CLI snapshots its
+        # tools (--containall drops the host env, so this must be explicit).
+        "--env",
+        f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
         "--env",
         "ROBOCODE_SKIP_FIREWALL=1",
     ]
@@ -241,7 +225,10 @@ async def run_agent_in_apptainer_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     run_id = f"apptainer-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts() as (filtered_src, filtered_kindergarden):
+    with _filtered_repo_mounts(blackbox=config.blackbox) as (
+        filtered_src,
+        filtered_kindergarden,
+    ):
         auth_args, auth_env = _build_apptainer_auth_args(backend_name)
 
         firewall_domains: list[str] = []
@@ -250,13 +237,23 @@ async def run_agent_in_apptainer_sandbox(
                 provider_from_model(config.model)
             )
 
+        # Apptainer shares the host network namespace (even with --containall),
+        # so use a free loopback port for the render http server to avoid
+        # colliding with the host or a concurrent run.
+        mcp_port = _free_port()
         agent_cmd = backend.build_cli_cmd(
             config,
             mcp_python_cmd=APPTAINER_PYTHON,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
+            mcp_transport="http",
+            mcp_port=mcp_port,
         )
+        # Start and health-check the render server before the CLI (same wrapper
+        # as docker) so its tools are connected on the agent's first turn.
+        if config.mcp_tools:
+            agent_cmd = _mcp_prestart_wrapper(agent_cmd, port=mcp_port)
 
         apptainer_cmd = _build_apptainer_cmd(
             config,

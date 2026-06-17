@@ -3,10 +3,32 @@
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 # Server name used by FastMCP and to build Claude CLI tool names
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
+
+# Startup wait (milliseconds) the agent CLI is given for the render MCP server
+# to connect, passed as the ``MCP_TIMEOUT`` env var by every backend. The server
+# imports the MCP framework plus the env/render stack (~2s) before it can answer
+# the stdio handshake; if the CLI snapshots its tool list before that, the render
+# tools are silently absent for the whole run ("No such tool available"). A
+# generous timeout makes the CLI wait for the server instead of racing it; the
+# CLI still proceeds as soon as the server connects, so this only adds latency
+# when the server is genuinely slow.
+MCP_STARTUP_TIMEOUT_MS = 60000
+
+# HTTP transport. Instead of letting the agent CLI spawn the render server over
+# stdio (which can still be importing when the CLI snapshots its tools, so the
+# render tools are missing on the first turn), the launch flow starts a
+# standalone streamable-http server and health-checks it BEFORE the CLI, so its
+# tools are connected on turn 1. A fixed loopback port is safe: the server is the
+# only one in its isolated sandbox. The launch flow runs MCP_START_SCRIPT (under
+# <sandbox>/.mcp/), waits for the port, then execs the CLI.
+MCP_HTTP_HOST = "127.0.0.1"
+MCP_HTTP_PORT = 8765
+MCP_START_SCRIPT = "start_server.sh"
 
 # Tool description templates. Use {render_state} and {render_policy}
 # placeholders for the backend-specific tool names (Claude uses
@@ -69,6 +91,49 @@ _TOOL_DESC_TEMPLATES: dict[str, str] = {
     ),
 }
 
+# Per-tool blackbox overrides, merged over _TOOL_DESC_TEMPLATES. In blackbox
+# mode the agent has no env source, but env_client still proxies
+# observation_space.devectorize/vectorize to the host: devectorize returns a
+# remote ObjectCentricState handle accessed via methods (get_object_names,
+# get_objects, get_object_from_name, get, set), not the in-process
+# dict-of-arrays form, and there are no constant_objects/type_features to build
+# a state from scratch. The override describes that handle API. render_policy
+# needs no override (it never references devectorize), so it stays shared.
+_TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
+    "render_state": (
+        "`{render_state}(seed=42, state=None, "
+        'label="")`: renders an environment state as a PNG and returns '
+        "the file path.\n"
+        "  Two modes:\n"
+        "  1. **Reset mode** (default): pass `seed` to render the initial "
+        "state after `env.reset(seed=seed)`.\n"
+        "  2. **Arbitrary state mode**: pass `state` as a flat list of floats "
+        "to render any state you want. `seed` is ignored when `state` is "
+        "provided.\n"
+        "  The optional `label` parameter is included in the output filename "
+        'for easier identification (e.g. label="after_grasp").\n'
+        "  Use reset mode to visually understand the spatial layout, obstacle "
+        "placement, and goal positions. Use arbitrary state mode to visualize "
+        "intermediate states during debugging, e.g. after applying actions or "
+        "to verify a planned trajectory.\n"
+        "  How to get a state list (a flat list of floats):\n"
+        "  - From an existing observation: `obs.tolist()`\n"
+        "  - From the live env: `env.get_state().tolist()`\n"
+        "  - To inspect/modify named features: "
+        "`env.observation_space.devectorize(obs)` returns an "
+        "`ObjectCentricState` handle; read it with `get_object_names()`, "
+        "`get_objects(type)`, `get_object_from_name(name)`, and "
+        "`get(obj, feature)`, modify it with `set(obj, feature, value)`, then "
+        "`env.observation_space.vectorize(ocs).tolist()` to convert back.\n"
+        "  The features are named, but you must still discover what each one "
+        "means empirically by driving the env.\n"
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
+        "NOT available inside subagents. Call it yourself, then delegate "
+        "image reading to a subagent: have it Read the PNG, describe the "
+        "scene, and return a concise summary. Delete the file when done."
+    ),
+}
+
 
 def mcp_tool_name_claude(tool: str) -> str:
     """Claude Code MCP tool name: ``mcp__robocode-tools__<tool>``."""
@@ -80,17 +145,23 @@ def mcp_tool_name_opencode(tool: str) -> str:
     return f"{MCP_SERVER_NAME}_{tool}"
 
 
-def mcp_tool_descriptions(backend_name: str) -> dict[str, str]:
-    """Return MCP tool descriptions with backend-specific tool names."""
+def mcp_tool_descriptions(backend_name: str, blackbox: bool = False) -> dict[str, str]:
+    """Return MCP tool descriptions with backend-specific tool names.
+
+    In blackbox mode the render_state description swaps the in-process
+    devectorize/vectorize/ObjectCentricState guidance for the host-proxied handle API
+    (no constant_objects/type_features), matching what env_client exposes when the
+    sandbox has no env source.
+    """
     if backend_name == "opencode":
         namer = mcp_tool_name_opencode
     else:
         namer = mcp_tool_name_claude
-    names = {tool: namer(tool) for tool in _TOOL_DESC_TEMPLATES}
-    return {
-        tool: template.format(**names)
-        for tool, template in _TOOL_DESC_TEMPLATES.items()
-    }
+    templates = dict(_TOOL_DESC_TEMPLATES)
+    if blackbox:
+        templates.update(_TOOL_DESC_TEMPLATES_BLACKBOX)
+    names = {tool: namer(tool) for tool in templates}
+    return {tool: template.format(**names) for tool, template in templates.items()}
 
 
 # Backward compat: descriptions with Claude naming (used by existing code
@@ -114,6 +185,24 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     "delegate image reading to a subagent."
 )
 
+# Blackbox variant: same workflow and subagent guidance, but devectorize/
+# vectorize are proxied to the host env server and return a remote
+# ObjectCentricState handle (read via get/get_objects, write via set) rather
+# than the in-process dict-of-arrays form.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "Start by calling render_state to see the environment before writing code. "
+    "When your approach fails, call render_policy to visually diagnose the "
+    "failure BEFORE guessing at fixes. You can also render arbitrary states by "
+    "passing a flat list of floats (e.g. from obs.tolist() or "
+    "env.get_state().tolist()) to render_state's `state` parameter, or use "
+    "env.observation_space.devectorize/vectorize to inspect or modify states "
+    "by named features. "
+    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
+    "called from inside subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a subagent."
+)
+
 
 def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
     """Return Claude CLI tool names (e.g. ``mcp__robocode-tools__render_state``)."""
@@ -126,38 +215,91 @@ def setup_mcp_config(
     python_cmd: str,
     env_config_path: str,
     log_file_path: str,
+    blackbox: bool = False,
+    transport: str = "stdio",
+    port: int = MCP_HTTP_PORT,
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
-    Copies ``env_config.json`` from *sandbox_dir*'s parent into ``.mcp/``
-    and writes ``mcp_config.json``.  Returns the path to ``mcp_config.json``.
+    In normal mode, copies ``env_config.json`` from *sandbox_dir*'s parent
+    into ``.mcp/`` so the server can instantiate the env locally. In blackbox
+    mode the env source is absent from the container, so the server instead
+    proxies render tools to the host env server using the connection info in
+    ``env_spaces.json`` (written by the approach at the sandbox root).
+
+    With ``transport="http"`` the agent CLI is pointed at a standalone
+    streamable-http server on ``127.0.0.1:MCP_HTTP_PORT`` and the server-start
+    command is written to ``.mcp/MCP_START_SCRIPT`` for the launch flow to start
+    and health-check BEFORE the CLI (so the render tools are connected on the
+    agent's first turn). With the default ``"stdio"`` the agent CLI spawns the
+    server itself. Returns the path to ``mcp_config.json``.
     """
     mcp_dir = sandbox_dir / ".mcp"
     mcp_dir.mkdir(exist_ok=True)
 
-    shutil.copy2(
-        sandbox_dir.parent / "env_config.json",
-        mcp_dir / "env_config.json",
-    )
-
     # Use a shell wrapper so that stderr (import errors, tracebacks) is also
     # captured in the log file even if the Python process never reaches main().
     stderr_log_path = str(Path(log_file_path).with_suffix(".stderr.log"))
-    server_cmd = (
-        f"{python_cmd} -m robocode.mcp.server"
-        f" --env-config {env_config_path}"
-        f" --tools {','.join(tool_names)}"
-        f" --log-file {log_file_path}"
-        f" 2>>{stderr_log_path}"
+    transport_args = (
+        f" --transport http --host {MCP_HTTP_HOST} --port {port}"
+        if transport == "http"
+        else ""
     )
-    mcp_config = {
-        "mcpServers": {
-            MCP_SERVER_NAME: {
-                "command": "bash",
-                "args": ["-c", server_cmd],
+    if blackbox:
+        # The blackbox MCP server (robocode.mcp.server) imports only
+        # env_client, so it stays importable in a container with the env
+        # source stripped. env_config_path is
+        # <container_sandbox>/.mcp/env_config.json; the env_spaces.json the
+        # approach wrote sits at the sandbox root.
+        env_spaces_path = Path(env_config_path).parent.parent / "env_spaces.json"
+        server_cmd = (
+            f"{python_cmd} -m robocode.mcp.server"
+            f" --env-spaces {env_spaces_path}"
+            f" --tools {','.join(tool_names)}"
+            f" --log-file {log_file_path}"
+            f"{transport_args}"
+            f" 2>>{stderr_log_path}"
+        )
+    else:
+        shutil.copy2(
+            sandbox_dir.parent / "env_config.json",
+            mcp_dir / "env_config.json",
+        )
+        # The local variant (robocode.mcp.local_render) instantiates the env
+        # and renders in-process, so it needs the env source and primitives.
+        server_cmd = (
+            f"{python_cmd} -m robocode.mcp.local_render"
+            f" --env-config {env_config_path}"
+            f" --tools {','.join(tool_names)}"
+            f" --log-file {log_file_path}"
+            f"{transport_args}"
+            f" 2>>{stderr_log_path}"
+        )
+    if transport == "http":
+        # The launch flow starts this and waits for the port before the CLI.
+        # ``exec`` so the script's pid IS the server, letting the wrapper kill
+        # it by pid when the CLI exits (apptainer shares the host pid namespace,
+        # so a backgrounded server would otherwise leak after the run).
+        (mcp_dir / MCP_START_SCRIPT).write_text(
+            f"exec {server_cmd}\n", encoding="utf-8"
+        )
+        mcp_config: dict[str, Any] = {
+            "mcpServers": {
+                MCP_SERVER_NAME: {
+                    "type": "http",
+                    "url": f"http://{MCP_HTTP_HOST}:{port}/mcp",
+                }
             }
         }
-    }
+    else:
+        mcp_config = {
+            "mcpServers": {
+                MCP_SERVER_NAME: {
+                    "command": "bash",
+                    "args": ["-c", server_cmd],
+                }
+            }
+        }
     config_path = mcp_dir / "mcp_config.json"
     config_path.write_text(json.dumps(mcp_config, indent=2))
     return config_path

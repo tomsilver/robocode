@@ -39,6 +39,11 @@ def ensure_ollama(keep_alive: str = "5m") -> None:
 
     env = os.environ.copy()
     env["OLLAMA_KEEP_ALIVE"] = keep_alive
+    # Bind all interfaces so a docker sandbox can reach the server over the
+    # bridge gateway (host.docker.internal). Loopback-only would be reachable
+    # from the local and apptainer backends but not from docker. Respect an
+    # OLLAMA_HOST the caller already set.
+    env.setdefault("OLLAMA_HOST", "0.0.0.0:11434")
 
     gpus = env.get("CUDA_VISIBLE_DEVICES", "all")
     logger.info("Starting Ollama server (keep_alive=%s, gpus=%s)", keep_alive, gpus)

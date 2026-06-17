@@ -265,6 +265,56 @@ class TestOpenCodeBackend:
         assert "You are a policy writer" in text
         assert "relative paths" in text
 
+    def test_setup_sandbox_files_mcp_http_uses_remote(self, tmp_path: Path) -> None:
+        """Http MCP transport maps to an OpenCode "remote" server in opencode.json."""
+        sandbox_dir = tmp_path / "sandbox"
+        sandbox_dir.mkdir()
+        (tmp_path / "env_config.json").write_text("{}")
+        config = SandboxConfig(
+            sandbox_dir=sandbox_dir,
+            model="openai/gpt-4o",
+            mcp_tools=("render_state",),
+        )
+        backend = OpenCodeBackend(DEFAULT_OPENCODE_CFG)
+        backend.build_cli_cmd(
+            config,
+            mcp_python_cmd="python",
+            mcp_env_config_path=str(sandbox_dir / ".mcp" / "env_config.json"),
+            mcp_transport="http",
+            mcp_port=8799,
+        )
+        # The http transport must emit the start script the pre-start flow runs.
+        assert (sandbox_dir / ".mcp" / "start_server.sh").exists()
+        backend.setup_sandbox_files(config)
+        oc = json.loads((sandbox_dir / "opencode.json").read_text())
+        server = oc["mcp"]["robocode-tools"]
+        assert server["type"] == "remote"
+        assert server["url"] == "http://127.0.0.1:8799/mcp"
+        assert server["enabled"] is True
+
+    def test_setup_sandbox_files_mcp_stdio_uses_local(self, tmp_path: Path) -> None:
+        """Default stdio MCP transport maps to an OpenCode "local" command server."""
+        sandbox_dir = tmp_path / "sandbox"
+        sandbox_dir.mkdir()
+        (tmp_path / "env_config.json").write_text("{}")
+        config = SandboxConfig(
+            sandbox_dir=sandbox_dir,
+            model="openai/gpt-4o",
+            mcp_tools=("render_state",),
+        )
+        backend = OpenCodeBackend(DEFAULT_OPENCODE_CFG)
+        backend.build_cli_cmd(
+            config,
+            mcp_python_cmd="python",
+            mcp_env_config_path=str(sandbox_dir / ".mcp" / "env_config.json"),
+        )
+        assert not (sandbox_dir / ".mcp" / "start_server.sh").exists()
+        backend.setup_sandbox_files(config)
+        oc = json.loads((sandbox_dir / "opencode.json").read_text())
+        server = oc["mcp"]["robocode-tools"]
+        assert server["type"] == "local"
+        assert server["command"][0] == "bash"
+
     def test_setup_sandbox_files_no_claude_files(self, tmp_path: Path) -> None:
         """OpenCode backend should NOT create .claude/ or CLAUDE.md."""
         config = SandboxConfig(sandbox_dir=tmp_path)
@@ -282,7 +332,10 @@ class TestOpenCodeBackend:
         assert "/venv/bin/python" in text
 
     def test_setup_sandbox_files_ollama_provider_injected(self, tmp_path: Path) -> None:
-        """opencode.json gets an Ollama provider block for ollama/ models."""
+        """opencode.json gets an Ollama provider block for ollama/ models.
+
+        Default host is the loopback (local/apptainer share the host network).
+        """
         cfg = DictConfig({"backend": "opencode", "model": "ollama/qwen3.5:27b"})
         config = SandboxConfig(sandbox_dir=tmp_path, model="ollama/qwen3.5:27b")
         OpenCodeBackend(cfg).setup_sandbox_files(config)
@@ -290,13 +343,37 @@ class TestOpenCodeBackend:
         assert "provider" in oc
         assert "ollama" in oc["provider"]
         ollama_cfg = oc["provider"]["ollama"]
-        assert ollama_cfg["options"]["baseURL"] == "http://localhost:11434/v1"
+        assert ollama_cfg["options"]["baseURL"] == "http://127.0.0.1:11434/v1"
         assert "qwen3.5:27b" in ollama_cfg["models"]
 
-    def test_setup_sandbox_files_no_provider_for_non_ollama(
+    def test_setup_sandbox_files_ollama_docker_host(self, tmp_path: Path) -> None:
+        """The baseURL host comes from config.local_model_host (docker override)."""
+        cfg = DictConfig({"backend": "opencode", "model": "ollama/qwen3:0.6b"})
+        config = SandboxConfig(
+            sandbox_dir=tmp_path,
+            model="ollama/qwen3:0.6b",
+            local_model_host="host.docker.internal",
+        )
+        OpenCodeBackend(cfg).setup_sandbox_files(config)
+        oc = json.loads((tmp_path / "opencode.json").read_text())
+        url = oc["provider"]["ollama"]["options"]["baseURL"]
+        assert url == "http://host.docker.internal:11434/v1"
+
+    def test_setup_sandbox_files_vllm_provider_injected(self, tmp_path: Path) -> None:
+        """opencode.json gets a vLLM provider block (port 8000) for vllm/ models."""
+        cfg = DictConfig({"backend": "opencode", "model": "vllm/Qwen/Qwen2.5-0.5B"})
+        config = SandboxConfig(sandbox_dir=tmp_path, model="vllm/Qwen/Qwen2.5-0.5B")
+        OpenCodeBackend(cfg).setup_sandbox_files(config)
+        oc = json.loads((tmp_path / "opencode.json").read_text())
+        assert "vllm" in oc["provider"]
+        vllm_cfg = oc["provider"]["vllm"]
+        assert vllm_cfg["options"]["baseURL"] == "http://127.0.0.1:8000/v1"
+        assert "Qwen/Qwen2.5-0.5B" in vllm_cfg["models"]
+
+    def test_setup_sandbox_files_no_provider_for_remote_model(
         self, tmp_path: Path
     ) -> None:
-        """opencode.json does NOT get a provider block for non-Ollama models."""
+        """opencode.json does NOT get a provider block for remote (API) models."""
         config = SandboxConfig(sandbox_dir=tmp_path, model="openai/gpt-4o")
         OpenCodeBackend(DEFAULT_OPENCODE_CFG).setup_sandbox_files(config)
         oc = json.loads((tmp_path / "opencode.json").read_text())
@@ -321,6 +398,15 @@ class TestOpenCodeBackend:
     def test_build_env_skips_ensure_ollama_for_non_ollama(self) -> None:
         """build_env does NOT call ensure_ollama for non-Ollama models."""
         config = SandboxConfig(sandbox_dir=Path("/tmp/test"), model="openai/gpt-4o")
+        with patch("robocode.utils.backends.opencode.ensure_ollama") as mock_ensure:
+            OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(config)
+        mock_ensure.assert_not_called()
+
+    def test_build_env_skips_ensure_ollama_for_vllm(self) -> None:
+        """build_env does NOT auto-start ollama for vLLM models (user-managed)."""
+        config = SandboxConfig(
+            sandbox_dir=Path("/tmp/test"), model="vllm/Qwen/Qwen2.5-0.5B"
+        )
         with patch("robocode.utils.backends.opencode.ensure_ollama") as mock_ensure:
             OpenCodeBackend(DEFAULT_OPENCODE_CFG).build_env(config)
         mock_ensure.assert_not_called()

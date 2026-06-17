@@ -41,6 +41,17 @@ class SandboxConfig:
     mcp_tools: tuple[str, ...] = ()
     max_output_tokens: int = 16384
     autocompact_pct: int = 80
+    blackbox: bool = False
+    # Which primitive source files to copy into the sandbox so the agent can
+    # read their API. Empty for the local backend (the host venv already exposes
+    # robocode.primitives); the docker/apptainer backends strip that package and
+    # copy the listed sources instead.
+    primitive_names: tuple[str, ...] = ()
+    # Address the sandbox uses to reach a service on the host loopback (a local
+    # model server, ollama/vLLM). 127.0.0.1 for the local and apptainer backends
+    # (they share the host network namespace); DockerSandboxConfig overrides this
+    # to host.docker.internal (mapped to the host gateway via --add-host).
+    local_model_host: str = "127.0.0.1"
 
 
 @dataclass(frozen=True)
