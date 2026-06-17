@@ -539,8 +539,8 @@ async def _run_blackbox_adversarial(
     """Run a blackbox adversarial prompt and assert env source stays hidden.
 
     Runs in the Docker blackbox sandbox by default, or the Apptainer one when
-    *use_apptainer*; both strip the env source via the same filtered mounts, so
-    the same breach detectors apply.
+    *use_apptainer*; both strip the env source via the same filtered mounts, so the same
+    breach detectors apply.
     """
     _reset_sandbox()
 

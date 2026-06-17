@@ -38,8 +38,8 @@ ENV_CONFIG = {
 def _min_ms(fn: Callable[[], Any], n: int) -> float:
     """Return the fastest of *n* calls of *fn*, in milliseconds.
 
-    The minimum is the least scheduler-perturbed sample, so it isolates the
-    real per-call cost better than the mean/median for a sub-millisecond op.
+    The minimum is the least scheduler-perturbed sample, so it isolates the real per-
+    call cost better than the mean/median for a sub-millisecond op.
     """
     best = float("inf")
     for _ in range(n):

@@ -119,7 +119,8 @@ def _score(tmp_path: Path, get_action_body: str, seeds, max_steps=10):
 
 
 def test_score_counts_solved_across_seeds(tmp_path):
-    """A solving policy counts every seed solved and completed; reward is the rollout's."""
+    """A solving policy counts every seed solved and completed; reward is the
+    rollout's."""
     # solved=2, completed=2, total=2, reaches the goal in 3 steps (-1 reward/step).
     assert _score(
         tmp_path, "return np.array([1.0], dtype=np.float32)", seeds=[0, 1]

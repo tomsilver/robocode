@@ -269,9 +269,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
     ) -> None:
         """Generate, validate, re-prompt with feedback until solved or out of budget.
 
-        The first implementation attempt always runs (chain-of-thought may have
-        already consumed the budget); the budget/step cap bounds only the further
-        debug attempts, so an approach file is always written.
+        The first implementation attempt always runs (chain-of-thought may have already
+        consumed the budget); the budget/step cap bounds only the further debug
+        attempts, so an approach file is always written.
         """
         t = 0
         while True:
