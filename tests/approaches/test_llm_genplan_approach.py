@@ -197,3 +197,35 @@ def test_budget_stops_debug_loop(tmp_path):
     # 0.01/attempt against a 0.025 budget -> 3 attempts, not the 21-attempt step cap.
     assert len(client.calls) == 3
     assert approach.num_generations == 3
+
+
+def test_first_attempt_runs_even_if_cot_exhausts_budget(tmp_path):
+    """CoT may use up the budget; the first implementation attempt still runs."""
+    env = _ToyEnv()
+    client = _FakeClient(["a summary", "a strategy", _FIXED])
+    approach = LLMGenPlanApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=0,
+        primitives={},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env=env,
+        output_dir=str(tmp_path),
+        max_steps=10,
+        num_train_tasks=2,
+        num_prompt_tasks=1,
+        max_debug_attempts=20,
+        max_budget_usd=0.015,  # the two CoT calls (0.02) exceed this before any impl
+        chain_of_thought=True,
+        use_docker=False,
+    )
+    approach._client = client  # pylint: disable=protected-access
+    approach.train()
+
+    # summary + strategy + one implementation attempt; the file is written despite
+    # the budget being spent during CoT.
+    assert len(client.calls) == 3
+    assert approach.num_generations == 1
+    assert (
+        "class GeneratedApproach" in (tmp_path / "sandbox" / "approach.py").read_text()
+    )

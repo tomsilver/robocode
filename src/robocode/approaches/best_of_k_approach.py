@@ -24,7 +24,7 @@ from robocode.approaches.llm_genplan_approach import (
     LLMGenPlanApproach,
     _parse_python_code,
 )
-from robocode.utils.genplan_validate import score_tasks
+from robocode.utils.genplan_validate import TaskScore, score_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class BestOfKApproach(LLMGenPlanApproach):
         candidates_dir.mkdir(parents=True, exist_ok=True)
 
         best_path: Path | None = None
-        best_score: tuple[int, float] | None = None
+        best_key: tuple[int, int, float] | None = None
         i = 0
         while self._within_budget(i):
             # Fresh messages each candidate, with no feedback appended: a CoT run
@@ -73,21 +73,24 @@ class BestOfKApproach(LLMGenPlanApproach):
             if i == 0:
                 self._assert_loop_bounded()
 
-            num_solved, num_total, mean_reward = self._score(cand_path, train_seeds)
+            score = self._score(cand_path, train_seeds)
             logger.info(
-                "Candidate %d solved %d/%d training tasks (mean reward %.3g)",
+                "Candidate %d solved %d/%d (completed %d, mean reward %.3g)",
                 i,
-                num_solved,
-                num_total,
-                mean_reward,
+                score.num_solved,
+                score.num_total,
+                score.num_completed,
+                score.mean_reward,
             )
-            score = (num_solved, mean_reward)
-            if best_score is None or score > best_score:
-                best_score, best_path = score, cand_path
+            # Rank by solved, then completed (a runnable unsolved policy beats a
+            # crashing one), then reward.
+            key = (score.num_solved, score.num_completed, score.mean_reward)
+            if best_key is None or key > best_key:
+                best_key, best_path = key, cand_path
             i += 1
-            if num_solved == num_total:
+            if score.num_solved == score.num_total:
                 logger.info(
-                    "Candidate solved all %d training tasks; stopping", num_total
+                    "Candidate solved all %d training tasks; stopping", score.num_total
                 )
                 break
 
@@ -95,7 +98,7 @@ class BestOfKApproach(LLMGenPlanApproach):
         self.num_generations = i  # number of candidates sampled
         approach_path.write_text(best_path.read_text())
 
-    def _score(self, approach_path: Path, seeds: list[int]) -> tuple[int, int, float]:
+    def _score(self, approach_path: Path, seeds: list[int]) -> TaskScore:
         """Score a candidate on the training tasks (see ``score_tasks``)."""
         assert self._env is not None
         return score_tasks(

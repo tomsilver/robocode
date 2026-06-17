@@ -48,7 +48,18 @@ def _program(action_value: float) -> str:
 
 
 _SOLVE = _program(1.0)  # reaches the goal -> solves every seed
-_STALL = _program(0.0)  # never moves -> solves nothing
+_STALL = _program(0.0)  # never moves -> solves nothing, but runs to the step limit
+_CRASH = (  # raises in get_action -> never completes a rollout
+    "```python\n"
+    "class GeneratedApproach:\n"
+    "    def __init__(self, action_space, observation_space, primitives):\n"
+    "        pass\n"
+    "    def reset(self, state, info):\n"
+    "        pass\n"
+    "    def get_action(self, state):\n"
+    "        raise ValueError('boom')\n"
+    "```"
+)
 
 
 class _FakeClient:
@@ -133,6 +144,19 @@ def test_budget_cap_stops_loop(tmp_path):
 
     assert len(client.calls) == 3
     assert approach.num_generations == 3
+
+
+def test_prefers_runnable_over_crashing(tmp_path):
+    """With no solver, a runnable unsolved policy is kept over a crashing one."""
+    env = _ToyEnv()
+    client = _FakeClient([_CRASH, _STALL])
+    approach = _make(env, client, tmp_path, max_generation_steps=2, max_budget_usd=5.0)
+    approach.train()
+
+    approach_py = (tmp_path / "sandbox" / "approach.py").read_text()
+    assert "raise ValueError" not in approach_py  # the crasher was not kept
+    assert "[0.0]" in approach_py  # the runnable (stall) policy was kept
+    assert approach.num_generations == 2
 
 
 def test_unbounded_loop_raises(tmp_path):

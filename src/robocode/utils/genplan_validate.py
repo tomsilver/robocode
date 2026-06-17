@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable
 from multiprocessing.managers import SyncManager
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import gymnasium
 from gymnasium.spaces import Space
@@ -113,6 +113,15 @@ def validate_tasks(
     return None
 
 
+class TaskScore(NamedTuple):
+    """Aggregate score of a policy over a set of tasks, for ranking candidates."""
+
+    num_solved: int
+    num_completed: int  # rollouts that finished without crashing / timing out
+    num_total: int
+    mean_reward: float  # mean reward over completed rollouts (0.0 if none)
+
+
 def score_tasks(
     env: gymnasium.Env,
     approach_path: Path,
@@ -122,17 +131,21 @@ def score_tasks(
     seeds: list[int],
     max_steps: int,
     timeout: float,
-) -> tuple[int, int, float]:
-    """Run the policy on every task; return ``(num_solved, num_total, mean_reward)``.
+) -> TaskScore:
+    """Run the policy on every task and aggregate the outcomes into a ``TaskScore``.
 
     Unlike :func:`validate_tasks` (which stops at the first failure to produce
     debug feedback), this runs all seeds so callers can rank partially-successful
-    policies. The primary signal is ``num_solved``; ``mean_reward`` is a rough
-    secondary signal (non-completing episodes contribute 0.0).
+    policies. A rollout is *completed* if it solved or ran to the step limit;
+    invalid actions, exceptions, timeouts, and crashes are not. Ranking on
+    ``(num_solved, num_completed, mean_reward)`` prefers a policy that solves
+    more, then one that runs without crashing, before comparing reward, so a
+    crashing policy never outranks a runnable unsolved one. ``mean_reward`` is
+    averaged over completed rollouts only (crashes have no meaningful reward).
     """
     ctx = mp.get_context("fork")  # fork: workers inherit the live env
     num_solved = 0
-    rewards: list[float] = []
+    completed_rewards: list[float] = []
     with ctx.Manager() as manager:
         for seed in seeds:
             result = _validate_episode(
@@ -148,9 +161,12 @@ def score_tasks(
                 manager,
             )
             num_solved += int(result["solved"])
-            rewards.append(float(result["total_reward"]))
-    mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
-    return num_solved, len(seeds), mean_reward
+            if result["solved"] or result.get("error_type") == "not-solved":
+                completed_rewards.append(float(result["total_reward"]))
+    mean_reward = (
+        sum(completed_rewards) / len(completed_rewards) if completed_rewards else 0.0
+    )
+    return TaskScore(num_solved, len(completed_rewards), len(seeds), mean_reward)
 
 
 def _validate_episode(

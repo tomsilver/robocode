@@ -267,9 +267,14 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir: Path,
         seeds: list[int],
     ) -> None:
-        """Generate, validate, re-prompt with feedback until solved or out of budget."""
+        """Generate, validate, re-prompt with feedback until solved or out of budget.
+
+        The first implementation attempt always runs (chain-of-thought may have
+        already consumed the budget); the budget/step cap bounds only the further
+        debug attempts, so an approach file is always written.
+        """
         t = 0
-        while self._within_budget(t):
+        while True:
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
             # Overwrite, don't accumulate: each response is a full class.
@@ -287,10 +292,12 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 self.num_generations = t + 1
                 return
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
+            t += 1
+            if not self._within_budget(t):
+                break
             messages.append(
                 {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
             )
-            t += 1
         self.num_generations = t  # budget/step cap reached without solving
 
     # ------------------------------------------------------------------ prompt

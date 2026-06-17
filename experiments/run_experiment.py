@@ -112,17 +112,25 @@ def _main(cfg: DictConfig) -> float:
 
     # Evaluate on held-out episodes.
     render = cfg.render_videos
-    per_episode = []
+    per_episode: list[dict[str, Any]] = []
     for i, s in enumerate(eval_seeds):
         try:
             episode_result, frames, _ = run_episode(
                 env, approach, s, cfg.max_steps, render=render
             )
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             # A generated policy can raise on an unseen eval seed; count that as a
-            # failed episode instead of aborting the whole evaluation.
+            # failed episode instead of aborting the whole evaluation. Record the
+            # error so a crash is distinguishable from an ordinary unsolved episode.
             logger.exception("Eval episode (seed %d) crashed; counting as unsolved", s)
-            per_episode.append({"total_reward": 0.0, "num_steps": 0, "solved": False})
+            per_episode.append(
+                {
+                    "total_reward": 0.0,
+                    "num_steps": 0,
+                    "solved": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
             continue
         per_episode.append(episode_result)
         if frames:

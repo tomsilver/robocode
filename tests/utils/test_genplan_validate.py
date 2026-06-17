@@ -119,17 +119,19 @@ def _score(tmp_path: Path, get_action_body: str, seeds, max_steps=10):
 
 
 def test_score_counts_solved_across_seeds(tmp_path):
-    """A solving policy counts every seed as solved; reward is the episode reward."""
-    num_solved, num_total, mean_reward = _score(
+    """A solving policy counts every seed solved and completed; reward is the rollout's."""
+    # solved=2, completed=2, total=2, reaches the goal in 3 steps (-1 reward/step).
+    assert _score(
         tmp_path, "return np.array([1.0], dtype=np.float32)", seeds=[0, 1]
-    )
-    assert (num_solved, num_total) == (2, 2)
-    assert mean_reward == -3.0  # reaches the goal in 3 steps, -1 reward per step
+    ) == (2, 2, 2, -3.0)
 
 
-def test_score_unsolved_and_crash(tmp_path):
-    """A stalling policy solves nothing; a crashing one contributes 0.0 reward."""
+def test_score_distinguishes_unsolved_from_crash(tmp_path):
+    """A stall completes (ran to the step limit); a crash does not complete."""
+    # Stall: both seeds ran to the limit -> completed but unsolved.
     assert _score(
         tmp_path, "return np.array([0.0], dtype=np.float32)", seeds=[0, 1]
-    ) == (0, 2, -10.0)
-    assert _score(tmp_path, "raise ValueError('boom')", seeds=[0]) == (0, 1, 0.0)
+    ) == (0, 2, 2, -10.0)
+    # Crash: no completed rollout -> num_completed 0 (so it ranks below a stall),
+    # and mean_reward 0.0 over no completed rollouts.
+    assert _score(tmp_path, "raise ValueError('boom')", seeds=[0]) == (0, 0, 1, 0.0)
