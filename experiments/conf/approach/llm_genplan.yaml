@@ -1,5 +1,5 @@
 defaults:
-  - completion: anthropic_sonnet
+  - completion: cli_claude  # CLI/subscription by default; never the paid API unless overridden
 
 _target_: robocode.approaches.llm_genplan_approach.LLMGenPlanApproach
 output_dir: ${hydra:runtime.output_dir}
@@ -7,8 +7,11 @@ load_dir: null
 # Defaults follow Silver et al. 2023.
 num_train_tasks: 10
 num_prompt_tasks: 2
-max_debug_attempts: 4
-skip_chain_of_thought: false
+# The debug loop stops at whichever bound binds first (and early on success).
+# Either bound may be null to disable it; at least one must be set.
+max_debug_attempts: 4  # step cap: 1 initial attempt + this many debug attempts
+max_budget_usd: 5.0  # dollar cap; only bounds cost-reporting backends (null -> step cap only)
+chain_of_thought: true  # summary -> strategy -> code; false: single prompt -> code
 episode_timeout_s: 30.0
 # Run the whole genplan loop inside one sandbox container (like the agentic
 # approach), so generated code never executes on the host. local runs in-process.

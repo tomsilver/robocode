@@ -2,3 +2,6 @@ provider: openai_compatible
 model: Qwen/Qwen3.6-35B-A3B
 base_url: http://localhost:8000/v1
 api_key_env: ""
+# Local/self-hosted: no dollar cost, so no input/output_cost_per_mtok here and
+# cost_usd stays None. Bound generation loops with a step cap (max_generation_steps
+# / max_debug_attempts), not max_budget_usd.

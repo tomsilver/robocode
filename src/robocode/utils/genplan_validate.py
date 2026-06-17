@@ -93,7 +93,7 @@ def validate_tasks(
     ctx = mp.get_context("fork")  # fork: workers inherit the live env
     with ctx.Manager() as manager:
         for seed in seeds:
-            failure = _validate_episode(
+            result = _validate_episode(
                 env,
                 approach_path,
                 action_space,
@@ -105,9 +105,52 @@ def validate_tasks(
                 ctx,
                 manager,
             )
-            if failure is not None:
-                return failure
+            if not result["solved"]:
+                return {
+                    "error_type": result["error_type"],
+                    "feedback": result["feedback"],
+                }
     return None
+
+
+def score_tasks(
+    env: gymnasium.Env,
+    approach_path: Path,
+    action_space: Space[Any],
+    observation_space: Space[Any],
+    primitives: dict[str, Callable[..., Any]],
+    seeds: list[int],
+    max_steps: int,
+    timeout: float,
+) -> tuple[int, int, float]:
+    """Run the policy on every task; return ``(num_solved, num_total, mean_reward)``.
+
+    Unlike :func:`validate_tasks` (which stops at the first failure to produce
+    debug feedback), this runs all seeds so callers can rank partially-successful
+    policies. The primary signal is ``num_solved``; ``mean_reward`` is a rough
+    secondary signal (non-completing episodes contribute 0.0).
+    """
+    ctx = mp.get_context("fork")  # fork: workers inherit the live env
+    num_solved = 0
+    rewards: list[float] = []
+    with ctx.Manager() as manager:
+        for seed in seeds:
+            result = _validate_episode(
+                env,
+                approach_path,
+                action_space,
+                observation_space,
+                primitives,
+                seed,
+                max_steps,
+                timeout,
+                ctx,
+                manager,
+            )
+            num_solved += int(result["solved"])
+            rewards.append(float(result["total_reward"]))
+    mean_reward = sum(rewards) / len(rewards) if rewards else 0.0
+    return num_solved, len(seeds), mean_reward
 
 
 def _validate_episode(
@@ -121,7 +164,13 @@ def _validate_episode(
     timeout: float,
     ctx: mp.context.ForkContext,
     manager: SyncManager,
-) -> dict[str, str] | None:
+) -> dict[str, Any]:
+    """Run one episode (timeout-guarded) and return its classified result.
+
+    Always returns a dict with ``solved`` / ``total_reward`` / ``num_steps``; on
+    failure it also carries ``error_type`` / ``feedback``. Consumed by both
+    :func:`validate_tasks` and :func:`score_tasks`.
+    """
     result = manager.dict()
     proc = ctx.Process(
         target=_episode_worker,
@@ -146,6 +195,9 @@ def _validate_episode(
             proc.kill()
             proc.join()
         return {
+            "solved": False,
+            "total_reward": 0.0,
+            "num_steps": 0,
             "error_type": "timeout",
             "feedback": (
                 f"On the task with seed {seed}, get_action did not finish within "
@@ -157,6 +209,9 @@ def _validate_episode(
         # The worker died before reporting (OOM kill, segfault in native code,
         # os._exit, ...), so there is no traceback to forward.
         return {
+            "solved": False,
+            "total_reward": 0.0,
+            "num_steps": 0,
             "error_type": "worker-crashed",
             "feedback": (
                 f"On the task with seed {seed}, the episode worker died with "
@@ -165,9 +220,7 @@ def _validate_episode(
                 "normally and reduce memory use."
             ),
         }
-    if result["solved"]:
-        return None
-    return {"error_type": result["error_type"], "feedback": result["feedback"]}
+    return dict(result)
 
 
 def _episode_worker(
@@ -220,9 +273,15 @@ def _classify_episode(
         )
         metrics, _, final_state = run_episode(env, policy, seed, max_steps)
         if metrics["solved"]:
-            return {"solved": True}
+            return {
+                "solved": True,
+                "total_reward": metrics["total_reward"],
+                "num_steps": metrics["num_steps"],
+            }
         return {
             "solved": False,
+            "total_reward": metrics["total_reward"],
+            "num_steps": metrics["num_steps"],
             "error_type": "not-solved",
             "feedback": (
                 f"On the task with seed {seed}, the policy ran for "
@@ -235,6 +294,8 @@ def _classify_episode(
     except _InvalidActionError as e:
         return {
             "solved": False,
+            "total_reward": 0.0,
+            "num_steps": e.step,
             "error_type": "invalid-action",
             "feedback": (
                 f"On the task with seed {seed}, at step {e.step} get_action "
@@ -245,6 +306,8 @@ def _classify_episode(
     except Exception:  # pylint: disable=broad-exception-caught
         return {
             "solved": False,
+            "total_reward": 0.0,
+            "num_steps": 0,
             "error_type": "python-exception",
             "feedback": (
                 f"On the task with seed {seed}, the code raised an exception:\n"

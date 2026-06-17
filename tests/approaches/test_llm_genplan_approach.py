@@ -94,7 +94,7 @@ def _make_approach(env, client, tmp_path):
         num_train_tasks=2,
         num_prompt_tasks=1,
         max_debug_attempts=4,
-        skip_chain_of_thought=True,
+        chain_of_thought=False,
         use_docker=False,
     )
     approach._client = client  # pylint: disable=protected-access
@@ -110,6 +110,7 @@ def test_debug_loop_fixes_broken_policy(tmp_path):
 
     # Two completions: the broken attempt, then the fix after feedback.
     assert len(client.calls) == 2
+    assert approach.num_generations == 2  # recorded for results.json
     approach_py = (tmp_path / "sandbox" / "approach.py").read_text()
     # The fix must REPLACE the broken code, not be appended to it: exactly one
     # GeneratedApproach class should remain (regression guard for accumulation).
@@ -145,13 +146,16 @@ def test_docker_cost_readback(tmp_path, monkeypatch):
     def fake_run(sandbox_dir, completion_cfg, image):
         del completion_cfg, image
         sandbox_dir.joinpath("approach.py").write_text(_parse_python_code(_FIXED))
-        sandbox_dir.joinpath("cost.json").write_text('{"total_cost_usd": 0.05}')
+        sandbox_dir.joinpath("cost.json").write_text(
+            '{"total_cost_usd": 0.05, "num_generations": 3}'
+        )
 
     monkeypatch.setattr(
         "robocode.approaches.llm_genplan_approach.run_genplan_in_docker", fake_run
     )
     approach.train()
     assert approach.total_cost_usd == pytest.approx(0.05)
+    assert approach.num_generations == 3  # read back from the container
 
 
 def test_cot_adds_summary_and_strategy_turns(tmp_path):
@@ -159,8 +163,37 @@ def test_cot_adds_summary_and_strategy_turns(tmp_path):
     env = _ToyEnv()
     client = _FakeClient(["a summary", "a strategy", _FIXED])
     approach = _make_approach(env, client, tmp_path)
-    approach._skip_chain_of_thought = False  # pylint: disable=protected-access
+    approach._chain_of_thought = True  # pylint: disable=protected-access
     approach.train()
 
     assert len(client.calls) == 3  # summary, strategy, implement
     assert approach.total_cost_usd == pytest.approx(0.03)
+    assert approach.num_generations == 1  # CoT exchanges are not code generations
+
+
+def test_budget_stops_debug_loop(tmp_path):
+    """The dollar budget bounds the debug loop before max_debug_attempts."""
+    env = _ToyEnv()
+    client = _FakeClient([_BROKEN] * 10)  # never fixed -> always re-prompts
+    approach = LLMGenPlanApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=0,
+        primitives={},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env=env,
+        output_dir=str(tmp_path),
+        max_steps=10,
+        num_train_tasks=2,
+        num_prompt_tasks=1,
+        max_debug_attempts=20,
+        max_budget_usd=0.025,
+        chain_of_thought=False,
+        use_docker=False,
+    )
+    approach._client = client  # pylint: disable=protected-access
+    approach.train()
+
+    # 0.01/attempt against a 0.025 budget -> 3 attempts, not the 21-attempt step cap.
+    assert len(client.calls) == 3
+    assert approach.num_generations == 3
