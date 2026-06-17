@@ -63,12 +63,16 @@ class BestOfKApproach(LLMGenPlanApproach):
         best_key: tuple[int, int, float] | None = None
         i = 0
         while self._within_budget(i):
+            # Each candidate gets its own dir so its prompt/response artifacts
+            # (CoT and implementation) are not overwritten by later candidates.
             # Fresh messages each candidate, with no feedback appended: a CoT run
             # resamples the summary/strategy independently, a non-CoT run resamples
             # the single prompt -> code completion.
-            messages = self._build_initial_messages(context, sandbox_dir)
-            response = self._complete(messages, sandbox_dir, f"cand{i}")
-            cand_path = candidates_dir / f"cand{i}.py"
+            cand_dir = candidates_dir / f"cand{i}"
+            cand_dir.mkdir(parents=True, exist_ok=True)
+            messages = self._build_initial_messages(context, cand_dir)
+            response = self._complete(messages, cand_dir, "impl")
+            cand_path = cand_dir / "approach.py"
             cand_path.write_text(_parse_python_code(response))
             if i == 0:
                 self._assert_loop_bounded()
