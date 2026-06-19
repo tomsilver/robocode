@@ -53,7 +53,6 @@ from typing import Any
 from robocode.mcp import (
     MCP_HTTP_HOST,
     MCP_HTTP_PORT,
-    MCP_RENDER_BIND_TIMEOUT_S,
     MCP_START_SCRIPT,
     MCP_STARTUP_TIMEOUT_MS,
 )
@@ -388,8 +387,7 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
 
     Returns a container command that starts ``.mcp/<MCP_START_SCRIPT>`` in the
     background (its output redirected to a file so it cannot hold the CLI's
-    stdout pipe), waits (up to MCP_RENDER_BIND_TIMEOUT_S) for *port* to accept
-    connections, then runs
+    stdout pipe), waits (up to ~20s) for *port* to accept connections, then runs
     the agent CLI in the foreground and kills the server when it exits. Starting
     and health-checking the server before the CLI is what makes the render tools
     connected on the agent's first turn. If the server dies or never binds the
@@ -409,7 +407,7 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
     )
     script = (
         f"bash {start_script} >>{server_log} 2>&1 & srv=$!; ok=0; "
-        f"for _ in $(seq 1 {int(MCP_RENDER_BIND_TIMEOUT_S * 10)}); do "
+        f"for _ in $(seq 1 200); do "
         f'kill -0 "$srv" 2>/dev/null || break; '
         f"{probe} 2>/dev/null && {{ ok=1; break; }}; sleep 0.1; "
         f"done; "

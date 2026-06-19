@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-from robocode.mcp import MCP_RENDER_BIND_TIMEOUT_S, MCP_START_SCRIPT
+from robocode.mcp import MCP_START_SCRIPT
 from robocode.primitive_specs import (
     ENV_DEPENDENT_PRIMITIVES,
     PRIMITIVE_NAME_TO_FILE,
@@ -76,7 +76,7 @@ def _start_local_http_mcp(
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    deadline = time.monotonic() + MCP_RENDER_BIND_TIMEOUT_S
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             raise RuntimeError(
@@ -89,10 +89,7 @@ def _start_local_http_mcp(
         except OSError:
             time.sleep(0.1)
     proc.terminate()
-    raise RuntimeError(
-        f"render MCP server did not bind port {port} within "
-        f"{MCP_RENDER_BIND_TIMEOUT_S}s"
-    )
+    raise RuntimeError(f"render MCP server did not bind port {port} within 30s")
 
 
 _SANDBOX_GITIGNORE = """\
