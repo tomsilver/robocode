@@ -4,13 +4,17 @@ import os
 
 # kinder.register_all_environments() (below) hardcodes MUJOCO_GL=osmesa and
 # PYOPENGL_PLATFORM=osmesa on headless Linux and then imports mujoco to probe
-# for Dynamic3D support, which permanently locks PyOpenGL to OSMesaPlatform.
-# OSMesa isn't installed on every dev machine (EGL from libegl1 is), and later
-# mujoco users in the same process (e.g. robosuite via LIBERO) expect EGL too.
-# Pin MUJOCO_GL=egl and preempt-import mujoco here so PyOpenGL locks to
-# EGLPlatform before kinder runs.
+# for Dynamic3D support, which permanently locks PyOpenGL to that platform.
+# Default to EGL (present on most dev machines via libegl1, and expected by
+# robosuite via LIBERO), but honor an explicit MUJOCO_GL chosen by the caller:
+# the sandbox sets osmesa because headless EGL device displays need a GPU, which
+# the container does not have, so the Dynamic3D mujoco offscreen renderer fails
+# under EGL. Capture the chosen backend, preempt-import mujoco so PyOpenGL locks
+# to it, then restore it after kinder flips the env vars.
 os.environ.setdefault("MUJOCO_GL", "egl")
 os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+_MUJOCO_GL = os.environ["MUJOCO_GL"]
+_PYOPENGL_PLATFORM = os.environ["PYOPENGL_PLATFORM"]
 try:
     import mujoco  # pylint: disable=unused-import
 
@@ -34,10 +38,10 @@ from numpy.typing import NDArray
 from robocode.environments.base_env import BaseEnv
 
 kinder.register_all_environments()
-# Restore the EGL pin (kinder flipped to osmesa) so later robosuite imports
-# in the same process also pick EGL.
-os.environ["MUJOCO_GL"] = "egl"
-os.environ["PYOPENGL_PLATFORM"] = "egl"
+# kinder flips these to osmesa on headless Linux; restore the chosen backend so
+# later mujoco/robosuite users in this process pick it up.
+os.environ["MUJOCO_GL"] = _MUJOCO_GL
+os.environ["PYOPENGL_PLATFORM"] = _PYOPENGL_PLATFORM
 
 
 def _unwrap_to_kinder(env: gymnasium.Env) -> ConstantObjectKinDEREnv:
