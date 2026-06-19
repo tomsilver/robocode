@@ -10,9 +10,11 @@ writes and self-tests the policy with tools.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -412,11 +414,76 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
     return targets
 
 
+_REQUIRED_METHODS = ("__init__", "reset", "get_action")
+
+
+def _is_stub_body(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if the method body is only a docstring and/or `pass`/`...`."""
+    body = [
+        node
+        for node in fn.body
+        if not (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+    ]
+    if not body:
+        return True
+    return all(
+        isinstance(node, ast.Pass)
+        or (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is Ellipsis
+        )
+        for node in body
+    )
+
+
+def _has_complete_approach(code: str) -> bool:
+    """True if code defines GeneratedApproach with all required methods implemented."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    cls = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef) and node.name == "GeneratedApproach"
+        ),
+        None,
+    )
+    if cls is None:
+        return False
+    methods = {
+        node.name: node
+        for node in cls.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    if not all(name in methods for name in _REQUIRED_METHODS):
+        return False
+    return all(not _is_stub_body(methods[name]) for name in _REQUIRED_METHODS)
+
+
 def _parse_python_code(response: str) -> str:
-    """Extract the first ```python fenced block, else the raw response."""
-    marker = "```python"
-    if marker in response:
-        rest = response[response.index(marker) + len(marker) :]
-        end = rest.index("```") if "```" in rest else len(rest)
-        return rest[:end].strip()
-    return response.strip()
+    """Extract the fenced Python block holding the GeneratedApproach implementation.
+
+    Models sometimes emit a short illustrative snippet (sometimes even a stubbed class
+    with empty method bodies) before the full implementation, so the first block is not
+    reliable. Scanning longest-first, prefer the block that defines GeneratedApproach
+    with all required methods implemented; otherwise fall back to the longest block that
+    at least names the class, then the longest block, then the raw response.
+    """
+    blocks = re.findall(r"```(?:python)?\n(.*?)```", response, re.DOTALL)
+    blocks = sorted((b.strip() for b in blocks if b.strip()), key=len, reverse=True)
+    if not blocks:
+        return response.strip()
+    for block in blocks:
+        if _has_complete_approach(block):
+            return block
+    for block in blocks:
+        if "class GeneratedApproach" in block:
+            return block
+    return blocks[0]

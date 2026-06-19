@@ -68,6 +68,59 @@ def test_parse_python_code():
     assert _parse_python_code("no fence here") == "no fence here"
 
 
+_FULL_APPROACH = (
+    "class GeneratedApproach:\n"
+    "    def __init__(self, action_space, observation_space, primitives):\n"
+    "        self.action_space = action_space\n"
+    "    def reset(self, state, info):\n"
+    "        self.plan = [0, 1]\n"
+    "    def get_action(self, state):\n"
+    "        return self.plan.pop(0)\n"
+)
+
+
+def test_parse_python_code_prefers_generated_approach_block():
+    """A leading illustrative snippet does not shadow the real block."""
+    response = (
+        "First, a sketch:\n"
+        "```python\nsuction_cx = base_x + 1\n```\n"
+        "Now the full thing:\n"
+        f"```python\n{_FULL_APPROACH}```\n"
+    )
+    assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_parse_python_code_skips_stub_class():
+    """A stubbed class signature loses to the fully implemented block."""
+    stub = (
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        ...\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        pass\n"
+    )
+    response = (
+        f"Here is the skeleton:\n```python\n{stub}```\n"
+        f"And the implementation:\n```python\n{_FULL_APPROACH}```\n"
+    )
+    assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_parse_python_code_falls_back_to_longest_block_with_class():
+    """If nothing is fully implemented, keep the longest class block for feedback."""
+    partial = (
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self.x = 1\n"
+        "    def get_action(self, state):\n"
+        "        return 0\n"
+    )
+    response = f"```python\nx = 1\n```\n```python\n{partial}```\n"
+    assert _parse_python_code(response) == partial.strip()
+
+
 def test_create_llm_client_dispatch(monkeypatch):
     """The factory routes providers and rejects unknown ones."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
