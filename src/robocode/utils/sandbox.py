@@ -217,7 +217,9 @@ def _stream_result_to_sandbox_result(
     """Convert a :class:`_StreamParseResult` to a :class:`SandboxResult`."""
     cost = stream.total_cost
 
-    if stream.is_error:
+    # A rate-limit error must propagate so the retry loop can wait and rerun the
+    # whole sandbox; never evaluate a partial approach from a rate-limited run.
+    if stream.rate_limit_reset is not None:
         return SandboxResult(
             success=False,
             output_file=None,
@@ -226,18 +228,22 @@ def _stream_result_to_sandbox_result(
             rate_limit_reset=stream.rate_limit_reset,
         )
 
+    # The agent commits its best-effort approach.py as it iterates, so if that
+    # file exists we evaluate it even when the run ended on an error such as the
+    # budget or turn cap being hit. Those are normal stopping conditions, not a
+    # reason to throw away a working approach and fall back to a random policy.
     output_path = sandbox_dir / output_filename
     if output_path.exists():
         return SandboxResult(
             success=True,
             output_file=output_path,
-            error=None,
+            error=stream.error_text,
             total_cost_usd=cost,
         )
     return SandboxResult(
         success=False,
         output_file=None,
-        error=f"Output file not found: {output_filename}",
+        error=stream.error_text or f"Output file not found: {output_filename}",
         total_cost_usd=cost,
     )
 

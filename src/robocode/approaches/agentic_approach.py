@@ -554,9 +554,15 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
         self.total_cost_usd = result.total_cost_usd
 
         if result.success and result.output_file is not None:
+            if result.error:
+                logger.info(
+                    "Agent stopped early (%s) but committed an approach; "
+                    "evaluating it.",
+                    result.error,
+                )
             self._load_generated(result.output_file)
         else:
-            logger.warning("Agent failed to generate approach: %s", result.error)
+            raise RuntimeError(f"Agent failed to generate an approach: {result.error}")
 
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""
@@ -583,9 +589,14 @@ class AgenticApproach(BaseApproach[_ObsType, _ActType]):
             self._generated.update(state, reward, done, info)
 
     def _get_action(self) -> _ActType:
-        if self._generated is not None:
-            try:
-                return self._generated.get_action(self._last_state)
-            except Exception:  # pylint: disable=broad-exception-caught
-                logger.exception("Generated approach failed, using random")
-        return self._action_space.sample()
+        # Never silently fall back to random: a random eval would propagate a
+        # misleading 0 through the results as if the generated approach had been
+        # measured. Fail loudly instead. Use approach=random for a random
+        # baseline. A runtime error in the generated approach also propagates.
+        if self._generated is None:
+            raise RuntimeError(
+                "No generated approach is loaded (the agent did not produce a "
+                "usable approach.py). Refusing to evaluate a silent random "
+                "policy; use approach=random for a random baseline."
+            )
+        return self._generated.get_action(self._last_state)
