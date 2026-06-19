@@ -30,6 +30,13 @@ MCP_HTTP_HOST = "127.0.0.1"
 MCP_HTTP_PORT = 8765
 MCP_START_SCRIPT = "start_server.sh"
 
+# Seconds the launch flow waits for the render server to bind its port before
+# giving up and aborting the run. The server imports the full env/render stack
+# first, which for heavy envs (e.g. the dynamic3d TidyBot mujoco scenes) can take
+# well over a minute, so this is generous; the wait ends as soon as the port is
+# up, so it only costs real time when the env is genuinely slow to load.
+MCP_RENDER_BIND_TIMEOUT_S = 120
+
 # Tool description templates. Use {render_state} and {render_policy}
 # placeholders for the backend-specific tool names (Claude uses
 # ``mcp__robocode-tools__render_state``, OpenCode uses
