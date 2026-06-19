@@ -1,2 +1,6 @@
 _target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
 env_id: kinder/ConstrainedCupboard3D-o1-v0
+# Realistic background (floor/wall textures) instead of the plain white "simple"
+# scene. Purely cosmetic: observations and the task are unchanged. Requires the
+# mimiclabs assets (see README); falls back with an error if they are missing.
+scene_bg: mimiclabs-lab2

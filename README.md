@@ -145,6 +145,8 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 | `packing3d_medium` | `kinder/Packing3D-p2-v0` | Medium (2 parts) |
 | `packing3d_hard` | `kinder/Packing3D-p3-v0` | Hard (3 parts) |
 
+> **Realistic 3D backgrounds (optional):** dynamic3d / TidyBot envs (e.g. `ConstrainedCupboard3D`) render on a plain white background by default. For the realistic room scene (floor/wall textures), download the MimicLabs assets once (~1 GB, gitignored): `python third-party/kindergarden/scripts/download_mimiclabs_assets.py`, then set `scene_bg: mimiclabs-lab2` in the env config (already set for `constrainedcupboard3d_easy`).
+
 ### LIBERO-PRO (manipulation benchmark, optional extra)
 
 [LIBERO-PRO](https://github.com/uynitsuj/LIBERO-PRO) is a Franka tabletop manipulation benchmark (~80 task suites covering goal / spatial / object / 10-task mixes plus OOD and perturbation variants) built on MuJoCo via robosuite. It is vendored as a submodule under `third-party/LIBERO-PRO/` and gated behind the optional `libero` extra — it is **not** installed by default because it pins old upstreams (`robosuite==1.4.0`, `gym==0.25.2`, `robomimic==0.2.0`, `bddl==1.0.1`) and drags in a CUDA-enabled torch.

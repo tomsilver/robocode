@@ -55,9 +55,18 @@ def _unwrap_to_kinder(env: gymnasium.Env) -> ConstantObjectKinDEREnv:
 class KinderGeom3DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     """A robocode environment backed by a kinder geom3d environment."""
 
-    def __init__(self, env_id: str) -> None:
+    def __init__(self, env_id: str, scene_bg: str | bool | None = None) -> None:
         self._env_id = env_id
-        self._kinder_env = _unwrap_to_kinder(kinder.make(env_id))
+        # scene_bg selects the background scene for dynamic3d (TidyBot) envs:
+        # None/False is the plain white "simple" ground, while "mimiclabs-labN"
+        # (or True) loads a realistic room with floor/wall textures. It only
+        # applies to dynamic3d envs, so it is only forwarded when set. The
+        # mimiclabs assets are gitignored and must be fetched once via
+        # third-party/kindergarden/scripts/download_mimiclabs_assets.py (README).
+        make_kwargs: dict[str, Any] = {}
+        if scene_bg is not None:
+            make_kwargs["scene_bg"] = scene_bg
+        self._kinder_env = _unwrap_to_kinder(kinder.make(env_id, **make_kwargs))
         self.observation_space = self._kinder_env.observation_space
         self.action_space = self._kinder_env.action_space
         self._current_obs: NDArray[Any] | None = None
