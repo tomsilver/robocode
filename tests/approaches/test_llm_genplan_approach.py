@@ -68,6 +68,14 @@ def test_parse_python_code():
     assert _parse_python_code("no fence here") == "no fence here"
 
 
+def test_parse_python_code_tolerates_fence_variants():
+    """Capitalized tags, bare fences, trailing spaces, and CRLF all parse."""
+    assert _parse_python_code("```Python\nx = 1\n```") == "x = 1"
+    assert _parse_python_code("```py \nx = 1\n```") == "x = 1"
+    assert _parse_python_code("```\nx = 1\n```") == "x = 1"
+    assert _parse_python_code("```python\r\nx = 1\r\n```") == "x = 1"
+
+
 _FULL_APPROACH = (
     "class GeneratedApproach:\n"
     "    def __init__(self, action_space, observation_space, primitives):\n"

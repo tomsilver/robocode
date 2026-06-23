@@ -81,7 +81,11 @@ _WRAPPER_MODULES = [
 
 def _mujoco_gl_after_import(module: str, preset: str | None) -> str:
     """Import *module* in a fresh process and return the resulting MUJOCO_GL."""
-    env = {k: v for k, v in os.environ.items() if k != "MUJOCO_GL"}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("MUJOCO_GL", "PYOPENGL_PLATFORM")
+    }
     if preset is not None:
         env["MUJOCO_GL"] = preset
         env["PYOPENGL_PLATFORM"] = preset

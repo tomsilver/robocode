@@ -476,7 +476,9 @@ def _parse_python_code(response: str) -> str:
     with all required methods implemented; otherwise fall back to the longest block that
     at least names the class, then the longest block, then the raw response.
     """
-    blocks = re.findall(r"```(?:python)?\n(.*?)```", response, re.DOTALL)
+    blocks = re.findall(
+        r"```[ \t]*[a-zA-Z0-9]*[ \t]*\r?\n(.*?)```", response, re.DOTALL
+    )
     blocks = sorted((b.strip() for b in blocks if b.strip()), key=len, reverse=True)
     if not blocks:
         return response.strip()

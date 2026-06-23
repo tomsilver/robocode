@@ -13,7 +13,13 @@ import os
 # to egl and break the Dynamic3D mujoco renderer. Capture the chosen backend,
 # preempt-import mujoco so PyOpenGL locks to it, restore it after kinder runs.
 os.environ.setdefault("MUJOCO_GL", "egl")
-os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+# PyOpenGL must agree with the chosen MUJOCO_GL backend, so derive its platform
+# from it rather than defaulting independently (glfw is on-screen and uses GLX
+# on Linux). This keeps a caller-set MUJOCO_GL=osmesa from pairing with egl.
+_PYOPENGL_FOR_MUJOCO = {"egl": "egl", "osmesa": "osmesa", "glfw": "glx"}
+os.environ.setdefault(
+    "PYOPENGL_PLATFORM", _PYOPENGL_FOR_MUJOCO.get(os.environ["MUJOCO_GL"], "egl")
+)
 _MUJOCO_GL = os.environ["MUJOCO_GL"]
 _PYOPENGL_PLATFORM = os.environ["PYOPENGL_PLATFORM"]
 try:
