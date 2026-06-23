@@ -119,15 +119,19 @@ def _main(cfg: DictConfig) -> float:
                 env, approach, s, cfg.max_steps, render=render
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            # A generated policy can raise on an unseen eval seed; count that as a
-            # failed episode instead of aborting the whole evaluation. Record the
-            # error so a crash is distinguishable from an ordinary unsolved episode.
-            logger.exception("Eval episode (seed %d) crashed; counting as unsolved", s)
+            # A loaded policy can raise on an unseen eval seed. We cannot fairly
+            # score a crash without the env's worst-case return (not available
+            # per env), so flag it and exclude it from the aggregate metrics
+            # rather than inventing a score that could flatter a crashy policy.
+            logger.exception(
+                "Eval episode (seed %d) crashed; excluding from metrics", s
+            )
             per_episode.append(
                 {
-                    "total_reward": 0.0,
-                    "num_steps": 0,
+                    "total_reward": None,
+                    "num_steps": None,
                     "solved": False,
+                    "crashed": True,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             )
@@ -138,15 +142,34 @@ def _main(cfg: DictConfig) -> float:
             video_dir.mkdir(exist_ok=True)
             save_video(frames, video_dir / f"episode_{i}.gif")
 
-    mean_reward = float(np.mean([e["total_reward"] for e in per_episode]))
-    mean_steps = float(np.mean([e["num_steps"] for e in per_episode]))
-    solve_rate = float(np.mean([e["solved"] for e in per_episode]))
+    # Aggregate over episodes that actually ran; crashed episodes are reported
+    # separately so partial evaluations stay honest (see the crash handler above).
+    evaluated = [e for e in per_episode if not e.get("crashed")]
+    num_crashed = len(per_episode) - len(evaluated)
+    if num_crashed:
+        logger.warning(
+            "%d/%d eval episodes crashed and are excluded from the metrics; see "
+            "per_episode errors in results.json.",
+            num_crashed,
+            len(per_episode),
+        )
+
+    def _mean(key: str) -> float:
+        return (
+            float(np.mean([e[key] for e in evaluated])) if evaluated else float("nan")
+        )
+
+    mean_reward = _mean("total_reward")
+    mean_steps = _mean("num_steps")
+    solve_rate = _mean("solved")
 
     results: dict[str, Any] = {
         "mean_eval_reward": mean_reward,
         "mean_eval_steps": mean_steps,
         "solve_rate": solve_rate,
         "num_eval_tasks": num_eval,
+        "num_evaluated_episodes": len(evaluated),
+        "num_crashed_episodes": num_crashed,
         "per_episode": per_episode,
     }
     agent_cost = getattr(approach, "total_cost_usd", None)

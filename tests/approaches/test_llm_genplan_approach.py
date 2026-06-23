@@ -98,35 +98,19 @@ def test_parse_python_code_prefers_generated_approach_block():
     assert _parse_python_code(response) == _FULL_APPROACH.strip()
 
 
-def test_parse_python_code_skips_stub_class():
-    """A stubbed class signature loses to the fully implemented block."""
-    stub = (
-        "class GeneratedApproach:\n"
-        "    def __init__(self, action_space, observation_space, primitives):\n"
-        "        ...\n"
-        "    def reset(self, state, info):\n"
-        "        pass\n"
-        "    def get_action(self, state):\n"
-        "        pass\n"
-    )
+def test_parse_python_code_prefers_last_class_over_trailing_snippet():
+    """A trailing non-class snippet does not shadow the real implementation."""
     response = (
-        f"Here is the skeleton:\n```python\n{stub}```\n"
-        f"And the implementation:\n```python\n{_FULL_APPROACH}```\n"
+        f"The implementation:\n```python\n{_FULL_APPROACH}```\n"
+        "For reference, the action space is Discrete(4):\n```python\nn = 4\n```\n"
     )
     assert _parse_python_code(response) == _FULL_APPROACH.strip()
 
 
-def test_parse_python_code_falls_back_to_longest_block_with_class():
-    """If nothing is fully implemented, keep the longest class block for feedback."""
-    partial = (
-        "class GeneratedApproach:\n"
-        "    def __init__(self, action_space, observation_space, primitives):\n"
-        "        self.x = 1\n"
-        "    def get_action(self, state):\n"
-        "        return 0\n"
-    )
-    response = f"```python\nx = 1\n```\n```python\n{partial}```\n"
-    assert _parse_python_code(response) == partial.strip()
+def test_parse_python_code_recovers_truncated_block():
+    """A response cut off mid-block (no closing fence) still yields the code."""
+    response = f"Here is the approach:\n```python\n{_FULL_APPROACH}"
+    assert _parse_python_code(response) == _FULL_APPROACH.strip()
 
 
 def test_create_llm_client_dispatch(monkeypatch):
