@@ -13,6 +13,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -412,11 +413,23 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
     return targets
 
 
+_FENCE = r"```[ \t]*[a-zA-Z0-9]*[ \t]*\r?\n"
+
+
 def _parse_python_code(response: str) -> str:
-    """Extract the first ```python fenced block, else the raw response."""
-    marker = "```python"
-    if marker in response:
-        rest = response[response.index(marker) + len(marker) :]
-        end = rest.index("```") if "```" in rest else len(rest)
-        return rest[:end].strip()
-    return response.strip()
+    """Extract the GeneratedApproach implementation from a model response.
+
+    Models sometimes emit an illustrative snippet before the real implementation,
+    so prefer the last fenced block that defines GeneratedApproach, then the last
+    fenced block. If the response was truncated at the token limit (an opening
+    fence with no close), recover the code after the last opening fence.
+    """
+    blocks = [b.strip() for b in re.findall(_FENCE + r"(.*?)```", response, re.DOTALL)]
+    blocks = [b for b in blocks if b]
+    generated = [b for b in blocks if "class GeneratedApproach" in b]
+    if generated:
+        return generated[-1]
+    if blocks:
+        return blocks[-1]
+    opens = list(re.finditer(_FENCE, response))
+    return response[opens[-1].end() :].strip() if opens else response.strip()

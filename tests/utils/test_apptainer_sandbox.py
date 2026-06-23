@@ -68,6 +68,10 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
     assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70" in cmd
     # init-firewall.sh is skipped (apptainer can't grant CAP_NET_ADMIN).
     assert "ROBOCODE_SKIP_FIREWALL=1" in cmd
+    # Headless container has no GPU: mujoco's Dynamic3D renderer must use OSMesa
+    # (software), so the sandbox forces it; EGL device displays would crash.
+    assert "MUJOCO_GL=osmesa" in cmd
+    assert "PYOPENGL_PLATFORM=osmesa" in cmd
 
     # Bind mounts.
     assert "/host/sandbox:/sandbox" in cmd

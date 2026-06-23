@@ -1,5 +1,9 @@
 """Tests for kinder_geom3d_env.py."""
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -62,3 +66,49 @@ def test_kinder_geom3d_sample_next_state(env_id: str) -> None:
     assert env.observation_space.contains(next_state)
 
     env.close()
+
+
+# Both kinder wrappers pin MUJOCO_GL at import time. The sandbox runs headless
+# with no GPU, so it sets MUJOCO_GL=osmesa; the wrappers must NOT clobber that
+# back to egl (egl device displays need a GPU and crash the Dynamic3D mujoco
+# renderer). A fresh subprocess is required because the pin happens once on
+# first import. See the geom2d/geom3d env wrappers.
+_WRAPPER_MODULES = [
+    "robocode.environments.kinder_geom3d_env",
+    "robocode.environments.kinder_geom2d_env",
+]
+
+
+def _mujoco_gl_after_import(module: str, preset: str | None) -> str:
+    """Import *module* in a fresh process and return the resulting MUJOCO_GL."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("MUJOCO_GL", "PYOPENGL_PLATFORM")
+    }
+    if preset is not None:
+        env["MUJOCO_GL"] = preset
+        env["PYOPENGL_PLATFORM"] = preset
+    code = f"import os; import {module}; print('RESULT=' + os.environ['MUJOCO_GL'])"
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT="))
+    return line.split("=", 1)[1]
+
+
+@pytest.mark.parametrize("module", _WRAPPER_MODULES)
+def test_wrapper_honors_preset_mujoco_gl(module: str) -> None:
+    """A caller-set MUJOCO_GL (the sandbox sets osmesa) survives importing the wrapper,
+    rather than being force-overridden to egl."""
+    assert _mujoco_gl_after_import(module, "osmesa") == "osmesa"
+
+
+@pytest.mark.parametrize("module", _WRAPPER_MODULES)
+def test_wrapper_defaults_to_egl(module: str) -> None:
+    """With no MUJOCO_GL set, the wrapper defaults to egl."""
+    assert _mujoco_gl_after_import(module, None) == "egl"

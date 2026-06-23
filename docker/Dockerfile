@@ -45,6 +45,10 @@ RUN if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
 #   - git, sudo, curl: basic dev tools
 #   - jq, dnsutils (dig), aggregate, iptables, ipset, iproute2: firewall
 #   - python3.11, python3.11-venv, python3.11-dev: Python runtime
+#   - libegl1, libegl-mesa0, libgl1, libgl1-mesa-dri, libgles2, libglvnd0,
+#     libosmesa6: headless GL runtime so mujoco can initialize (kinder only
+#     registers Dynamic3D envs, e.g. ConstrainedCupboard3D, when `import mujoco`
+#     succeeds; without an EGL/GL backend it fails and those envs are skipped).
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
@@ -59,6 +63,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.11 \
         python3.11-venv \
         python3.11-dev \
+        libegl1 \
+        libegl-mesa0 \
+        libgl1 \
+        libgl1-mesa-dri \
+        libgles2 \
+        libglvnd0 \
+        libosmesa6 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

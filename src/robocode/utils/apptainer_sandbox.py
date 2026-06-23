@@ -178,6 +178,12 @@ def _build_apptainer_cmd(
         f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
         "--env",
         "ROBOCODE_SKIP_FIREWALL=1",
+        # Headless container has no GPU, so mujoco's Dynamic3D offscreen renderer
+        # must use OSMesa (software); EGL device displays fail without a GPU.
+        "--env",
+        "MUJOCO_GL=osmesa",
+        "--env",
+        "PYOPENGL_PLATFORM=osmesa",
     ]
 
     if firewall_domains:

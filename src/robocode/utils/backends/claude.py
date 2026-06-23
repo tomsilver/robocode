@@ -29,7 +29,8 @@ from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_RE = re.compile(
-    r"(?:out of extra usage|hit your limit).*resets\s+(\d{1,2}(?:am|pm))",
+    r"(?:out of extra usage|hit your (?:\w+\s+)*limit)"
+    r".*?resets\s+(\d{1,2}(?:am|pm))(?:\s*\(?([A-Za-z][A-Za-z/_]*)\)?)?",
     re.IGNORECASE,
 )
 
@@ -326,8 +327,11 @@ class ClaudeBackend(AgentBackend):
                         meta.get("trigger"),
                         meta.get("pre_tokens"),
                     )
-                elif subtype != "status":
-                    logger.info("System event: subtype=%s", subtype)
+                elif subtype not in ("status", "thinking_tokens"):
+                    # thinking_tokens fires on every reasoning chunk and floods
+                    # the logs; other system events are rare diagnostics, so keep
+                    # them at debug rather than info.
+                    logger.debug("System event: subtype=%s", subtype)
 
             if msg_type == "assistant":
                 num_turns += 1
@@ -351,7 +355,7 @@ class ClaudeBackend(AgentBackend):
                         logger.info("Agent: %s", text)
                         m = _RATE_LIMIT_RE.search(text)
                         if m:
-                            rate_limit_reset = m.group(1)
+                            rate_limit_reset = m.group(0)
                     elif block.get("type") == "tool_use":
                         input_str = json.dumps(block.get("input", {}))
                         if len(input_str) > 300:
@@ -394,7 +398,7 @@ class ClaudeBackend(AgentBackend):
                     if not rate_limit_reset:
                         m = _RATE_LIMIT_RE.search(error_text)
                         if m:
-                            rate_limit_reset = m.group(1)
+                            rate_limit_reset = m.group(0)
 
         proc.wait()
 
@@ -413,7 +417,7 @@ class ClaudeBackend(AgentBackend):
             if not rate_limit_reset and stderr_output:
                 m = _RATE_LIMIT_RE.search(stderr_output)
                 if m:
-                    rate_limit_reset = m.group(1)
+                    rate_limit_reset = m.group(0)
 
         if rate_limit_reset and not is_error:
             is_error = True

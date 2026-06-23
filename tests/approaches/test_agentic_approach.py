@@ -21,8 +21,9 @@ _BLACKBOX_ENV_CFG = json.dumps(
 )
 
 
-def test_agentic_approach_fallback():
-    """Without training, AgenticApproach falls back to random actions."""
+def test_agentic_approach_no_silent_random():
+    """Without a generated approach, AgenticApproach fails loudly rather than silently
+    evaluating a random policy (which would propagate a misleading 0)."""
     env = MazeEnv(5, 8, 5, 8)
     approach = AgenticApproach(
         action_space=env.action_space,
@@ -33,8 +34,8 @@ def test_agentic_approach_fallback():
     )
     state, info = env.reset(seed=123)
     approach.reset(state, info)
-    action = approach.step()
-    assert env.action_space.contains(action)
+    with pytest.raises(RuntimeError, match="random"):
+        approach.step()
 
 
 def test_agentic_approach_with_generated():
@@ -216,7 +217,17 @@ def test_blackbox_train_wires_sandbox(tmp_path, monkeypatch):
         # The env server must be live while the agent would run.
         meta = json.loads((docker_config.sandbox_dir / "env_spaces.json").read_text())
         socket.create_connection(("127.0.0.1", meta["port"]), timeout=5).close()
-        return SandboxResult(success=False, output_file=None, error="skipped")
+        approach_file = docker_config.sandbox_dir / "approach.py"
+        approach_file.write_text(
+            "class GeneratedApproach:\n"
+            "    def __init__(self, action_space, observation_space, primitives):\n"
+            "        self._action_space = action_space\n"
+            "    def reset(self, state, info):\n"
+            "        pass\n"
+            "    def get_action(self, state):\n"
+            "        return self._action_space.sample()\n"
+        )
+        return SandboxResult(success=True, output_file=approach_file, error=None)
 
     monkeypatch.setattr(
         "robocode.approaches.agentic_approach.run_with_rate_limit_retry",

@@ -68,6 +68,51 @@ def test_parse_python_code():
     assert _parse_python_code("no fence here") == "no fence here"
 
 
+def test_parse_python_code_tolerates_fence_variants():
+    """Capitalized tags, bare fences, trailing spaces, and CRLF all parse."""
+    assert _parse_python_code("```Python\nx = 1\n```") == "x = 1"
+    assert _parse_python_code("```py \nx = 1\n```") == "x = 1"
+    assert _parse_python_code("```\nx = 1\n```") == "x = 1"
+    assert _parse_python_code("```python\r\nx = 1\r\n```") == "x = 1"
+
+
+_FULL_APPROACH = (
+    "class GeneratedApproach:\n"
+    "    def __init__(self, action_space, observation_space, primitives):\n"
+    "        self.action_space = action_space\n"
+    "    def reset(self, state, info):\n"
+    "        self.plan = [0, 1]\n"
+    "    def get_action(self, state):\n"
+    "        return self.plan.pop(0)\n"
+)
+
+
+def test_parse_python_code_prefers_generated_approach_block():
+    """A leading illustrative snippet does not shadow the real block."""
+    response = (
+        "First, a sketch:\n"
+        "```python\nsuction_cx = base_x + 1\n```\n"
+        "Now the full thing:\n"
+        f"```python\n{_FULL_APPROACH}```\n"
+    )
+    assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_parse_python_code_prefers_last_class_over_trailing_snippet():
+    """A trailing non-class snippet does not shadow the real implementation."""
+    response = (
+        f"The implementation:\n```python\n{_FULL_APPROACH}```\n"
+        "For reference, the action space is Discrete(4):\n```python\nn = 4\n```\n"
+    )
+    assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_parse_python_code_recovers_truncated_block():
+    """A response cut off mid-block (no closing fence) still yields the code."""
+    response = f"Here is the approach:\n```python\n{_FULL_APPROACH}"
+    assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
 def test_create_llm_client_dispatch(monkeypatch):
     """The factory routes providers and rejects unknown ones."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")

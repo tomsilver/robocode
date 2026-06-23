@@ -499,6 +499,12 @@ async def run_agent_in_docker_sandbox(
                 # snapshots its tools, else render tools race and can vanish.
                 "-e",
                 f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
+                # Headless container has no GPU, so mujoco's Dynamic3D offscreen
+                # renderer must use OSMesa (software); EGL device displays fail.
+                "-e",
+                "MUJOCO_GL=osmesa",
+                "-e",
+                "PYOPENGL_PLATFORM=osmesa",
             ],
             # Map the host gateway for blackbox (env server) and local model
             # runs (ollama/vLLM on the host), which both reach host loopback.
