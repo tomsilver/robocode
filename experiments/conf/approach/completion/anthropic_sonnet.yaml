@@ -2,3 +2,9 @@ provider: anthropic
 model: claude-sonnet-4-6
 api_key_env: ANTHROPIC_API_KEY
 max_tokens: 32000  # max output tokens; generated code can be long
+# The Messages API returns token usage but no dollar amount, so we estimate
+# cost_usd from these standard list prices (USD per 1M tokens). Estimate only:
+# ignores prompt-caching/batch/priority discounts. Claude Sonnet 4.6 published
+# rate as of 2026-06; recheck platform.claude.com/docs/en/pricing if it changes.
+input_cost_per_mtok: 3.0
+output_cost_per_mtok: 15.0

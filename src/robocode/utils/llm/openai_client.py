@@ -12,15 +12,22 @@ import openai
 from omegaconf import DictConfig
 
 from robocode.utils.backends.ollama_server import ensure_ollama
-from robocode.utils.llm.base import LLMResponse
+from robocode.utils.llm.base import LLMResponse, pricing_from_cfg, usage_cost
 
 
 class OpenAICompatibleClient:
-    """Single-shot completions via an OpenAI-compatible chat endpoint."""
+    """Single-shot completions via an OpenAI-compatible chat endpoint.
+
+    The API returns token usage but no dollar amount, so ``cost_usd`` is an
+    estimate from the ``input_cost_per_mtok`` / ``output_cost_per_mtok`` list
+    prices in the config (left ``None`` when those are unset, as for local
+    vLLM/Ollama servers).
+    """
 
     def __init__(self, cfg: DictConfig) -> None:
         self._model = cfg["model"]
         self._base_url = cfg.get("base_url", "") or None
+        self._pricing = pricing_from_cfg(cfg)
         # Local servers (vLLM/Ollama) usually need no real key.
         api_key_env = cfg.get("api_key_env", "")
         if api_key_env:
@@ -43,6 +50,13 @@ class OpenAICompatibleClient:
             model=self._model,
             messages=messages,  # type: ignore[arg-type]
         )
+        cost = None
+        if self._pricing is not None:
+            usage = response.usage
+            assert usage is not None
+            cost = usage_cost(
+                usage.prompt_tokens, usage.completion_tokens, *self._pricing
+            )
         return LLMResponse(
-            text=response.choices[0].message.content or "", cost_usd=None
+            text=response.choices[0].message.content or "", cost_usd=cost
         )

@@ -86,8 +86,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         max_steps: int = 100,
         num_train_tasks: int = 10,
         num_prompt_tasks: int = 2,
-        max_debug_attempts: int = 4,
-        skip_chain_of_thought: bool = False,
+        max_debug_attempts: int | None = 4,
+        max_budget_usd: float | None = 5.0,
+        chain_of_thought: bool = True,
         episode_timeout_s: float = 30.0,
         use_docker: bool = True,
         container_backend: str | None = None,
@@ -116,17 +117,26 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._num_train_tasks = num_train_tasks
         self._num_prompt_tasks = num_prompt_tasks
         self._max_debug_attempts = max_debug_attempts
-        self._skip_chain_of_thought = skip_chain_of_thought
+        self._max_budget_usd = max_budget_usd
+        self._chain_of_thought = chain_of_thought
         self._episode_timeout_s = episode_timeout_s
         self._docker_image = docker_image
         self._sif_path = Path(sif_path) if sif_path is not None else _DEFAULT_SIF
         self._generated: Any = None
         self.total_cost_usd: float | None = None
+        # Number of LLM generations made (debug attempts for genplan, candidates
+        # for best-of-k); recorded into results.json.
+        self.num_generations: int | None = None
 
     def train(self) -> None:
         if self._load_dir is not None:
             self._load_generated(self._load_dir / "sandbox" / "approach.py")
             return
+
+        assert self._max_generations is not None or self._max_budget_usd is not None, (
+            "set a loop bound: max_budget_usd and/or the generation-step cap "
+            "(max_debug_attempts / max_generation_steps)"
+        )
 
         # Sandboxed: run the whole loop inside one container (docker/apptainer)
         # via the genplan driver; the driver reruns train() locally inside.
@@ -141,10 +151,27 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         approach_path = sandbox_dir / "approach.py"
         train_seeds = list(range(self._num_train_tasks))
+        self._generate_local(approach_path, sandbox_dir, train_seeds)
+        self._load_generated(approach_path)
 
+    def _generate_local(
+        self, approach_path: Path, sandbox_dir: Path, train_seeds: list[int]
+    ) -> None:
+        """Build the prompt and debug it against the training tasks (in-process)."""
         context = self._build_context(train_seeds[: self._num_prompt_tasks])
+        messages = self._build_initial_messages(context, sandbox_dir)
+        self._debug_loop(messages, approach_path, sandbox_dir, train_seeds)
+
+    def _build_initial_messages(
+        self, context: str, sandbox_dir: Path
+    ) -> list[dict[str, str]]:
+        """Initial message list: the strategy CoT, or a single no-CoT prompt.
+
+        Best-of-K reuses this verbatim, calling it fresh per candidate so a CoT
+        run resamples the summary/strategy exchanges independently.
+        """
         messages: list[dict[str, str]] = []
-        if self._skip_chain_of_thought:
+        if not self._chain_of_thought:
             messages.append(
                 {
                     "role": "user",
@@ -159,19 +186,16 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self._exchange(messages, f"{context}\n\n{_SUMMARY_PROMPT}", sandbox_dir, 0)
             self._exchange(messages, _STRATEGY_PROMPT, sandbox_dir, 1)
             messages.append({"role": "user", "content": _INTERFACE_SPEC})
+        return messages
 
-        self._debug_loop(messages, approach_path, sandbox_dir, train_seeds)
-        self._load_generated(approach_path)
+    def _driver_config(self, completion: dict[str, Any]) -> dict[str, Any]:
+        """Config the in-container driver reads to rebuild and run this approach.
 
-    def _train_in_container(self) -> None:
-        """Write the driver config and run the loop in one sandbox container."""
+        Subclasses override to set ``approach`` and add their own fields.
+        """
         assert self._env_cfg is not None, "container runs need env_cfg"
-        sandbox_dir = self._output_dir / "sandbox"
-        sandbox_dir.mkdir(parents=True, exist_ok=True)
-        completion = cast(
-            dict[str, Any], OmegaConf.to_container(self._completion_cfg, resolve=True)
-        )
-        config = {
+        return {
+            "approach": "genplan",
             "completion": completion,
             "environment": json.loads(self._env_cfg),
             "seed": self._seed,
@@ -180,9 +204,19 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             "num_train_tasks": self._num_train_tasks,
             "num_prompt_tasks": self._num_prompt_tasks,
             "max_debug_attempts": self._max_debug_attempts,
-            "skip_chain_of_thought": self._skip_chain_of_thought,
+            "max_budget_usd": self._max_budget_usd,
+            "chain_of_thought": self._chain_of_thought,
             "episode_timeout_s": self._episode_timeout_s,
         }
+
+    def _train_in_container(self) -> None:
+        """Write the driver config and run the loop in one sandbox container."""
+        sandbox_dir = self._output_dir / "sandbox"
+        sandbox_dir.mkdir(parents=True, exist_ok=True)
+        completion = cast(
+            dict[str, Any], OmegaConf.to_container(self._completion_cfg, resolve=True)
+        )
+        config = self._driver_config(completion)
         (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
         if self._container_backend == "apptainer":
             run_genplan_in_apptainer(sandbox_dir, completion, sif_path=self._sif_path)
@@ -190,6 +224,41 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
         cost = json.loads((sandbox_dir / "cost.json").read_text(encoding="utf-8"))
         self.total_cost_usd = cost["total_cost_usd"]
+        self.num_generations = cost.get("num_generations")
+
+    # ---------------------------------------------------------------- budgeting
+
+    @property
+    def _max_generations(self) -> int | None:
+        """Total generations the step cap allows, or None for no step cap.
+
+        GenPlan does one initial attempt plus ``max_debug_attempts`` debug
+        attempts; Best-of-K overrides this with its own candidate count.
+        """
+        if self._max_debug_attempts is None:
+            return None
+        return self._max_debug_attempts + 1
+
+    def _within_budget(self, steps: int) -> bool:
+        """Whether another generation is allowed by the step cap and dollar budget."""
+        under_steps = self._max_generations is None or steps < self._max_generations
+        under_cost = (
+            self._max_budget_usd is None
+            or (self.total_cost_usd or 0.0) < self._max_budget_usd
+        )
+        return under_steps and under_cost
+
+    def _assert_loop_bounded(self) -> None:
+        """Fail loudly if neither a step cap nor a tracked cost can bound the loop."""
+        if self._max_generations is None and not (
+            self.total_cost_usd and self.total_cost_usd > 0
+        ):
+            raise RuntimeError(
+                "No step cap is set and the completion backend reports no cost, so "
+                "the generation loop is unbounded. Set max_debug_attempts / "
+                "max_generation_steps, or use a cost-reporting backend (e.g. the "
+                "Claude CLI) together with max_budget_usd."
+            )
 
     def _debug_loop(
         self,
@@ -198,12 +267,20 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         sandbox_dir: Path,
         seeds: list[int],
     ) -> None:
-        """Generate, validate, re-prompt with feedback until solved or out of tries."""
-        for t in range(self._max_debug_attempts + 1):
+        """Generate, validate, re-prompt with feedback until solved or out of budget.
+
+        The first implementation attempt always runs (chain-of-thought may have already
+        consumed the budget); the budget/step cap bounds only the further debug
+        attempts, so an approach file is always written.
+        """
+        t = 0
+        while True:
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
             # Overwrite, don't accumulate: each response is a full class.
             approach_path.write_text(_parse_python_code(response))
+            if t == 0:
+                self._assert_loop_bounded()
 
             failure = self._validate(approach_path, seeds)
             if failure is None:
@@ -212,11 +289,16 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     self._num_train_tasks,
                     t,
                 )
+                self.num_generations = t + 1
                 return
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
+            t += 1
+            if not self._within_budget(t):
+                break
             messages.append(
                 {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
             )
+        self.num_generations = t  # budget/step cap reached without solving
 
     # ------------------------------------------------------------------ prompt
 

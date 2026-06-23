@@ -112,11 +112,26 @@ def _main(cfg: DictConfig) -> float:
 
     # Evaluate on held-out episodes.
     render = cfg.render_videos
-    per_episode = []
+    per_episode: list[dict[str, Any]] = []
     for i, s in enumerate(eval_seeds):
-        episode_result, frames, _ = run_episode(
-            env, approach, s, cfg.max_steps, render=render
-        )
+        try:
+            episode_result, frames, _ = run_episode(
+                env, approach, s, cfg.max_steps, render=render
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # A generated policy can raise on an unseen eval seed; count that as a
+            # failed episode instead of aborting the whole evaluation. Record the
+            # error so a crash is distinguishable from an ordinary unsolved episode.
+            logger.exception("Eval episode (seed %d) crashed; counting as unsolved", s)
+            per_episode.append(
+                {
+                    "total_reward": 0.0,
+                    "num_steps": 0,
+                    "solved": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
         per_episode.append(episode_result)
         if frames:
             video_dir = output_dir / "videos"
@@ -137,6 +152,9 @@ def _main(cfg: DictConfig) -> float:
     agent_cost = getattr(approach, "total_cost_usd", None)
     if agent_cost is not None:
         results["agent_cost_usd"] = agent_cost
+    num_generations = getattr(approach, "num_generations", None)
+    if num_generations is not None:
+        results["num_generations"] = num_generations
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

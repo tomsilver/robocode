@@ -1,0 +1,23 @@
+defaults:
+  - completion: cli_claude  # CLI/subscription by default; never the paid API unless overridden
+
+_target_: robocode.approaches.best_of_k_approach.BestOfKApproach
+output_dir: ${hydra:runtime.output_dir}
+load_dir: null
+num_train_tasks: 10
+num_prompt_tasks: 2
+# Sample candidates until a bound binds (or one solves all training tasks), then
+# keep the best-scoring candidate. Either bound may be null to disable it; at
+# least one must be set. Defaults are generation-matched with llm_genplan
+# (5 generations each), so the two differ only in feedback.
+max_generation_steps: 5  # step cap: number of candidates (null -> budget only)
+max_budget_usd: 5.0  # dollar cap; only bounds cost-reporting backends (null -> step cap only)
+# false: a single prompt -> code, sampled per candidate (simplest baseline).
+# true: each candidate repeats GenPlan's summary -> strategy -> code flow, no debug loop.
+chain_of_thought: false
+episode_timeout_s: 30.0
+# Run the whole loop inside one sandbox container (like the agentic approach),
+# so generated code never executes on the host. local runs in-process.
+container_backend: docker  # docker | apptainer | local
+docker_image: robocode-sandbox
+sif_path: null  # null -> <repo_root>/robocode-sandbox.sif

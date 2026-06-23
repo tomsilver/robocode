@@ -6,7 +6,7 @@ import numpy as np
 from gymnasium import Env
 from gymnasium.spaces import Box
 
-from robocode.utils.genplan_validate import validate_tasks
+from robocode.utils.genplan_validate import score_tasks, validate_tasks
 
 
 class _ToyEnv(Env):
@@ -98,3 +98,41 @@ def test_infinite_loop_times_out(tmp_path):
     """A non-terminating get_action is killed and classified as timeout."""
     failure = _validate(tmp_path, "while True: pass", timeout=0.5)
     assert failure["error_type"] == "timeout"
+
+
+def _score(tmp_path: Path, get_action_body: str, seeds, max_steps=10):
+    env = _ToyEnv()
+    approach_path = tmp_path / "approach.py"
+    approach_path.write_text(
+        f"{_HEADER}    def get_action(self, state):\n        {get_action_body}\n"
+    )
+    return score_tasks(
+        env,
+        approach_path,
+        env.action_space,
+        env.observation_space,
+        primitives={},
+        seeds=seeds,
+        max_steps=max_steps,
+        timeout=10.0,
+    )
+
+
+def test_score_counts_solved_across_seeds(tmp_path):
+    """A solving policy counts every seed solved and completed; reward is the
+    rollout's."""
+    # solved=2, completed=2, total=2, reaches the goal in 3 steps (-1 reward/step).
+    assert _score(
+        tmp_path, "return np.array([1.0], dtype=np.float32)", seeds=[0, 1]
+    ) == (2, 2, 2, -3.0)
+
+
+def test_score_distinguishes_unsolved_from_crash(tmp_path):
+    """A stall completes (ran to the step limit); a crash does not complete."""
+    # Stall: both seeds ran to the limit -> completed but unsolved.
+    assert _score(
+        tmp_path, "return np.array([0.0], dtype=np.float32)", seeds=[0, 1]
+    ) == (0, 2, 2, -10.0)
+    # Crash: no completed rollout -> num_completed 0 (so it ranks below a stall),
+    # and mean_reward 0.0 over no completed rollouts.
+    assert _score(tmp_path, "raise ValueError('boom')", seeds=[0]) == (0, 0, 1, 0.0)
