@@ -190,14 +190,49 @@ The environment is described below.
 
 """
 
+# Shared task-prompt scaffold. The opener sentences and the interface-spec
+# wrapper are common to both approaches; only small slotted pieces (approach
+# kind, class-interface code, run commands, section ordering) differ.
+_SCAFFOLD_INTRO = (
+    "You are writing {approach_kind} for {target}.\n\n"
+    "Your approach should be general enough to solve any instance of this "
+    "environment (env.reset()), but it does NOT need to be adaptable to "
+    "different other environments."
+)
+_SOURCE_OPENER = (
+    "Read the environment source files in this directory to understand the "
+    "state type, action space, and dynamics."
+)
+
+# Shared interface-spec wrapper. {class_interface} is the approach-specific
+# GeneratedApproach contract (code block + rules); {run_commands} the
+# approach-specific example test invocations.
+INTERFACE_SPEC_TEMPLATE = """\
+Write `approach.py` containing a class `GeneratedApproach` with the following \
+interface:
+
+{class_interface}
+
+{primitives_description}
+
+Write the best approach you can — ideally one that solves the environment \
+optimally. Your `approach.py` should only use packages available in the \
+current environment. Write test scripts that use the real environment to \
+verify your approach works.
+
+IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
+interpreter has all required packages installed. For example:
+```bash
+{run_commands}
+```\
+"""
+
 # ---------------------------------------------------------------------------
 # AgenticApproach (monolithic policy) fragments
 # ---------------------------------------------------------------------------
 
-AGENTIC_INTERFACE_SPEC = """\
-Write `approach.py` containing a class `GeneratedApproach` with the following \
-interface:
-
+# Approach-specific GeneratedApproach contract, filled into INTERFACE_SPEC_TEMPLATE.
+AGENTIC_CLASS_INTERFACE = """\
 ```python
 class GeneratedApproach:
     def __init__(self, action_space, observation_space, primitives):
@@ -215,21 +250,10 @@ class GeneratedApproach:
 
 The class can maintain internal state between calls (e.g., a computed plan). \
 The `reset` method is called at the start of each episode. The `get_action` \
-method is called each step and must return a valid action.
-
-{primitives_description}
-
-Write the best approach you can — ideally one that solves the environment \
-optimally. Your `approach.py` should only use packages available in the \
-current environment. Write test scripts that use the real environment to \
-verify your approach works.
-
-IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
-interpreter has all required packages installed. For example:
-```bash
-{python_executable} test_approach.py
-```\
+method is called each step and must return a valid action.\
 """
+
+AGENTIC_RUN_COMMANDS = "{python_executable} test_approach.py"
 
 # Geometric-reasoning prompt, shared by both approaches.
 GEOMETRY_PROMPT = """\
@@ -266,10 +290,7 @@ approach fails, you should design your code to avoid repeating that failure.
 """
 
 _AGENTIC_WITH_DESCRIPTION = """\
-You are writing an approach for the environment described below.
-
-Your approach should be general enough to solve any instance of this environment (env.reset()), \
-but it does NOT need to be adaptable to different other environments.
+{scaffold_intro}
 
 {env_description}
 {geometry_prompt}
@@ -278,19 +299,13 @@ but it does NOT need to be adaptable to different other environments.
 """
 
 _AGENTIC_WITH_SOURCE = """\
-Read the environment source files in this directory to understand the state \
-type, action space, and dynamics.
+{source_opener}
 {interface_spec}
 {modular_code_prompt}\
 """
 
 _AGENTIC_BLACKBOX = """\
-You are writing an approach for an environment that you can only access as \
-a black box.
-
-Your approach should be general enough to solve any instance of this \
-environment (each reset gives a new instance), but it does NOT need to be \
-adaptable to different other environments.
+{scaffold_intro}
 {env_description_section}
 {blackbox_interaction_spec}
 {geometry_prompt}
@@ -419,10 +434,7 @@ with env_client: reset with several seeds, perturb the state with \
 Do NOT guess the observation layout. \
 """
 
-CDL_INTERFACE_SPEC = """\
-Write `approach.py` containing a class `GeneratedApproach` with the following \
-interface:
-
+CDL_CLASS_INTERFACE = """\
 ```python
 from collections import deque
 from behaviors import BehaviorA, BehaviorB  # your behavior classes
@@ -455,21 +467,13 @@ class GeneratedApproach:
 The ``reset`` method MUST ONLY build a behavior deque using backward \
 precondition checking. The ``get_action`` method MUST ONLY delegate to the \
 current behavior and advance on termination. No other logic is allowed in \
-approach.py — all intelligence lives in the behaviors and helpers.
-
-{primitives_description}
-
-Write the best approach you can — ideally one that solves the environment \
-optimally. Your `approach.py` should only use packages available in the \
-current environment.
-
-IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
-interpreter has all required packages installed. For example:
-```bash
-{python_executable} test_behavior_[behavior_name].py
-{python_executable} test_approach.py
-```\
+approach.py — all intelligence lives in the behaviors and helpers.\
 """
+
+CDL_RUN_COMMANDS = (
+    "{python_executable} test_behavior_[behavior_name].py\n"
+    "{python_executable} test_approach.py"
+)
 
 CDL_INITIAL_HELPERS_PROMPT = """\
 
@@ -502,10 +506,7 @@ CDL_HELPERS_PROVIDED_NOTE = (
 )
 
 _CDL_WITH_DESCRIPTION = """\
-You are writing a behavior-based approach for the environment described below.
-
-Your approach should be general enough to solve any instance of this environment \
-(env.reset()), but it does NOT need to be adaptable to different other environments.
+{scaffold_intro}
 
 {env_description}
 {initial_helpers_prompt}
@@ -516,8 +517,7 @@ Your approach should be general enough to solve any instance of this environment
 """
 
 _CDL_WITH_SOURCE = """\
-Read the environment source files in this directory to understand the state \
-type, action space, and dynamics.
+{source_opener}
 {initial_helpers_prompt}
 {cdl_decomposition_prompt}
 {interface_spec}
@@ -525,12 +525,7 @@ type, action space, and dynamics.
 """
 
 _CDL_BLACKBOX = """\
-You are writing a behavior-based approach for an environment that you can \
-only access as a black box.
-
-Your approach should be general enough to solve any instance of this \
-environment (each reset gives a new instance), but it does NOT need to be \
-adaptable to different other environments.
+{scaffold_intro}
 {env_description_section}
 {blackbox_interaction_spec}
 {initial_helpers_prompt}
@@ -614,16 +609,20 @@ def build_system_prompt(
 
 def build_interface_spec(
     *,
-    template: str,
+    class_interface: str,
+    run_commands: str,
     python_executable: str,
     primitives_description: str,
     blackbox: bool,
 ) -> str:
-    """Fill an interface-spec template; append the inspect-source suffix when the agent
-    can read env source (non-blackbox)."""
-    interface_spec = template.format(
-        python_executable=python_executable,
+    """Fill the shared interface-spec template with an approach's class contract and
+    run commands; append the inspect-source suffix when the agent can read env source
+    (non-blackbox)."""
+    interface_spec = INTERFACE_SPEC_TEMPLATE.format(
+        class_interface=class_interface,
         primitives_description=primitives_description,
+        python_executable=python_executable,
+        run_commands=run_commands.format(python_executable=python_executable),
     )
     if not blackbox:
         interface_spec += INSPECT_SOURCE_SUFFIX.format(
@@ -659,6 +658,15 @@ def _env_description_section(blackbox_description: str | None) -> str:
     return BLACKBOX_DESCRIPTION_PREFIX + blackbox_description + "\n"
 
 
+def _scaffold_intro(approach_kind: str, blackbox: bool) -> str:
+    target = (
+        "an environment that you can only access as a black box"
+        if blackbox
+        else "the environment described below"
+    )
+    return _SCAFFOLD_INTRO.format(approach_kind=approach_kind, target=target)
+
+
 def build_agentic_prompt(
     *,
     blackbox: bool,
@@ -672,6 +680,7 @@ def build_agentic_prompt(
     modular = MODULAR_CODE_PROMPT if modular_code else ""
     if blackbox:
         return _AGENTIC_BLACKBOX.format(
+            scaffold_intro=_scaffold_intro("an approach", blackbox=True),
             env_description_section=_env_description_section(env_description),
             blackbox_interaction_spec=BLACKBOX_INTERACTION_SPEC.format(
                 set_state_note=""
@@ -682,12 +691,14 @@ def build_agentic_prompt(
         )
     if env_description is not None:
         return _AGENTIC_WITH_DESCRIPTION.format(
+            scaffold_intro=_scaffold_intro("an approach", blackbox=False),
             env_description=env_description,
             geometry_prompt=geometry_prompt,
             modular_code_prompt=modular,
             interface_spec=interface_spec,
         )
     return _AGENTIC_WITH_SOURCE.format(
+        source_opener=_SOURCE_OPENER,
         modular_code_prompt=modular,
         interface_spec=interface_spec,
     )
@@ -714,6 +725,7 @@ def build_cdl_prompt(
     )
     if blackbox:
         return _CDL_BLACKBOX.format(
+            scaffold_intro=_scaffold_intro("a behavior-based approach", blackbox=True),
             env_description_section=_env_description_section(env_description),
             blackbox_interaction_spec=BLACKBOX_INTERACTION_SPEC.format(
                 set_state_note=BLACKBOX_SET_STATE_NOTE
@@ -726,6 +738,7 @@ def build_cdl_prompt(
         )
     if env_description is not None:
         return _CDL_WITH_DESCRIPTION.format(
+            scaffold_intro=_scaffold_intro("a behavior-based approach", blackbox=False),
             env_description=env_description,
             geometry_prompt=geometry_prompt,
             cdl_decomposition_prompt=CDL_DECOMPOSITION_PROMPT,
@@ -734,6 +747,7 @@ def build_cdl_prompt(
             initial_helpers_prompt=initial_helpers,
         )
     return _CDL_WITH_SOURCE.format(
+        source_opener=_SOURCE_OPENER,
         initial_helpers_prompt=initial_helpers,
         cdl_decomposition_prompt=CDL_DECOMPOSITION_PROMPT,
         interface_spec=interface_spec,

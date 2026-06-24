@@ -118,26 +118,53 @@ def test_system_prompt_token_budget_on_both_approaches():
 def test_interface_spec_non_blackbox_appends_inspect():
     """Non-blackbox interface spec appends the inspect-source suffix."""
     spec = prompts.build_interface_spec(
-        template=prompts.AGENTIC_INTERFACE_SPEC,
+        class_interface=prompts.AGENTIC_CLASS_INTERFACE,
+        run_commands=prompts.AGENTIC_RUN_COMMANDS,
         python_executable="/usr/bin/python3",
         primitives_description="PRIMS_DESC",
         blackbox=False,
     )
     assert "inspect the source code" in spec
-    assert "/usr/bin/python3" in spec
+    assert "/usr/bin/python3 test_approach.py" in spec
     assert "PRIMS_DESC" in spec
 
 
 def test_interface_spec_blackbox_omits_inspect():
     """Blackbox interface spec omits the inspect-source suffix."""
     spec = prompts.build_interface_spec(
-        template=prompts.AGENTIC_INTERFACE_SPEC,
+        class_interface=prompts.AGENTIC_CLASS_INTERFACE,
+        run_commands=prompts.AGENTIC_RUN_COMMANDS,
         python_executable="/usr/bin/python3",
         primitives_description="PRIMS_DESC",
         blackbox=True,
     )
     assert "inspect the source code" not in spec
     assert "PRIMS_DESC" in spec
+
+
+def test_interface_spec_shared_wrapper_across_approaches():
+    """Both approaches share the interface-spec wrapper, including the test note."""
+    common = {
+        "python_executable": "/py",
+        "primitives_description": "PRIMS",
+        "blackbox": False,
+    }
+    agentic = prompts.build_interface_spec(
+        class_interface=prompts.AGENTIC_CLASS_INTERFACE,
+        run_commands=prompts.AGENTIC_RUN_COMMANDS,
+        **common,
+    )
+    cdl = prompts.build_interface_spec(
+        class_interface=prompts.CDL_CLASS_INTERFACE,
+        run_commands=prompts.CDL_RUN_COMMANDS,
+        **common,
+    )
+    for spec in (agentic, cdl):
+        assert "Write the best approach you can" in spec
+        assert "Write test scripts that use the real environment" in spec
+    # Structural slots still differ.
+    assert "test_behavior_[behavior_name].py" in cdl
+    assert "test_behavior_[behavior_name].py" not in agentic
 
 
 # ---------------------------------------------------------------------------

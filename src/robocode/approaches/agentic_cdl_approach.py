@@ -172,7 +172,8 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             DOCKER_PYTHON if self._container_backend != "local" else sys.executable
         )
         interface_spec = prompts.build_interface_spec(
-            template=prompts.CDL_INTERFACE_SPEC,
+            class_interface=prompts.CDL_CLASS_INTERFACE,
+            run_commands=prompts.CDL_RUN_COMMANDS,
             python_executable=python_exe,
             primitives_description=primitives_desc,
             blackbox=self._blackbox,
