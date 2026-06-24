@@ -98,16 +98,16 @@ def test_system_prompt_mcp_suffix_non_blackbox_variant():
     assert MCP_TOOLS_SYSTEM_PROMPT_SUFFIX in sp
 
 
-def test_system_prompt_cdl_token_budget_tail():
-    """The CDL extra tail injects the token-budget guidance."""
-    sp = prompts.build_system_prompt(
-        intro=prompts.CDL_INTRO,
-        blackbox=False,
-        backend_name="claude",
-        extra_tail=prompts.CDL_SYSTEM_TOKEN_BUDGET,
+def test_system_prompt_token_budget_on_both_approaches():
+    """Token-budget guidance is appended to every system prompt (both approaches)."""
+    agentic = prompts.build_system_prompt(
+        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude"
     )
-    assert "purely imperative, feedforward" in sp
-    assert "TOKEN BUDGET" in sp
+    cdl = prompts.build_system_prompt(
+        intro=prompts.CDL_INTRO, blackbox=False, backend_name="claude"
+    )
+    assert "TOKEN BUDGET" in agentic
+    assert "TOKEN BUDGET" in cdl
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ def test_agentic_prompt_blackbox():
     assert "BLACK BOX" in p
     assert "must NOT import `env_client`" in p
     assert "Read the environment source files" not in p
-    assert "ZERO numbers" in p
+    assert "5-10 bullet points" in p
     assert "IFACE" in p
 
 
@@ -172,7 +172,7 @@ def test_agentic_prompt_blackbox_with_description_and_no_geometry():
     )
     assert "The environment is described below." in p
     assert "ENVDESC" in p
-    assert "ZERO numbers" not in p
+    assert "5-10 bullet points" not in p
 
 
 def test_agentic_prompt_with_description_non_blackbox():
@@ -227,6 +227,28 @@ def test_cdl_prompt_blackbox():
     assert "precondition requires when testing it in" in p
     assert "primitives = env.make_primitives()" in p
     assert "ALREADY PROVIDED" not in p
+
+
+def test_geometry_prompt_unified_across_approaches():
+    """Both approaches use the same (terse) geometry-reasoning prompt."""
+    agentic = prompts.build_agentic_prompt(
+        blackbox=False,
+        interface_spec="IFACE",
+        geometry=True,
+        modular_code=False,
+        env_description="E",
+    )
+    cdl = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec="IFACE",
+        geometry=True,
+        env_description="E",
+        has_initial_helpers=False,
+    )
+    assert prompts.GEOMETRY_PROMPT in agentic
+    assert prompts.GEOMETRY_PROMPT in cdl
+    assert "5-10 bullet points" in agentic
+    assert "5-10 bullet points" in cdl
 
 
 def test_cdl_prompt_initial_helpers_non_blackbox():

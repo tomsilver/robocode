@@ -86,9 +86,9 @@ SYSTEM_SUBAGENTS_BLACKBOX = (
     "gets its own fresh environment instance."
 )
 
-# CDL-only system-prompt tail (passed as extra_tail). Leading space joins it to
-# the subagent sentence above.
-CDL_SYSTEM_TOKEN_BUDGET = (
+# Token-budget guidance appended to every system prompt. Leading space joins it
+# to the subagent sentence above.
+SYSTEM_TOKEN_BUDGET = (
     " TOKEN BUDGET: You have a limited output-token budget per turn. Be concise. "
     "Do NOT write lengthy prose reasoning about geometry or arithmetic — put "
     "all numerical calculations in code (Python scripts or inline print "
@@ -231,60 +231,18 @@ interpreter has all required packages installed. For example:
 ```\
 """
 
-AGENTIC_GEOMETRY_PROMPT = """\
+# Geometric-reasoning prompt, shared by both approaches.
+GEOMETRY_PROMPT = """\
 
-BEFORE writing any code, you MUST first reason in detail about the geometry of this environment. \
-Think carefully and qualitatively about spatial relationships, shapes, motions, and constraints.
+BEFORE writing any code, briefly describe (in 5-10 bullet points) the key \
+geometric relationships in this environment:
+- What shapes are involved and how they interact spatially.
+- What motions/transformations are needed (translate, rotate, extend arm).
+- What collision constraints exist (clearances, boundaries).
 
-CRITICAL: Your geometric reasoning must be PURELY QUALITATIVE. Do NOT use any numbers AT ALL — \
-not in your reasoning, not in your thinking, not anywhere in your geometric analysis. This means \
-NO coordinates, NO distances, NO angles, NO dimensions, NO sizes, NO counts of objects, NO \
-thresholds, NO numeric constants, NO array indices, NO velocities, NO ratios, NO percentages. \
-Not even "2D" or "3D" — say "two-dimensional" or "three-dimensional" instead. If you catch \
-yourself about to write a number, stop and rephrase using purely relational, qualitative language. \
-Instead of saying "the object is at position (x, y)" say "the object is near the boundary". \
-Instead of "move 0.1 units" say "move a small step". Instead of "the angle is 90 degrees" say \
-"the surfaces are perpendicular".
-
-Your geometric reasoning should cover topics like:
-- What kinds of geometric shapes are involved (e.g. rectangles, circles, polygons, cuboids, \
-spheres, cylinders, capsules)? How do their shapes affect interactions — for instance, \
-rectangles tile differently than circles, spheres roll while cuboids don't, narrow corridors \
-between rectangular obstacles require precise alignment.
-- What are the key spatial relationships between objects? Reason about relative orientations \
-(parallel, perpendicular, oblique, aligned, tangent, skewed, transverse), relative positions \
-(adjacent, opposite, coplanar, collinear, concentric, coaxial, symmetric), and topological \
-relations (inside, outside, overlapping, enclosing, intersecting, touching, disjoint). Which \
-of these relationships matter for solving the task?
-- What geometric constraints exist? Are there boundaries, obstacles, containment relationships, \
-or clearance requirements? How do the shapes of obstacles create narrow passages, dead ends, \
-or open regions? Are surfaces flush or offset? Are relevant surfaces convex or concave?
-- What kind of motions or transformations are involved? Are objects translating, rotating, or \
-both? Are motions continuous or discrete? Does an object's shape affect how it can move \
-(e.g. a rectangle rotating requires more swept area than a circle of similar size)?
-- What makes a configuration "good" or "bad" geometrically? Think about reachability, \
-collision-freeness, coverage, proximity to goals.
-- What is the overall geometric strategy? For example:
-  - "The agent needs to navigate around obstacles to reach a goal region, so it must find a \
-path that threads between blocked areas while staying within bounds. When two rectangular \
-obstacles have parallel edges with a gap between them, the agent can pass through \
-perpendicular to those edges."
-  - "Objects must be packed tightly without overlapping, so the approach needs to find \
-placements where each new object fits into remaining gaps while respecting clearance from \
-existing objects. Rectangular objects can be aligned with parallel edges flush against each \
-other for dense packing, while circular objects leave unavoidable gaps."
-  - "The robot arm must move its end effector to a grasp pose, which means planning a \
-sequence of joint motions that avoids self-collision and keeps the kinematic chain valid. \
-The shape of the target object determines viable grasp orientations — a sphere can be \
-grasped from any direction, while a flat rectangular object requires approaching \
-perpendicular to one of its faces."
-  - "The agent must push an object toward a target, which requires approaching from the \
-opposite side so that the push direction is aligned with the line from object to goal. \
-A cylindrical object may roll unpredictably under pushes that are oblique to its axis."
-
-This qualitative geometric analysis should directly inform your code. Write your reasoning \
-out before you start coding. Do NOT skip this step. Remember: your geometric reasoning must \
-contain ZERO numbers. If any number appears in your geometric analysis, you have failed the task.
+Keep this analysis SHORT and QUALITATIVE — no numbers, no arithmetic. \
+If you need to compute specific positions or offsets, write a Python \
+script to do it and print the results. NEVER do arithmetic in text.
 """
 
 MODULAR_CODE_PROMPT = """\
@@ -513,19 +471,6 @@ interpreter has all required packages installed. For example:
 ```\
 """
 
-CDL_GEOMETRY_PROMPT = """\
-
-BEFORE writing any code, briefly describe (in 5-10 bullet points) the key \
-geometric relationships in this environment:
-- What shapes are involved and how they interact spatially.
-- What motions/transformations are needed (translate, rotate, extend arm).
-- What collision constraints exist (clearances, boundaries).
-
-Keep this analysis SHORT and QUALITATIVE — no numbers, no arithmetic. \
-If you need to compute specific positions or offsets, write a Python \
-script to do it and print the results. NEVER do arithmetic in text.
-"""
-
 CDL_INITIAL_HELPERS_PROMPT = """\
 
 IMPORTANT: You have been provided with initial versions of ``obs_helpers.py`` \
@@ -644,17 +589,16 @@ def build_system_prompt(
     blackbox: bool,
     backend_name: str,
     mcp_tools: tuple[str, ...] = (),
-    extra_tail: str = "",
 ) -> str:
     """Compose a coding-agent system prompt from shared fragments.
 
     ``intro`` is one of the composed intro constants (AGENTIC_INTRO[_BLACKBOX],
     CDL_INTRO[_BLACKBOX]). The shared file-discipline block, blackbox-aware
-    subagent guidance, optional ``extra_tail`` (CDL token budget), the
-    backend-specific suffix, and the optional MCP-tools suffix follow.
+    subagent guidance, token-budget guidance, the backend-specific suffix, and
+    the optional MCP-tools suffix follow.
     """
     subagents = SYSTEM_SUBAGENTS_BLACKBOX if blackbox else SYSTEM_SUBAGENTS
-    system_prompt = intro + SYSTEM_FILE_DISCIPLINE + subagents + extra_tail
+    system_prompt = intro + SYSTEM_FILE_DISCIPLINE + subagents + SYSTEM_TOKEN_BUDGET
     if backend_name == "opencode":
         system_prompt += OPENCODE_PROMPT_SUFFIX
     else:
@@ -724,7 +668,7 @@ def build_agentic_prompt(
     env_description: str | None,
 ) -> str:
     """Compose the monolithic-approach task prompt."""
-    geometry_prompt = AGENTIC_GEOMETRY_PROMPT if geometry else ""
+    geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     modular = MODULAR_CODE_PROMPT if modular_code else ""
     if blackbox:
         return _AGENTIC_BLACKBOX.format(
@@ -758,7 +702,7 @@ def build_cdl_prompt(
     has_initial_helpers: bool,
 ) -> str:
     """Compose the behavior-decomposed-approach task prompt."""
-    geometry_prompt = CDL_GEOMETRY_PROMPT if geometry else ""
+    geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     initial_helpers = CDL_INITIAL_HELPERS_PROMPT if has_initial_helpers else ""
     helpers_note = CDL_HELPERS_PROVIDED_NOTE if has_initial_helpers else ""
     behavior_impl_prompt = CDL_BEHAVIOR_IMPLEMENTATION_PROMPT.format(

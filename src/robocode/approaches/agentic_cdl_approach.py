@@ -196,7 +196,6 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
             mcp_tools=self._mcp_tools,
-            extra_tail=prompts.CDL_SYSTEM_TOKEN_BUDGET,
         )
 
         docker_config: DockerSandboxConfig | None = None
