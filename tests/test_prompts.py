@@ -1,5 +1,7 @@
 """Tests for robocode.prompts composition helpers and blackbox deltas."""
 
+import itertools
+
 from robocode import prompts
 from robocode.mcp import (
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
@@ -338,3 +340,241 @@ def test_genplan_constants():
     assert "Return ONLY" in prompts.GENPLAN_INTERFACE_SPEC
     assert prompts.GENPLAN_SUMMARY_PROMPT
     assert "simple strategy" in prompts.GENPLAN_STRATEGY_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Golden composition tests: pin the exact assembled output so a future fragment
+# reorder, dropped section, or stray separator (e.g. a reintroduced blank line)
+# is caught. Expected values are built from the public fragments in canonical
+# order, so an intentional edit to a fragment's text updates in exactly one
+# place while still locking ordering and the single-blank-line spacing.
+# ---------------------------------------------------------------------------
+
+_IFACE = "<<IFACE>>"
+_SOURCE_OPENER = (
+    "Read the environment source files in this directory to understand the "
+    "state type, action space, and dynamics."
+)
+_SCAFFOLD_CDL_DESCRIPTION = (
+    "You are writing a behavior-based approach for the environment described "
+    "below.\n\nYour approach should be general enough to solve any instance of "
+    "this environment (env.reset()), but it does NOT need to be adaptable to "
+    "different other environments."
+)
+_SCAFFOLD_CDL_BLACKBOX = (
+    "You are writing a behavior-based approach for an environment that you can "
+    "only access as a black box.\n\nYour approach should be general enough to "
+    "solve any instance of this environment (env.reset()), but it does NOT need "
+    "to be adaptable to different other environments."
+)
+
+
+def _cdl_behavior_impl(blackbox, helpers_note):
+    return prompts.CDL_BEHAVIOR_IMPLEMENTATION_PROMPT.format(
+        obs_inspection_note=(
+            prompts.CDL_OBS_INSPECTION_NOTE_BLACKBOX
+            if blackbox
+            else prompts.CDL_OBS_INSPECTION_NOTE
+        ),
+        obs_helpers_note=helpers_note,
+        act_helpers_note=helpers_note,
+    )
+
+
+def test_golden_system_prompt_agentic_nonblackbox_claude():
+    """Exact agentic (non-blackbox) system prompt: intro + shared tails + suffix."""
+    expected = (
+        prompts.AGENTIC_INTRO
+        + prompts.SYSTEM_FILE_DISCIPLINE
+        + prompts.SYSTEM_SUBAGENTS
+        + prompts.SYSTEM_TOKEN_BUDGET
+        + CLAUDE_PROMPT_SUFFIX
+    )
+    assert (
+        prompts.build_system_prompt(
+            intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude"
+        )
+        == expected
+    )
+
+
+def test_golden_system_prompt_cdl_blackbox_claude_with_mcp():
+    """Exact CDL blackbox system prompt: blackbox subagents + blackbox MCP suffix."""
+    expected = (
+        prompts.CDL_INTRO_BLACKBOX
+        + prompts.SYSTEM_FILE_DISCIPLINE
+        + prompts.SYSTEM_SUBAGENTS_BLACKBOX
+        + prompts.SYSTEM_TOKEN_BUDGET
+        + CLAUDE_PROMPT_SUFFIX
+        + MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+    )
+    assert (
+        prompts.build_system_prompt(
+            intro=prompts.CDL_INTRO_BLACKBOX,
+            blackbox=True,
+            backend_name="claude",
+            mcp_tools=("render_state",),
+        )
+        == expected
+    )
+
+
+def test_golden_system_prompt_opencode_suffix():
+    """Exact agentic system prompt under the opencode backend suffix."""
+    expected = (
+        prompts.AGENTIC_INTRO
+        + prompts.SYSTEM_FILE_DISCIPLINE
+        + prompts.SYSTEM_SUBAGENTS
+        + prompts.SYSTEM_TOKEN_BUDGET
+        + OPENCODE_PROMPT_SUFFIX
+    )
+    assert (
+        prompts.build_system_prompt(
+            intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="opencode"
+        )
+        == expected
+    )
+
+
+def test_golden_interface_spec_agentic_nonblackbox():
+    """Exact agentic interface spec: filled template plus the inspect-source suffix."""
+    expected = prompts.INTERFACE_SPEC_TEMPLATE.format(
+        class_interface=prompts.AGENTIC_CLASS_INTERFACE,
+        primitives_description="PRIMS",
+        python_executable="/py",
+        run_commands="/py test_approach.py",
+    ) + prompts.INSPECT_SOURCE_SUFFIX.format(python_executable="/py")
+    assert (
+        prompts.build_interface_spec(
+            class_interface=prompts.AGENTIC_CLASS_INTERFACE,
+            run_commands=prompts.AGENTIC_RUN_COMMANDS,
+            python_executable="/py",
+            primitives_description="PRIMS",
+            blackbox=False,
+        )
+        == expected
+    )
+
+
+def test_golden_agentic_task_prompt_source_with_geometry():
+    """Exact agentic source-branch prompt: opener, geometry, interface (one blank
+    line between sections)."""
+    expected = _SOURCE_OPENER + "\n" + prompts.GEOMETRY_PROMPT + "\n" + _IFACE + "\n"
+    prompt = prompts.build_agentic_prompt(
+        blackbox=False,
+        interface_spec=_IFACE,
+        geometry=True,
+        modular_code=False,
+        env_description=None,
+    )
+    assert prompt == expected
+    assert "\n\n\n" not in prompt
+
+
+def test_golden_cdl_task_prompt_source_with_geometry():
+    """Exact CDL source-branch prompt: optional fragments self-separate, so no
+    doubled blank line accumulates ahead of the decomposition section."""
+    expected = (
+        _SOURCE_OPENER
+        + "\n"
+        + prompts.GEOMETRY_PROMPT
+        + prompts.CDL_DECOMPOSITION_PROMPT
+        + "\n"
+        + _IFACE
+        + "\n"
+        + _cdl_behavior_impl(blackbox=False, helpers_note="")
+    )
+    prompt = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec=_IFACE,
+        geometry=True,
+        env_description=None,
+        has_initial_helpers=False,
+    )
+    assert prompt == expected
+    assert "\n\n\n" not in prompt
+
+
+def test_golden_cdl_task_prompt_blackbox_with_helpers():
+    """Exact CDL blackbox prompt: scaffold, interaction spec, helpers + geometry +
+    decomposition, interface, behavior impl, with single-blank-line spacing."""
+    expected = (
+        _SCAFFOLD_CDL_BLACKBOX
+        + "\n\n"
+        + prompts.BLACKBOX_INTERACTION_SPEC.format(
+            set_state_note=prompts.BLACKBOX_SET_STATE_NOTE
+        )
+        + "\n"
+        + prompts.CDL_INITIAL_HELPERS_PROMPT
+        + prompts.GEOMETRY_PROMPT
+        + prompts.CDL_DECOMPOSITION_PROMPT
+        + "\n"
+        + _IFACE
+        + "\n"
+        + _cdl_behavior_impl(
+            blackbox=True, helpers_note=prompts.CDL_HELPERS_PROVIDED_NOTE
+        )
+    )
+    prompt = prompts.build_cdl_prompt(
+        blackbox=True,
+        interface_spec=_IFACE,
+        geometry=True,
+        env_description=None,
+        has_initial_helpers=True,
+    )
+    assert prompt == expected
+    assert "\n\n\n" not in prompt
+
+
+def test_golden_cdl_task_prompt_description_with_helpers():
+    """Exact CDL description-branch prompt with provided helpers and geometry."""
+    expected = (
+        _SCAFFOLD_CDL_DESCRIPTION
+        + "\n\n"
+        + "ENVDESC"
+        + "\n"
+        + prompts.CDL_INITIAL_HELPERS_PROMPT
+        + prompts.GEOMETRY_PROMPT
+        + prompts.CDL_DECOMPOSITION_PROMPT
+        + "\n"
+        + _IFACE
+        + "\n"
+        + _cdl_behavior_impl(
+            blackbox=False, helpers_note=prompts.CDL_HELPERS_PROVIDED_NOTE
+        )
+    )
+    prompt = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec=_IFACE,
+        geometry=True,
+        env_description="ENVDESC",
+        has_initial_helpers=True,
+    )
+    assert prompt == expected
+    assert "\n\n\n" not in prompt
+
+
+def test_no_doubled_blank_lines_in_any_task_prompt():
+    """No composed task prompt contains a doubled blank line, in any config."""
+    for blackbox, geometry, modular, env in itertools.product(
+        (False, True), (False, True), (False, True), (None, "ENVDESC")
+    ):
+        prompt = prompts.build_agentic_prompt(
+            blackbox=blackbox,
+            interface_spec=_IFACE,
+            geometry=geometry,
+            modular_code=modular,
+            env_description=env,
+        )
+        assert "\n\n\n" not in prompt, ("agentic", blackbox, geometry, modular, env)
+    for blackbox, geometry, env, helpers in itertools.product(
+        (False, True), (False, True), (None, "ENVDESC"), (False, True)
+    ):
+        prompt = prompts.build_cdl_prompt(
+            blackbox=blackbox,
+            interface_spec=_IFACE,
+            geometry=geometry,
+            env_description=env,
+            has_initial_helpers=helpers,
+        )
+        assert "\n\n\n" not in prompt, ("cdl", blackbox, geometry, env, helpers)

@@ -506,36 +506,33 @@ CDL_HELPERS_PROVIDED_NOTE = (
     "additional helpers you need. Do NOT rewrite it from scratch."
 )
 
-_CDL_WITH_DESCRIPTION = """\
-{scaffold_intro}
+_CDL_WITH_DESCRIPTION = (
+    "{scaffold_intro}\n\n"
+    "{env_description}\n"
+    "{initial_helpers_prompt}{geometry_prompt}{cdl_decomposition_prompt}\n"
+    "{interface_spec}\n"
+    "{behavior_implementation_prompt}"
+)
 
-{env_description}
-{initial_helpers_prompt}
-{geometry_prompt}
-{cdl_decomposition_prompt}
-{interface_spec}
-{behavior_implementation_prompt}\
-"""
+# The optional initial-helpers and geometry fragments each begin with their own
+# newline, so they are concatenated directly rather than each occupying its own
+# template line; that keeps a single blank line between sections instead of
+# accumulating blank lines when a fragment is empty.
+_CDL_WITH_SOURCE = (
+    "{source_opener}\n"
+    "{initial_helpers_prompt}{geometry_prompt}{cdl_decomposition_prompt}\n"
+    "{interface_spec}\n"
+    "{behavior_implementation_prompt}"
+)
 
-_CDL_WITH_SOURCE = """\
-{source_opener}
-{initial_helpers_prompt}
-{geometry_prompt}
-{cdl_decomposition_prompt}
-{interface_spec}
-{behavior_implementation_prompt}\
-"""
-
-_CDL_BLACKBOX = """\
-{scaffold_intro}
-{env_description_section}
-{blackbox_interaction_spec}
-{initial_helpers_prompt}
-{geometry_prompt}
-{cdl_decomposition_prompt}
-{interface_spec}
-{behavior_implementation_prompt}\
-"""
+_CDL_BLACKBOX = (
+    "{scaffold_intro}\n"
+    "{env_description_section}\n"
+    "{blackbox_interaction_spec}\n"
+    "{initial_helpers_prompt}{geometry_prompt}{cdl_decomposition_prompt}\n"
+    "{interface_spec}\n"
+    "{behavior_implementation_prompt}"
+)
 
 # ---------------------------------------------------------------------------
 # LLMGenPlanApproach (non-agentic baseline) fragments
@@ -617,9 +614,9 @@ def build_interface_spec(
     primitives_description: str,
     blackbox: bool,
 ) -> str:
-    """Fill the shared interface-spec template with an approach's class contract and
-    run commands; append the inspect-source suffix when the agent can read env source
-    (non-blackbox)."""
+    """Fill the shared interface-spec template with an approach's class contract and run
+    commands; append the inspect-source suffix when the agent can read env source (non-
+    blackbox)."""
     interface_spec = INTERFACE_SPEC_TEMPLATE.format(
         class_interface=class_interface,
         primitives_description=primitives_description,
