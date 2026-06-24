@@ -22,6 +22,7 @@ import gymnasium
 from gymnasium.spaces import Space
 from omegaconf import DictConfig, OmegaConf
 
+from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
 from robocode.primitives import format_primitives_description
 from robocode.utils.apptainer_sandbox import _DEFAULT_SIF, run_genplan_in_apptainer
@@ -36,37 +37,6 @@ logger = logging.getLogger(__name__)
 
 _ObsType = TypeVar("_ObsType")
 _ActType = TypeVar("_ActType")
-
-_INTERFACE_SPEC = """\
-Implement the strategy as a Python class named `GeneratedApproach` in a single \
-code block:
-
-```python
-class GeneratedApproach:
-    def __init__(self, action_space, observation_space, primitives):
-        \"\"\"action_space and observation_space are the gym spaces above.\"\"\"
-        ...
-
-    def reset(self, state, info):
-        \"\"\"Called at the start of each episode with the initial observation.\"\"\"
-        ...
-
-    def get_action(self, state):
-        \"\"\"Return a valid action (matching action_space) for this state.\"\"\"
-        ...
-```
-
-`state` is a numpy observation matching the observation space. `get_action` is \
-called every step and must return an action inside the action space. The class \
-may keep internal state between calls (e.g. a precomputed plan). Return ONLY \
-the code block; do not write tests or explanations."""
-
-_SUMMARY_PROMPT = "Write a short summary of this environment in words."
-
-_STRATEGY_PROMPT = (
-    "There is a simple strategy for solving all instances of this environment "
-    "without using search. What is that strategy?"
-)
 
 
 class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
@@ -179,14 +149,19 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     "content": (
                         f"{context}\n\nThere is a simple strategy for solving "
                         "all instances of this environment without using "
-                        f"search. {_INTERFACE_SPEC}"
+                        f"search. {prompts.GENPLAN_INTERFACE_SPEC}"
                     ),
                 }
             )
         else:
-            self._exchange(messages, f"{context}\n\n{_SUMMARY_PROMPT}", sandbox_dir, 0)
-            self._exchange(messages, _STRATEGY_PROMPT, sandbox_dir, 1)
-            messages.append({"role": "user", "content": _INTERFACE_SPEC})
+            self._exchange(
+                messages,
+                f"{context}\n\n{prompts.GENPLAN_SUMMARY_PROMPT}",
+                sandbox_dir,
+                0,
+            )
+            self._exchange(messages, prompts.GENPLAN_STRATEGY_PROMPT, sandbox_dir, 1)
+            messages.append({"role": "user", "content": prompts.GENPLAN_INTERFACE_SPEC})
         return messages
 
     def _driver_config(self, completion: dict[str, Any]) -> dict[str, Any]:
@@ -419,10 +394,10 @@ _FENCE = r"```[ \t]*[a-zA-Z0-9]*[ \t]*\r?\n"
 def _parse_python_code(response: str) -> str:
     """Extract the GeneratedApproach implementation from a model response.
 
-    Models sometimes emit an illustrative snippet before the real implementation,
-    so prefer the last fenced block that defines GeneratedApproach, then the last
-    fenced block. If the response was truncated at the token limit (an opening
-    fence with no close), recover the code after the last opening fence.
+    Models sometimes emit an illustrative snippet before the real implementation, so
+    prefer the last fenced block that defines GeneratedApproach, then the last fenced
+    block. If the response was truncated at the token limit (an opening fence with no
+    close), recover the code after the last opening fence.
     """
     blocks = [b.strip() for b in re.findall(_FENCE + r"(.*?)```", response, re.DOTALL)]
     blocks = [b for b in blocks if b]
