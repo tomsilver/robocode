@@ -300,6 +300,7 @@ _AGENTIC_WITH_DESCRIPTION = """\
 
 _AGENTIC_WITH_SOURCE = """\
 {source_opener}
+{geometry_prompt}
 {interface_spec}
 {modular_code_prompt}\
 """
@@ -519,6 +520,7 @@ _CDL_WITH_DESCRIPTION = """\
 _CDL_WITH_SOURCE = """\
 {source_opener}
 {initial_helpers_prompt}
+{geometry_prompt}
 {cdl_decomposition_prompt}
 {interface_spec}
 {behavior_implementation_prompt}\
@@ -699,6 +701,7 @@ def build_agentic_prompt(
         )
     return _AGENTIC_WITH_SOURCE.format(
         source_opener=_SOURCE_OPENER,
+        geometry_prompt=geometry_prompt,
         modular_code_prompt=modular,
         interface_spec=interface_spec,
     )
@@ -749,6 +752,7 @@ def build_cdl_prompt(
     return _CDL_WITH_SOURCE.format(
         source_opener=_SOURCE_OPENER,
         initial_helpers_prompt=initial_helpers,
+        geometry_prompt=geometry_prompt,
         cdl_decomposition_prompt=CDL_DECOMPOSITION_PROMPT,
         interface_spec=interface_spec,
         behavior_implementation_prompt=behavior_impl_prompt,

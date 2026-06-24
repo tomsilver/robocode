@@ -218,7 +218,7 @@ def test_agentic_prompt_with_description_non_blackbox():
 
 
 def test_agentic_prompt_source_non_blackbox():
-    """Non-blackbox prompt without a description asks to read source."""
+    """Non-blackbox prompt without a description asks to read source, with geometry."""
     p = prompts.build_agentic_prompt(
         blackbox=False,
         interface_spec="IFACE",
@@ -227,6 +227,7 @@ def test_agentic_prompt_source_non_blackbox():
         env_description=None,
     )
     assert "Read the environment source files" in p
+    assert "5-10 bullet points" in p  # geometry applies in every branch
     assert "Write MODULAR code" not in p
 
 
