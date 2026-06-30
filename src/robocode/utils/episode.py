@@ -141,6 +141,7 @@ def run_per_instance_eval(
             seed=seed,
             budget_usd=budget_i,
             output_subdir=output_dir / f"instance_{i}",
+            render=render,
         )
         num_attempted += 1
         remaining -= result.cost_usd

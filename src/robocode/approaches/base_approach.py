@@ -103,12 +103,14 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         seed: int,
         budget_usd: float,
         output_subdir: Path,
+        render: bool = False,
     ) -> InstanceResult:
         """Spend up to ``budget_usd`` of eval-time agent budget on one seed.
 
         Only implemented by per-instance approaches (``per_instance = True``).
         Generalized approaches train once and are rolled out for free, so they
-        leave this unimplemented.
+        leave this unimplemented. ``render`` requests RGB frames on the scored
+        episode (for video saving).
         """
         raise NotImplementedError(
             "solve_instance is only implemented by per-instance approaches"

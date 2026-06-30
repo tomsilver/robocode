@@ -39,6 +39,7 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         seed: int,
         budget_usd: float,
         output_subdir: Path,
+        render: bool = False,
     ) -> InstanceResult:
         """Run the agent on a single seed, then score the program it wrote.
 
@@ -98,7 +99,9 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         self._generated = None
         try:
             self._load_generated(result.output_file)
-            metrics, frames, _ = run_episode(env, self, seed, self._max_steps)
+            metrics, frames, _ = run_episode(
+                env, self, seed, self._max_steps, render=render
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Isolate a single seed's bad program (load error or runtime crash):
             # score it as a failure rather than aborting the whole per-seed sweep,

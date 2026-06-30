@@ -39,10 +39,16 @@ class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
         raise NotImplementedError
 
     def solve_instance(
-        self, *, env: Any, seed: int, budget_usd: float, output_subdir: Path
+        self,
+        *,
+        env: Any,
+        seed: int,
+        budget_usd: float,
+        output_subdir: Path,
+        render: bool = False,
     ) -> InstanceResult:
         del env, output_subdir
-        self.calls.append({"seed": seed, "budget_usd": budget_usd})
+        self.calls.append({"seed": seed, "budget_usd": budget_usd, "render": render})
         return self._results.pop(0)
 
 
@@ -114,6 +120,23 @@ def test_per_instance_eval_charges_crashed_attempts(tmp_path: Path) -> None:
     assert out["mean_eval_steps"] == pytest.approx(4.0)
     assert out["solve_rate"] == pytest.approx(0.5)  # 1 of 2 seeds solved
     assert out["per_episode"][1]["crashed"] is True
+
+
+def test_per_instance_eval_threads_render_and_saves_video(tmp_path: Path) -> None:
+    """render is passed to solve_instance and returned frames are saved as a gif."""
+    rng = np.random.default_rng(0)
+    frames = [rng.integers(0, 255, (8, 8, 3), dtype=np.uint8) for _ in range(3)]
+    results = [
+        InstanceResult(
+            solved=True, total_reward=1.0, num_steps=3, cost_usd=0.5, frames=frames
+        )
+    ]
+    approach = _ScriptedPerInstanceApproach(results)
+    run_per_instance_eval(
+        None, approach, [5], max_budget_usd=2.0, output_dir=tmp_path, render=True
+    )
+    assert approach.calls[0]["render"] is True
+    assert (tmp_path / "videos" / "episode_0.gif").exists()
 
 
 @pytest.fixture()
