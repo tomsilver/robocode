@@ -89,6 +89,102 @@ def run_episode(
     return metrics, frames, state
 
 
+def run_per_instance_eval(
+    env: Any,
+    approach: BaseApproach,
+    eval_seeds: list[int],
+    *,
+    max_budget_usd: float,
+    output_dir: Path,
+    max_budget_per_instance_usd: float | None = None,
+    render: bool = False,
+) -> dict[str, Any]:
+    """Evaluate a per-instance approach, spending one global budget across seeds.
+
+    Each seed gets its own budget-bounded agent run via ``approach.solve_instance``
+    (which scores on its own configured eval horizon) until the global
+    ``max_budget_usd`` is exhausted; remaining seeds are then left unattempted.
+    ``max_budget_per_instance_usd`` optionally caps a single seed's spend
+    (``None`` = a seed may use all remaining budget).
+
+    Returns a results dict ready to merge into ``results.json``. ``solve_rate`` is
+    over *all* eval seeds (unattempted, unsolved, and crashed attempts all count as
+    failures); reward/step means are taken only over attempted, non-crashed,
+    scored episodes.
+    """
+    per_episode: list[dict[str, Any]] = []
+    remaining = max_budget_usd
+    total_cost = 0.0
+    num_solved = 0
+    num_attempted = 0
+    for i, seed in enumerate(eval_seeds):
+        if remaining <= 0:
+            per_episode.append(
+                {
+                    "seed": seed,
+                    "attempted": False,
+                    "solved": False,
+                    "crashed": False,
+                    "total_reward": None,
+                    "num_steps": None,
+                    "cost_usd": 0.0,
+                }
+            )
+            continue
+        budget_i = (
+            remaining
+            if max_budget_per_instance_usd is None
+            else min(max_budget_per_instance_usd, remaining)
+        )
+        result = approach.solve_instance(
+            env=env,
+            seed=seed,
+            budget_usd=budget_i,
+            output_subdir=output_dir / f"instance_{i}",
+        )
+        num_attempted += 1
+        remaining -= result.cost_usd
+        total_cost += result.cost_usd
+        if result.solved:
+            num_solved += 1
+        if render and result.frames:
+            video_dir = output_dir / "videos"
+            video_dir.mkdir(exist_ok=True)
+            save_video(result.frames, video_dir / f"episode_{i}.gif")
+        per_episode.append(
+            {
+                "seed": seed,
+                "attempted": True,
+                "solved": result.solved,
+                "crashed": result.crashed,
+                "total_reward": result.total_reward,
+                "num_steps": result.num_steps,
+                "cost_usd": result.cost_usd,
+            }
+        )
+
+    scored = [e for e in per_episode if e["attempted"] and not e["crashed"]]
+    num_crashed = sum(1 for e in per_episode if e["crashed"])
+
+    def _mean(key: str) -> float:
+        vals = [e[key] for e in scored if e[key] is not None]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    num_eval = len(eval_seeds)
+    return {
+        "mean_eval_reward": _mean("total_reward"),
+        "mean_eval_steps": _mean("num_steps"),
+        "solve_rate": num_solved / num_eval if num_eval else float("nan"),
+        "num_eval_tasks": num_eval,
+        "num_attempted": num_attempted,
+        "num_solved": num_solved,
+        "num_evaluated_episodes": len(scored),
+        "num_crashed_episodes": num_crashed,
+        "per_episode": per_episode,
+        "total_cost_usd": total_cost,
+    }
+
+
 def save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:
     """Save a list of RGB frames as a gif."""
     duration = 1000.0 / fps  # ms per frame

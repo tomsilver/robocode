@@ -1,0 +1,15 @@
+defaults:
+  - backend: claude_sonnet
+
+_target_: robocode.approaches.agentic_per_instance_approach.AgenticPerInstanceApproach
+max_budget_usd: 5.0  # GLOBAL budget shared across all eval seeds
+max_budget_per_instance_usd: null  # per-seed cap; null = a seed may use all remaining
+max_turns: 0
+output_dir: ${hydra:runtime.output_dir}
+load_dir: null
+container_backend: docker  # docker | apptainer | local
+geometry_prompt: true
+modular_code_prompt: false
+max_output_tokens: 32768
+autocompact_pct: 80
+blackbox: false  # hide env source; interact via host-side env server

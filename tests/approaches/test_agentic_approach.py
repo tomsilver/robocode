@@ -230,7 +230,7 @@ def test_blackbox_train_wires_sandbox(tmp_path, monkeypatch):
         return SandboxResult(success=True, output_file=approach_file, error=None)
 
     monkeypatch.setattr(
-        "robocode.approaches.agentic_approach.run_with_rate_limit_retry",
+        "robocode.approaches.agentic_base.run_with_rate_limit_retry",
         fake_run,
     )
     approach = AgenticApproach(

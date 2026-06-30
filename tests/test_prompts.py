@@ -567,6 +567,103 @@ def test_no_doubled_blank_lines_in_any_task_prompt():
             env_description=env,
         )
         assert "\n\n\n" not in prompt, ("agentic", blackbox, geometry, modular, env)
+
+
+# ---------------------------------------------------------------------------
+# Per-instance task-prompt delta: target-seed directive + budget stewardship,
+# byte-identical to the generalized prompt when no seed is given.
+# ---------------------------------------------------------------------------
+
+
+def test_per_instance_seed_none_is_unchanged():
+    """per_instance_seed=None reproduces the generalized prompt exactly."""
+    for blackbox, geometry, modular, env in itertools.product(
+        (False, True), (False, True), (False, True), (None, "ENVDESC")
+    ):
+        common = {
+            "blackbox": blackbox,
+            "interface_spec": _IFACE,
+            "geometry": geometry,
+            "modular_code": modular,
+            "env_description": env,
+        }
+        assert prompts.build_agentic_prompt(**common) == prompts.build_agentic_prompt(
+            **common, per_instance_seed=None
+        )
+
+
+def test_per_instance_seed_swaps_generalize_clause_with_description():
+    """With a description, the generalize clause is replaced by the seed directive."""
+    p = prompts.build_agentic_prompt(
+        blackbox=False,
+        interface_spec=_IFACE,
+        geometry=True,
+        modular_code=False,
+        env_description="ENVDESC",
+        per_instance_seed=4242,
+    )
+    assert "general enough to solve any instance" not in p
+    assert "env.reset(seed=4242)" in p
+    assert "you may specialize entirely to this instance" in p
+    assert "BUDGET:" in p
+    assert "seed 4242" in p
+    assert "\n\n\n" not in p
+
+
+def test_per_instance_seed_prepends_directive_in_source_branch():
+    """The read-source branch (no scaffold intro) prepends the seed directive."""
+    p = prompts.build_agentic_prompt(
+        blackbox=False,
+        interface_spec=_IFACE,
+        geometry=True,
+        modular_code=False,
+        env_description=None,
+        per_instance_seed=7,
+    )
+    assert p.startswith("Your approach only needs to solve")
+    assert "env.reset(seed=7)" in p
+    assert "Read the environment source files" in p
+    assert "BUDGET:" in p
+    assert "\n\n\n" not in p
+
+
+def test_per_instance_seed_blackbox():
+    """Blackbox per-instance prompt swaps the clause and keeps the interaction spec."""
+    p = prompts.build_agentic_prompt(
+        blackbox=True,
+        interface_spec=_IFACE,
+        geometry=True,
+        modular_code=False,
+        env_description=None,
+        per_instance_seed=11,
+    )
+    assert "general enough to solve any instance" not in p
+    assert "env.reset(seed=11)" in p
+    assert "must NOT import `env_client`" in p
+    assert "BUDGET:" in p
+    assert "\n\n\n" not in p
+
+
+def test_per_instance_no_doubled_blank_lines_grid():
+    """No per-instance prompt contains a doubled blank line, in any config."""
+    for blackbox, geometry, modular, env in itertools.product(
+        (False, True), (False, True), (False, True), (None, "ENVDESC")
+    ):
+        prompt = prompts.build_agentic_prompt(
+            blackbox=blackbox,
+            interface_spec=_IFACE,
+            geometry=geometry,
+            modular_code=modular,
+            env_description=env,
+            per_instance_seed=123,
+        )
+        assert "\n\n\n" not in prompt, (
+            "per-instance",
+            blackbox,
+            geometry,
+            modular,
+            env,
+        )
     for blackbox, geometry, env, helpers in itertools.product(
         (False, True), (False, True), (None, "ENVDESC"), (False, True)
     ):
