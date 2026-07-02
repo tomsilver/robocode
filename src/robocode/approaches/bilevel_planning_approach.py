@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
 from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
@@ -36,7 +37,6 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         seed: int,
         primitives: dict[str, Any],
         *,
-        env: Any,
         max_steps: int,
         max_abstract_plans: int = 10,
         samples_per_step: int = 10,
@@ -46,14 +46,14 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         **kwargs: Any,
     ) -> None:
         super().__init__(action_space, observation_space, seed, primitives, **kwargs)
-        self._env = env
         self._max_steps = max_steps
         self._max_abstract_plans = max_abstract_plans
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
         self._heuristic_name = heuristic_name
         self._planning_timeout = planning_timeout
-        # SesameModels depend only on the (fixed) env, so build once and reuse.
+        # SesameModels depend only on the (fixed) env, so build once from the env
+        # handed to solve_instance and reuse across seeds.
         self._models: Any | None = None
         self._agent: BilevelPlanningAgent | None = None
 
@@ -65,17 +65,17 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             "train() is not used (the runner branches on approach.per_instance)"
         )
 
-    def _get_models(self) -> Any:
+    def _get_models(self, env: Any) -> Any:
         if self._models is None:
-            assert self._env.bilevel_env_name is not None, (
+            assert env.bilevel_env_name is not None, (
                 "BilevelPlanningApproach needs bilevel_env_name on the environment; "
                 "add bilevel_env_name and bilevel_env_model_kwargs to the env config."
             )
             self._models = create_bilevel_planning_models(
-                self._env.bilevel_env_name,
-                self._env.observation_space,
-                self._env.action_space,
-                **self._env.bilevel_env_model_kwargs,
+                env.bilevel_env_name,
+                env.observation_space,
+                env.action_space,
+                **env.bilevel_env_model_kwargs,
             )
         return self._models
 
@@ -101,7 +101,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         every seed is attempted.
         """
         del budget_usd, output_subdir
-        models = self._get_models()
+        models = self._get_models(env)
         agent: BilevelPlanningAgent[Any, Any, Any] = BilevelPlanningAgent(
             models,
             seed=seed,
@@ -140,7 +140,9 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
 
         def _capture() -> None:
             rendered = env.render()
-            if rendered is not None:
+            # render() may return a single frame, a list, or None; keep only
+            # numpy RGB frames (matches run_episode and what save_video expects).
+            if isinstance(rendered, np.ndarray):
                 frames.append(rendered)
 
         if render:
