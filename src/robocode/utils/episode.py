@@ -154,6 +154,9 @@ def run_per_instance_eval(
             save_video(result.frames, video_dir / f"episode_{i}.gif")
         per_episode.append(
             {
+                # Approach-specific per-instance metrics first; the fixed keys
+                # below take precedence over any colliding extras key.
+                **result.extras,
                 "seed": seed,
                 "attempted": True,
                 "solved": result.solved,
@@ -172,7 +175,7 @@ def run_per_instance_eval(
         return float(np.mean(vals)) if vals else float("nan")
 
     num_eval = len(eval_seeds)
-    return {
+    results = {
         "mean_eval_reward": _mean("total_reward"),
         "mean_eval_steps": _mean("num_steps"),
         "solve_rate": num_solved / num_eval if num_eval else float("nan"),
@@ -184,6 +187,38 @@ def run_per_instance_eval(
         "per_episode": per_episode,
         "total_cost_usd": total_cost,
     }
+
+    # Average any numeric approach-specific extras (e.g. planning_time) over
+    # scored episodes, surfaced as mean_<key> so they flow into results.json and
+    # become analyze_results columns automatically. Extras keys may vary across
+    # episodes (a failed plan has fewer), so aggregate per key over whoever has it.
+    reserved = {
+        "seed",
+        "attempted",
+        "solved",
+        "crashed",
+        "total_reward",
+        "num_steps",
+        "cost_usd",
+    }
+
+    def _mean_extra(key: str) -> float:
+        vals = [
+            v
+            for e in scored
+            if isinstance((v := e.get(key)), (int, float)) and not isinstance(v, bool)
+        ]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    extra_keys = {
+        k
+        for e in scored
+        for k, v in e.items()
+        if k not in reserved and isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    for key in sorted(extra_keys):
+        results[f"mean_{key}"] = _mean_extra(key)
+    return results
 
 
 def save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:

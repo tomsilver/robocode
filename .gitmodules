@@ -1,9 +1,12 @@
 [submodule "third-party/kindergarden"]
 	path = third-party/kindergarden
-	url = https://github.com/Jaraxxus-Me/kindergarden
+	url = https://github.com/Princeton-Robot-Planning-and-Learning/kindergarden
 [submodule "third-party/cap-x"]
 	path = third-party/cap-x
 	url = https://github.com/Jaraxxus-Me/cap-x
 [submodule "third-party/LIBERO-PRO"]
 	path = third-party/LIBERO-PRO
 	url = https://github.com/uynitsuj/LIBERO-PRO
+[submodule "third-party/kinder-baselines"]
+	path = third-party/kinder-baselines
+	url = https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines

@@ -122,8 +122,53 @@ def test_per_instance_eval_charges_crashed_attempts(tmp_path: Path) -> None:
     assert out["per_episode"][1]["crashed"] is True
 
 
+def test_per_instance_eval_aggregates_extras(tmp_path: Path) -> None:
+    """Per-instance extras are merged into per_episode and averaged as mean_<key>.
+
+    Extras keys may differ across instances (a failed attempt reports fewer): the
+    aggregation averages each numeric key over whichever scored episodes have it,
+    ignores bools (e.g. a flag), and never lets extras clobber the fixed keys.
+    """
+    results = [
+        InstanceResult(
+            solved=True,
+            total_reward=1.0,
+            num_steps=5,
+            cost_usd=0.0,
+            extras={
+                "planning_time": 2.0,
+                "execution_time": 4.0,
+                "plan_found": True,
+                "seed": 999,  # collides with a fixed key; must be ignored
+            },
+        ),
+        InstanceResult(
+            solved=False,
+            total_reward=None,
+            num_steps=None,
+            cost_usd=0.0,
+            # A failed plan reports planning_time but no execution_time.
+            extras={"planning_time": 6.0, "plan_found": False},
+        ),
+    ]
+    approach = _ScriptedPerInstanceApproach(results)
+    out = run_per_instance_eval(
+        None, approach, [3, 4], max_budget_usd=1.0, output_dir=tmp_path
+    )
+    # planning_time is present on both scored episodes -> mean of 2.0 and 6.0.
+    assert out["mean_planning_time"] == pytest.approx(4.0)
+    # execution_time only on the first -> mean over the one that has it.
+    assert out["mean_execution_time"] == pytest.approx(4.0)
+    # bool extras are not averaged.
+    assert "mean_plan_found" not in out
+    # extras are exposed per-episode; the fixed "seed" key is not overwritten.
+    assert out["per_episode"][0]["planning_time"] == pytest.approx(2.0)
+    assert out["per_episode"][0]["seed"] == 3
+    assert out["per_episode"][0]["plan_found"] is True
+
+
 def test_per_instance_eval_threads_render_and_saves_video(tmp_path: Path) -> None:
-    """render is passed to solve_instance and returned frames are saved as a gif."""
+    """Render is passed to solve_instance and returned frames are saved as a gif."""
     rng = np.random.default_rng(0)
     frames = [rng.integers(0, 255, (8, 8, 3), dtype=np.uint8) for _ in range(3)]
     results = [
