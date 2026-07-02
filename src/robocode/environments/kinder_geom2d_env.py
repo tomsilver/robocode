@@ -62,12 +62,28 @@ def _unwrap_to_kinder(env: gymnasium.Env) -> ConstantObjectKinDEREnv:
 class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     """A robocode environment backed by a kinder geom2d environment."""
 
-    def __init__(self, env_id: str) -> None:
+    def __init__(
+        self,
+        env_id: str,
+        bilevel_env_name: str | None = None,
+        bilevel_env_model_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         self._env_id = env_id
         self._kinder_env = _unwrap_to_kinder(kinder.make(env_id))
         self.observation_space = self._kinder_env.observation_space
         self.action_space = self._kinder_env.action_space
         self._current_obs: NDArray[Any] | None = None
+        # Optional mapping to the bilevel planning models for this env family,
+        # consumed by BilevelPlanningApproach. `bilevel_env_name` is the family
+        # (e.g. "obstruction2d") and `bilevel_env_model_kwargs` its object-count
+        # kwargs (e.g. {"num_obstructions": 2}). Stored as a plain dict since
+        # Hydra passes a DictConfig.
+        self.bilevel_env_name = bilevel_env_name
+        self.bilevel_env_model_kwargs = (
+            dict(bilevel_env_model_kwargs)
+            if bilevel_env_model_kwargs is not None
+            else {}
+        )
         super().__init__()
 
     @property
