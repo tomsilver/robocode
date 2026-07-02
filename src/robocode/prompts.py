@@ -193,11 +193,25 @@ The environment is described below.
 # Shared task-prompt scaffold. The opener sentences and the interface-spec
 # wrapper are common to both approaches; only small slotted pieces (approach
 # kind, class-interface code, run commands, section ordering) differ.
-_SCAFFOLD_INTRO = (
-    "You are writing {approach_kind} for {target}.\n\n"
+# The scaffold intro is an opener line plus a generalization clause. The clause
+# is the one piece that flips for per-instance baselines: generalized approaches
+# solve any instance, per-instance approaches specialize to a single seed.
+_SCAFFOLD_INTRO_OPENER = "You are writing {approach_kind} for {target}.\n\n"
+_GENERALIZE_CLAUSE = (
     "Your approach should be general enough to solve any instance of this "
     "environment (env.reset()), but it does NOT need to be adaptable to "
     "different other environments."
+)
+_SCAFFOLD_INTRO = _SCAFFOLD_INTRO_OPENER + _GENERALIZE_CLAUSE
+
+# Per-instance baselines (one fresh agent run per eval seed) replace the
+# generalization clause with this directive, naming the concrete target seed.
+# In the read-source branch (which has no scaffold intro) it is prepended on its
+# own instead.
+PER_INSTANCE_DIRECTIVE = (
+    "Your approach only needs to solve the single specific instance produced by "
+    "`env.reset(seed={seed})`. You do NOT need to generalize to other instances "
+    "or environments; you may specialize entirely to this instance."
 )
 _SOURCE_OPENER = (
     "Read the environment source files in this directory to understand the "
@@ -289,20 +303,32 @@ IMPORTANT: be careful about repeated behavior! If an action or strategy in your 
 approach fails, you should design your code to avoid repeating that failure.
 """
 
+# Per-instance budget-stewardship note, appended (after modular-code guidance) only
+# when a per-instance seed is set. Leading single newline mirrors MODULAR_CODE_PROMPT
+# so the spacing stays at one blank line.
+BUDGET_STEWARDSHIP = """\
+
+BUDGET: You are solving seed {seed}, one of many seeds in a larger evaluation. Your \
+LLM budget is GLOBAL and shared across all remaining seeds, so anything you spend \
+here is taken from future seeds. As soon as you have a working solution for seed \
+{seed}, make sure `approach.py` is committed/saved, then stop voluntarily instead of \
+polishing further. Do not spend budget exploring unrelated instances.
+"""
+
 _AGENTIC_WITH_DESCRIPTION = """\
 {scaffold_intro}
 
 {env_description}
 {geometry_prompt}
 {interface_spec}
-{modular_code_prompt}\
+{modular_code_prompt}{budget_stewardship}\
 """
 
 _AGENTIC_WITH_SOURCE = """\
-{source_opener}
+{per_instance_directive}{source_opener}
 {geometry_prompt}
 {interface_spec}
-{modular_code_prompt}\
+{modular_code_prompt}{budget_stewardship}\
 """
 
 _AGENTIC_BLACKBOX = """\
@@ -311,7 +337,7 @@ _AGENTIC_BLACKBOX = """\
 {blackbox_interaction_spec}
 {geometry_prompt}
 {interface_spec}
-{modular_code_prompt}\
+{modular_code_prompt}{budget_stewardship}\
 """
 
 # ---------------------------------------------------------------------------
@@ -657,13 +683,19 @@ def _env_description_section(blackbox_description: str | None) -> str:
     return BLACKBOX_DESCRIPTION_PREFIX + blackbox_description + "\n"
 
 
-def _scaffold_intro(approach_kind: str, blackbox: bool) -> str:
+def _scaffold_intro(
+    approach_kind: str, blackbox: bool, per_instance_seed: int | None = None
+) -> str:
     target = (
         "an environment that you can only access as a black box"
         if blackbox
         else "the environment described below"
     )
-    return _SCAFFOLD_INTRO.format(approach_kind=approach_kind, target=target)
+    if per_instance_seed is None:
+        return _SCAFFOLD_INTRO.format(approach_kind=approach_kind, target=target)
+    return (_SCAFFOLD_INTRO_OPENER + PER_INSTANCE_DIRECTIVE).format(
+        approach_kind=approach_kind, target=target, seed=per_instance_seed
+    )
 
 
 def build_agentic_prompt(
@@ -673,13 +705,26 @@ def build_agentic_prompt(
     geometry: bool,
     modular_code: bool,
     env_description: str | None,
+    per_instance_seed: int | None = None,
 ) -> str:
-    """Compose the monolithic-approach task prompt."""
+    """Compose the monolithic-approach task prompt.
+
+    When ``per_instance_seed`` is set, the generalization clause is replaced by a
+    per-instance directive naming the target seed and a budget-stewardship note is
+    appended; with ``per_instance_seed=None`` the output is unchanged.
+    """
     geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     modular = MODULAR_CODE_PROMPT if modular_code else ""
+    budget_stewardship = (
+        BUDGET_STEWARDSHIP.format(seed=per_instance_seed)
+        if per_instance_seed is not None
+        else ""
+    )
     if blackbox:
         return _AGENTIC_BLACKBOX.format(
-            scaffold_intro=_scaffold_intro("an approach", blackbox=True),
+            scaffold_intro=_scaffold_intro(
+                "an approach", blackbox=True, per_instance_seed=per_instance_seed
+            ),
             env_description_section=_env_description_section(env_description),
             blackbox_interaction_spec=BLACKBOX_INTERACTION_SPEC.format(
                 set_state_note=""
@@ -687,20 +732,31 @@ def build_agentic_prompt(
             geometry_prompt=geometry_prompt,
             interface_spec=interface_spec,
             modular_code_prompt=modular,
+            budget_stewardship=budget_stewardship,
         )
     if env_description is not None:
         return _AGENTIC_WITH_DESCRIPTION.format(
-            scaffold_intro=_scaffold_intro("an approach", blackbox=False),
+            scaffold_intro=_scaffold_intro(
+                "an approach", blackbox=False, per_instance_seed=per_instance_seed
+            ),
             env_description=env_description,
             geometry_prompt=geometry_prompt,
             modular_code_prompt=modular,
             interface_spec=interface_spec,
+            budget_stewardship=budget_stewardship,
         )
+    per_instance_directive = (
+        PER_INSTANCE_DIRECTIVE.format(seed=per_instance_seed) + "\n\n"
+        if per_instance_seed is not None
+        else ""
+    )
     return _AGENTIC_WITH_SOURCE.format(
+        per_instance_directive=per_instance_directive,
         source_opener=_SOURCE_OPENER,
         geometry_prompt=geometry_prompt,
         modular_code_prompt=modular,
         interface_spec=interface_spec,
+        budget_stewardship=budget_stewardship,
     )
 
 

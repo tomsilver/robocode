@@ -3,6 +3,8 @@
 import abc
 import copy
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Generic, SupportsFloat, TypeVar
 
 import numpy as np
@@ -12,8 +14,33 @@ _StateType = TypeVar("_StateType")
 _ActType = TypeVar("_ActType")
 
 
+@dataclass
+class InstanceResult:
+    """Outcome of a per-instance approach solving a single eval seed.
+
+    Reward/step metrics are nullable because a crashed or failed attempt (no
+    program produced, or a scoring crash) has no episode metrics. ``cost_usd``
+    is always populated so the runner can charge it against the global budget
+    even when the attempt failed.
+    """
+
+    solved: bool
+    total_reward: float | None
+    num_steps: int | None
+    cost_usd: float
+    crashed: bool = False
+    frames: list[Any] | None = None
+
+
 class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
     """Base class for a sequential decision-making agent."""
+
+    # Per-instance approaches spend eval-time agent budget per seed via
+    # ``solve_instance`` instead of training one generalized policy. The runner
+    # branches on this flag to choose the eval lifecycle; the two lifecycles are
+    # deliberately kept separate (a generalized approach trains once and is then
+    # rolled out for free, which is a different experiment).
+    per_instance: bool = False
 
     def __init__(  # pylint: disable=unused-argument
         self,
@@ -68,6 +95,26 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
 
         Override to implement learning.
         """
+
+    def solve_instance(
+        self,
+        *,
+        env: Any,
+        seed: int,
+        budget_usd: float,
+        output_subdir: Path,
+        render: bool = False,
+    ) -> InstanceResult:
+        """Spend up to ``budget_usd`` of eval-time agent budget on one seed.
+
+        Only implemented by per-instance approaches (``per_instance = True``).
+        Generalized approaches train once and are rolled out for free, so they
+        leave this unimplemented. ``render`` requests RGB frames on the scored
+        episode (for video saving).
+        """
+        raise NotImplementedError(
+            "solve_instance is only implemented by per-instance approaches"
+        )
 
     def seed(self, seed: int) -> None:
         """Reset the random number generator."""
