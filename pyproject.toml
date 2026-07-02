@@ -17,7 +17,10 @@ dependencies = [
    "hydra-core",
    "hydra-joblib-launcher",
    "omegaconf",
-   "kindergarden[kinematic2d,kinematic3d,dynamic2d,dynamic3d]",
+   "kindergarden",
+   "bilevel_planning>=0.1.4",
+   "kinder_bilevel_planning",
+   "kinder_models",
    "pybullet",
    "types-shapely",
    "scipy-stubs",
@@ -82,6 +85,8 @@ exclude = ["venv/*", ".venv/*", "outputs/*", "third-party/*"]
 [tool.uv.sources]
 kindergarden = { path = "third-party/kindergarden", editable = true }
 libero = { path = "third-party/LIBERO-PRO", editable = true }
+kinder_bilevel_planning = { path = "third-party/kinder-baselines/kinder-bilevel-planning", editable = true }
+kinder_models = { path = "third-party/kinder-baselines/kinder-models", editable = true }
 
 [[tool.mypy.overrides]]
 module = [
