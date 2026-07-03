@@ -43,6 +43,7 @@ from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 
 from robocode.environments.base_env import BaseEnv
+from robocode.utils.bilevel import infer_bilevel_mapping
 
 kinder.register_all_environments()
 # kinder flips these to osmesa on headless Linux; restore the chosen backend so
@@ -73,11 +74,18 @@ class KinderGeom2DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         self.observation_space = self._kinder_env.observation_space
         self.action_space = self._kinder_env.action_space
         self._current_obs: NDArray[Any] | None = None
-        # Optional mapping to the bilevel planning models for this env family,
-        # consumed by BilevelPlanningApproach. `bilevel_env_name` is the family
-        # (e.g. "obstruction2d") and `bilevel_env_model_kwargs` its object-count
-        # kwargs (e.g. {"num_obstructions": 2}). Stored as a plain dict since
-        # Hydra passes a DictConfig.
+        # Mapping to the bilevel planning models for this env family, consumed by
+        # BilevelPlanningApproach and the bilevel_models primitive. `bilevel_env_name`
+        # is the family (e.g. "obstruction2d") and `bilevel_env_model_kwargs` its
+        # object-count kwargs (e.g. {"num_obstructions": 2}). The env configs set
+        # these explicitly; when they are not given (e.g. an env the agent builds
+        # by hand to test), fall back to inferring them from env_id so the
+        # bilevel_models primitive still works. Stored as a plain dict since Hydra
+        # passes a DictConfig.
+        if bilevel_env_name is None:
+            bilevel_env_name, inferred_kwargs = infer_bilevel_mapping(env_id)
+            if bilevel_env_model_kwargs is None:
+                bilevel_env_model_kwargs = inferred_kwargs
         self.bilevel_env_name = bilevel_env_name
         self.bilevel_env_model_kwargs = (
             dict(bilevel_env_model_kwargs)

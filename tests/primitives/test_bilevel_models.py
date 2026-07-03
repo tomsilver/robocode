@@ -25,10 +25,17 @@ def test_registered_and_built_env_bound() -> None:
     assert isinstance(prims["bilevel_models"], BilevelModels)
 
 
-def test_construction_is_lazy_for_unmapped_env() -> None:
-    """Constructing the primitive must not touch the mapping (the factory builds it for
-    every env); only using it on an unmapped env fails loudly."""
-    env = KinderGeom2DEnv("kinder/Obstruction2D-o0-v0")  # no mapping
+def test_construction_is_lazy() -> None:
+    """Constructing the primitive must not build models eagerly (the factory builds
+    it for every env, so it must be cheap until actually used)."""
+    env = _obstruction_env()
+    bm = BilevelModels(env)
+    assert bm._models is None  # pylint: disable=protected-access
+
+
+def test_use_on_unmapped_env_fails_loudly() -> None:
+    """Using the primitive on an env with no bilevel model fails loudly."""
+    env = KinderGeom2DEnv("kinder/PushPullHook2D-v0")  # infers to no mapping
     bm = BilevelModels(env)  # must not raise
     with pytest.raises(AssertionError, match="bilevel_env_name"):
         _ = bm.models
