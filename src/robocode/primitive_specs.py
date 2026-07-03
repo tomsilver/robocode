@@ -21,6 +21,7 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "crv_motion_planning": "crv_motion_planning",
     "crv_motion_planning_grasp": "crv_motion_planning_grasp",
     "BiRRT": "motion_planning",
+    "bilevel_models": "bilevel_models",
 }
 
 # Primitives whose construction needs the live environment. In black-box mode
@@ -28,7 +29,12 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
 # (see env_client.BlackboxEnv) and their source is NOT copied into the sandbox:
 # it would not import (it imports the hidden env) and it would leak the env
 # structure. Every other primitive is generic and imported directly.
-ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset({"check_action_collision"})
+# ``bilevel_models`` is env-bound too: it builds the SeSamE models for the live
+# env. Full black-box exposure (proxying its object methods over the handle
+# protocol) is deferred; for now it runs clearbox/local like check_action_collision.
+ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset(
+    {"check_action_collision", "bilevel_models"}
+)
 
 # Primitives whose whole module runs on the host in black-box mode. Their
 # source imports the stripped kinder.envs.* (kinematic2d, utils), so just like
@@ -108,6 +114,29 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "`collision_fn(state) -> bool` returns True if state is in collision, "
         "`distance_fn(s1, s2) -> float` returns distance between states, "
         "`rng` is a `np.random.Generator`."
+    ),
+    "bilevel_models": (
+        "`primitives['bilevel_models']` gives you the bilevel planning MODELS for "
+        "this environment as building blocks \u2014 the symbolic predicates and "
+        "operators plus the parameterized skills the planner is built from. "
+        "Compose them into ONE generalized policy yourself; do NOT run a "
+        "planner/search. All methods take the raw observation `obs`:\n"
+        "  - `get_abstract_state(obs) -> set[GroundAtom]` \u2014 the atoms true now "
+        "(e.g. `Holding(robot, block)`, `OnTarget(block)`).\n"
+        "  - `get_goal_atoms(obs) -> set[GroundAtom]` \u2014 the atoms the goal "
+        "requires.\n"
+        "  - `operators` \u2014 the lifted operators (each has `.name`, "
+        "`.parameters`, `.preconditions`, `.add_effects`, `.delete_effects`); use "
+        "them to learn each skill's name, its object-parameter order, and the "
+        "effect it achieves.\n"
+        "  - `get_objects(obs, type_name=None) -> list[Object]` \u2014 the objects, "
+        "optionally filtered by type name (e.g. `'circle'`).\n"
+        "  - `run_skill(obs, skill_name, objects, rng=None) -> list[action]` \u2014 "
+        "grounds the named skill on `objects` (order matching the operator's "
+        "parameters), samples parameters, and returns a low-level action sequence. "
+        "It is simulator-backed and single-sample, so it may fail on a given draw; "
+        "for reliable continuous control combine it with `crv_motion_planning` and "
+        "execute closed-loop, choosing the next skill from `get_abstract_state`."
     ),
 }
 

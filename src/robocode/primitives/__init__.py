@@ -25,6 +25,7 @@ from robocode.primitive_specs import (
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
 from robocode.primitives import crv_motion_planning_grasp as crv_grasp_module
 from robocode.primitives import csp as csp_module
+from robocode.primitives.bilevel_models import BilevelModels
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
 
@@ -48,6 +49,7 @@ def _all_primitives(env: Any) -> dict[str, Any]:
         "crv_motion_planning": crv_motion_planning_module,
         "crv_motion_planning_grasp": crv_grasp_module,
         "BiRRT": BiRRT,
+        "bilevel_models": BilevelModels(env),
     }
 
 
