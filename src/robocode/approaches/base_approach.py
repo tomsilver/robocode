@@ -3,7 +3,7 @@
 import abc
 import copy
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, SupportsFloat, TypeVar
 
@@ -22,6 +22,10 @@ class InstanceResult:
     program produced, or a scoring crash) has no episode metrics. ``cost_usd``
     is always populated so the runner can charge it against the global budget
     even when the attempt failed.
+
+    ``extras`` carries approach-specific per-instance metrics (e.g. a planner's
+    ``planning_time``). Numeric extras are averaged across scored episodes by
+    ``run_per_instance_eval`` and surfaced as ``mean_<key>`` in the results.
     """
 
     solved: bool
@@ -30,6 +34,7 @@ class InstanceResult:
     cost_usd: float
     crashed: bool = False
     frames: list[Any] | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
