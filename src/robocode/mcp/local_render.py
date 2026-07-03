@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import functools
 import importlib
+import inspect
 import json
 import sys
 import traceback
@@ -45,6 +46,7 @@ from robocode.mcp.server import (
     run_server,
 )
 from robocode.primitive_specs import (
+    ENV_DEPENDENT_ATTR,
     ENV_DEPENDENT_PRIMITIVES,
     GENERIC_PRIMITIVE_ATTR,
     PRIMITIVE_NAME_TO_FILE,
@@ -85,7 +87,12 @@ def _build_sandbox_primitives(env: Any, primitives_dir: Path | None) -> dict[str
         for prim_name in file_to_names.get(py.stem, []):
             module = importlib.import_module(f"primitives.{py.stem}")
             if prim_name in ENV_DEPENDENT_PRIMITIVES:
-                out[prim_name] = functools.partial(getattr(module, prim_name), env)
+                obj = getattr(module, ENV_DEPENDENT_ATTR[prim_name])
+                # A class binds the env by instantiation (BilevelModels(env)); a
+                # function binds it by partial (check_action_collision).
+                out[prim_name] = (
+                    obj(env) if inspect.isclass(obj) else functools.partial(obj, env)
+                )
             else:
                 attr = GENERIC_PRIMITIVE_ATTR[prim_name]
                 out[prim_name] = module if attr is None else getattr(module, attr)
