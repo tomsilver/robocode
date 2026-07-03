@@ -1,11 +1,15 @@
-"""Robocode primitives — source-importing factory; metadata re-exported.
+"""Robocode primitives: source-importing factory with metadata re-exported.
 
-The primitive metadata (names, file mapping, descriptions, manifest/description
-builders) lives in the source-free ``robocode.primitive_specs`` module so it
-stays importable where this package's source is stripped (the agentic sandbox).
-This module adds the heavy factory (``build_primitives``), which imports the
-actual primitive implementations, and re-exports the metadata names so every
-existing ``from robocode.primitives import ...`` keeps working.
+The source-free primitive metadata (names, file mapping, env-dependence flags,
+black-box manifest builder) lives in ``robocode.primitive_specs`` so it stays
+importable where this package's source is stripped (the agentic sandbox). The
+human-facing descriptions (and ``format_primitives_description``) live in the
+host-only ``robocode.primitive_descriptions`` module, which is NOT shipped to the
+sandbox. This module adds the heavy factory (``build_primitives``) and re-exports
+both sets of names so every existing ``from robocode.primitives import ...`` keeps
+working. It is never imported inside the agent sandbox (this package's source is
+stripped there); the genplan container keeps ``primitive_descriptions.py`` so the
+re-export resolves.
 """
 
 from __future__ import annotations
@@ -13,6 +17,10 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
+from robocode.primitive_descriptions import (
+    PRIMITIVE_DESCRIPTIONS,
+    format_primitives_description,
+)
 from robocode.primitive_specs import (
     ENV_DEPENDENT_PRIMITIVES,
     GENERIC_PRIMITIVE_ATTR,
@@ -30,10 +38,12 @@ from robocode.primitives.motion_planning import BiRRT
 __all__ = [
     "ENV_DEPENDENT_PRIMITIVES",
     "GENERIC_PRIMITIVE_ATTR",
+    "PRIMITIVE_DESCRIPTIONS",
     "PRIMITIVE_NAME_TO_FILE",
     "REMOTE_MODULE_PRIMITIVES",
     "blackbox_primitive_manifest",
     "build_primitives",
+    "format_primitives_description",
 ]
 
 
