@@ -22,8 +22,8 @@ def _sandbox_primitives_dir(tmp_path: Path, files: list[str]) -> Path:
 
 def test_build_sandbox_primitives_handles_class_and_function(tmp_path: Path) -> None:
     """The builder binds a function primitive by partial and a class one by
-    instantiation, so both an env-bound function (check_action_collision) and an
-    env-bound class (bilevel_models -> BilevelModels) are usable in-sandbox."""
+    instantiation, so both an env-bound function (check_action_collision) and an env-
+    bound class (bilevel_models -> BilevelModels) are usable in-sandbox."""
     prims_dir = _sandbox_primitives_dir(
         tmp_path, ["check_action_collision.py", "bilevel_models.py"]
     )
@@ -49,4 +49,4 @@ def test_build_sandbox_primitives_handles_class_and_function(tmp_path: Path) -> 
 def test_build_sandbox_primitives_empty_when_none(tmp_path: Path) -> None:
     """No copied primitives -> empty dict (render still works with no primitives)."""
     env = KinderGeom2DEnv("kinder/Obstruction2D-o0-v0")
-    assert _build_sandbox_primitives(env, tmp_path / "missing") == {}
+    assert not _build_sandbox_primitives(env, tmp_path / "missing")

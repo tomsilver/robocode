@@ -26,8 +26,8 @@ def test_registered_and_built_env_bound() -> None:
 
 
 def test_construction_is_lazy() -> None:
-    """Constructing the primitive must not build models eagerly (the factory builds
-    it for every env, so it must be cheap until actually used)."""
+    """Constructing the primitive must not build models eagerly (the factory builds it
+    for every env, so it must be cheap until actually used)."""
     env = _obstruction_env()
     bm = BilevelModels(env)
     assert bm._models is None  # pylint: disable=protected-access

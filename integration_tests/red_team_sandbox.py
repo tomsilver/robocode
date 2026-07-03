@@ -644,10 +644,10 @@ async def _run_models_off_adversarial(
 ) -> None:
     """Run a models-OFF adversarial prompt and assert the bilevel models stay hidden.
 
-    A normal (non-blackbox) Docker sandbox with no bilevel_models primitive: the
-    bilevel packages are not installed, kinder-baselines is not mounted, and the
-    prompt descriptions are stripped, so the agent must not obtain or read the
-    models or their structure.
+    A normal (non-blackbox) Docker sandbox with no bilevel_models primitive: the bilevel
+    packages are not installed, kinder-baselines is not mounted, and the prompt
+    descriptions are stripped, so the agent must not obtain or read the models or their
+    structure.
     """
     _reset_sandbox()
 

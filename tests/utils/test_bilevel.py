@@ -41,8 +41,8 @@ def test_build_sesame_models_requires_mapping() -> None:
 
 
 def test_infer_bilevel_mapping_agrees_with_env_configs() -> None:
-    """Inference from env_id matches every explicit env-config mapping (so the
-    fallback and the configs can never silently diverge)."""
+    """Inference from env_id matches every explicit env-config mapping (so the fallback
+    and the configs can never silently diverge)."""
     conf_dir = Path("experiments/conf/environment")
     checked = 0
     for yaml_file in sorted(conf_dir.glob("*.yaml")):
