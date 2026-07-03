@@ -38,6 +38,7 @@ from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
     _copy_src,
+    _docker_run_prefix,
     _filtered_repo_mounts,
     _find_repo_root,
     _is_local_model,
@@ -166,7 +167,7 @@ def test_find_repo_root_has_pyproject() -> None:
 
 def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
     """Blackbox mounts contain no environment source anywhere."""
-    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
         assert not (src / "robocode" / "environments").exists()
         assert not (src / "robocode" / "oracles").exists()
         assert not (kindergarden / "src" / "kinder" / "envs").exists()
@@ -179,9 +180,48 @@ def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
 
 def test_filtered_repo_mounts_default_keeps_env_source() -> None:
     """Non-blackbox mounts keep the environment source."""
-    with _filtered_repo_mounts() as (src, kindergarden):
+    with _filtered_repo_mounts() as (src, kindergarden, _):
         assert (src / "robocode" / "environments").exists()
         assert (kindergarden / "src" / "kinder" / "envs").exists()
+
+
+def test_filtered_repo_mounts_excludes_bilevel_by_default() -> None:
+    """Without include_bilevel, no kinder-baselines source is prepared (models OFF)."""
+    with _filtered_repo_mounts() as (_src, _kg, kinder_baselines):
+        assert kinder_baselines is None
+
+
+def test_filtered_repo_mounts_includes_bilevel_when_requested() -> None:
+    """With include_bilevel, only the two depended-on subpackages are copied."""
+    with _filtered_repo_mounts(include_bilevel=True) as (_src, _kg, kinder_baselines):
+        assert kinder_baselines is not None
+        assert (
+            kinder_baselines / "kinder-bilevel-planning" / "pyproject.toml"
+        ).exists()
+        assert (kinder_baselines / "kinder-models" / "pyproject.toml").exists()
+        # the rest of the monorepo is not copied
+        assert not (kinder_baselines / "kinder-rl").exists()
+
+
+def test_docker_run_prefix_omits_bilevel_without_primitive(tmp_path: Path) -> None:
+    """No kinder-baselines mount or extra-sync env when bilevel is not requested."""
+    cmd = _docker_run_prefix(
+        "c", "img", tmp_path, tmp_path / "src", tmp_path / "kg", None, [], []
+    )
+    joined = " ".join(cmd)
+    assert "kinder-baselines" not in joined
+    assert "ROBOCODE_UV_EXTRA_ARGS" not in joined
+
+
+def test_docker_run_prefix_adds_bilevel_when_present(tmp_path: Path) -> None:
+    """The kinder-baselines mount and `--extra bilevel` sync are added when
+    requested."""
+    kb = tmp_path / "kb"
+    cmd = _docker_run_prefix(
+        "c", "img", tmp_path, tmp_path / "src", tmp_path / "kg", kb, [], []
+    )
+    assert f"{kb.resolve()}:/robocode/third-party/kinder-baselines" in cmd
+    assert "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel" in cmd
 
 
 def test_is_local_model() -> None:
@@ -196,7 +236,7 @@ def test_is_local_model() -> None:
 @requires_docker
 def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
     """With blackbox mounts, uv sync still works but env code is gone."""
-    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
         result = subprocess.run(
             [
                 "docker",
@@ -235,6 +275,90 @@ def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
     assert "BLACKBOX_OK" in result.stdout, result.stdout + result.stderr
 
 
+# A battery of adversarial probes a "models OFF" agent might run to recover the
+# bilevel planning models (predicates/operators/controllers). Each prints a
+# `LEAK_<name>` marker ONLY if it succeeds; the test asserts none appear. Run in
+# one container after a base `uv sync` (no `--extra bilevel`, no kinder-baselines
+# mount), exactly as a real models-OFF sandbox is set up.
+_MODELS_OFF_RED_TEAM_PROBES = r"""
+PY=/robocode/.venv/bin/python
+# 1. direct imports of the bilevel packages must all fail
+for m in kinder_bilevel_planning kinder_models bilevel_planning; do
+    $PY -c "import $m" 2>/dev/null && echo "LEAK_import_$m"
+done
+# 2. the lazy model-builder must raise (ImportError), not return models
+$PY - <<'EOF' 2>/dev/null && echo "LEAK_build_models"
+import types
+from robocode.utils.bilevel import build_sesame_models
+e = types.SimpleNamespace(bilevel_env_name="obstruction2d",
+                          bilevel_env_model_kwargs={},
+                          observation_space=None, action_space=None)
+build_sesame_models(e)
+EOF
+# 3. no kinder-baselines source dir is present
+test -e /robocode/third-party/kinder-baselines && echo "LEAK_kb_dir"
+# 4. the REAL model source (definitions, which live only in the bilevel packages)
+# is not reachable. We match definitions, not robocode's own references to them.
+grep -rEl "def create_bilevel_planning_models|def state_abstractor|class SesameModels" \
+    /robocode 2>/dev/null | head -1 | grep -q . && echo "LEAK_model_source"
+find /robocode -name '*.py' 2>/dev/null \
+    | grep -E "kinder_bilevel_planning|kinder_models|/bilevel_planning/" \
+    | head -1 | grep -q . && echo "LEAK_source_files"
+# 5. the agent cannot self-serve the models from PyPI (not published there)
+$PY -m pip install --quiet kinder_bilevel_planning 2>/dev/null \
+    && echo "LEAK_pip_install"
+# 6. the prompt-descriptions module is not shipped, so the agent cannot read the
+# description (symbolic API, example atoms) of a primitive it was not granted
+test -e /robocode/src/robocode/primitive_descriptions.py && echo "LEAK_descriptions_module"
+grep -rE "symbolic predicates and operators|get_abstract_state\(obs\)" /robocode/src \
+    2>/dev/null | head -1 | grep -q . && echo "LEAK_description_text"
+echo PROBES_DONE
+"""
+
+
+@requires_docker
+def test_container_models_off_red_team(tmp_path: Path) -> None:
+    """Red-team: a models-OFF sandbox yields no path to the bilevel models.
+
+    Runs a battery of adversarial probes (import, lazy builder, filesystem search,
+    symbol grep, self-install) in a container set up exactly as a real models-OFF
+    run (base sync, no kinder-baselines mount). None may recover the models, while
+    `robocode.utils` (holding the lazy builder) stays importable.
+    """
+    with _filtered_repo_mounts() as (src, kindergarden, kinder_baselines):
+        assert kinder_baselines is None
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "/bin/bash",
+                "-v",
+                f"{tmp_path.resolve()}:/sandbox",
+                "-v",
+                f"{src.resolve()}:/robocode/src",
+                "-v",
+                f"{kindergarden.resolve()}:/robocode/third-party/kindergarden",
+                "-w",
+                "/sandbox",
+                _DOCKER_IMAGE,
+                "-c",
+                "cd /robocode && uv sync --frozen --python python3.11 && "
+                f"{DOCKER_PYTHON} -c 'import robocode.utils' && "
+                + _MODELS_OFF_RED_TEAM_PROBES,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    out = result.stdout + result.stderr
+    assert "PROBES_DONE" in out, out
+    leaks = [line for line in out.splitlines() if line.startswith("LEAK_")]
+    assert not leaks, f"models-OFF isolation breached: {leaks}\n{out}"
+
+
 @requires_docker
 def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
     """A blackbox container renders via the host env server over TCP.
@@ -267,7 +391,7 @@ def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
             )
         )
         env.close()
-        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
             result = subprocess.run(
                 [
                     "docker",
@@ -345,7 +469,7 @@ def test_container_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> Non
             )
         )
         env.close()
-        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden):
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
             result = subprocess.run(
                 [
                     "docker",

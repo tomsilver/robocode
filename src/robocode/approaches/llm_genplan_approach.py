@@ -24,7 +24,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
-from robocode.primitives import format_primitives_description
+from robocode.primitive_descriptions import format_primitives_description
 from robocode.utils.apptainer_sandbox import _DEFAULT_SIF, run_genplan_in_apptainer
 from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach

@@ -11,15 +11,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
-
 
 def build_sesame_models(env: Any) -> Any:
     """Build the `SesameModels` (predicates, operators, skills, transition sim).
 
     Reads the bilevel env-family name and object-count kwargs off *env*. Fails loudly if
     the env config is missing the mapping rather than planning silently.
+
+    `kinder_bilevel_planning` is imported lazily (it is an optional `bilevel` extra),
+    so `import robocode.primitives` works even where the extra is not installed -- e.g.
+    a "models OFF" sandbox. Only actually using the bilevel models requires it.
     """
+    # pylint: disable=import-outside-toplevel
+    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+
     assert env.bilevel_env_name is not None, (
         "bilevel_env_name is not set on the environment; add bilevel_env_name and "
         "bilevel_env_model_kwargs to the env config to use bilevel planning models."

@@ -23,10 +23,8 @@ from omegaconf import DictConfig
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
-from robocode.primitives import (
-    blackbox_primitive_manifest,
-    format_primitives_description,
-)
+from robocode.primitive_descriptions import format_primitives_description
+from robocode.primitives import blackbox_primitive_manifest
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import create_backend
 from robocode.utils.docker_sandbox import (

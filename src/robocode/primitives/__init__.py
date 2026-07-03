@@ -16,11 +16,9 @@ from typing import Any
 from robocode.primitive_specs import (
     ENV_DEPENDENT_PRIMITIVES,
     GENERIC_PRIMITIVE_ATTR,
-    PRIMITIVE_DESCRIPTIONS,
     PRIMITIVE_NAME_TO_FILE,
     REMOTE_MODULE_PRIMITIVES,
     blackbox_primitive_manifest,
-    format_primitives_description,
 )
 from robocode.primitives import crv_motion_planning as crv_motion_planning_module
 from robocode.primitives import crv_motion_planning_grasp as crv_grasp_module
@@ -32,12 +30,10 @@ from robocode.primitives.motion_planning import BiRRT
 __all__ = [
     "ENV_DEPENDENT_PRIMITIVES",
     "GENERIC_PRIMITIVE_ATTR",
-    "PRIMITIVE_DESCRIPTIONS",
     "PRIMITIVE_NAME_TO_FILE",
     "REMOTE_MODULE_PRIMITIVES",
     "blackbox_primitive_manifest",
     "build_primitives",
-    "format_primitives_description",
 ]
 
 

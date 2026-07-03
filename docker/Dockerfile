@@ -20,6 +20,7 @@
 #   -v <sandbox_dir>:/sandbox              writable — agent writes approach.py here
 #   -v <src>:/robocode/src:ro              filtered copy (oracles stripped)
 #   -v <kindergarden>:/robocode/third-party/kindergarden:ro  (tests stripped)
+#   -v <kinder-baselines>:/robocode/third-party/kinder-baselines:ro  (2 pkgs)
 
 FROM node:20
 
@@ -127,6 +128,10 @@ COPY pyproject.toml uv.lock ./
 COPY third-party/kindergarden/ third-party/kindergarden/
 COPY src/ src/
 
+# Base sync only (the `bilevel` extra is intentionally NOT installed here, so
+# the image carries no bilevel planning models/source). For "models ON" runs the
+# entrypoint syncs `--extra bilevel` against a runtime bind-mount of
+# kinder-baselines; see docker_sandbox.py.
 RUN uv sync --frozen --python python3.11 \
     && rm -rf src/ third-party/ \
     && find .venv -maxdepth 3 \( -name '*.egg-info' -o -name '*.dist-info' -o -name '*.pth' \) \

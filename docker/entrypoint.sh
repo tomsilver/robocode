@@ -12,8 +12,12 @@
 set -e
 
 # Install Python deps BEFORE the firewall locks down network access.
+# ROBOCODE_UV_EXTRA_ARGS is set (e.g. "--extra bilevel") only when a run needs an
+# optional dependency group in the sandbox; unset otherwise so those deps (and
+# their source) stay absent.
 cd /robocode
-uv sync --frozen --python python3.11
+# shellcheck disable=SC2086
+uv sync --frozen --python python3.11 ${ROBOCODE_UV_EXTRA_ARGS:-}
 cd /sandbox
 
 # Pass ROBOCODE_FIREWALL_EXTRA_DOMAINS through sudo (sudo strips env by default).
