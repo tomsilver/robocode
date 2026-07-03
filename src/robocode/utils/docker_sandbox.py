@@ -303,6 +303,7 @@ def run_genplan_in_docker(
     completion_cfg: dict[str, Any],
     image: str = _DEFAULT_IMAGE,
     timeout: float = 3600.0,
+    include_bilevel: bool = False,
 ) -> None:
     """Run the whole LLM-GenPlan loop inside one sandbox container.
 
@@ -310,10 +311,15 @@ def run_genplan_in_docker(
     the firewall + ``uv sync`` entrypoint) but the command is the genplan driver
     instead of the agent CLI. The driver reads ``sandbox_dir/genplan_config.json``
     and writes ``sandbox_dir/approach.py``. ``src`` keeps ``primitives`` (unlike
-    the agent mount) so the policy can build/use them as it does at eval.
+    the agent mount) so the policy can build/use them as it does at eval. With
+    *include_bilevel* (the genplan config requested ``bilevel_models``), the
+    kinder-baselines source is mounted and ``uv sync --extra bilevel`` runs, so
+    the models the primitive builds are importable in-container.
     """
     container_name = f"robocode-genplan-{uuid.uuid4().hex[:8]}"
-    with _filtered_repo_mounts(keep_primitives=True) as (
+    with _filtered_repo_mounts(
+        keep_primitives=True, include_bilevel=include_bilevel
+    ) as (
         filtered_src,
         filtered_kindergarden,
         filtered_kinder_baselines,
@@ -362,12 +368,15 @@ def _copy_src(
     With *blackbox*, ``environments/`` is also skipped so the agent cannot
     read the environment source.
 
-    ``primitive_descriptions.py`` is always stripped: the prompt descriptions are
-    built host-side, and shipping them would let an agent read the description of
-    a primitive it was not granted (e.g. the bilevel_models symbolic structure).
+    ``primitive_descriptions.py`` is stripped from the agent mount only: the
+    prompt descriptions are built host-side, and shipping them would let an agent
+    read the description of a primitive it was not granted (e.g. the
+    bilevel_models symbolic structure). The genplan mount (*keep_primitives*)
+    keeps it: it is non-agentic (no author browsing the filesystem) and its
+    driver imports it (via ``LLMGenPlanApproach``) to build the prompt in-container.
     """
     skip: tuple[str, ...] = (
-        ("oracles", "primitive_descriptions.py")
+        ("oracles",)
         if keep_primitives
         else ("oracles", "primitives", "primitive_descriptions.py")
     )

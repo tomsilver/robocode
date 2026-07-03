@@ -33,8 +33,9 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
 # it would not import (it imports the hidden env) and it would leak the env
 # structure. Every other primitive is generic and imported directly.
 # ``bilevel_models`` is env-bound too: it builds the SeSamE models for the live
-# env. Full black-box exposure (proxying its object methods over the handle
-# protocol) is deferred; for now it runs clearbox/local like check_action_collision.
+# env. It runs clearbox/local only; black-box exposure (proxying its object
+# methods over the handle protocol) is deferred, so blackbox_primitive_manifest
+# rejects it rather than emitting a host_proxy with no BlackboxEnv method.
 ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset(
     {"check_action_collision", "bilevel_models"}
 )
@@ -86,6 +87,11 @@ def blackbox_primitive_manifest(
     """
     manifest: list[dict[str, Any]] = []
     for name in names:
+        if name == "bilevel_models":
+            raise ValueError(
+                "bilevel_models has no black-box host proxy (black-box exposure is "
+                "deferred); run it in a clearbox/local sandbox instead."
+            )
         if name in ENV_DEPENDENT_PRIMITIVES:
             manifest.append({"name": name, "kind": "host_proxy"})
         elif name in REMOTE_MODULE_PRIMITIVES:

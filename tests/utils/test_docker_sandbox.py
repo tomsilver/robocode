@@ -203,6 +203,24 @@ def test_filtered_repo_mounts_includes_bilevel_when_requested() -> None:
         assert not (kinder_baselines / "kinder-rl").exists()
 
 
+def test_copy_src_keeps_descriptions_for_genplan_but_not_agent(tmp_path: Path) -> None:
+    """primitive_descriptions.py ships to the (non-agentic) genplan mount so its driver
+    can import it (via LLMGenPlanApproach) to build the prompt in-container, but is
+    stripped from the agent mount so an agent cannot read the description of a primitive
+    it was not granted."""
+    src = _find_repo_root() / "src"
+
+    genplan = tmp_path / "genplan"
+    _copy_src(src, genplan, keep_primitives=True)
+    assert (genplan / "robocode" / "primitive_descriptions.py").exists()
+    assert (genplan / "robocode" / "primitives").exists()
+
+    agent = tmp_path / "agent"
+    _copy_src(src, agent, keep_primitives=False)
+    assert not (agent / "robocode" / "primitive_descriptions.py").exists()
+    assert not (agent / "robocode" / "primitives").exists()
+
+
 def test_docker_run_prefix_omits_bilevel_without_primitive(tmp_path: Path) -> None:
     """No kinder-baselines mount or extra-sync env when bilevel is not requested."""
     cmd = _docker_run_prefix(

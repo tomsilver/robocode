@@ -188,8 +188,11 @@ def test_docker_cost_readback(tmp_path, monkeypatch):
         use_docker=True,
     )
 
-    def fake_run(sandbox_dir, completion_cfg, image):
+    captured = {}
+
+    def fake_run(sandbox_dir, completion_cfg, image, include_bilevel):
         del completion_cfg, image
+        captured["include_bilevel"] = include_bilevel
         sandbox_dir.joinpath("approach.py").write_text(_parse_python_code(_FIXED))
         sandbox_dir.joinpath("cost.json").write_text(
             '{"total_cost_usd": 0.05, "num_generations": 3}'
@@ -201,6 +204,39 @@ def test_docker_cost_readback(tmp_path, monkeypatch):
     approach.train()
     assert approach.total_cost_usd == pytest.approx(0.05)
     assert approach.num_generations == 3  # read back from the container
+    assert captured["include_bilevel"] is False  # no bilevel_models primitive
+
+
+def test_docker_syncs_bilevel_extra_when_primitive_requested(tmp_path, monkeypatch):
+    """A genplan config that requests bilevel_models tells the container to mount
+    kinder-baselines and `uv sync --extra bilevel` (include_bilevel=True), so the models
+    the primitive builds are importable in-container."""
+    env = _ToyEnv()
+    approach = LLMGenPlanApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=0,
+        primitives={"bilevel_models": object()},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env_cfg="{}",
+        output_dir=str(tmp_path),
+        use_docker=True,
+    )
+    captured = {}
+
+    def fake_run(sandbox_dir, completion_cfg, image, include_bilevel):
+        del completion_cfg, image
+        captured["include_bilevel"] = include_bilevel
+        sandbox_dir.joinpath("approach.py").write_text(_parse_python_code(_FIXED))
+        sandbox_dir.joinpath("cost.json").write_text(
+            '{"total_cost_usd": 0.0, "num_generations": 1}'
+        )
+
+    monkeypatch.setattr(
+        "robocode.approaches.llm_genplan_approach.run_genplan_in_docker", fake_run
+    )
+    approach.train()
+    assert captured["include_bilevel"] is True
 
 
 def test_cot_adds_summary_and_strategy_turns(tmp_path):

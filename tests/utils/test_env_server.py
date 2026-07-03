@@ -117,6 +117,14 @@ def test_blackbox_primitive_manifest() -> None:
     }
 
 
+def test_blackbox_primitive_manifest_rejects_bilevel_models() -> None:
+    """bilevel_models has no black-box host proxy (its symbolic objects would need a
+    serialization layer, not the opaque handle protocol), so the manifest fails loudly
+    rather than emitting a host_proxy with no BlackboxEnv method behind it."""
+    with pytest.raises(ValueError, match="bilevel_models"):
+        blackbox_primitive_manifest(["bilevel_models"])
+
+
 def test_reset_matches_direct_env(
     server: tuple[int, str], direct_env: KinderGeom2DEnv
 ) -> None:
