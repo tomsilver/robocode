@@ -364,9 +364,9 @@ def _build_docker_auth_args(
                 extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
             else:
                 logger.warning(
-                    "No Claude OAuth token found in Keychain; falling back to a "
-                    "throwaway copy of ~/.claude. Run `claude login` on the host "
-                    "if the container cannot authenticate."
+                    "No Claude OAuth token found (env var or Keychain); falling "
+                    "back to a throwaway copy of ~/.claude. Run `claude login` on "
+                    "the host if the container cannot authenticate."
                 )
                 host_claude_cfg = Path(
                     os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
