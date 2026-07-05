@@ -34,7 +34,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
-from robocode.utils.episode import run_episode, save_video
+from robocode.utils.episode import run_episode, run_per_instance_eval, save_video
 
 logger = logging.getLogger(__name__)
 
@@ -93,85 +93,116 @@ def _main(cfg: DictConfig) -> float:
     num_eval = cfg.num_eval_tasks
     eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
 
-    approach.train()
-
-    # Record approach history: replay every sandbox snapshot.
-    if cfg.record_approach_history:
-        load_dir = cfg.approach.get("load_dir", None)
-        sandbox_dir = Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
-        snapshots = get_snapshots(sandbox_dir)
-        record_episodes(
-            snapshots,
-            sandbox_dir,
+    # Two eval lifecycles, chosen explicitly. Per-instance approaches spend a
+    # global agent budget seed by seed (no single train() step); generalized
+    # approaches train once and are then rolled out for free over every seed.
+    if approach.per_instance:
+        if cfg.record_approach_history:
+            raise ValueError(
+                "record_approach_history is not supported for per-instance "
+                "approaches (it replays a single sandbox's git history; "
+                "per-instance approaches use a separate sandbox per seed)"
+            )
+        results: dict[str, Any] = run_per_instance_eval(
             env,
-            primitives,
-            cfg.seed,
-            max_steps=cfg.max_steps,
+            approach,
+            eval_seeds,
+            max_budget_usd=cfg.approach.max_budget_usd,
             output_dir=output_dir,
+            max_budget_per_instance_usd=cfg.approach.get(
+                "max_budget_per_instance_usd", None
+            ),
+            render=cfg.render_videos,
         )
+        # Surface the accumulated cross-seed cost via the shared reporting hook.
+        approach.total_cost_usd = results.pop("total_cost_usd")
+        mean_reward = results["mean_eval_reward"]
+        mean_steps = results["mean_eval_steps"]
+        solve_rate = results["solve_rate"]
+    else:
+        approach.train()
 
-    # Evaluate on held-out episodes.
-    render = cfg.render_videos
-    per_episode: list[dict[str, Any]] = []
-    for i, s in enumerate(eval_seeds):
-        try:
-            episode_result, frames, _ = run_episode(
-                env, approach, s, cfg.max_steps, render=render
+        # Record approach history: replay every sandbox snapshot.
+        if cfg.record_approach_history:
+            load_dir = cfg.approach.get("load_dir", None)
+            sandbox_dir = (
+                Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
             )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            # A loaded policy can raise on an unseen eval seed. We cannot fairly
-            # score a crash without the env's worst-case return (not available
-            # per env), so flag it and exclude it from the aggregate metrics
-            # rather than inventing a score that could flatter a crashy policy.
-            logger.exception(
-                "Eval episode (seed %d) crashed; excluding from metrics", s
+            snapshots = get_snapshots(sandbox_dir)
+            record_episodes(
+                snapshots,
+                sandbox_dir,
+                env,
+                primitives,
+                cfg.seed,
+                max_steps=cfg.max_steps,
+                output_dir=output_dir,
             )
-            per_episode.append(
-                {
-                    "total_reward": None,
-                    "num_steps": None,
-                    "solved": False,
-                    "crashed": True,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
+
+        # Evaluate on held-out episodes.
+        render = cfg.render_videos
+        per_episode: list[dict[str, Any]] = []
+        for i, s in enumerate(eval_seeds):
+            try:
+                episode_result, frames, _ = run_episode(
+                    env, approach, s, cfg.max_steps, render=render
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # A loaded policy can raise on an unseen eval seed. We cannot fairly
+                # score a crash without the env's worst-case return (not available
+                # per env), so flag it and exclude it from the aggregate metrics
+                # rather than inventing a score that could flatter a crashy policy.
+                logger.exception(
+                    "Eval episode (seed %d) crashed; excluding from metrics", s
+                )
+                per_episode.append(
+                    {
+                        "total_reward": None,
+                        "num_steps": None,
+                        "solved": False,
+                        "crashed": True,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            per_episode.append(episode_result)
+            if frames:
+                video_dir = output_dir / "videos"
+                video_dir.mkdir(exist_ok=True)
+                save_video(frames, video_dir / f"episode_{i}.gif")
+
+        # Aggregate over episodes that actually ran; crashed episodes are reported
+        # separately so partial evaluations stay honest (see the crash handler).
+        evaluated = [e for e in per_episode if not e.get("crashed")]
+        num_crashed = len(per_episode) - len(evaluated)
+        if num_crashed:
+            logger.warning(
+                "%d/%d eval episodes crashed and are excluded from the metrics; "
+                "see per_episode errors in results.json.",
+                num_crashed,
+                len(per_episode),
             )
-            continue
-        per_episode.append(episode_result)
-        if frames:
-            video_dir = output_dir / "videos"
-            video_dir.mkdir(exist_ok=True)
-            save_video(frames, video_dir / f"episode_{i}.gif")
 
-    # Aggregate over episodes that actually ran; crashed episodes are reported
-    # separately so partial evaluations stay honest (see the crash handler above).
-    evaluated = [e for e in per_episode if not e.get("crashed")]
-    num_crashed = len(per_episode) - len(evaluated)
-    if num_crashed:
-        logger.warning(
-            "%d/%d eval episodes crashed and are excluded from the metrics; see "
-            "per_episode errors in results.json.",
-            num_crashed,
-            len(per_episode),
-        )
+        def _mean(key: str) -> float:
+            return (
+                float(np.mean([e[key] for e in evaluated]))
+                if evaluated
+                else float("nan")
+            )
 
-    def _mean(key: str) -> float:
-        return (
-            float(np.mean([e[key] for e in evaluated])) if evaluated else float("nan")
-        )
+        mean_reward = _mean("total_reward")
+        mean_steps = _mean("num_steps")
+        solve_rate = _mean("solved")
 
-    mean_reward = _mean("total_reward")
-    mean_steps = _mean("num_steps")
-    solve_rate = _mean("solved")
-
-    results: dict[str, Any] = {
-        "mean_eval_reward": mean_reward,
-        "mean_eval_steps": mean_steps,
-        "solve_rate": solve_rate,
-        "num_eval_tasks": num_eval,
-        "num_evaluated_episodes": len(evaluated),
-        "num_crashed_episodes": num_crashed,
-        "per_episode": per_episode,
-    }
+        results = {
+            "mean_eval_reward": mean_reward,
+            "mean_eval_steps": mean_steps,
+            "solve_rate": solve_rate,
+            "num_eval_tasks": num_eval,
+            "num_evaluated_episodes": len(evaluated),
+            "num_crashed_episodes": num_crashed,
+            "per_episode": per_episode,
+        }
     agent_cost = getattr(approach, "total_cost_usd", None)
     if agent_cost is not None:
         results["agent_cost_usd"] = agent_cost

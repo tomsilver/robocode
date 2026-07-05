@@ -1,0 +1,14 @@
+_target_: robocode.approaches.bilevel_planning_approach.BilevelPlanningApproach
+
+# The planner has no LLM cost (cost_usd is always 0.0), so the dollar budget is
+# never spent and every eval seed is attempted. These keys must exist and be > 0
+# because run_per_instance_eval reads them; their value does not matter.
+max_budget_usd: 1.0
+max_budget_per_instance_usd: null
+
+# SeSamE planner parameters (defaults match kinder_bilevel_planning.agent).
+max_abstract_plans: 10
+samples_per_step: 10
+max_skill_horizon: 100
+heuristic_name: hff
+planning_timeout: 30.0

@@ -1,2 +1,5 @@
 _target_: robocode.environments.kinder_geom2d_env.KinderGeom2DEnv
 env_id: kinder/StickButton2D-b1-v0
+bilevel_env_name: stickbutton2d
+bilevel_env_model_kwargs:
+  num_buttons: 1
