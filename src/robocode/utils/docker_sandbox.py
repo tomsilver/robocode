@@ -8,7 +8,8 @@ provides:
 * **Network restriction** -- ``init-firewall.sh`` whitelists only the API
   endpoints needed by the configured backend/provider, plus GitHub and
   telemetry endpoints.
-* **Auth forwarding** -- for Claude: OAuth token or ``~/.claude`` bind-mount;
+* **Auth forwarding** -- for Claude: OAuth token, or a throwaway copy of
+  ``~/.claude`` bind-mounted (so container writes never persist on the host);
   for OpenCode: ``~/.local/share/opencode`` bind-mount or API key env vars.
 * **Reproducible Python environment** -- all robocode dependencies are
   pre-installed in ``/robocode/.venv`` via ``uv sync --frozen``.
@@ -266,15 +267,17 @@ def run_genplan_in_docker(
     the agent mount) so the policy can build/use them as it does at eval.
     """
     container_name = f"robocode-genplan-{uuid.uuid4().hex[:8]}"
-    with _filtered_repo_mounts(keep_primitives=True) as (
-        filtered_src,
-        filtered_kindergarden,
+    # Reuse the agent auth: the cli provider needs Claude OAuth/~/.claude; the SDK
+    # providers just need their API key forwarded (the non-claude branch forwards
+    # ANTHROPIC_API_KEY/OPENAI_API_KEY).
+    auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
+    with (
+        _filtered_repo_mounts(keep_primitives=True) as (
+            filtered_src,
+            filtered_kindergarden,
+        ),
+        _build_docker_auth_args(auth_backend) as (auth_args, auth_env),
     ):
-        # Reuse the agent auth: the cli provider needs Claude OAuth/~/.claude;
-        # the SDK providers just need their API key forwarded (the non-claude
-        # branch forwards ANTHROPIC_API_KEY/OPENAI_API_KEY).
-        auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
-        auth_args, auth_env = _build_docker_auth_args(auth_backend)
         # Whitelist the provider's API endpoint in the firewall (the default
         # whitelist only covers Anthropic). The cli provider needs nothing
         # extra; self-hosted endpoints are covered via base_url.
@@ -335,51 +338,80 @@ class DockerSandboxConfig(SandboxConfig):
     local_model_host: str = "host.docker.internal"
 
 
+@contextmanager
 def _build_docker_auth_args(
     backend_name: str,
-) -> tuple[list[str], dict[str, str]]:
-    """Return Docker CLI args and env vars for backend authentication.
+) -> Iterator[tuple[list[str], dict[str, str]]]:
+    """Yield Docker CLI args and env vars for backend authentication.
 
-    For Claude: OAuth token or ~/.claude bind-mount.
+    For Claude: OAuth token, or -- as a fallback when no token is found -- a
+    THROWAWAY COPY of ~/.claude bind-mounted read-write. Mounting the live host
+    ~/.claude would let anything the container writes under it, notably Claude
+    auto-memory, persist on the host and reach the next run; the copy is discarded
+    when this context exits, so writes stay ephemeral while the CLI can still read
+    the credentials and refresh session state.
     For OpenCode: ~/.local/share/opencode bind-mount + API key passthrough.
     """
     docker_args: list[str] = []
     extra_env: dict[str, str] = {}
+    cleanup_dir: Path | None = None
 
-    if backend_name == "claude":
-        oauth_token = _get_claude_oauth_token()
-        if oauth_token:
-            docker_args += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
-            extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+    try:
+        if backend_name == "claude":
+            oauth_token = _get_claude_oauth_token()
+            if oauth_token:
+                docker_args += ["-e", "CLAUDE_CODE_OAUTH_TOKEN"]
+                extra_env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+            else:
+                logger.warning(
+                    "No Claude OAuth token found in Keychain; falling back to a "
+                    "throwaway copy of ~/.claude. Run `claude login` on the host "
+                    "if the container cannot authenticate."
+                )
+                host_claude_cfg = Path(
+                    os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
+                )
+                cleanup_dir = Path(tempfile.mkdtemp(prefix="robocode-claude-"))
+                claude_copy = cleanup_dir / ".claude"
+                # Copy only what auth needs; skip the heavy, sensitive session
+                # dirs so they neither cost a per-run copy nor become readable in
+                # the sandbox. symlinks=True copies links verbatim, so a dangling
+                # link (e.g. debug/latest) does not abort the copy.
+                shutil.copytree(
+                    host_claude_cfg,
+                    claude_copy,
+                    symlinks=True,
+                    ignore=shutil.ignore_patterns(
+                        "projects",
+                        "todos",
+                        "shell-snapshots",
+                        "statsig",
+                        "debug",
+                        "history.jsonl",
+                    ),
+                )
+                docker_args += ["-v", f"{claude_copy}:/home/node/.claude"]
         else:
-            logger.warning(
-                "No Claude OAuth token found in Keychain; "
-                "falling back to ~/.claude bind-mount. "
-                "Run `claude login` on the host if the container "
-                "cannot authenticate."
-            )
-            host_claude_cfg = Path(
-                os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
-            )
-            docker_args += ["-v", f"{host_claude_cfg}:/home/node/.claude"]
-    else:
-        # OpenCode: bind-mount auth store and pass through API key env vars.
-        opencode_data = Path.home() / ".local" / "share" / "opencode"
-        if opencode_data.exists():
-            docker_args += [
-                "-v",
-                f"{opencode_data}:/home/node/.local/share/opencode",
-            ]
+            # OpenCode: bind-mount auth store and pass through API key env vars.
+            opencode_data = Path.home() / ".local" / "share" / "opencode"
+            if opencode_data.exists():
+                docker_args += [
+                    "-v",
+                    f"{opencode_data}:/home/node/.local/share/opencode",
+                ]
 
-        # Pass through provider API key env vars if set.
-        for info in PROVIDERS.values():
-            if info.api_key_env:
-                val = os.environ.get(info.api_key_env)
-                if val:
-                    docker_args += ["-e", info.api_key_env]
-                    extra_env[info.api_key_env] = val
+            # Pass through provider API key env vars if set.
+            for info in PROVIDERS.values():
+                if info.api_key_env:
+                    val = os.environ.get(info.api_key_env)
+                    if val:
+                        docker_args += ["-e", info.api_key_env]
+                        extra_env[info.api_key_env] = val
 
-    return docker_args, extra_env
+        yield docker_args, extra_env
+    finally:
+        if cleanup_dir is not None:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
 def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> list[str]:
@@ -433,9 +465,9 @@ async def run_agent_in_docker_sandbox(
     3. Launches ``docker run`` with:
 
        * ``--cap-add=NET_ADMIN --cap-add=NET_RAW`` for the iptables firewall
-       * Backend-specific auth forwarding (Claude OAuth token / ``~/.claude``
-         bind-mount, or OpenCode ``~/.local/share/opencode`` / API key env
-         vars)
+       * Backend-specific auth forwarding (Claude OAuth token / throwaway
+         ``~/.claude`` copy, or OpenCode ``~/.local/share/opencode`` / API key
+         env vars)
        * ``-v <sandbox_dir>:/sandbox`` (writable bind-mount)
        * ``-v <kindergarden>:/robocode/third-party/kindergarden:ro`` (read-only)
        * ``-w /sandbox`` as the working directory
@@ -466,13 +498,13 @@ async def run_agent_in_docker_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts(blackbox=config.blackbox) as (
-        filtered_src,
-        filtered_kindergarden,
+    with (
+        _filtered_repo_mounts(blackbox=config.blackbox) as (
+            filtered_src,
+            filtered_kindergarden,
+        ),
+        _build_docker_auth_args(backend_name) as (auth_args, auth_env),
     ):
-        # --- Authentication ---
-        auth_args, auth_env = _build_docker_auth_args(backend_name)
-
         # --- Firewall extra domains ---
         firewall_domains: list[str] = []
         if backend_name == "opencode":
