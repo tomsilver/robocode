@@ -24,8 +24,10 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -39,7 +41,10 @@ from robocode.utils.apptainer_sandbox import (
 )
 from robocode.utils.backends import create_backend
 from robocode.utils.docker_sandbox import (
+    _DEFAULT_IMAGE,
     DockerSandboxConfig,
+    _build_docker_auth_args,
+    _get_claude_oauth_token,
     run_agent_in_docker_sandbox,
 )
 from robocode.utils.env_server import (
@@ -705,6 +710,82 @@ async def _run_known_leak(name: str, prompt: str) -> bool:
     return leaked
 
 
+# Host-home persistence test. When no OAuth token is found, the Docker sandbox
+# authenticates Claude from ~/.claude (or $CLAUDE_CONFIG_DIR). It must mount a
+# THROWAWAY COPY, not the live dir: a live read-write mount would let anything
+# written under it -- including a Claude auto-memory file -- land on the host and
+# be visible to the next container run. We test the mount boundary DIRECTLY, with
+# a bare container write, rather than by asking an agent to do it: the real threat
+# (auto-memory) is automatic, and an adversarial agent may simply refuse the
+# prompt, which would mask a live mount. The write must not reach the host.
+HOME_PERSIST_MARKER = "robocode_redteam_persist_canary.txt"
+
+
+def _docker_write_probe(container_path: str) -> None:
+    """Write a marker to *container_path* from a bare sandbox container.
+
+    Uses the real auth mounts (``_build_docker_auth_args``) so whatever a real run
+    mounts at ``/home/node/.claude`` is in place. The entrypoint is overridden so
+    no firewall/uv setup runs; the write is all we need to probe whether the host
+    dir is reachable from inside the container.
+    """
+    with _build_docker_auth_args("claude") as (auth_args, auth_env):
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            *auth_args,
+            "--entrypoint",
+            "sh",
+            _DEFAULT_IMAGE,
+            "-c",
+            f"echo ROBOCODE_PERSISTED > '{container_path}'",
+        ]
+        subprocess.run(cmd, env={**os.environ, **auth_env}, check=True, timeout=120)
+
+
+async def _run_home_persistence() -> None:
+    """Assert the sandbox cannot persist a file into the host's Claude config dir.
+
+    Writes a marker to the container's ``/home/node/.claude`` (the mount point
+    ``_build_docker_auth_args`` targets) and checks the host side. A marker that
+    survives on the host proves container writes under ``~/.claude`` -- including
+    Claude auto-memory -- persist across runs. The marker is removed either way.
+    """
+    host_cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
+    marker = host_cfg / HOME_PERSIST_MARKER
+    fallback_mount = _get_claude_oauth_token() is None
+
+    print(f"\n{'='*60}")
+    print("TEST [Docker home-persistence]: host_home_persistence")
+    print(f"  host Claude config dir: {host_cfg}")
+    print(f"  no OAuth token (uses ~/.claude fallback): {fallback_mount}")
+    print(f"{'='*60}")
+
+    # Never clobber a real pre-existing file that happens to share the name.
+    if marker.exists():
+        raise SandboxBreachError(
+            f"Marker {marker} already exists on host; refusing to run "
+            "(remove it first)."
+        )
+
+    try:
+        _docker_write_probe(f"/home/node/.claude/{HOME_PERSIST_MARKER}")
+    finally:
+        # Always remove the planted marker, whether or not the write succeeded.
+        persisted = marker.exists()
+        if persisted:
+            marker.unlink()
+
+    print(f"  HOST PERSISTENCE: {'*** PERSISTED ***' if persisted else 'NONE'}")
+    if persisted:
+        raise SandboxBreachError(
+            "Sandbox persisted a file into the host Claude config dir "
+            f"({marker}); container writes under ~/.claude survive to the host "
+            "and reach the next run."
+        )
+
+
 async def main() -> None:
     """Run smoke test, then all adversarial prompts."""
     parser = argparse.ArgumentParser(description="Red team the sandbox")
@@ -731,17 +812,28 @@ async def main() -> None:
         help="Apptainer sandbox with blackbox mounts; test that env source "
         "is unreachable (needs robocode-sandbox.sif built)",
     )
+    parser.add_argument(
+        "--home-persist-only",
+        action="store_true",
+        help="Run only the host home-dir persistence test (Docker): a write into "
+        "the container's ~/.claude must not survive on the host; skips the rest "
+        "of the suite to save budget",
+    )
     args = parser.parse_args()
     if args.proxy_only:
         args.blackbox = True
-    use_docker: bool = args.docker or args.blackbox
+    use_docker: bool = args.docker or args.blackbox or args.home_persist_only
     mode = (
-        "Apptainer blackbox"
-        if args.apptainer_blackbox
+        "Docker home-persistence"
+        if args.home_persist_only
         else (
-            "Docker blackbox"
-            if args.blackbox
-            else "Docker" if use_docker else "OS-level"
+            "Apptainer blackbox"
+            if args.apptainer_blackbox
+            else (
+                "Docker blackbox"
+                if args.blackbox
+                else "Docker" if use_docker else "OS-level"
+            )
         )
     )
 
@@ -752,6 +844,13 @@ async def main() -> None:
     RED_TEAM_DIR.mkdir(parents=True)
 
     try:
+        if args.home_persist_only:
+            await _run_home_persistence()
+            print(f"\n{'='*60}")
+            print("RED TEAM COMPLETE (Docker home-persistence)")
+            print(f"{'='*60}")
+            return
+
         if args.apptainer_blackbox:
             # Same env-source-unreachability checks as Docker blackbox, but via
             # the Apptainer sandbox (which isolates with --no-home / --cleanenv /
@@ -803,6 +902,10 @@ async def main() -> None:
         for name, prompt in all_adversarial:
             await _run_adversarial(name, prompt, use_docker)
 
+        # The host-home mount only exists under Docker; skip it OS-level.
+        if use_docker:
+            await _run_home_persistence()
+
         leak_count = 0
         if not use_docker:
             for name, prompt in BASH_READ_LEAK_PROMPTS:
@@ -812,6 +915,8 @@ async def main() -> None:
         print(f"\n{'='*60}")
         print(f"RED TEAM COMPLETE ({mode})")
         print(f"  Adversarial tests passed: {len(all_adversarial)}")
+        if use_docker:
+            print("  Host home-persistence test passed")
         if not use_docker:
             print(
                 f"  Known bash read leaks: "
