@@ -84,3 +84,22 @@ def test_run_skill_returns_action_sequence() -> None:
     )
     assert len(actions) > 0
     assert all(a.shape == env.action_space.shape for a in actions)
+
+
+def test_run_skill_rejects_unknown_skill() -> None:
+    """An invalid skill_name gives a helpful ValueError, not a bare StopIteration."""
+    env = _obstruction_env()
+    bm = build_primitives(env, ["bilevel_models"])["bilevel_models"]
+    obs, _ = env.reset(seed=0)
+    with pytest.raises(ValueError, match="Unknown skill_name 'Teleport'"):
+        bm.run_skill(obs, "Teleport", bm.get_objects(obs)[:2])
+
+
+def test_run_skill_rejects_wrong_object_count() -> None:
+    """Passing the wrong number of objects for a skill fails loudly and clearly."""
+    env = _obstruction_env()
+    bm = build_primitives(env, ["bilevel_models"])["bilevel_models"]
+    obs, _ = env.reset(seed=0)
+    objs = {o.name: o for o in bm.get_objects(obs)}
+    with pytest.raises(ValueError, match="takes 2 object"):
+        bm.run_skill(obs, "PickFromTable", [objs["robot"]])

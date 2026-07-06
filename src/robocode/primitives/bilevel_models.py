@@ -116,7 +116,18 @@ class BilevelModels:
             rng = np.random.default_rng()
         models = self.models
         state = self._to_state(obs)
-        skill = next(s for s in models.skills if s.operator.name == skill_name)
+        skill = next((s for s in models.skills if s.operator.name == skill_name), None)
+        if skill is None:
+            raise ValueError(
+                f"Unknown skill_name {skill_name!r}; available skills are "
+                f"{self.skill_names}."
+            )
+        num_params = len(skill.operator.parameters)
+        if len(objects) != num_params:
+            raise ValueError(
+                f"Skill {skill_name!r} takes {num_params} object argument(s) "
+                f"(parameters {skill.operator.parameters}), but got {len(objects)}."
+            )
         controller = skill.ground(tuple(objects)).controller
         controller.reset(state, controller.sample_parameters(state, rng))
         actions: list[np.ndarray] = []

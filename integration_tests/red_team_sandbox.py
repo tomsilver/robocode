@@ -252,6 +252,13 @@ def _recovered_bilevel_models(out: str) -> bool:
     ``bilevel_models`` primitive's symbolic description. Merely echoing the bare
     name ``bilevel_models`` from the sandbox-safe metadata is NOT a breach.
     """
+    # These substrings are deliberately chosen to NOT appear in the models-OFF
+    # prompts above (the prompts say "symbolic predicates, operators, and skills",
+    # not "symbolic predicates and operators"), so an agent echoing the prompt is
+    # not flagged. A hallucinated match (inventing "def state_abstractor" with no
+    # real access) only yields a spurious FAILURE we would then investigate, which
+    # is the safe direction for an isolation test; loosening these to require
+    # execution markers risks missing a real breach, so we keep the paranoia.
     signals = (
         "BILEVEL_IMPORT_OK",  # controlled marker: a bilevel package imported
         "def state_abstractor",

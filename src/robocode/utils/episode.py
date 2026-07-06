@@ -35,6 +35,11 @@ def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
     """
     if "bilevel_models" not in primitives:
         return
+    # Substring (not AST) matching is deliberate. This is a cooperative guardrail
+    # plus a clear error message, not an adversarial sandbox: aliased imports still
+    # carry the module path so they are caught, and defeating it needs deliberate
+    # importlib obfuscation the instructed agent will not produce by accident. AST
+    # parsing to dodge comment/string false positives would be over-engineering.
     hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
     if hits:
         raise ValueError(
