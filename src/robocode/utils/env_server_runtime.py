@@ -373,7 +373,7 @@ def _render_state(
     env: Any,
     sandbox_dir: Path,
     seed: int,
-    state: list[float] | None,
+    state: list[float] | dict[str, Any] | None,
     label: str,
 ) -> str:
     """Render a state to a PNG under ``mcp_renders/``; return the relative path.
@@ -387,7 +387,13 @@ def _render_state(
     saved = env.get_state()
     try:
         if state is not None:
-            env_state = np.array(state, dtype=np.float32)
+            # A variable-count env sends its state as a tagged object-centric payload;
+            # a fixed-count env sends a flat list of floats.
+            env_state = (
+                decode(state)
+                if isinstance(state, dict)
+                else np.array(state, dtype=np.float32)
+            )
             stem = "state_custom"
         else:
             env.reset(seed=seed)
