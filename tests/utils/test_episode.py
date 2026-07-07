@@ -21,7 +21,41 @@ from robocode.utils.episode import (
     run_per_instance_eval,
     save_frames,
     save_video,
+    summarize_by_count,
 )
+
+
+def test_summarize_by_count_uses_full_scheduled_denominator() -> None:
+    """Per-count solve rate counts every scheduled episode; crashes/unattempted fail."""
+    scheduled = [2, 2, 2, 5, 5]
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "num_steps": 10},  # count 2
+        {"solved": False, "num_steps": 30},  # count 2
+        {"solved": False, "crashed": True},  # count 2, crash -> failure in denominator
+        {"solved": False, "attempted": False},  # count 5, unattempted -> failure
+        {"solved": True, "num_steps": 40, "planning_time": 3.0},  # count 5
+    ]
+    by_count, largest_all, largest_any = summarize_by_count(scheduled, per_episode)
+    assert by_count[2]["n"] == 3 and by_count[2]["solve_rate"] == 1 / 3
+    assert by_count[5]["n"] == 2 and by_count[5]["solve_rate"] == 1 / 2
+    # numeric extras averaged per count over whoever has them.
+    assert by_count[5]["mean_planning_time"] == 3.0
+    # largest_count_all_solved needs solve_rate == 1.0 (no count qualifies here).
+    assert largest_all is None
+    assert largest_any == 5  # count 5 has a solve
+
+
+def test_summarize_by_count_largest_all_solved() -> None:
+    """largest_count_all_solved is the biggest count solved on every episode."""
+    scheduled = [1, 1, 3]
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "num_steps": 5},
+        {"solved": True, "num_steps": 6},
+        {"solved": False, "num_steps": 9},
+    ]
+    _by_count, largest_all, largest_any = summarize_by_count(scheduled, per_episode)
+    assert largest_all == 1  # count 1 fully solved, count 3 not
+    assert largest_any == 1
 
 
 class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
@@ -46,9 +80,12 @@ class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
         budget_usd: float,
         output_subdir: Path,
         render: bool = False,
+        count: int | None = None,
     ) -> InstanceResult:
         del env, output_subdir
-        self.calls.append({"seed": seed, "budget_usd": budget_usd, "render": render})
+        self.calls.append(
+            {"seed": seed, "budget_usd": budget_usd, "render": render, "count": count}
+        )
         return self._results.pop(0)
 
 

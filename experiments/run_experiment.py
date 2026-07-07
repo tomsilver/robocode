@@ -34,7 +34,12 @@ from omegaconf import DictConfig, OmegaConf
 
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
-from robocode.utils.episode import run_episode, run_per_instance_eval, save_video
+from robocode.utils.episode import (
+    run_episode,
+    run_per_instance_eval,
+    save_video,
+    summarize_by_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +103,15 @@ def _main(cfg: DictConfig) -> float:
     num_eval = cfg.num_eval_tasks
     eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
 
+    # A variable-count env sweeps its configured object counts evenly across the eval
+    # set, so program and planner face the same (seed, count) instances and a
+    # solve-rate-vs-count curve can be reported. Held-out counts reach the env only
+    # here, pinned per episode; unpinned resets stay in the design range.
+    eval_counts: list[int] | None = None
+    if hasattr(env, "eval_counts"):
+        count_pool = list(env.eval_counts)
+        eval_counts = [count_pool[i % len(count_pool)] for i in range(num_eval)]
+
     # Two eval lifecycles, chosen explicitly. Per-instance approaches spend a
     # global agent budget seed by seed (no single train() step); generalized
     # approaches train once and are then rolled out for free over every seed.
@@ -118,6 +132,7 @@ def _main(cfg: DictConfig) -> float:
                 "max_budget_per_instance_usd", None
             ),
             render=cfg.render_videos,
+            eval_counts=eval_counts,
         )
         # Surface the accumulated cross-seed cost via the shared reporting hook.
         approach.total_cost_usd = results.pop("total_cost_usd")
@@ -148,15 +163,22 @@ def _main(cfg: DictConfig) -> float:
         render = cfg.render_videos
         per_episode: list[dict[str, Any]] = []
         for i, s in enumerate(eval_seeds):
+            count = eval_counts[i] if eval_counts is not None else None
+            episode_max_steps = (
+                env.max_steps_for_count(count)
+                if count is not None and hasattr(env, "max_steps_for_count")
+                else cfg.max_steps
+            )
             try:
                 episode_result, frames, _ = run_episode(
-                    env, approach, s, cfg.max_steps, render=render
+                    env, approach, s, episode_max_steps, render=render, count=count
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 # A loaded policy can raise on an unseen eval seed. We cannot fairly
                 # score a crash without the env's worst-case return (not available
                 # per env), so flag it and exclude it from the aggregate metrics
                 # rather than inventing a score that could flatter a crashy policy.
+                # (The by_count scaling curve still counts it as unsolved.)
                 logger.exception(
                     "Eval episode (seed %d) crashed; excluding from metrics", s
                 )
@@ -167,6 +189,7 @@ def _main(cfg: DictConfig) -> float:
                         "solved": False,
                         "crashed": True,
                         "error": f"{type(exc).__name__}: {exc}",
+                        **({"object_count": count} if count is not None else {}),
                     }
                 )
                 continue
@@ -208,6 +231,13 @@ def _main(cfg: DictConfig) -> float:
             "num_crashed_episodes": num_crashed,
             "per_episode": per_episode,
         }
+        if eval_counts is not None:
+            by_count, largest_all, largest_any = summarize_by_count(
+                eval_counts, per_episode
+            )
+            results["by_count"] = by_count
+            results["largest_count_all_solved"] = largest_all
+            results["largest_count_any_solved"] = largest_any
     agent_cost = getattr(approach, "total_cost_usd", None)
     if agent_cost is not None:
         results["agent_cost_usd"] = agent_cost

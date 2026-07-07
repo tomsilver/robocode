@@ -42,7 +42,17 @@ def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
             if "seed" not in row:
                 row["seed"] = cfg["seed"]
 
-            row.update({k: v for k, v in results.items() if k != "per_episode"})
+            for key, value in results.items():
+                if key == "per_episode":
+                    continue
+                # by_count is a nested {count: {...}} dict; flatten its solve rates to
+                # numeric solve_rate@<count> columns so they aggregate across seeds.
+                if key == "by_count" and isinstance(value, dict):
+                    for count, entry in value.items():
+                        if isinstance(entry, dict) and "solve_rate" in entry:
+                            row[f"solve_rate@{count}"] = entry["solve_rate"]
+                    continue
+                row[key] = value
             rows.append(row)
 
     return pd.DataFrame(rows)

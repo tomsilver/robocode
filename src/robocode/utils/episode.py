@@ -24,6 +24,7 @@ _FORBIDDEN_PLANNER_REFS = (
     "BacktrackingRefiner",
     "BilevelPlanningGraph",
     "bilevel_planning.sesame",
+    "BilevelPlanningAgent",
 )
 
 
@@ -84,9 +85,17 @@ def run_episode(
     seed: int,
     max_steps: int,
     render: bool = False,
+    count: int | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
-    """Run a single evaluation episode; return metrics, frames, final state."""
-    state, info = env.reset(seed=seed)
+    """Run a single evaluation episode; return metrics, frames, final state.
+
+    ``count`` pins the object count for a variable-count env (via
+    ``reset(options={"object_count": count})``); ``None`` leaves the env to sample.
+    """
+    if count is not None:
+        state, info = env.reset(seed=seed, options={"object_count": count})
+    else:
+        state, info = env.reset(seed=seed)
     approach.reset(state, info)
 
     frames: list[NDArray[np.uint8]] = []
@@ -118,7 +127,64 @@ def run_episode(
         "num_steps": num_steps,
         "solved": bool(terminated),
     }
+    if "object_count" in info:
+        metrics["object_count"] = info["object_count"]
     return metrics, frames, state
+
+
+def summarize_by_count(
+    scheduled_counts: list[int], per_episode: list[dict[str, Any]]
+) -> tuple[dict[int, dict[str, Any]], int | None, int | None]:
+    """Break results down by object count for a variable-count scaling curve.
+
+    ``scheduled_counts[i]`` is the object count assigned to ``per_episode[i]`` (the two
+    lists are parallel). The per-count ``solve_rate`` uses the **full scheduled**
+    denominator: crashed, unattempted, and unsolved episodes all count as failures, so
+    the curve does not flatter a policy that crashes on larger counts.
+
+    Returns ``(by_count, largest_count_all_solved, largest_count_any_solved)`` where the
+    two scalars are the largest count solved on every / at least one scheduled episode
+    (``None`` if no count qualifies).
+    """
+    reserved = {"seed", "attempted", "crashed", "solved", "object_count"}
+    buckets: dict[int, dict[str, Any]] = {}
+    for count, episode in zip(scheduled_counts, per_episode):
+        bucket = buckets.setdefault(
+            count, {"n": 0, "n_solved": 0, "steps": [], "extras": {}}
+        )
+        bucket["n"] += 1
+        if episode.get("solved"):
+            bucket["n_solved"] += 1
+        steps = episode.get("num_steps")
+        if steps is not None:
+            bucket["steps"].append(steps)
+        for key, value in episode.items():
+            if key in reserved or key in {"total_reward", "num_steps", "cost_usd"}:
+                continue
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                bucket["extras"].setdefault(key, []).append(value)
+
+    by_count: dict[int, dict[str, Any]] = {}
+    for count in sorted(buckets):
+        bucket = buckets[count]
+        entry: dict[str, Any] = {
+            "n": bucket["n"],
+            "n_solved": bucket["n_solved"],
+            "solve_rate": (
+                bucket["n_solved"] / bucket["n"] if bucket["n"] else float("nan")
+            ),
+        }
+        if bucket["steps"]:
+            entry["mean_num_steps"] = float(np.mean(bucket["steps"]))
+        for key, values in sorted(bucket["extras"].items()):
+            entry[f"mean_{key}"] = float(np.mean(values))
+        by_count[count] = entry
+
+    solved_counts = [c for c, e in by_count.items() if e["solve_rate"] > 0]
+    fully_solved = [c for c, e in by_count.items() if e["solve_rate"] >= 1.0]
+    largest_all = max(fully_solved) if fully_solved else None
+    largest_any = max(solved_counts) if solved_counts else None
+    return by_count, largest_all, largest_any
 
 
 def run_per_instance_eval(
@@ -130,6 +196,7 @@ def run_per_instance_eval(
     output_dir: Path,
     max_budget_per_instance_usd: float | None = None,
     render: bool = False,
+    eval_counts: list[int] | None = None,
 ) -> dict[str, Any]:
     """Evaluate a per-instance approach, spending one global budget across seeds.
 
@@ -174,6 +241,7 @@ def run_per_instance_eval(
             budget_usd=budget_i,
             output_subdir=output_dir / f"instance_{i}",
             render=render,
+            count=eval_counts[i] if eval_counts is not None else None,
         )
         num_attempted += 1
         remaining -= result.cost_usd
@@ -250,6 +318,14 @@ def run_per_instance_eval(
     }
     for key in sorted(extra_keys):
         results[f"mean_{key}"] = _mean_extra(key)
+
+    if eval_counts is not None:
+        by_count, largest_all, largest_any = summarize_by_count(
+            eval_counts, per_episode
+        )
+        results["by_count"] = by_count
+        results["largest_count_all_solved"] = largest_all
+        results["largest_count_any_solved"] = largest_any
     return results
 
 
