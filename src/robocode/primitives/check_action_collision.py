@@ -8,6 +8,7 @@ import numpy as np
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.environments.maze_env import MazeEnv
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 
 # Action-index to (row-delta, col-delta) for MazeEnv.
 _MAZE_DELTAS = {0: (-1, 0), 1: (1, 0), 2: (0, -1), 3: (0, 1)}
@@ -35,6 +36,22 @@ def _kinder_check(env: Any, state: Any, action: Any) -> bool:
     return ref_after is ref_before  # type: ignore[no-any-return]
 
 
+def _variable_count_check(env: Any, state: Any, action: Any) -> bool:
+    """Collision check for VariableObjectCountEnv via kinder reference identity.
+
+    Same trick as ``_kinder_check`` but the active inner object-centric env lives on
+    the per-count backend selected by ``set_state``.
+    """
+    saved = env.get_state()
+    env.set_state(state)
+    inner = env._current_backend._object_centric_env  # type: ignore[attr-defined]  # pylint: disable=protected-access
+    ref_before = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
+    env.step(np.array(action, dtype=np.float32))
+    ref_after = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
+    env.set_state(saved)
+    return ref_after is ref_before  # type: ignore[no-any-return]
+
+
 def _generic_check(env: Any, state: Any, action: Any) -> bool:
     """Fallback: step the env and compare states."""
     saved = env.get_state()
@@ -48,6 +65,8 @@ def check_action_collision(env: Any, state: Any, action: Any) -> bool:
     """Return True if taking *action* in *state* causes a collision."""
     if isinstance(env, MazeEnv):
         return _maze_check(state, action)
+    if isinstance(env, VariableObjectCountEnv):
+        return _variable_count_check(env, state, action)
     if isinstance(env, KinderGeom2DEnv):
         return _kinder_check(env, state, action)
     return _generic_check(env, state, action)

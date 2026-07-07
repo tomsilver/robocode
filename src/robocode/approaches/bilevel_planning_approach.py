@@ -52,9 +52,11 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         self._max_skill_horizon = max_skill_horizon
         self._heuristic_name = heuristic_name
         self._planning_timeout = planning_timeout
-        # SesameModels depend only on the (fixed) env, so build once from the env
-        # handed to solve_instance and reuse across seeds.
+        # Fixed-count env: SesameModels depend only on the env, so build once and reuse.
+        # Variable-count env: the models bake in the object count, so they are rebuilt
+        # per count and cached by count (see _get_models).
         self._models: Any | None = None
+        self._models_by_count: dict[int, Any] = {}
         self._agent: BilevelPlanningAgent | None = None
 
     def train(self) -> None:
@@ -65,10 +67,26 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             "train() is not used (the runner branches on approach.per_instance)"
         )
 
-    def _get_models(self, env: Any) -> Any:
+    def _get_models(self, env: Any, count: int | None) -> Any:
+        # A variable-count env exposes models_for_count: the models bake in the object
+        # count, so cache one bundle per count. Otherwise the env is fixed-count and a
+        # single bundle is reused across seeds.
+        if count is not None and hasattr(env, "models_for_count"):
+            if count not in self._models_by_count:
+                self._models_by_count[count] = env.models_for_count(count)
+            return self._models_by_count[count]
         if self._models is None:
             self._models = build_sesame_models(env)
         return self._models
+
+    @staticmethod
+    def _planner_obs(env: Any, obs: Any) -> Any:
+        # The SeSamE models consume a fixed-length Box. A variable-count env yields an
+        # object-centric state, which it vectorizes through the current count's Box
+        # space; a fixed-count env already yields the Box vector.
+        if hasattr(env, "to_box"):
+            return env.to_box(obs)
+        return obs
 
     def _get_action(self) -> Any:
         # solve_instance drives the planner directly; this keeps the ABC honest.
@@ -83,16 +101,20 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         budget_usd: float,
         output_subdir: Path,
         render: bool = False,
+        count: int | None = None,
     ) -> InstanceResult:
         """Plan once for this seed, then execute the plan open-loop.
 
         A planning timeout or an unreachable goal surfaces as ``AgentFailure`` and
         is scored as an unsolved (not crashed) attempt. The dollar ``budget_usd``
         is unused: the planner has no LLM cost, so ``cost_usd`` is always 0.0 and
-        every seed is attempted.
+        every seed is attempted. ``count`` pins a variable-count env's object count so
+        the planner faces the same instance as the generalized program; the SeSamE
+        models are then rebuilt for that count and the object-centric observation is
+        vectorized to that count's Box space for the planner.
         """
         del budget_usd, output_subdir
-        models = self._get_models(env)
+        models = self._get_models(env, count)
         agent: BilevelPlanningAgent[Any, Any, Any] = BilevelPlanningAgent(
             models,
             seed=seed,
@@ -104,11 +126,17 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         )
         self._agent = agent
 
-        obs, info = env.reset(seed=seed)
+        if count is not None:
+            obs, info = env.reset(seed=seed, options={"object_count": count})
+        else:
+            obs, info = env.reset(seed=seed)
+        object_count = (
+            count if count is not None else getattr(env, "current_count", None)
+        )
 
         plan_start = time.perf_counter()
         try:
-            agent.reset(obs, info)
+            agent.reset(self._planner_obs(env, obs), info)
             plan_found = True
         except AgentFailure:
             plan_found = False
@@ -124,6 +152,11 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
                     "planning_time": planning_time,
                     "plan_found": False,
                     "plan_length": 0,
+                    **(
+                        {"object_count": object_count}
+                        if object_count is not None
+                        else {}
+                    ),
                 },
             )
 
@@ -144,7 +177,14 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         terminated = False
         execution_time = 0.0
         env_step_time = 0.0
-        for _ in range(self._max_steps):
+        # A variable-count instance gets a horizon that grows with its object count,
+        # so a large instance is not cut off before its (longer) plan can execute.
+        max_steps = (
+            env.max_steps_for_count(count)
+            if count is not None and hasattr(env, "max_steps_for_count")
+            else self._max_steps
+        )
+        for _ in range(max_steps):
             t0 = time.perf_counter()
             try:
                 action = agent.step()
@@ -159,7 +199,12 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             total_reward += float(reward)
             num_steps += 1
             t0 = time.perf_counter()
-            agent.update(obs, float(reward), terminated or truncated, info)
+            agent.update(
+                self._planner_obs(env, obs),
+                float(reward),
+                terminated or truncated,
+                info,
+            )
             execution_time += time.perf_counter() - t0
             if render:
                 _capture()
@@ -178,5 +223,6 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
                 "env_step_time": env_step_time,
                 "plan_length": num_steps,
                 "plan_found": True,
+                **({"object_count": object_count} if object_count is not None else {}),
             },
         )

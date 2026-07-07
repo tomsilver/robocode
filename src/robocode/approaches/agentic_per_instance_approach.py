@@ -40,6 +40,7 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         budget_usd: float,
         output_subdir: Path,
         render: bool = False,
+        count: int | None = None,
     ) -> InstanceResult:
         """Run the agent on a single seed, then score the program it wrote.
 
@@ -97,10 +98,15 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         assert self._max_steps is not None  # the runner always provides max_steps
         # Each seed gets a fresh program; clear any policy from a prior seed.
         self._generated = None
+        episode_max_steps = (
+            env.max_steps_for_count(count)
+            if count is not None and hasattr(env, "max_steps_for_count")
+            else self._max_steps
+        )
         try:
             self._load_generated(result.output_file)
             metrics, frames, _ = run_episode(
-                env, self, seed, self._max_steps, render=render
+                env, self, seed, episode_max_steps, render=render, count=count
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Isolate a single seed's bad program (load error or runtime crash):
@@ -127,4 +133,9 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
             cost_usd=cost,
             crashed=False,
             frames=frames,
+            extras=(
+                {"object_count": metrics["object_count"]}
+                if "object_count" in metrics
+                else {}
+            ),
         )
