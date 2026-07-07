@@ -23,6 +23,7 @@ from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
 from omegaconf import DictConfig
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
@@ -98,6 +99,9 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._blackbox = blackbox
+        # A variable-count env hands the program an ObjectCentricState (not a vector);
+        # the prompt then documents the object-centric API instead of vector/devectorize.
+        self._object_centric = isinstance(observation_space, ObjectCentricStateSpace)
         self._env_cfg = env_cfg
         self._max_steps = max_steps
         if blackbox:
@@ -143,6 +147,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             python_executable=python_exe,
             primitives_description=primitives_desc,
             blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         env_description: str | None = None

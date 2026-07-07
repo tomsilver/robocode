@@ -269,6 +269,22 @@ method is called each step and must return a valid action.\
 
 AGENTIC_RUN_COMMANDS = "{python_executable} test_approach.py"
 
+# Appended to the interface spec for a variable-object-count (generalized) env, where
+# `state` is an ObjectCentricState rather than a fixed-length vector. Deliberately
+# names the object-centric API and forbids vector/index/count assumptions.
+OBJECT_CENTRIC_STATE_NOTE = """
+
+IMPORTANT -- this environment has a VARIABLE number of objects. `state` (in both \
+`reset` and `get_action`) is an `ObjectCentricState`, NOT a fixed-length vector. It \
+is a set of typed objects whose count changes between episodes. Read it with:
+- `state.get_objects(type)` -- objects of a type (types are in `observation_space.types`);
+- `state.get_object_names()` / `state.get_object_from_name(name)` -- objects by name;
+- `state.get(obj, feature)` -- a named feature of an object.
+Do NOT call `state.shape` or index `state` positionally, do NOT devectorize it, and \
+do NOT assume a fixed number of objects of any type. Your ONE program must work for \
+ANY object count; it will be evaluated on counts larger than any you see while \
+developing, so write count-agnostic code (loop over the objects that are present)."""
+
 # Geometric-reasoning prompt, shared by both approaches.
 GEOMETRY_PROMPT = """\
 
@@ -639,16 +655,19 @@ def build_interface_spec(
     python_executable: str,
     primitives_description: str,
     blackbox: bool,
+    object_centric: bool = False,
 ) -> str:
     """Fill the shared interface-spec template with an approach's class contract and run
     commands; append the inspect-source suffix when the agent can read env source (non-
-    blackbox)."""
+    blackbox), and the object-centric-state note for a variable-count env."""
     interface_spec = INTERFACE_SPEC_TEMPLATE.format(
         class_interface=class_interface,
         primitives_description=primitives_description,
         python_executable=python_executable,
         run_commands=run_commands.format(python_executable=python_executable),
     )
+    if object_centric:
+        interface_spec += OBJECT_CENTRIC_STATE_NOTE
     if not blackbox:
         interface_spec += INSPECT_SOURCE_SUFFIX.format(
             python_executable=python_executable
