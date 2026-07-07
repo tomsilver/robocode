@@ -240,6 +240,59 @@ def test_load_cleans_sys_path(dummy_approach_file: Path) -> None:
     assert sandbox_dir not in sys.path
 
 
+_APPROACH_TEMPLATE = (
+    "{extra}\n"
+    "class GeneratedApproach:\n"
+    "    def __init__(self, action_space, observation_space, primitives):\n"
+    "        self._action_space = action_space\n"
+    "    def reset(self, state, info):\n"
+    "        pass\n"
+    "    def get_action(self, state):\n"
+    "        return self._action_space.sample()\n"
+)
+
+
+def _write_approach(tmp_path: Path, extra: str = "") -> Path:
+    approach_py = tmp_path / "approach.py"
+    approach_py.write_text(_APPROACH_TEMPLATE.format(extra=extra))
+    return approach_py
+
+
+def test_anti_cheat_rejects_planner_refs_with_bilevel_models(tmp_path: Path) -> None:
+    """With bilevel_models, referencing the SeSamE planner is rejected at load."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(
+        tmp_path, extra="from bilevel_planning.sesame import run_sesame"
+    )
+    with pytest.raises(ValueError, match="bilevel planner"):
+        load_generated_approach(
+            path, action_space, obs_space, {"bilevel_models": object()}
+        )
+
+
+def test_anti_cheat_allows_clean_program_with_bilevel_models(tmp_path: Path) -> None:
+    """A program that does not touch the planner loads normally."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(tmp_path, extra="# uses primitives['bilevel_models'] only")
+    approach = load_generated_approach(
+        path, action_space, obs_space, {"bilevel_models": object()}
+    )
+    assert hasattr(approach, "get_action")
+
+
+def test_anti_cheat_not_enforced_without_bilevel_models(tmp_path: Path) -> None:
+    """The check only applies when the bilevel_models primitive is present."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(
+        tmp_path, extra="run_sesame = None  # not the primitive setting"
+    )
+    approach = load_generated_approach(path, action_space, obs_space, {})
+    assert hasattr(approach, "get_action")
+
+
 def test_run_episode_returns_final_state() -> None:
     """run_episode returns the observation the episode ended on."""
 

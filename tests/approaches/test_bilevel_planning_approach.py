@@ -134,8 +134,8 @@ def test_planning_is_deterministic(tmp_path: Path) -> None:
 
 
 def test_missing_mapping_fails_loudly(tmp_path: Path) -> None:
-    """An env without the bilevel mapping raises rather than planning silently."""
-    env = KinderGeom2DEnv("kinder/Obstruction2D-o0-v0")  # no bilevel_env_name
+    """An env with no bilevel model raises rather than planning silently."""
+    env = KinderGeom2DEnv("kinder/PushPullHook2D-v0")  # infers to no mapping
     approach = _make_approach(env)
     with pytest.raises(AssertionError, match="bilevel_env_name"):
         approach.solve_instance(env=env, seed=0, budget_usd=0.0, output_subdir=tmp_path)

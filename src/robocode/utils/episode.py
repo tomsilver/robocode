@@ -15,6 +15,37 @@ from robocode.approaches.base_approach import BaseApproach
 
 logger = logging.getLogger(__name__)
 
+# Symbols that would let a generated program run the SeSamE planner instead of
+# composing the bilevel MODELS itself. Deployed programs given the bilevel_models
+# primitive must NOT call the planner: doing so reintroduces the per-instance
+# search the generalized program is meant to amortize away.
+_FORBIDDEN_PLANNER_REFS = (
+    "run_sesame",
+    "BacktrackingRefiner",
+    "BilevelPlanningGraph",
+    "bilevel_planning.sesame",
+)
+
+
+def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
+    """Reject a generated approach that invokes the bilevel planner (anti-cheat).
+
+    Only enforced when the ``bilevel_models`` primitive is in play; other
+    approaches are unaffected.
+    """
+    if "bilevel_models" not in primitives:
+        return
+    # A cooperative guardrail plus a clear error message, not an adversarial
+    # sandbox: substring matching suffices because aliased imports still carry the
+    # module path, and only deliberate importlib obfuscation would evade it.
+    hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
+    if hits:
+        raise ValueError(
+            f"Generated approach references the bilevel planner ({', '.join(hits)}); "
+            "with the bilevel_models primitive you must compose the models yourself, "
+            "not run SeSamE search."
+        )
+
 
 def load_generated_approach(
     path: Path,
@@ -33,6 +64,7 @@ def load_generated_approach(
         sys.path.insert(0, sandbox_dir)
     try:
         source = path.read_text()
+        _reject_planner_references(source, primitives)
         # Set __file__ so the exec'd code can use it (e.g. to locate
         # sibling modules via os.path.dirname(__file__)).  exec() does
         # not set this automatically unlike a normal module import.

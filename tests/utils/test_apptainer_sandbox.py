@@ -49,6 +49,7 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
         sandbox_abs="/host/sandbox",
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
         auth_args=[],
         firewall_domains=[],
         agent_cmd=["claude", "--print", "hello"],
@@ -87,6 +88,30 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
     assert cmd[-3:] == ["claude", "--print", "hello"]
 
 
+def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
+    """The kinder-baselines bind and --extra bilevel sync appear only when requested."""
+
+    def build(kinder_baselines_abs: str | None) -> list[str]:
+        return _build_apptainer_cmd(
+            ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox"),
+            sandbox_abs="/host/sandbox",
+            src_abs="/host/src",
+            kindergarden_abs="/host/kindergarden",
+            kinder_baselines_abs=kinder_baselines_abs,
+            auth_args=[],
+            firewall_domains=[],
+            agent_cmd=["claude"],
+        )
+
+    off = build(None)
+    assert "kinder-baselines" not in " ".join(off)
+    assert "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel" not in off
+
+    on = build("/host/kinder-baselines")
+    assert "/host/kinder-baselines:/robocode/third-party/kinder-baselines" in on
+    assert "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel" in on
+
+
 def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
     """Blackbox mode adds --containall; --no-home alone leaks the host /home.
 
@@ -101,6 +126,7 @@ def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
         sandbox_abs="/host/sandbox",
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
         auth_args=[],
         firewall_domains=[],
         agent_cmd=["claude"],
@@ -110,6 +136,7 @@ def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
         sandbox_abs="/host/sandbox",
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
         auth_args=[],
         firewall_domains=[],
         agent_cmd=["claude"],
@@ -126,6 +153,7 @@ def test_build_cmd_firewall_domains(tmp_path: Path) -> None:
         sandbox_abs="/host/sandbox",
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
         auth_args=[],
         firewall_domains=["api.example.com", "cdn.example.com"],
         agent_cmd=["claude"],
@@ -141,6 +169,7 @@ def test_build_cmd_no_firewall_when_empty(tmp_path: Path) -> None:
         sandbox_abs="/host/sandbox",
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
         auth_args=[],
         firewall_domains=[],
         agent_cmd=["claude"],
@@ -157,6 +186,7 @@ def test_build_cmd_auth_args_inserted(tmp_path: Path) -> None:
         sandbox_abs="/host/sandbox",
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
         auth_args=auth_args,
         firewall_domains=[],
         agent_cmd=["claude"],

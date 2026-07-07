@@ -20,9 +20,9 @@ from typing import Any
 
 import numpy as np
 from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
-from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
+from robocode.utils.bilevel import build_sesame_models
 
 
 class BilevelPlanningApproach(BaseApproach[Any, Any]):
@@ -67,16 +67,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
 
     def _get_models(self, env: Any) -> Any:
         if self._models is None:
-            assert env.bilevel_env_name is not None, (
-                "BilevelPlanningApproach needs bilevel_env_name on the environment; "
-                "add bilevel_env_name and bilevel_env_model_kwargs to the env config."
-            )
-            self._models = create_bilevel_planning_models(
-                env.bilevel_env_name,
-                env.observation_space,
-                env.action_space,
-                **env.bilevel_env_model_kwargs,
-            )
+            self._models = build_sesame_models(env)
         return self._models
 
     def _get_action(self) -> Any:

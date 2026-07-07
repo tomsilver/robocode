@@ -24,7 +24,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
-from robocode.primitives import format_primitives_description
+from robocode.primitive_descriptions import format_primitives_description
 from robocode.utils.apptainer_sandbox import _DEFAULT_SIF, run_genplan_in_apptainer
 from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
@@ -194,10 +194,21 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         )
         config = self._driver_config(completion)
         (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
+        include_bilevel = "bilevel_models" in self._primitives
         if self._container_backend == "apptainer":
-            run_genplan_in_apptainer(sandbox_dir, completion, sif_path=self._sif_path)
+            run_genplan_in_apptainer(
+                sandbox_dir,
+                completion,
+                sif_path=self._sif_path,
+                include_bilevel=include_bilevel,
+            )
         else:
-            run_genplan_in_docker(sandbox_dir, completion, image=self._docker_image)
+            run_genplan_in_docker(
+                sandbox_dir,
+                completion,
+                image=self._docker_image,
+                include_bilevel=include_bilevel,
+            )
         cost = json.loads((sandbox_dir / "cost.json").read_text(encoding="utf-8"))
         self.total_cost_usd = cost["total_cost_usd"]
         self.num_generations = cost.get("num_generations")

@@ -18,9 +18,6 @@ dependencies = [
    "hydra-joblib-launcher",
    "omegaconf",
    "kindergarden",
-   "bilevel_planning>=0.1.4",
-   "kinder_bilevel_planning",
-   "kinder_models",
    "pybullet",
    "types-shapely",
    "scipy-stubs",
@@ -31,6 +28,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Bilevel planning (SeSamE) baseline + the `bilevel_models` primitive. Kept
+# optional so the agentic sandbox can OMIT it entirely for "models OFF" runs:
+# its predicates/operators/controllers would otherwise leak task structure to
+# the agent. Installed on the host via `uv sync --all-extras`; the sandbox only
+# syncs `--extra bilevel` (and bind-mounts kinder-baselines) when the
+# bilevel_models primitive is requested.
+bilevel = [
+    "bilevel_planning>=0.1.4",
+    "kinder_bilevel_planning",
+    "kinder_models",
+]
 develop = [
     "black",
     "docformatter",

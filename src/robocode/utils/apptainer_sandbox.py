@@ -144,6 +144,7 @@ def _build_apptainer_cmd(
     sandbox_abs: str,
     src_abs: str,
     kindergarden_abs: str,
+    kinder_baselines_abs: str | None,
     auth_args: list[str],
     firewall_domains: list[str],
     agent_cmd: list[str],
@@ -192,6 +193,11 @@ def _build_apptainer_cmd(
             f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
         ]
 
+    # Only when the bilevel_models primitive is in play: sync the bilevel extra
+    # (the bind is added below). Otherwise no bilevel source/deps enter the sandbox.
+    if kinder_baselines_abs is not None:
+        cmd += ["--env", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
+
     cmd += auth_args
 
     cmd += [
@@ -201,6 +207,13 @@ def _build_apptainer_cmd(
         f"{src_abs}:/robocode/src",
         "--bind",
         f"{kindergarden_abs}:/robocode/third-party/kindergarden",
+    ]
+    if kinder_baselines_abs is not None:
+        cmd += [
+            "--bind",
+            f"{kinder_baselines_abs}:/robocode/third-party/kinder-baselines",
+        ]
+    cmd += [
         str(config.sif_path),
         "/usr/local/bin/entrypoint.sh",
     ]
@@ -231,9 +244,13 @@ async def run_agent_in_apptainer_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     run_id = f"apptainer-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts(blackbox=config.blackbox) as (
+    with _filtered_repo_mounts(
+        blackbox=config.blackbox,
+        include_bilevel="bilevel_models" in config.primitive_names,
+    ) as (
         filtered_src,
         filtered_kindergarden,
+        filtered_kinder_baselines,
     ):
         auth_args, auth_env = _build_apptainer_auth_args(backend_name)
 
@@ -266,6 +283,11 @@ async def run_agent_in_apptainer_sandbox(
             sandbox_abs=sandbox_abs,
             src_abs=str(filtered_src.resolve()),
             kindergarden_abs=str(filtered_kindergarden.resolve()),
+            kinder_baselines_abs=(
+                str(filtered_kinder_baselines.resolve())
+                if filtered_kinder_baselines is not None
+                else None
+            ),
             auth_args=auth_args,
             firewall_domains=firewall_domains,
             agent_cmd=agent_cmd,
@@ -323,6 +345,7 @@ def run_genplan_in_apptainer(
     completion_cfg: dict[str, Any],
     sif_path: Path = _DEFAULT_SIF,
     timeout: float = 3600.0,
+    include_bilevel: bool = False,
 ) -> None:
     """Apptainer analog of :func:`docker_sandbox.run_genplan_in_docker`.
 
@@ -330,16 +353,21 @@ def run_genplan_in_apptainer(
     sandbox container via the genplan driver, which reads
     ``sandbox_dir/genplan_config.json`` and writes ``sandbox_dir/approach.py``
     and ``sandbox_dir/cost.json``. Keeps ``primitives`` in the source mount so
-    the policy can build/use them as eval does on the host.
+    the policy can build/use them as eval does on the host. With *include_bilevel*
+    (the genplan config requested ``bilevel_models``), the kinder-baselines source
+    is mounted and ``uv sync --extra bilevel`` runs so the models are importable.
     """
     if not sif_path.exists():
         raise RuntimeError(
             f"SIF image not found at {sif_path}; build it with: bash docker/build_sif.sh"
         )
     run_id = f"apptainer-genplan-{uuid.uuid4().hex[:8]}"
-    with _filtered_repo_mounts(keep_primitives=True) as (
+    with _filtered_repo_mounts(
+        keep_primitives=True, include_bilevel=include_bilevel
+    ) as (
         filtered_src,
         filtered_kindergarden,
+        filtered_kinder_baselines,
     ):
         auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
         auth_args, auth_env = _build_apptainer_auth_args(auth_backend)
@@ -352,6 +380,17 @@ def run_genplan_in_apptainer(
                 "--env",
                 f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
             ]
+        # With bilevel_models, mount the kinder-baselines path deps and tell the
+        # entrypoint to `uv sync --extra bilevel` (mirrors _docker_run_prefix).
+        bilevel_env: list[str] = []
+        bilevel_bind: list[str] = []
+        if filtered_kinder_baselines is not None:
+            bilevel_env = ["--env", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
+            bilevel_bind = [
+                "--bind",
+                f"{filtered_kinder_baselines.resolve()}"
+                ":/robocode/third-party/kinder-baselines",
+            ]
         apptainer_cmd = [
             "apptainer",
             "exec",
@@ -363,6 +402,7 @@ def run_genplan_in_apptainer(
             "--env",
             "ROBOCODE_SKIP_FIREWALL=1",
             *firewall_env,
+            *bilevel_env,
             *auth_args,
             "--bind",
             f"{sandbox_dir.resolve()}:/sandbox",
@@ -370,6 +410,7 @@ def run_genplan_in_apptainer(
             f"{filtered_src.resolve()}:/robocode/src",
             "--bind",
             f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
+            *bilevel_bind,
             str(sif_path),
             "/usr/local/bin/entrypoint.sh",
             APPTAINER_PYTHON,

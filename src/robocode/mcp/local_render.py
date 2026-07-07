@@ -45,6 +45,7 @@ from robocode.mcp.server import (
     run_server,
 )
 from robocode.primitive_specs import (
+    ENV_DEPENDENT_ATTR,
     ENV_DEPENDENT_PRIMITIVES,
     GENERIC_PRIMITIVE_ATTR,
     PRIMITIVE_NAME_TO_FILE,
@@ -85,7 +86,13 @@ def _build_sandbox_primitives(env: Any, primitives_dir: Path | None) -> dict[str
         for prim_name in file_to_names.get(py.stem, []):
             module = importlib.import_module(f"primitives.{py.stem}")
             if prim_name in ENV_DEPENDENT_PRIMITIVES:
-                out[prim_name] = functools.partial(getattr(module, prim_name), env)
+                obj = getattr(module, ENV_DEPENDENT_ATTR[prim_name])
+                if prim_name == "bilevel_models":
+                    # The primitive is the built models bundle: call the builder.
+                    out[prim_name] = obj(env)
+                else:
+                    # check_action_collision is a per-step callable: bind by partial.
+                    out[prim_name] = functools.partial(obj, env)
             else:
                 attr = GENERIC_PRIMITIVE_ATTR[prim_name]
                 out[prim_name] = module if attr is None else getattr(module, attr)

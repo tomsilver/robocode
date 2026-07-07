@@ -1,12 +1,15 @@
-"""Source-free primitive registry (metadata only).
+"""Source-free primitive registry (sandbox-safe metadata only).
 
-Holds the names, file mapping, env-dependence flags, descriptions, and the
-manifest/description builders for the robocode primitives, but imports NO
-primitive implementation (and no kinder or environment code). It depends only on
-the standard library and typing, so it stays importable in sandboxes where the
-``primitives/`` package source is stripped (the agentic Docker mount removes
-``robocode/primitives/``). The heavy factory (``build_primitives``) lives in
-``robocode.primitives`` and re-exports these names for backward compatibility.
+Holds the names, file mapping, env-dependence flags, and the black-box manifest
+builder for the robocode primitives, but imports NO primitive implementation
+(and no kinder or environment code). It depends only on the standard library and
+typing, so it stays importable in the sandbox (the in-container render server
+needs this metadata to rebuild the primitives dict).
+
+The human-facing *descriptions* live in ``robocode.primitive_descriptions``
+instead, used only host-side to build prompts and NOT shipped into the sandbox,
+so an agent cannot read the description of a primitive it was not granted. The
+heavy factory (``build_primitives``) lives in ``robocode.primitives``.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
     "crv_motion_planning": "crv_motion_planning",
     "crv_motion_planning_grasp": "crv_motion_planning_grasp",
     "BiRRT": "motion_planning",
+    "bilevel_models": "bilevel_models",
 }
 
 # Primitives whose construction needs the live environment. In black-box mode
@@ -28,7 +32,13 @@ PRIMITIVE_NAME_TO_FILE: dict[str, str] = {
 # (see env_client.BlackboxEnv) and their source is NOT copied into the sandbox:
 # it would not import (it imports the hidden env) and it would leak the env
 # structure. Every other primitive is generic and imported directly.
-ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset({"check_action_collision"})
+# ``bilevel_models`` is env-bound too: it builds the SeSamE models for the live
+# env. It runs clearbox/local only; black-box exposure (proxying its object
+# methods over the handle protocol) is deferred, so blackbox_primitive_manifest
+# rejects it rather than emitting a host_proxy with no BlackboxEnv method.
+ENV_DEPENDENT_PRIMITIVES: frozenset[str] = frozenset(
+    {"check_action_collision", "bilevel_models"}
+)
 
 # Primitives whose whole module runs on the host in black-box mode. Their
 # source imports the stripped kinder.envs.* (kinematic2d, utils), so just like
@@ -52,88 +62,13 @@ GENERIC_PRIMITIVE_ATTR: dict[str, str | None] = {
     "BiRRT": "BiRRT",
 }
 
-# Descriptions shown to the Claude agent so it knows how to call each
-# primitive. Keyed by the same names as PRIMITIVE_NAME_TO_FILE.
-PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
-    "check_action_collision": (
-        "`check_action_collision(state, action) -> bool` returns True when "
-        "taking `action` in `state` would cause a collision (i.e. the agent "
-        "stays in place). Use it to avoid wasted steps \u2014 e.g. in search or "
-        "planning algorithms, skip actions that collide."
-    ),
-    "csp": (
-        "`csp` is a module providing a constraint satisfaction problem (CSP) "
-        "solver. Use it to sample configurations (e.g. placements, grasps) "
-        "that satisfy constraints (e.g. collision-free). Key classes:\n"
-        "  - `csp.CSPVariable(name, domain)` \u2014 a variable with a "
-        "`gymnasium.spaces.Space` domain.\n"
-        "  - `csp.FunctionalCSPConstraint(name, variables, fn)` \u2014 a "
-        "constraint where `fn(*vals) -> bool`.\n"
-        "  - `csp.CSP(variables, constraints, cost=None)` \u2014 the problem.\n"
-        "  - `csp.FunctionalCSPSampler(fn, csp, sampled_vars)` \u2014 a "
-        "sampler where `fn(current_vals, rng) -> dict | None`.\n"
-        "  - `csp.RandomWalkCSPSolver(seed)` \u2014 solver; call "
-        "`.solve(csp, initialization, samplers)` to get a satisfying "
-        "assignment or None.\n"
-        "  - `csp.CSPCost(name, variables, cost_fn)` \u2014 optional cost to "
-        "minimize.\n"
-        "  - `csp.LogProbCSPConstraint(name, variables, logprob_fn, "
-        "threshold)` \u2014 constraint from log probabilities.\n"
-        "  Access via `primitives['csp']`, e.g. "
-        "`primitives['csp'].CSPVariable(...)`."
-    ),
-    "crv_motion_planning": (
-        "`crv_motion_planning` is a module with generic CRV robot motion "
-        "planners. Use `plan_crv_actions(...)` with object-centric state and a "
-        "target `CRVConfig` to get collision-free action sequences, and set "
-        "`carrying=True` for holding-aware planning. Compatibility wrappers "
-        "`plan_crv_base_actions(...)` and `plan_crv_holding_actions(...)` are "
-        "also available. The module exports `CRVConfig`, `CRVActionLimits`, and "
-        "helpers to convert between pose plans and action plans."
-    ),
-    "crv_motion_planning_grasp": (
-        "`crv_motion_planning_grasp` is a module that plans one CRV grasp "
-        "maneuver from an object-centric state, a target object, a relative "
-        "grasp pose, and a grasp arm length. Use `plan_crv_grasp(...)` to get "
-        "collision-free grasp waypoints, and handle the explicit suction "
-        "failure errors."
-    ),
-    "BiRRT": (
-        "`BiRRT(sample_fn, extend_fn, collision_fn, distance_fn, rng, "
-        "num_attempts, num_iters, smooth_amt)` \u2014 Bidirectional RRT motion "
-        "planner. Construct one, then call `birrt.query(start, goal)` to get "
-        "a collision-free path (list of states) or None. "
-        "`sample_fn(state) -> state` samples a random state, "
-        "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
-        "`collision_fn(state) -> bool` returns True if state is in collision, "
-        "`distance_fn(s1, s2) -> float` returns distance between states, "
-        "`rng` is a `np.random.Generator`."
-    ),
-}
-
-
-# Extra guidance appended in black-box mode only. In black-box the planner
-# state is not an obs vector but the object-centric view from
-# observation_space.devectorize(obs), and the CRV module runs on the host via a
-# remote-module proxy; spell that out so the agent calls them correctly. Normal
-# mode descriptions stay unchanged.
-_BLACKBOX_PRIMITIVE_NOTES: dict[str, str] = {
-    "crv_motion_planning": (
-        "  Black-box note: build the planner state with "
-        "`ocs = observation_space.devectorize(obs)`, then call "
-        "`primitives['crv_motion_planning'].plan_crv_actions(ocs, "
-        "primitives['crv_motion_planning'].CRVConfig(x, y, theta), "
-        "carrying=..., seed=...)`. The module runs on the host; pass the "
-        "ObjectCentricState and CRVConfig straight to it."
-    ),
-    "crv_motion_planning_grasp": (
-        "  Black-box note: build the planner state with "
-        "`ocs = observation_space.devectorize(obs)` and pass it (plus the "
-        "target object name and a "
-        "`primitives['crv_motion_planning_grasp'].RelativeGraspPose(...)`) to "
-        "`primitives['crv_motion_planning_grasp'].plan_crv_grasp(...)`. The "
-        "module runs on the host."
-    ),
+# For env-dependent primitives, the module attribute to bind to the live env.
+# ``check_action_collision`` is a per-step callable bound as ``partial(attr, env)``;
+# ``bilevel_models`` is a builder whose result IS the primitive, bound as ``attr(env)``.
+# This lets the in-sandbox render server rebuild them the way build_primitives does.
+ENV_DEPENDENT_ATTR: dict[str, str] = {
+    "check_action_collision": "check_action_collision",
+    "bilevel_models": "build_sesame_models",
 }
 
 
@@ -152,6 +87,11 @@ def blackbox_primitive_manifest(
     """
     manifest: list[dict[str, Any]] = []
     for name in names:
+        if name == "bilevel_models":
+            raise ValueError(
+                "bilevel_models has no black-box host proxy (black-box exposure is "
+                "deferred); run it in a clearbox/local sandbox instead."
+            )
         if name in ENV_DEPENDENT_PRIMITIVES:
             manifest.append({"name": name, "kind": "host_proxy"})
         elif name in REMOTE_MODULE_PRIMITIVES:
@@ -166,27 +106,3 @@ def blackbox_primitive_manifest(
                 }
             )
     return manifest
-
-
-def format_primitives_description(names: list[str], blackbox: bool = False) -> str:
-    """Markdown describing the ``primitives`` dict passed to GeneratedApproach.
-
-    Shared by the agentic and llm_genplan prompts so both describe primitives the same
-    way. With *blackbox*, appends per-primitive notes (e.g. for the CRV planners, how to
-    build the planner state via observation_space.devectorize) without changing the
-    normal-mode descriptions.
-    """
-    if not names:
-        return "`primitives` is an empty dict."
-    lines = ["`primitives` is a dict with these callables:\n"]
-    for name in sorted(names):
-        lines.append(f"- {PRIMITIVE_DESCRIPTIONS.get(name, f'`{name}`')}")
-        if blackbox and name in _BLACKBOX_PRIMITIVE_NOTES:
-            lines.append(_BLACKBOX_PRIMITIVE_NOTES[name])
-    listed = ", ".join(f"`{n}`" for n in sorted(names))
-    lines.append(
-        f"\nIMPORTANT: Your approach MUST use the following primitives: {listed}. "
-        "These are essential for solving this environment. Read their descriptions "
-        "above and integrate them into your solution."
-    )
-    return "\n".join(lines)

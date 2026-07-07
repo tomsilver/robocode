@@ -151,18 +151,44 @@ def _copy_kindergarden_without_tests(
     )
 
 
+# The two kinder-baselines subpackages robocode depends on (editable path deps in
+# uv.lock). Only these are needed for the sandbox's `uv sync --frozen`; the rest
+# of the monorepo is not copied/mounted.
+_KINDER_BASELINES_PACKAGES = ("kinder-bilevel-planning", "kinder-models")
+
+
+def _copy_kinder_baselines(kinder_baselines: Path, dest: Path) -> None:
+    """Copy the two editable kinder-baselines subpackages to *dest*, sans tests.
+
+    Provides the sources for the `bilevel_models` primitive (kinder_bilevel_planning
+    + kinder_models) so the entrypoint's `uv sync --frozen` can build the editable
+    installs. Only the two depended-on packages are copied, tests/docs stripped.
+    """
+    for pkg in _KINDER_BASELINES_PACKAGES:
+        shutil.copytree(
+            kinder_baselines / pkg,
+            dest / pkg,
+            ignore=shutil.ignore_patterns("tests", "docs"),
+        )
+
+
 @contextmanager
 def _filtered_repo_mounts(
-    *, keep_primitives: bool = False, blackbox: bool = False
-) -> Iterator[tuple[Path, Path]]:
-    """Yield filtered copies of ``src/`` and ``kindergarden/`` to bind-mount.
+    *,
+    keep_primitives: bool = False,
+    blackbox: bool = False,
+    include_bilevel: bool = False,
+) -> Iterator[tuple[Path, Path, Path | None]]:
+    """Yield filtered copies of ``src/``, ``kindergarden/``, and optionally ``kinder-
+    baselines/`` to bind-mount.
 
     ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
     *keep_primitives*); ``kindergarden`` without tests/docs. With *blackbox*,
-    environment source (``robocode/environments/``, ``kinder/envs/``, demos)
-    is also excluded so the agent can only interact with the env through the
-    host-side env server. The copies live in a temp dir that is removed on
-    exit.
+    environment source (``robocode/environments/``, ``kinder/envs/``, demos) is
+    also excluded. With *include_bilevel*, the two kinder-baselines subpackages
+    are also copied (for the ``bilevel_models`` primitive); otherwise the third
+    yielded value is ``None`` and no bilevel source reaches the sandbox. The
+    copies live in a temp dir that is removed on exit.
     """
     repo_root = _find_repo_root()
     kindergarden = repo_root / "third-party" / "kindergarden"
@@ -171,9 +197,16 @@ def _filtered_repo_mounts(
             f"kindergarden not found at {kindergarden}; "
             "run: git submodule update --init --recursive"
         )
+    kinder_baselines = repo_root / "third-party" / "kinder-baselines"
+    if include_bilevel and not kinder_baselines.exists():
+        raise RuntimeError(
+            f"kinder-baselines not found at {kinder_baselines}; "
+            "run: git submodule update --init --recursive"
+        )
     tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
     filtered_src = Path(tmp_dir) / "src"
     filtered_kindergarden = Path(tmp_dir) / "kindergarden"
+    filtered_kinder_baselines: Path | None = None
     try:
         _copy_src(
             repo_root / "src",
@@ -184,7 +217,10 @@ def _filtered_repo_mounts(
         _copy_kindergarden_without_tests(
             kindergarden, filtered_kindergarden, blackbox=blackbox
         )
-        yield filtered_src, filtered_kindergarden
+        if include_bilevel:
+            filtered_kinder_baselines = Path(tmp_dir) / "kinder-baselines"
+            _copy_kinder_baselines(kinder_baselines, filtered_kinder_baselines)
+        yield filtered_src, filtered_kindergarden, filtered_kinder_baselines
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -205,6 +241,7 @@ def _docker_run_prefix(
     sandbox_dir: Path,
     filtered_src: Path,
     filtered_kindergarden: Path,
+    filtered_kinder_baselines: Path | None,
     auth_args: list[str],
     firewall_domains: list[str],
     env_args: list[str] | None = None,
@@ -238,6 +275,12 @@ def _docker_run_prefix(
             f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
         ]
     cmd += auth_args
+    # Only when the bilevel_models primitive is in play: bind-mount the two
+    # kinder-baselines subpackages and tell the entrypoint to `uv sync --extra
+    # bilevel`. Otherwise the sandbox has no bilevel source and cannot import
+    # the models, so a "models OFF" agent is not conditioned by them.
+    if filtered_kinder_baselines is not None:
+        cmd += ["-e", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
     cmd += [
         "-v",
         f"{sandbox_dir.resolve()}:/sandbox",
@@ -245,10 +288,14 @@ def _docker_run_prefix(
         f"{filtered_src.resolve()}:/robocode/src",
         "-v",
         f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
-        "-w",
-        "/sandbox",
-        image,
     ]
+    if filtered_kinder_baselines is not None:
+        cmd += [
+            "-v",
+            f"{filtered_kinder_baselines.resolve()}"
+            ":/robocode/third-party/kinder-baselines",
+        ]
+    cmd += ["-w", "/sandbox", image]
     return cmd
 
 
@@ -257,6 +304,7 @@ def run_genplan_in_docker(
     completion_cfg: dict[str, Any],
     image: str = _DEFAULT_IMAGE,
     timeout: float = 3600.0,
+    include_bilevel: bool = False,
 ) -> None:
     """Run the whole LLM-GenPlan loop inside one sandbox container.
 
@@ -264,7 +312,10 @@ def run_genplan_in_docker(
     the firewall + ``uv sync`` entrypoint) but the command is the genplan driver
     instead of the agent CLI. The driver reads ``sandbox_dir/genplan_config.json``
     and writes ``sandbox_dir/approach.py``. ``src`` keeps ``primitives`` (unlike
-    the agent mount) so the policy can build/use them as it does at eval.
+    the agent mount) so the policy can build/use them as it does at eval. With
+    *include_bilevel* (the genplan config requested ``bilevel_models``), the
+    kinder-baselines source is mounted and ``uv sync --extra bilevel`` runs, so
+    the models the primitive builds are importable in-container.
     """
     container_name = f"robocode-genplan-{uuid.uuid4().hex[:8]}"
     # Reuse the agent auth: the cli provider needs Claude OAuth/~/.claude; the SDK
@@ -272,9 +323,12 @@ def run_genplan_in_docker(
     # ANTHROPIC_API_KEY/OPENAI_API_KEY).
     auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
     with (
-        _filtered_repo_mounts(keep_primitives=True) as (
+        _filtered_repo_mounts(
+            keep_primitives=True, include_bilevel=include_bilevel
+        ) as (
             filtered_src,
             filtered_kindergarden,
+            filtered_kinder_baselines,
         ),
         _build_docker_auth_args(auth_backend) as (auth_args, auth_env),
     ):
@@ -290,6 +344,7 @@ def run_genplan_in_docker(
             sandbox_dir,
             filtered_src,
             filtered_kindergarden,
+            filtered_kinder_baselines,
             auth_args,
             firewall_domains,
         ) + [DOCKER_PYTHON, "-m", "robocode.approaches.genplan_driver"]
@@ -308,20 +363,38 @@ def _copy_src(
 ) -> None:
     """Copy ``src/`` to *dest*, always skipping ``oracles/`` (solution code).
 
-    The agent mount also skips ``primitives/`` so the author cannot read all
-    primitive solutions (it gets only the requested files via
-    :func:`_setup_sandbox_dir`). The genplan container sets ``keep_primitives``
-    so its driver can call ``build_primitives`` in-container exactly as eval does
-    on the host -- it is non-agentic, so there is no author to expose them to.
-    With *blackbox*, ``environments/`` is also skipped so the agent cannot
-    read the environment source.
+    The agent mount additionally skips three things the author must not read:
+
+    - ``primitives/``: it gets only the requested primitive files via
+      :func:`_setup_sandbox_dir`, not every primitive's source.
+    - ``primitive_descriptions.py``: prompt descriptions are built host-side;
+      shipping them would expose the description of a primitive it was not granted
+      (e.g. the bilevel_models symbolic structure).
+    - ``approaches/``: the other baselines, which reveal how they solve the task
+      (e.g. the bilevel planner driving skills through ``run_sesame``). Only
+      ``base_approach.py`` is copied back, since the in-sandbox MCP render server
+      imports it via ``robocode.utils.episode``.
+
+    The genplan container sets ``keep_primitives`` and keeps all three: it is
+    non-agentic (no author browsing the filesystem), and its driver imports the
+    genplan baselines and calls ``build_primitives`` in-container exactly as eval
+    does on the host. With *blackbox*, ``environments/`` is also skipped so the
+    agent cannot read the environment source.
     """
-    skip: tuple[str, ...] = (
-        ("oracles",) if keep_primitives else ("oracles", "primitives")
-    )
+    if keep_primitives:
+        skip: tuple[str, ...] = ("oracles",)
+    else:
+        skip = ("oracles", "primitives", "primitive_descriptions.py", "approaches")
     if blackbox:
         skip += ("environments",)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
+    if "approaches" in skip:
+        approaches = dest / "robocode" / "approaches"
+        approaches.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            src / "robocode" / "approaches" / "base_approach.py",
+            approaches / "base_approach.py",
+        )
 
 
 @dataclass(frozen=True)
@@ -499,9 +572,13 @@ async def run_agent_in_docker_sandbox(
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
     with (
-        _filtered_repo_mounts(blackbox=config.blackbox) as (
+        _filtered_repo_mounts(
+            blackbox=config.blackbox,
+            include_bilevel="bilevel_models" in config.primitive_names,
+        ) as (
             filtered_src,
             filtered_kindergarden,
+            filtered_kinder_baselines,
         ),
         _build_docker_auth_args(backend_name) as (auth_args, auth_env),
     ):
@@ -520,6 +597,7 @@ async def run_agent_in_docker_sandbox(
             config.sandbox_dir,
             filtered_src,
             filtered_kindergarden,
+            filtered_kinder_baselines,
             auth_args,
             firewall_domains,
             env_args=[
