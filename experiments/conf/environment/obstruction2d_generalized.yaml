@@ -1,0 +1,11 @@
+# Obstruction2D with a variable object count. One generated program is written
+# once and evaluated across a range of obstruction counts. Obstruction2D's scene
+# geometry caps at 4 obstructions, so the design range is 0-2 and the held-out
+# (out-of-distribution) counts are 3-4.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv
+count_kwarg: num_obstructions
+count_object_prefix: obstruction
+design_counts: [0, 1, 2]
+eval_counts: [0, 1, 2, 3, 4]
+bilevel_env_name: obstruction2d

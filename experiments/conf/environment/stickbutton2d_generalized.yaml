@@ -1,0 +1,10 @@
+# StickButton2D with a variable object count. The count parameter is the number of
+# buttons to press (optionally using the stick to reach far ones). Design counts are
+# small; held-out counts (5, 10) are larger.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv
+count_kwarg: num_buttons
+count_object_prefix: button
+design_counts: [1, 2, 3]
+eval_counts: [1, 2, 3, 5, 10]
+bilevel_env_name: stickbutton2d
