@@ -221,6 +221,30 @@ def test_copy_src_keeps_descriptions_for_genplan_but_not_agent(tmp_path: Path) -
     assert not (agent / "robocode" / "primitives").exists()
 
 
+def test_copy_src_hides_baseline_approaches_from_agent(tmp_path: Path) -> None:
+    """The agent mount hides the other baselines (they reveal how those approaches solve
+    the task, e.g. the bilevel planner's run_sesame usage), keeping only
+    base_approach.py, which the in-sandbox render server imports.
+
+    The non-agentic genplan mount keeps them all (its driver imports the genplan
+    baselines).
+    """
+    src = _find_repo_root() / "src"
+
+    agent = tmp_path / "agent"
+    _copy_src(src, agent, keep_primitives=False)
+    approaches = agent / "robocode" / "approaches"
+    assert [p.name for p in approaches.iterdir()] == ["base_approach.py"]
+    assert not (approaches / "bilevel_planning_approach.py").exists()
+    assert not (approaches / "agentic_approach.py").exists()
+
+    genplan = tmp_path / "genplan"
+    _copy_src(src, genplan, keep_primitives=True)
+    genplan_approaches = genplan / "robocode" / "approaches"
+    assert (genplan_approaches / "bilevel_planning_approach.py").exists()
+    assert (genplan_approaches / "genplan_driver.py").exists()
+
+
 def test_docker_run_prefix_omits_bilevel_without_primitive(tmp_path: Path) -> None:
     """No kinder-baselines mount or extra-sync env when bilevel is not requested."""
     cmd = _docker_run_prefix(

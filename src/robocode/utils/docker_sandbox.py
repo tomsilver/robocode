@@ -360,29 +360,38 @@ def _copy_src(
 ) -> None:
     """Copy ``src/`` to *dest*, always skipping ``oracles/`` (solution code).
 
-    The agent mount also skips ``primitives/`` so the author cannot read all
-    primitive solutions (it gets only the requested files via
-    :func:`_setup_sandbox_dir`). The genplan container sets ``keep_primitives``
-    so its driver can call ``build_primitives`` in-container exactly as eval does
-    on the host -- it is non-agentic, so there is no author to expose them to.
-    With *blackbox*, ``environments/`` is also skipped so the agent cannot
-    read the environment source.
+    The agent mount additionally skips three things the author must not read:
 
-    ``primitive_descriptions.py`` is stripped from the agent mount only: the
-    prompt descriptions are built host-side, and shipping them would let an agent
-    read the description of a primitive it was not granted (e.g. the
-    bilevel_models symbolic structure). The genplan mount (*keep_primitives*)
-    keeps it: it is non-agentic (no author browsing the filesystem) and its
-    driver imports it (via ``LLMGenPlanApproach``) to build the prompt in-container.
+    - ``primitives/``: it gets only the requested primitive files via
+      :func:`_setup_sandbox_dir`, not every primitive's source.
+    - ``primitive_descriptions.py``: prompt descriptions are built host-side;
+      shipping them would expose the description of a primitive it was not granted
+      (e.g. the bilevel_models symbolic structure).
+    - ``approaches/``: the other baselines, which reveal how they solve the task
+      (e.g. the bilevel planner driving skills through ``run_sesame``). Only
+      ``base_approach.py`` is copied back, since the in-sandbox MCP render server
+      imports it via ``robocode.utils.episode``.
+
+    The genplan container sets ``keep_primitives`` and keeps all three: it is
+    non-agentic (no author browsing the filesystem), and its driver imports the
+    genplan baselines and calls ``build_primitives`` in-container exactly as eval
+    does on the host. With *blackbox*, ``environments/`` is also skipped so the
+    agent cannot read the environment source.
     """
-    skip: tuple[str, ...] = (
-        ("oracles",)
-        if keep_primitives
-        else ("oracles", "primitives", "primitive_descriptions.py")
-    )
+    if keep_primitives:
+        skip: tuple[str, ...] = ("oracles",)
+    else:
+        skip = ("oracles", "primitives", "primitive_descriptions.py", "approaches")
     if blackbox:
         skip += ("environments",)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
+    if "approaches" in skip:
+        approaches = dest / "robocode" / "approaches"
+        approaches.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            src / "robocode" / "approaches" / "base_approach.py",
+            approaches / "base_approach.py",
+        )
 
 
 @dataclass(frozen=True)
