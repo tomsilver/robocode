@@ -45,11 +45,19 @@ def infer_bilevel_mapping(env_id: str) -> tuple[str | None, dict[str, int]]:
     return family, {kwarg: int(match.group(2))}
 
 
-def build_sesame_models(env: Any) -> Any:
+def build_sesame_models(
+    env: Any,
+    *,
+    observation_space: Any | None = None,
+    model_kwargs: dict[str, Any] | None = None,
+) -> Any:
     """Build the `SesameModels` (predicates, operators, skills, transition sim).
 
-    Reads the bilevel env-family name and object-count kwargs off *env*. Fails loudly if
-    the env config is missing the mapping rather than planning silently.
+    Reads the bilevel env-family name off *env*. The observation space and object-count
+    kwargs default to the env's own (the fixed-count case), but a variable-count env
+    passes them explicitly so the models are built for the *current* instance's count:
+    its per-count `ObjectCentricBoxSpace` and `{count_kwarg: k}`. Fails loudly if the
+    env config is missing the family mapping rather than planning silently.
 
     `kinder_bilevel_planning` is imported lazily (it is an optional `bilevel` extra),
     so `import robocode.primitives` works even where the extra is not installed -- e.g.
@@ -63,9 +71,23 @@ def build_sesame_models(env: Any) -> Any:
         "bilevel_env_name is not set on the environment; add bilevel_env_name and "
         "bilevel_env_model_kwargs to the env config to use bilevel planning models."
     )
+    # A variable-count env has no single object count, so the raw `bilevel_models`
+    # primitive (one SesameModels bundle) is not meaningful. The planner builds models
+    # per count via explicit overrides (see VariableObjectCountEnv.models_for_count);
+    # a call without overrides means the primitive was requested directly -- fail loud.
+    if model_kwargs is None and not hasattr(env, "bilevel_env_model_kwargs"):
+        raise ValueError(
+            "build_sesame_models needs a fixed object count, but this environment has a "
+            "variable object count. The bilevel_models primitive (a single SesameModels "
+            "bundle) is not available here; the planner builds per-count models instead."
+        )
+    obs_space = (
+        observation_space if observation_space is not None else env.observation_space
+    )
+    kwargs = model_kwargs if model_kwargs is not None else env.bilevel_env_model_kwargs
     return create_bilevel_planning_models(
         env.bilevel_env_name,
-        env.observation_space,
+        obs_space,
         env.action_space,
-        **env.bilevel_env_model_kwargs,
+        **kwargs,
     )
