@@ -136,6 +136,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             mcp_tools=self._mcp_tools,
             backend_name=self._backend_cfg["backend"],
             blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         python_exe = (
@@ -173,6 +174,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
             mcp_tools=self._mcp_tools,
+            object_centric=self._object_centric,
         )
         init_files: dict[str, Path] = {}
         if self._blackbox:

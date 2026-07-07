@@ -23,6 +23,7 @@ fragments here rather than stored as four full strings.
 from robocode.mcp import (
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC,
     mcp_tool_descriptions,
 )
 from robocode.utils.backends import CLAUDE_PROMPT_SUFFIX, OPENCODE_PROMPT_SUFFIX
@@ -625,13 +626,15 @@ def build_system_prompt(
     blackbox: bool,
     backend_name: str,
     mcp_tools: tuple[str, ...] = (),
+    object_centric: bool = False,
 ) -> str:
     """Compose a coding-agent system prompt from shared fragments.
 
     ``intro`` is one of the composed intro constants (AGENTIC_INTRO[_BLACKBOX],
     CDL_INTRO[_BLACKBOX]). The shared file-discipline block, blackbox-aware
     subagent guidance, token-budget guidance, the backend-specific suffix, and
-    the optional MCP-tools suffix follow.
+    the optional MCP-tools suffix follow. For a variable-count (object_centric) env
+    the render guidance drops the flat-vector arbitrary-state mode.
     """
     subagents = SYSTEM_SUBAGENTS_BLACKBOX if blackbox else SYSTEM_SUBAGENTS
     system_prompt = intro + SYSTEM_FILE_DISCIPLINE + subagents + SYSTEM_TOKEN_BUDGET
@@ -640,11 +643,12 @@ def build_system_prompt(
     else:
         system_prompt += CLAUDE_PROMPT_SUFFIX
     if mcp_tools:
-        system_prompt += (
-            MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
-            if blackbox
-            else MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
-        )
+        if object_centric:
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC
+        elif blackbox:
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+        else:
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
     return system_prompt
 
 
@@ -680,12 +684,15 @@ def build_mcp_tool_lines(
     mcp_tools: tuple[str, ...],
     backend_name: str,
     blackbox: bool,
+    object_centric: bool = False,
 ) -> str:
     """Return the MCP-tools section appended to the primitives description, or "" when
     no MCP tools are configured."""
     if not mcp_tools:
         return ""
-    tool_descs = mcp_tool_descriptions(backend_name, blackbox=blackbox)
+    tool_descs = mcp_tool_descriptions(
+        backend_name, blackbox=blackbox, object_centric=object_centric
+    )
     lines = [
         "\n\nYou also have MCP tools for visual debugging (they do NOT "
         "affect your test scripts):\n",

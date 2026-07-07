@@ -135,6 +135,29 @@ _TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
 }
 
 
+# Object-centric override (variable object count). The observation is an
+# ObjectCentricState with a varying number of objects, so there is no flat state
+# vector: render_state's arbitrary-state mode (a list of floats) does not apply, and
+# the devectorize/vectorize/constant_objects guidance is meaningless. Only seed mode
+# and render_policy are useful. render_policy needs no override (it never references a
+# vector), so it stays shared.
+_TOOL_DESC_TEMPLATES_OBJECT_CENTRIC: dict[str, str] = {
+    "render_state": (
+        '`{render_state}(seed=42, label="")`: renders the environment\'s initial '
+        "state after `env.reset(seed=seed)` as a PNG and returns the file path.\n"
+        "  This environment's observations are object-centric states with a VARIABLE "
+        "number of objects, so there is no flat state vector: the arbitrary-state mode "
+        "(passing a list of floats) does NOT apply here. Use seed mode to see layouts, "
+        "and use {render_policy} to watch your policy act.\n"
+        "  The optional `label` parameter is included in the output filename.\n"
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are NOT available "
+        "inside subagents. Call it yourself, then delegate image reading to a subagent: "
+        "have it Read the PNG, describe the scene, and return a concise summary. Delete "
+        "the file when done."
+    ),
+}
+
+
 def mcp_tool_name_claude(tool: str) -> str:
     """Claude Code MCP tool name: ``mcp__robocode-tools__<tool>``."""
     return f"mcp__{MCP_SERVER_NAME}__{tool}"
@@ -145,13 +168,18 @@ def mcp_tool_name_opencode(tool: str) -> str:
     return f"{MCP_SERVER_NAME}_{tool}"
 
 
-def mcp_tool_descriptions(backend_name: str, blackbox: bool = False) -> dict[str, str]:
+def mcp_tool_descriptions(
+    backend_name: str, blackbox: bool = False, object_centric: bool = False
+) -> dict[str, str]:
     """Return MCP tool descriptions with backend-specific tool names.
 
     In blackbox mode the render_state description swaps the in-process
     devectorize/vectorize/ObjectCentricState guidance for the host-proxied handle API
     (no constant_objects/type_features), matching what env_client exposes when the
-    sandbox has no env source.
+    sandbox has no env source. For a variable-count (object-centric) env the render_state
+    description drops the flat-vector arbitrary-state mode entirely -- it does not apply
+    to a state with a varying number of objects -- taking precedence over the blackbox
+    variant.
     """
     if backend_name == "opencode":
         namer = mcp_tool_name_opencode
@@ -160,6 +188,8 @@ def mcp_tool_descriptions(backend_name: str, blackbox: bool = False) -> dict[str
     templates = dict(_TOOL_DESC_TEMPLATES)
     if blackbox:
         templates.update(_TOOL_DESC_TEMPLATES_BLACKBOX)
+    if object_centric:
+        templates.update(_TOOL_DESC_TEMPLATES_OBJECT_CENTRIC)
     names = {tool: namer(tool) for tool in templates}
     return {tool: template.format(**names) for tool, template in templates.items()}
 
@@ -180,6 +210,22 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     "passing a flat list of floats to render_state's `state` parameter; use "
     "devectorize/vectorize on env.observation_space to construct or modify "
     "states with named features. "
+    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
+    "called from inside subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a subagent."
+)
+
+# Object-centric variant (variable object count): observations are ObjectCentricStates,
+# not flat vectors, so render_state's arbitrary-state mode does not apply -- only seed
+# mode and render_policy are useful.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "Start by calling render_state(seed=...) to see the environment before writing "
+    "code. When your approach fails, call render_policy to visually diagnose the "
+    "failure BEFORE guessing at fixes. This environment's observations are "
+    "object-centric states (a set of typed objects), not flat vectors, so "
+    "render_state's arbitrary-state mode does not apply -- use seed mode and "
+    "render_policy. "
     "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
     "called from inside subagents. Always call MCP tools yourself, then "
     "delegate image reading to a subagent."
