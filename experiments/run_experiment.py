@@ -73,12 +73,15 @@ def _main(cfg: DictConfig) -> float:
     # to locate pre-written helper files in src/robocode/primitives/<env_name>/.
     env_name = HydraConfig.get().runtime.choices.get("environment")
 
-    approach = hydra.utils.instantiate(
+    # primitives can hold live runtime objects (e.g. the bilevel_models
+    # SesameModels dataclass) that OmegaConf tries to structure, and rejects, when
+    # merging kwargs into the approach config. Build the approach as a partial from
+    # the config-safe arguments and pass primitives straight to the constructor.
+    approach_ctor = hydra.utils.instantiate(
         cfg.approach,
         action_space=env.action_space,
         observation_space=env.observation_space,
         seed=cfg.seed,
-        primitives=primitives,
         env_description_path=env_description_path,
         mcp_tools=mcp_tools,
         env_name=env_name,
@@ -87,7 +90,9 @@ def _main(cfg: DictConfig) -> float:
         # instantiate it; the llm_genplan docker driver rebuilds the env from it.
         env_cfg=json.dumps(OmegaConf.to_container(cfg.environment, resolve=True)),
         max_steps=cfg.max_steps,
+        _partial_=True,
     )
+    approach = approach_ctor(primitives=primitives)
 
     task_rng = np.random.default_rng(cfg.seed)
     num_eval = cfg.num_eval_tasks

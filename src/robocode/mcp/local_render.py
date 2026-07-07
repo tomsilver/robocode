@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import functools
 import importlib
-import inspect
 import json
 import sys
 import traceback
@@ -88,11 +87,12 @@ def _build_sandbox_primitives(env: Any, primitives_dir: Path | None) -> dict[str
             module = importlib.import_module(f"primitives.{py.stem}")
             if prim_name in ENV_DEPENDENT_PRIMITIVES:
                 obj = getattr(module, ENV_DEPENDENT_ATTR[prim_name])
-                # A class binds the env by instantiation (BilevelModels(env)); a
-                # function binds it by partial (check_action_collision).
-                out[prim_name] = (
-                    obj(env) if inspect.isclass(obj) else functools.partial(obj, env)
-                )
+                if prim_name == "bilevel_models":
+                    # The primitive is the built models bundle: call the builder.
+                    out[prim_name] = obj(env)
+                else:
+                    # check_action_collision is a per-step callable: bind by partial.
+                    out[prim_name] = functools.partial(obj, env)
             else:
                 attr = GENERIC_PRIMITIVE_ATTR[prim_name]
                 out[prim_name] = module if attr is None else getattr(module, attr)

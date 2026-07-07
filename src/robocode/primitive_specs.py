@@ -62,13 +62,13 @@ GENERIC_PRIMITIVE_ATTR: dict[str, str | None] = {
     "BiRRT": "BiRRT",
 }
 
-# For env-dependent primitives, the module attribute to bind to the live env. A
-# class attribute is instantiated as ``attr(env)`` (e.g. BilevelModels); a
-# function attribute is bound as ``partial(attr, env)`` (e.g. check_action_collision).
+# For env-dependent primitives, the module attribute to bind to the live env.
+# ``check_action_collision`` is a per-step callable bound as ``partial(attr, env)``;
+# ``bilevel_models`` is a builder whose result IS the primitive, bound as ``attr(env)``.
 # This lets the in-sandbox render server rebuild them the way build_primitives does.
 ENV_DEPENDENT_ATTR: dict[str, str] = {
     "check_action_collision": "check_action_collision",
-    "bilevel_models": "BilevelModels",
+    "bilevel_models": "build_sesame_models",
 }
 
 

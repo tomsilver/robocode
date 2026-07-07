@@ -20,10 +20,9 @@ def _sandbox_primitives_dir(tmp_path: Path, files: list[str]) -> Path:
     return dest
 
 
-def test_build_sandbox_primitives_handles_class_and_function(tmp_path: Path) -> None:
-    """The builder binds a function primitive by partial and a class one by
-    instantiation, so both an env-bound function (check_action_collision) and an env-
-    bound class (bilevel_models -> BilevelModels) are usable in-sandbox."""
+def test_build_sandbox_primitives_binds_callable_and_builder(tmp_path: Path) -> None:
+    """The builder binds a per-step callable (check_action_collision) by partial and a
+    models builder (bilevel_models) by calling it, so both are usable in-sandbox."""
     prims_dir = _sandbox_primitives_dir(
         tmp_path, ["check_action_collision.py", "bilevel_models.py"]
     )
@@ -35,15 +34,15 @@ def test_build_sandbox_primitives_handles_class_and_function(tmp_path: Path) -> 
     prims = _build_sandbox_primitives(env, prims_dir)
 
     assert set(prims) == {"check_action_collision", "bilevel_models"}
-    # function primitive -> callable (state, action) -> bool
+    # per-step callable -> callable (state, action) -> bool
     assert callable(prims["check_action_collision"])
-    # class primitive -> an object exposing the bilevel_models API (built from a
-    # copied module, so match by API, not isinstance).
-    bm = prims["bilevel_models"]
+    # models builder -> the SesameModels bundle (built from a copied module, so
+    # match by API, not isinstance).
+    models = prims["bilevel_models"]
     obs, _ = env.reset(seed=0)
-    atoms = bm.get_abstract_state(obs)
-    assert len(atoms) > 0
-    assert bm.skill_names
+    state = models.observation_to_state(obs)
+    assert models.state_abstractor(state).atoms
+    assert models.skills
 
 
 def test_build_sandbox_primitives_empty_when_none(tmp_path: Path) -> None:
