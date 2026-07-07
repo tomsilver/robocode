@@ -58,9 +58,7 @@ def build_sesame_models(env: Any) -> Any:
     # pylint: disable=import-outside-toplevel
     from kinder_bilevel_planning.env_models import create_bilevel_planning_models
 
-    # An assert (not a raised exception) is fine here: we never run under python
-    # -O, so this fires loudly as intended. Converting to a raise would only churn
-    # the tests that pin this AssertionError for no real gain.
+    # We never run under python -O, so this assert fires as a loud config check.
     assert env.bilevel_env_name is not None, (
         "bilevel_env_name is not set on the environment; add bilevel_env_name and "
         "bilevel_env_model_kwargs to the env config to use bilevel planning models."

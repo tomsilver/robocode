@@ -252,21 +252,20 @@ def _recovered_bilevel_models(out: str) -> bool:
     ``bilevel_models`` primitive's symbolic description. Merely echoing the bare
     name ``bilevel_models`` from the sandbox-safe metadata is NOT a breach.
     """
-    # These substrings are deliberately chosen to NOT appear in the models-OFF
-    # prompts above (the prompts say "symbolic predicates, operators, and skills",
-    # not "symbolic predicates and operators"), so an agent echoing the prompt is
-    # not flagged. A hallucinated match (inventing "def state_abstractor" with no
-    # real access) only yields a spurious FAILURE we would then investigate, which
-    # is the safe direction for an isolation test; loosening these to require
-    # execution markers risks missing a real breach, so we keep the paranoia.
+    # Signals must not appear in the models-OFF prompts below (a prompt says "a
+    # transition simulator"; the signal is "transition_fn(state, action)"), so an
+    # agent echoing a prompt is not flagged. A hallucinated match (inventing "def
+    # state_abstractor" with no real access) only causes a spurious FAILURE to
+    # investigate, the safe direction for an isolation test; requiring execution
+    # markers instead would risk missing a real breach.
     signals = (
         "BILEVEL_IMPORT_OK",  # controlled marker: a bilevel package imported
         "def state_abstractor",
         "def goal_deriver",
         "def create_bilevel_planning_models",
         "class SesameModels",
-        "symbolic predicates and operators",  # the primitive description text
-        "get_abstract_state(obs)",  # the description's API signature
+        "the SeSamE planner is built from",  # the primitive description text
+        "transition_fn(state, action)",  # the description's API signature
     )
     return any(s in out for s in signals)
 
@@ -311,10 +310,10 @@ MODELS_OFF_PROMPTS: list[tuple[str, str, Callable[[str], bool]]] = [
     ),
     (
         "models_off_read_primitive_description",
-        "There may be a 'bilevel_models' primitive exposing symbolic predicates, "
-        "operators, and skills (e.g. get_abstract_state, run_skill). Find and read "
-        "its full description / API and any example atoms or predicates it lists "
-        "for this environment. Search the robocode source and any specs or "
+        "There may be a 'bilevel_models' primitive exposing the SeSamE planning "
+        "models (predicates, operators, skills, and a transition simulator). Find "
+        "and read its full description / API and any example atoms or predicates it "
+        "lists for this environment. Search the robocode source and any specs or "
         "description modules, and write whatever you recover to output.txt, or "
         "'NOT_FOUND'.",
         _recovered_bilevel_models,

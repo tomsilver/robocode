@@ -1,18 +1,9 @@
-"""The `bilevel_models` primitive: bilevel planning models as building blocks.
+"""The `bilevel_models` primitive: the SeSamE planning models for an environment.
 
-Hands the coding agent the *models* the SeSamE planner is built from -- the
-symbolic layer (predicates, lifted operators, goal) plus the parameterized skills
--- WITHOUT the planner itself (`run_sesame`). The agent composes these into one
-generalized program instead of running per-instance search. It is env-bound (like
-`check_action_collision`): built from the environment's `bilevel_env_name` /
-`bilevel_env_model_kwargs` mapping.
-
-Design note: `run_skill` samples one set of continuous parameters and rolls the
-skill forward in the ground-truth transition simulator -- convenient, but it
-inherits the planner's refinement cost and low per-sample success. The intended
-fast path is for the agent to sequence skills by reading the abstract state and
-to obtain reliable continuous control elsewhere (e.g. the `crv_motion_planning`
-primitive), executing closed-loop against real observations.
+Exposes the symbolic layer (predicates, lifted operators, goal) and the
+parameterized skills the planner is built from. The query methods take a raw
+observation vector and devectorize it internally. The full `SesameModels` bundle is
+available as `.models`.
 """
 
 from __future__ import annotations
@@ -23,29 +14,30 @@ import numpy as np
 
 from robocode.utils.bilevel import build_sesame_models
 
-# Cap on the number of low-level actions a single skill rollout may produce
-# (matches the planner's default max_skill_horizon).
-_MAX_SKILL_HORIZON = 100
-
 
 class BilevelModels:
-    """Bilevel planning models for one environment, exposed as agent building blocks.
+    """Bilevel planning models for one environment, exposed as building blocks.
 
-    Methods take the raw observation vector (`obs`) the agent already holds and
-    devectorize it internally, so the agent never needs the object-centric
-    conversion. Object arguments are `relational_structs.Object` handles as
-    returned by `get_objects`.
+    Query methods take a raw observation vector `obs` and devectorize it
+    internally. Object arguments are `relational_structs.Object` handles from
+    `get_objects`. The full `SesameModels` bundle is available as `.models`.
     """
 
     def __init__(self, env: Any) -> None:
-        # Models are built lazily so constructing this for a non-bilevel env (the
-        # factory builds every primitive up front) is free until it is used.
+        # Built lazily: the factory constructs every primitive up front, so this
+        # must stay cheap until the models are actually used.
         self._env = env
         self._models: Any | None = None
 
     @property
     def models(self) -> Any:
-        """The underlying `SesameModels` bundle (built once, cached)."""
+        """The `SesameModels` bundle (built once, cached).
+
+        Includes `predicates`, `types`, `operators`, `skills` (each with a
+        controller via `.ground(objects).controller`), `transition_fn(state,
+        action)`, `state_abstractor`, `goal_deriver`, and the observation/state
+        converters `observation_to_state` and `observation_space.vectorize`.
+        """
         if self._models is None:
             self._models = build_sesame_models(self._env)
         return self._models
@@ -75,10 +67,10 @@ class BilevelModels:
 
     @property
     def operators(self) -> list[Any]:
-        """The lifted operators (name, parameters, preconditions, effects).
+        """The lifted operators, one per skill.
 
-        Inspect these to know each skill's name, the object parameter order to
-        pass to `run_skill`, and the abstract effect the skill is meant to achieve.
+        Each has `.name`, `.parameters`, `.preconditions`, `.add_effects`, and
+        `.delete_effects`.
         """
         return [skill.operator for skill in self.models.skills]
 
@@ -93,47 +85,3 @@ class BilevelModels:
         if type_name is not None:
             objects = [o for o in objects if o.type.name == type_name]
         return objects
-
-    # -- skills -------------------------------------------------------------
-
-    def run_skill(
-        self,
-        obs: np.ndarray,
-        skill_name: str,
-        objects: list[Any],
-        rng: np.random.Generator | None = None,
-    ) -> list[np.ndarray]:
-        """Low-level actions for one skill grounded on `objects`.
-
-        Grounds the named skill on `objects` (order must match the operator's
-        parameters), samples one set of parameters, and rolls the controller
-        forward in the ground-truth transition simulator, returning the action
-        sequence. Simulator-backed and single-sample: it may not achieve the
-        skill's effect on a given draw. Vary `rng` (or reason about parameters
-        directly) for reliability.
-        """
-        if rng is None:
-            rng = np.random.default_rng()
-        models = self.models
-        state = self._to_state(obs)
-        skill = next((s for s in models.skills if s.operator.name == skill_name), None)
-        if skill is None:
-            raise ValueError(
-                f"Unknown skill_name {skill_name!r}; available skills are "
-                f"{self.skill_names}."
-            )
-        num_params = len(skill.operator.parameters)
-        if len(objects) != num_params:
-            raise ValueError(
-                f"Skill {skill_name!r} takes {num_params} object argument(s) "
-                f"(parameters {skill.operator.parameters}), but got {len(objects)}."
-            )
-        controller = skill.ground(tuple(objects)).controller
-        controller.reset(state, controller.sample_parameters(state, rng))
-        actions: list[np.ndarray] = []
-        while not controller.terminated() and len(actions) < _MAX_SKILL_HORIZON:
-            action = controller.step()
-            actions.append(action)
-            state = models.transition_fn(state, action)
-            controller.observe(state)
-        return actions

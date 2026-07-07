@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
@@ -66,40 +65,21 @@ def test_symbolic_layer() -> None:
 
     all_names = {o.name for o in bm.get_objects(obs)}
     assert {"robot", "target_block", "target_surface"} <= all_names
-    circles = bm.get_objects(obs, type_name="rectangle")
-    assert circles and all(o.type.name == "rectangle" for o in circles)
+    rectangles = bm.get_objects(obs, type_name="rectangle")
+    assert rectangles and all(o.type.name == "rectangle" for o in rectangles)
 
 
-def test_run_skill_returns_action_sequence() -> None:
-    """run_skill grounds the skill and returns a low-level action sequence."""
+def test_raw_models_usable_for_skills() -> None:
+    """The `.models` bundle exposes the skills (with controllers) and the transition
+    simulator."""
     env = _obstruction_env()
     bm = build_primitives(env, ["bilevel_models"])["bilevel_models"]
     obs, _ = env.reset(seed=0)
-    objs = {o.name: o for o in bm.get_objects(obs)}
-    actions = bm.run_skill(
-        obs,
-        "PickFromTable",
-        [objs["robot"], objs["target_block"]],
-        rng=np.random.default_rng(0),
-    )
-    assert len(actions) > 0
-    assert all(a.shape == env.action_space.shape for a in actions)
+    state = bm.models.observation_to_state(obs)
+    objs = {o.name: o for o in state}
 
-
-def test_run_skill_rejects_unknown_skill() -> None:
-    """An invalid skill_name gives a helpful ValueError, not a bare StopIteration."""
-    env = _obstruction_env()
-    bm = build_primitives(env, ["bilevel_models"])["bilevel_models"]
-    obs, _ = env.reset(seed=0)
-    with pytest.raises(ValueError, match="Unknown skill_name 'Teleport'"):
-        bm.run_skill(obs, "Teleport", bm.get_objects(obs)[:2])
-
-
-def test_run_skill_rejects_wrong_object_count() -> None:
-    """Passing the wrong number of objects for a skill fails loudly and clearly."""
-    env = _obstruction_env()
-    bm = build_primitives(env, ["bilevel_models"])["bilevel_models"]
-    obs, _ = env.reset(seed=0)
-    objs = {o.name: o for o in bm.get_objects(obs)}
-    with pytest.raises(ValueError, match="takes 2 object"):
-        bm.run_skill(obs, "PickFromTable", [objs["robot"]])
+    skill = next(s for s in bm.models.skills if s.operator.name == "PickFromTable")
+    controller = skill.ground((objs["robot"], objs["target_block"])).controller
+    assert hasattr(controller, "sample_parameters")
+    assert hasattr(controller, "step")
+    assert callable(bm.models.transition_fn)
