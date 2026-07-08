@@ -15,6 +15,7 @@ module), and the sandbox client rebuilds a lightweight local mirror with the sam
 
 from __future__ import annotations
 
+from operator import attrgetter
 from typing import Any
 
 import numpy as np
@@ -47,7 +48,8 @@ def encode_object_centric_state(state: ObjectCentricState) -> dict[str, Any]:
         for t in _ordered_types(type_features)
     ]
     objects_payload = []
-    for obj in sorted(state):
+    # Sort by name explicitly rather than relying on Object's rich comparison.
+    for obj in sorted(state, key=attrgetter("name")):
         objects_payload.append(
             {
                 "name": obj.name,

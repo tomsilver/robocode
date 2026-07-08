@@ -146,6 +146,7 @@ def test_variable_count_collision():
     env.reset(seed=0, options={"object_count": 1})
     state, action = _find_variable_count_collision(env)
     assert check_action_collision(env, state, action)
+    env.close()
 
 
 def test_variable_count_free_move():
@@ -154,6 +155,7 @@ def test_variable_count_free_move():
     state, _ = env.reset(seed=0, options={"object_count": 1})
     action = np.zeros(env.action_space.shape, dtype=np.float32)
     assert not check_action_collision(env, state, action)
+    env.close()
 
 
 def test_variable_count_state_preservation():
@@ -164,3 +166,4 @@ def test_variable_count_state_preservation():
     env.set_state(saved)
     check_action_collision(env, state, action)
     assert env.get_state().allclose(saved)
+    env.close()

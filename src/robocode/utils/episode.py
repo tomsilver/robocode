@@ -146,6 +146,12 @@ def summarize_by_count(
     two scalars are the largest count solved on every / at least one scheduled episode
     (``None`` if no count qualifies).
     """
+    if len(scheduled_counts) != len(per_episode):
+        raise ValueError(
+            "scheduled_counts and per_episode must be parallel, got "
+            f"{len(scheduled_counts)} and {len(per_episode)}; a length mismatch would "
+            "silently drop episodes and break the full-scheduled denominator."
+        )
     reserved = {"seed", "attempted", "crashed", "solved", "object_count"}
     buckets: dict[int, dict[str, Any]] = {}
     for count, episode in zip(scheduled_counts, per_episode):
