@@ -24,32 +24,23 @@ def _maze_check(state: Any, action: Any) -> bool:
     )
 
 
-def _kinder_check(env: Any, state: Any, action: Any) -> bool:
-    """Collision check for KinderGeom2DEnv using kinder reference identity."""
-    saved = env.get_state()
-    env.set_state(state)
-    inner = env._kinder_env._object_centric_env  # type: ignore[attr-defined]  # pylint: disable=protected-access
-    ref_before = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
-    env.step(np.array(action, dtype=np.float32))
-    ref_after = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
-    env.set_state(saved)
-    return ref_after is ref_before  # type: ignore[no-any-return]
+def _kinder_reference_check(
+    env: Any, backend_attr: str, state: Any, action: Any
+) -> bool:
+    """Collision iff the kinder step reuses the same state object (no movement).
 
-
-def _variable_count_check(env: Any, state: Any, action: Any) -> bool:
-    """Collision check for VariableObjectCountEnv via kinder reference identity.
-
-    Same trick as ``_kinder_check`` but the active inner object-centric env lives on
-    the per-count backend selected by ``set_state``.
+    ``backend_attr`` names the env attribute holding the active kinder backend, read
+    after set_state so a variable-count env resolves its per-count backend.
     """
+    # pylint: disable=protected-access
     saved = env.get_state()
     env.set_state(state)
-    inner = env._current_backend._object_centric_env  # type: ignore[attr-defined]  # pylint: disable=protected-access
-    ref_before = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
+    inner = getattr(env, backend_attr)._object_centric_env
+    ref_before = inner._current_state
     env.step(np.array(action, dtype=np.float32))
-    ref_after = inner._current_state  # type: ignore[attr-defined]  # pylint: disable=protected-access
+    ref_after = inner._current_state
     env.set_state(saved)
-    return ref_after is ref_before  # type: ignore[no-any-return]
+    return ref_after is ref_before
 
 
 def _generic_check(env: Any, state: Any, action: Any) -> bool:
@@ -66,7 +57,7 @@ def check_action_collision(env: Any, state: Any, action: Any) -> bool:
     if isinstance(env, MazeEnv):
         return _maze_check(state, action)
     if isinstance(env, VariableObjectCountEnv):
-        return _variable_count_check(env, state, action)
+        return _kinder_reference_check(env, "_current_backend", state, action)
     if isinstance(env, KinderGeom2DEnv):
-        return _kinder_check(env, state, action)
+        return _kinder_reference_check(env, "_kinder_env", state, action)
     return _generic_check(env, state, action)

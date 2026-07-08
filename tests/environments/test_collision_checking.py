@@ -5,6 +5,7 @@ from gymnasium.spaces import Box
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.environments.maze_env import MazeEnv, _MazeState
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.primitives.check_action_collision import check_action_collision
 
 # Maze action constants (public in MazeEnv but prefixed with _).
@@ -109,3 +110,57 @@ def test_kinder_state_preservation():
     check_action_collision(env, state, action)
     np.testing.assert_array_equal(env.get_state(), saved)
     env.close()
+
+
+def _make_variable_count_env() -> VariableObjectCountEnv:
+    """A one-passage Motion2D wrapped as a variable-count env (walls to hit)."""
+    return VariableObjectCountEnv(
+        constant_object_env_path="kinder.envs.kinematic2d.motion2d:Motion2DEnv",
+        count_kwarg="num_passages",
+        count_object_prefix="obstacle",
+        design_counts=[1],
+        eval_counts=[1],
+        bilevel_env_name="motion2d",
+    )
+
+
+def _find_variable_count_collision(
+    env: VariableObjectCountEnv,
+) -> tuple[object, np.ndarray]:
+    """Drive with the max action until a collision occurs; return (state, action)."""
+    assert isinstance(env.action_space, Box)
+    action = env.action_space.high.copy()
+    for _ in range(500):
+        state = env.get_state()
+        if check_action_collision(env, state, action):
+            return state, action
+        _, _, terminated, _, _ = env.step(action)
+        if terminated:
+            env.reset(seed=0, options={"object_count": 1})
+    raise RuntimeError("Could not find a collision")
+
+
+def test_variable_count_collision():
+    """Stepping into a wall collides through the variable-count dispatch too."""
+    env = _make_variable_count_env()
+    env.reset(seed=0, options={"object_count": 1})
+    state, action = _find_variable_count_collision(env)
+    assert check_action_collision(env, state, action)
+
+
+def test_variable_count_free_move():
+    """A zero action does not collide."""
+    env = _make_variable_count_env()
+    state, _ = env.reset(seed=0, options={"object_count": 1})
+    action = np.zeros(env.action_space.shape, dtype=np.float32)
+    assert not check_action_collision(env, state, action)
+
+
+def test_variable_count_state_preservation():
+    """check_action_collision restores the object-centric env state."""
+    env = _make_variable_count_env()
+    saved, _ = env.reset(seed=0, options={"object_count": 1})
+    state, action = _find_variable_count_collision(env)
+    env.set_state(saved)
+    check_action_collision(env, state, action)
+    assert env.get_state().allclose(saved)
