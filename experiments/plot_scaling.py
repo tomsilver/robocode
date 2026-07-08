@@ -22,15 +22,12 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+from omegaconf import DictConfig, OmegaConf
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402  pylint: disable=wrong-import-position
-import numpy as np  # noqa: E402  pylint: disable=wrong-import-position
-from omegaconf import (  # noqa: E402  pylint: disable=wrong-import-position
-    DictConfig,
-    OmegaConf,
-)
+# Render to files without a display.
+plt.switch_backend("Agg")
 
 
 def _run_label(job_dir: Path) -> tuple[str, str] | None:
