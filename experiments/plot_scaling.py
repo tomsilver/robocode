@@ -3,8 +3,8 @@
 Reads ``results.json`` files (with ``.hydra`` sidecars) from one or more run
 directories and renders, per environment family:
 
-* solve rate vs object count, one line per approach (e.g. the generalized program
-  overlaid on the bilevel planner), with **honest denominators** -- every scheduled
+* solve rate vs object count, one line per run (two runs of the same approach are
+  kept separate), with **honest denominators** -- every scheduled
   episode at a count counts, crashes and unattempted included; and
 * the planner's mean planning time and plan-found rate vs object count, which is the
   degradation the generalized program is meant to amortize away.
@@ -53,10 +53,17 @@ def _run_label(job_dir: Path) -> tuple[str, str] | None:
     return environment, approach
 
 
-def _collect(dirs: list[Path]) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    """Map environment -> approach -> list of per-episode dicts (with object_count)."""
-    data: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
-        lambda: defaultdict(list)
+def collect(
+    dirs: list[Path],
+) -> dict[str, dict[str, dict[str, list[dict[str, Any]]]]]:
+    """Map environment -> approach -> source-dir name -> per-episode dicts.
+
+    Keeping the source (the CLI dir a run was found under) lets two runs of the
+    same approach that differ only in config -- e.g. one with primitives and one
+    without -- stay separate instead of pooling into a single blended line.
+    """
+    data: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
     )
     for search_dir in dirs:
         for results_path in sorted(search_dir.rglob("results.json")):
@@ -72,11 +79,31 @@ def _collect(dirs: list[Path]) -> dict[str, dict[str, list[dict[str, Any]]]]:
                 if e.get("object_count") is not None
             ]
             if episodes:
-                data[environment][approach].extend(episodes)
+                data[environment][approach][search_dir.name].extend(episodes)
     return data
 
 
-def _by_count(
+def series(
+    by_approach: dict[str, dict[str, list[dict[str, Any]]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Flatten approach -> {source: episodes} into the label -> episodes to plot.
+
+    A single source keeps the plain approach name; several sources (seeds of one run
+    pool under one source, so this means genuinely distinct runs) are split and suffixed
+    with the source dir so each stays its own line.
+    """
+    labelled: dict[str, list[dict[str, Any]]] = {}
+    for approach, by_source in by_approach.items():
+        if len(by_source) == 1:
+            (episodes,) = by_source.values()
+            labelled[approach] = episodes
+        else:
+            for source, episodes in by_source.items():
+                labelled[f"{approach} ({source})"] = episodes
+    return labelled
+
+
+def by_count(
     episodes: list[dict[str, Any]], key: str, reducer: str = "mean"
 ) -> tuple[list[int], list[float]]:
     """Aggregate ``key`` per object count.
@@ -95,13 +122,14 @@ def _by_count(
     return counts, values
 
 
-def _plot_environment(
+def plot_environment(
     environment: str, approaches: dict[str, list[dict[str, Any]]], out: Path
 ) -> None:
+    """Render the two-panel solve-rate and planner-cost figure for one environment."""
     fig, (ax_solve, ax_plan) = plt.subplots(1, 2, figsize=(12, 4.5))
 
     for approach, episodes in sorted(approaches.items()):
-        counts, solve = _by_count(episodes, "solved", reducer="rate")
+        counts, solve = by_count(episodes, "solved", reducer="rate")
         if counts:
             ax_solve.plot(counts, solve, marker="o", label=approach)
 
@@ -115,14 +143,14 @@ def _plot_environment(
     # Planner degradation: only approaches that record planning_time contribute.
     plotted = False
     for approach, episodes in sorted(approaches.items()):
-        counts, plan_time = _by_count(episodes, "planning_time")
+        counts, plan_time = by_count(episodes, "planning_time")
         if not counts:
             continue
         plotted = True
         ax_plan.plot(
             counts, plan_time, marker="s", label=f"{approach} planning time (s)"
         )
-        pf_counts, plan_found = _by_count(episodes, "plan_found", reducer="rate")
+        pf_counts, plan_found = by_count(episodes, "plan_found", reducer="rate")
         ax_twin = ax_plan.twinx()
         ax_twin.plot(
             pf_counts,
@@ -167,13 +195,13 @@ def _main() -> None:
         help="output PNG (one per environment: <stem>_<env><suffix>)",
     )
     args = parser.parse_args()
-    data = _collect(args.dirs)
+    data = collect(args.dirs)
     if not data:
         print("No variable-count results found (per_episode needs object_count).")
         return
-    for environment, approaches in sorted(data.items()):
+    for environment, by_approach in sorted(data.items()):
         out = args.out.with_name(f"{args.out.stem}_{environment}{args.out.suffix}")
-        _plot_environment(environment, approaches, out)
+        plot_environment(environment, series(by_approach), out)
 
 
 if __name__ == "__main__":
