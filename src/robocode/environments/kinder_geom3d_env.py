@@ -1,37 +1,6 @@
 """Wrapper around kinder geom3d environments."""
 
 import os
-
-# kinder.register_all_environments() (below) hardcodes MUJOCO_GL=osmesa and
-# PYOPENGL_PLATFORM=osmesa on headless Linux and then imports mujoco to probe
-# for Dynamic3D support, which permanently locks PyOpenGL to that platform.
-# Default to EGL (present on most dev machines via libegl1, and expected by
-# robosuite via LIBERO), but honor an explicit MUJOCO_GL chosen by the caller:
-# the sandbox sets osmesa because headless EGL device displays need a GPU, which
-# the container does not have, so the Dynamic3D mujoco offscreen renderer fails
-# under EGL. Capture the chosen backend, preempt-import mujoco so PyOpenGL locks
-# to it, then restore it after kinder flips the env vars.
-os.environ.setdefault("MUJOCO_GL", "egl")
-# PyOpenGL must agree with the chosen MUJOCO_GL backend, so derive its platform
-# from it rather than defaulting independently (glfw is on-screen and uses GLX
-# on Linux). This keeps a caller-set MUJOCO_GL=osmesa from pairing with egl.
-_PYOPENGL_FOR_MUJOCO = {"egl": "egl", "osmesa": "osmesa", "glfw": "glx"}
-os.environ.setdefault(
-    "PYOPENGL_PLATFORM", _PYOPENGL_FOR_MUJOCO.get(os.environ["MUJOCO_GL"], "egl")
-)
-_MUJOCO_GL = os.environ["MUJOCO_GL"]
-_PYOPENGL_PLATFORM = os.environ["PYOPENGL_PLATFORM"]
-try:
-    import mujoco  # pylint: disable=unused-import
-
-    _ = mujoco
-except Exception:  # pylint: disable=broad-except
-    # mujoco is optional; only needed for libero-style downstream use. Catch
-    # broad Exception because mujoco's import chain touches ctypes/OpenGL and
-    # can raise AttributeError / OSError when GL runtime libs are missing.
-    pass
-
-# pylint: disable=wrong-import-position
 from typing import Any, SupportsFloat
 
 import gymnasium
@@ -42,10 +11,13 @@ from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 
 from robocode.environments.base_env import BaseEnv
+from robocode.environments.mujoco_gl import configure_gl_backend
 
+# Register the kinder gym envs. register_all_environments() imports mujoco and forces
+# osmesa on headless Linux, so lock our GL backend first and restore it after -- the
+# 3D offscreen renderer depends on the sandbox's chosen backend.
+_MUJOCO_GL, _PYOPENGL_PLATFORM = configure_gl_backend()
 kinder.register_all_environments()
-# kinder flips these to osmesa on headless Linux; restore the chosen backend so
-# later mujoco/robosuite users in this process pick it up.
 os.environ["MUJOCO_GL"] = _MUJOCO_GL
 os.environ["PYOPENGL_PLATFORM"] = _PYOPENGL_PLATFORM
 

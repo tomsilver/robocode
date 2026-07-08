@@ -35,13 +35,8 @@ from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 from relational_structs.object_centric_state import ObjectCentricState
 
-# Imported for its side effects: the 2D wrapper module sets the MUJOCO_GL/PyOpenGL
-# backend and calls kinder.register_all_environments(), which the object-centric
-# families rely on being importable. Kept after the third-party imports (isort order);
-# it runs well before any env is instantiated in __init__, which is what the GL
-# preamble needs.
-import robocode.environments.kinder_geom2d_env  # noqa: F401  pylint: disable=unused-import
 from robocode.environments.base_env import BaseEnv
+from robocode.environments.mujoco_gl import configure_gl_backend
 from robocode.utils.bilevel import build_sesame_models
 
 
@@ -79,6 +74,9 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         base_steps: int = 300,
         steps_per_object: int = 150,
     ) -> None:
+        # Lock the GL backend before building any backend env so rendering works;
+        # driving the kinder classes directly needs no gym registry.
+        configure_gl_backend()
         self._env_path = constant_object_env_path
         self._env_cls = _load_constant_object_env_class(constant_object_env_path)
         self._count_kwarg = count_kwarg
