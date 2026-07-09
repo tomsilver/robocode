@@ -159,6 +159,39 @@ def test_per_instance_eval_charges_crashed_attempts(tmp_path: Path) -> None:
     assert out["per_episode"][1]["crashed"] is True
 
 
+def test_per_instance_eval_tags_every_entry_with_scheduled_count(
+    tmp_path: Path,
+) -> None:
+    """Crashed and budget-exhausted entries keep their scheduled object_count, so the
+    by-count denominator covers every scheduled episode (nothing silently dropped)."""
+    results = [
+        InstanceResult(solved=True, total_reward=1.0, num_steps=3, cost_usd=1.0),
+        InstanceResult(
+            solved=False,
+            total_reward=None,
+            num_steps=None,
+            cost_usd=2.0,
+            crashed=True,
+        ),
+    ]
+    approach = _ScriptedPerInstanceApproach(results)
+    out = run_per_instance_eval(
+        None,
+        approach,
+        [10, 11, 12, 13],
+        max_budget_usd=3.0,  # fits solved ($1) + crashed ($2); seeds 12,13 unattempted
+        output_dir=tmp_path,
+        eval_counts=[2, 4, 6, 8],
+    )
+    per = out["per_episode"]
+    assert [e.get("object_count") for e in per] == [2, 4, 6, 8]
+    assert per[1]["crashed"] is True and per[1]["object_count"] == 4
+    assert per[2]["attempted"] is False and per[2]["object_count"] == 6
+    # by-count covers all scheduled episodes; the unreached count-8 episode is a failure.
+    assert out["by_count"][8]["n"] == 1
+    assert out["by_count"][8]["n_solved"] == 0
+
+
 def test_per_instance_eval_aggregates_extras(tmp_path: Path) -> None:
     """Per-instance extras are merged into per_episode and averaged as mean_<key>.
 

@@ -223,9 +223,15 @@ def run_per_instance_eval(
     num_solved = 0
     num_attempted = 0
     for i, seed in enumerate(eval_seeds):
+        # The scheduled count for this episode, attached to every per_episode entry
+        # (unattempted and crashed included) so by-count reporting keeps the honest
+        # full-scheduled denominator once the budget runs out; None for fixed-count.
+        count_i = eval_counts[i] if eval_counts is not None else None
+        count_field = {"object_count": count_i} if count_i is not None else {}
         if remaining <= 0:
             per_episode.append(
                 {
+                    **count_field,
                     "seed": seed,
                     "attempted": False,
                     "solved": False,
@@ -247,7 +253,7 @@ def run_per_instance_eval(
             budget_usd=budget_i,
             output_subdir=output_dir / f"instance_{i}",
             render=render,
-            count=eval_counts[i] if eval_counts is not None else None,
+            count=count_i,
         )
         num_attempted += 1
         remaining -= result.cost_usd
@@ -261,8 +267,11 @@ def run_per_instance_eval(
         per_episode.append(
             {
                 # Approach-specific per-instance metrics first; the fixed keys
-                # below take precedence over any colliding extras key.
+                # below take precedence over any colliding extras key. The scheduled
+                # count is set explicitly so a crashed attempt (empty extras) still
+                # carries it, matching what a solved attempt reports.
                 **result.extras,
+                **count_field,
                 "seed": seed,
                 "attempted": True,
                 "solved": result.solved,
