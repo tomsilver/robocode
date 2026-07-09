@@ -356,6 +356,7 @@ def _dispatch(
                 request.get("seed", 42),
                 request.get("state"),
                 request.get("label", ""),
+                request.get("object_count"),
             )
         }
     # Remote-object proxy commands. They use the handle-aware encode_ref/
@@ -385,6 +386,7 @@ def _render_state(
     seed: int,
     state: list[float] | dict[str, Any] | None,
     label: str,
+    object_count: int | None = None,
 ) -> str:
     """Render a state to a PNG under ``mcp_renders/``; return the relative path.
 
@@ -406,7 +408,10 @@ def _render_state(
             )
             stem = "state_custom"
         else:
-            env.reset(seed=seed)
+            options = (
+                {"object_count": object_count} if object_count is not None else None
+            )
+            env.reset(seed=seed, options=options)
             env_state = env.get_state()
             stem = f"state_seed{seed}"
         if label:

@@ -539,19 +539,32 @@ class BlackboxEnv:
             return _encode(state)
         return _encode(np.asarray(state))
 
-    def render_state(self, seed: int = 42, state: Any = None, label: str = "") -> str:
+    def render_state(
+        self,
+        seed: int = 42,
+        state: Any = None,
+        label: str = "",
+        object_count: int | None = None,
+    ) -> str:
         """Render a state on the host; returns a PNG path inside the sandbox.
 
-        Either pass ``seed`` to render the initial state after a reset, or
-        ``state`` (a flat list of floats, as from ``get_state().tolist()``)
-        to render an arbitrary state. The path is relative to the sandbox dir.
+        Either pass ``seed`` to render the initial state after a reset (with
+        ``object_count`` to pin a variable-count env's object count), or ``state`` (a
+        flat list of floats, as from ``get_state().tolist()``) to render an arbitrary
+        state. The path is relative to the sandbox dir.
         """
         if isinstance(state, _ObjectCentricState):
             state = _encode(state)  # tagged object-centric payload, decoded host-side
         elif isinstance(state, np.ndarray):
             state = state.tolist()
         return self._request(
-            {"cmd": "render_state", "seed": seed, "state": state, "label": label}
+            {
+                "cmd": "render_state",
+                "seed": seed,
+                "state": state,
+                "label": label,
+                "object_count": object_count,
+            }
         )["path"]
 
     def render_policy(
@@ -560,14 +573,16 @@ class BlackboxEnv:
         max_steps: int = 1000,
         max_frames: int = 100,
         approach_path: Any = None,
+        object_count: int | None = None,
     ) -> list[str]:
         """Run an episode of approach.py here and render the visited states.
 
         The policy runs in this process: only ``get_action`` (which needs the
         observation alone) executes locally, while each visited state is
         rendered on the host via ``render_state``. No approach code runs on the
-        host, so a black-box agent cannot reach the env source through
-        rendering. Returns the PNG paths (relative to the sandbox dir).
+        host, so a black-box agent cannot reach the env source through rendering.
+        ``object_count`` pins a variable-count env's object count on the rollout reset.
+        Returns the PNG paths (relative to the sandbox dir).
         """
         path = (
             Path(approach_path)
@@ -577,7 +592,8 @@ class BlackboxEnv:
         approach = _load_generated_approach(
             path, self.action_space, self.observation_space, self.make_primitives()
         )
-        obs, info = self.reset(seed=seed)
+        options = {"object_count": object_count} if object_count is not None else None
+        obs, info = self.reset(seed=seed, options=options)
         approach.reset(obs, info)
         states = [self.get_state()]
         for _ in range(max_steps):
