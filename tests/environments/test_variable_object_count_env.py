@@ -74,6 +74,19 @@ def test_spaces_are_count_invariant_but_box_view_is_not() -> None:
     env.close()
 
 
+def test_observation_space_exposes_get_type_for_blackbox_parity() -> None:
+    """The eval-time space exposes get_type(name) like the blackbox client mirror, so a
+    program developed against the client runs unchanged at eval (KeyError on unknown).
+    """
+    env = VariableObjectCountEnv(**OBSTRUCTION2D)
+    # get_type is attached at construction; the space is typed as a bare gym Space.
+    get_type = getattr(env.observation_space, "get_type")
+    assert get_type("crv_robot").name == "crv_robot"
+    with pytest.raises(KeyError):
+        get_type("no_such_type")
+    env.close()
+
+
 def test_sample_next_state_with_object_centric_state() -> None:
     """sample_next_state (used by primitives) works with object-centric states."""
     env = VariableObjectCountEnv(**OBSTRUCTION2D)

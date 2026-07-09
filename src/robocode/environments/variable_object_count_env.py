@@ -115,6 +115,12 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         # The object-centric space carries no feature names on its own; attach them so
         # the blackbox serializer can emit the full type->feature schema.
         setattr(self.observation_space, "type_features", self.type_features)
+        # The bare ObjectCentricStateSpace exposes only `.types`; the blackbox client
+        # mirror and the object-centric prompts also offer `get_type(name)`. Attach it
+        # (KeyError on an unknown name, matching the client) so a program developed
+        # against the blackbox client runs unchanged at eval time.
+        self._type_by_name = {t.name: t for t in self.type_features}
+        setattr(self.observation_space, "get_type", self._type_by_name.__getitem__)
         self._reference_state, _ = ref_env.reset(seed=0)
 
         self._current_backend: ConstantObjectKinDEREnv | None = None
