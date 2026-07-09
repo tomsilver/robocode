@@ -68,10 +68,14 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "`rng` is a `np.random.Generator`."
     ),
     "bilevel_models": (
-        "`primitives['bilevel_models']` is the `SesameModels` bundle for this "
+        "`primitives['bilevel_models']` gives you the `SesameModels` bundle for this "
         "environment: the symbolic predicates and operators and the parameterized "
         "skills the SeSamE planner is built from, without the planner itself (you "
-        "must not call `run_sesame` or any planner/search). Its fields:\n"
+        "must not call `run_sesame` or any planner/search). For a fixed-count "
+        "environment it IS the bundle; for a VARIABLE object count the models depend "
+        "on the count, so it is instead a count-dispatching accessor -- call "
+        "`primitives['bilevel_models'].models_for_state(state)` to get the bundle for "
+        "the current instance's count. The bundle's fields:\n"
         "  - `predicates`, `types`: the domain's predicates (classifiers) and "
         "object types.\n"
         "  - `skills`: a set of `LiftedSkill`, one per operator. Each has "

@@ -45,6 +45,30 @@ def infer_bilevel_mapping(env_id: str) -> tuple[str | None, dict[str, int]]:
     return family, {kwarg: int(match.group(2))}
 
 
+class VariableCountBilevelModels:
+    """The ``bilevel_models`` primitive for a variable-object-count env.
+
+    The planning models bake in the object count, so there is no single
+    ``SesameModels`` bundle. Call :meth:`models_for_state` (or :meth:`models_for_count`)
+    to get the bundle for the current instance's count; bundles are built once per count
+    and cached.
+    """
+
+    def __init__(self, env: Any) -> None:
+        self._env = env
+        self._by_count: dict[int, Any] = {}
+
+    def models_for_count(self, count: int) -> Any:
+        """Return the ``SesameModels`` bundle for a given object count (cached)."""
+        if count not in self._by_count:
+            self._by_count[count] = self._env.models_for_count(count)
+        return self._by_count[count]
+
+    def models_for_state(self, state: Any) -> Any:
+        """Return the ``SesameModels`` bundle for the count implied by *state*."""
+        return self.models_for_count(self._env.infer_count(state))
+
+
 def build_sesame_models(
     env: Any,
     *,
@@ -59,28 +83,26 @@ def build_sesame_models(
     its per-count `ObjectCentricBoxSpace` and `{count_kwarg: k}`. Fails loudly if the
     env config is missing the family mapping rather than planning silently.
 
+    A variable-count env (one exposing `models_for_count`) has no single count, so a
+    call without explicit `model_kwargs` returns a :class:`VariableCountBilevelModels`
+    accessor instead of one bundle; per-count builds pass explicit kwargs and so take
+    the normal path below.
+
     `kinder_bilevel_planning` is imported lazily (it is an optional `bilevel` extra),
     so `import robocode.primitives` works even where the extra is not installed -- e.g.
     a "models OFF" sandbox. Only actually using the bilevel models requires it.
     """
-    # pylint: disable=import-outside-toplevel
-    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
-
     # We never run under python -O, so this assert fires as a loud config check.
     assert env.bilevel_env_name is not None, (
         "bilevel_env_name is not set on the environment; add bilevel_env_name and "
         "bilevel_env_model_kwargs to the env config to use bilevel planning models."
     )
-    # A variable-count env has no single object count, so the raw `bilevel_models`
-    # primitive (one SesameModels bundle) is not meaningful. The planner builds models
-    # per count via explicit overrides (see VariableObjectCountEnv.models_for_count);
-    # a call without overrides means the primitive was requested directly -- fail loud.
-    if model_kwargs is None and not hasattr(env, "bilevel_env_model_kwargs"):
-        raise ValueError(
-            "build_sesame_models needs a fixed object count, but this environment has a "
-            "variable object count. The bilevel_models primitive (a single SesameModels "
-            "bundle) is not available here; the planner builds per-count models instead."
-        )
+    if model_kwargs is None and hasattr(env, "models_for_count"):
+        return VariableCountBilevelModels(env)
+
+    # pylint: disable=import-outside-toplevel
+    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+
     obs_space = (
         observation_space if observation_space is not None else env.observation_space
     )
