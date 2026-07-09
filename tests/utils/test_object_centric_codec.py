@@ -6,6 +6,7 @@ import importlib.util
 import json
 import pathlib
 import tempfile
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -115,8 +116,13 @@ def _load_env_client(metadata_path: pathlib.Path):
     return module, module.make_env(metadata_path)
 
 
-def test_blackbox_object_centric_loop() -> None:
-    """A full client<->server loop carries object-centric states over the wire."""
+@contextmanager
+def _blackbox_client(primitive_names: list[str]):
+    """Serve obstruction2d_generalized over the wire; yield (client_module, client_env).
+
+    Mirrors what a black-box sandbox sees: a live env server plus an ``env_client``
+    built from ``env_spaces.json`` with the requested primitives.
+    """
     cfg = OmegaConf.load("experiments/conf/environment/obstruction2d_generalized.yaml")
     container = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(container, dict)
@@ -124,8 +130,7 @@ def test_blackbox_object_centric_loop() -> None:
         str(k): v for k, v in container.items() if k != "_target_"
     }
     host_env = VariableObjectCountEnv(**kwargs)
-    env_cfg_json = json.dumps(OmegaConf.to_container(cfg, resolve=True))
-
+    env_cfg_json = json.dumps(container)
     with tempfile.TemporaryDirectory() as tmp:
         sandbox = pathlib.Path(tmp) / "sandbox"
         sandbox.mkdir()
@@ -138,37 +143,67 @@ def test_blackbox_object_centric_loop() -> None:
                 observation_space=host_env.observation_space,
                 action_space=host_env.action_space,
                 max_steps=200,
-                primitives_manifest=blackbox_primitive_manifest(
-                    ["check_action_collision"]
-                ),
+                primitives_manifest=blackbox_primitive_manifest(primitive_names),
             )
             client_mod, env = _load_env_client(sandbox / "env_spaces.json")
-            # pylint: disable-next=protected-access
-            local_state_cls = client_mod._ObjectCentricState
+            try:
+                yield client_mod, env
+            finally:
+                env.close()
 
-            # Held-out count 4 arrives as a local object-centric state.
-            obs, info = env.reset(seed=3, options={"object_count": 4})
-            assert isinstance(obs, local_state_cls)
-            assert info["object_count"] == 4
-            n = sum(1 for nm in obs.get_object_names() if nm.startswith("obstruction"))
-            assert n == 4
-            rect = env.observation_space.get_type("rectangle")
-            assert len(obs.get_objects(rect)) == 6  # 4 obstructions + block + surface
 
-            obs2, _reward, _term, _trunc, _info = env.step(env.action_space.sample())
-            assert isinstance(obs2, local_state_cls)
+def test_blackbox_object_centric_loop() -> None:
+    """A full client<->server loop carries object-centric states over the wire."""
+    with _blackbox_client(["check_action_collision"]) as (client_mod, env):
+        # pylint: disable-next=protected-access
+        local_state_cls = client_mod._ObjectCentricState
 
-            snapshot = env.get_state()
-            assert isinstance(snapshot, local_state_cls)
-            env.step(env.action_space.sample())
-            env.set_state(snapshot)
-            assert snapshot.allclose(env.get_state())
+        # Held-out count 4 arrives as a local object-centric state.
+        obs, info = env.reset(seed=3, options={"object_count": 4})
+        assert isinstance(obs, local_state_cls)
+        assert info["object_count"] == 4
+        n = sum(1 for nm in obs.get_object_names() if nm.startswith("obstruction"))
+        assert n == 4
+        rect = env.observation_space.get_type("rectangle")
+        assert len(obs.get_objects(rect)) == 6  # 4 obstructions + block + surface
 
-            collision = env.make_primitives()["check_action_collision"](
-                env.get_state(), env.action_space.sample()
-            )
-            assert isinstance(collision, bool)
-            env.close()
+        obs2, _reward, _term, _trunc, _info = env.step(env.action_space.sample())
+        assert isinstance(obs2, local_state_cls)
+
+        snapshot = env.get_state()
+        assert isinstance(snapshot, local_state_cls)
+        env.step(env.action_space.sample())
+        env.set_state(snapshot)
+        assert snapshot.allclose(env.get_state())
+
+        collision = env.make_primitives()["check_action_collision"](
+            env.get_state(), env.action_space.sample()
+        )
+        assert isinstance(collision, bool)
+
+
+def test_blackbox_crv_remote_module_receives_local_ocs() -> None:
+    """A local ObjectCentricState passed to the crv remote-module primitive is decoded
+    into a real host state, so planning runs end-to-end over the wire.
+
+    The variable-count observation is a local state (not a remote handle), so the call
+    sends it by value as an ``{__ocs__}`` leaf; the host ``decode_ref`` must honor the
+    codec tag or the planner would receive a raw dict and crash.
+    """
+    with _blackbox_client(["crv_motion_planning"]) as (client_mod, env):
+        obs, _ = env.reset(seed=0, options={"object_count": 3})
+        # pylint: disable-next=protected-access
+        assert isinstance(obs, client_mod._ObjectCentricState)
+        crv = env.make_primitives()["crv_motion_planning"]
+        robot = obs.get_object_from_name("robot")
+        goal = crv.CRVConfig(
+            float(obs.get(robot, "x")),
+            float(obs.get(robot, "y")),
+            float(obs.get(robot, "theta")),
+        )
+        actions = crv.plan_crv_actions(obs, goal, carrying=False, seed=0)
+        assert actions is not None  # a real plan: the local state round-tripped
+        assert all(isinstance(a, np.ndarray) for a in actions)
 
 
 def test_blackbox_bilevel_models_rejected() -> None:
