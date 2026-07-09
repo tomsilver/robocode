@@ -342,6 +342,27 @@ def test_genplan_constants():
     assert "simple strategy" in prompts.GENPLAN_STRATEGY_PROMPT
 
 
+def test_genplan_interface_spec_fixed_count():
+    """The fixed-count spec describes a numpy observation and no object-centric note."""
+    spec = prompts.genplan_interface_spec(object_centric=False)
+    assert spec == prompts.GENPLAN_INTERFACE_SPEC
+    assert "numpy observation" in spec
+    assert "ObjectCentricState" not in spec
+
+
+def test_genplan_interface_spec_object_centric():
+    """The variable-count spec drops the numpy wording and appends the OCS note."""
+    spec = prompts.genplan_interface_spec(object_centric=True)
+    assert "numpy observation" not in spec
+    assert "ObjectCentricState" in spec
+    # The shared object-centric usage note is appended verbatim.
+    assert prompts.OBJECT_CENTRIC_STATE_NOTE in spec
+    assert "get_objects" in spec
+    # The class skeleton is preserved.
+    assert "class GeneratedApproach" in spec
+    assert "Return ONLY" in spec
+
+
 # ---------------------------------------------------------------------------
 # Golden composition tests: pin the exact assembled output so a future fragment
 # reorder, dropped section, or stray separator (e.g. a reintroduced blank line)

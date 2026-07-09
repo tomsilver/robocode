@@ -583,7 +583,7 @@ _CDL_BLACKBOX = (
 # Kept faithful to the upstream llm-genplan method; textually independent from
 # the agentic prompts above (single code block, no test scripts).
 
-GENPLAN_INTERFACE_SPEC = """\
+_GENPLAN_INTERFACE_SPEC_TEMPLATE = """\
 Implement the strategy as a Python class named `GeneratedApproach` in a single \
 code block:
 
@@ -602,10 +602,39 @@ class GeneratedApproach:
         ...
 ```
 
-`state` is a numpy observation matching the observation space. `get_action` is \
+{state_description} `get_action` is \
 called every step and must return an action inside the action space. The class \
 may keep internal state between calls (e.g. a precomputed plan). Return ONLY \
 the code block; do not write tests or explanations."""
+
+# A fixed-count env hands the policy a flat vector; a variable-count (generalized)
+# env hands it an ObjectCentricState, spelled out by OBJECT_CENTRIC_STATE_NOTE.
+_GENPLAN_VECTOR_STATE = "`state` is a numpy observation matching the observation space."
+_GENPLAN_OBJECT_CENTRIC_STATE = (
+    "`state` is an `ObjectCentricState` (detailed in the note below), not a numpy "
+    "vector."
+)
+
+GENPLAN_INTERFACE_SPEC = _GENPLAN_INTERFACE_SPEC_TEMPLATE.format(
+    state_description=_GENPLAN_VECTOR_STATE
+)
+
+
+def genplan_interface_spec(object_centric: bool = False) -> str:
+    """The GenPlan ``GeneratedApproach`` interface spec.
+
+    A variable-count env's observation is an ``ObjectCentricState``, so describe it as
+    such and append the object-centric usage note rather than calling it a vector.
+    """
+    if not object_centric:
+        return GENPLAN_INTERFACE_SPEC
+    return (
+        _GENPLAN_INTERFACE_SPEC_TEMPLATE.format(
+            state_description=_GENPLAN_OBJECT_CENTRIC_STATE
+        )
+        + OBJECT_CENTRIC_STATE_NOTE
+    )
+
 
 GENPLAN_SUMMARY_PROMPT = "Write a short summary of this environment in words."
 

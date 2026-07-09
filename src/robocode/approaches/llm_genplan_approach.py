@@ -21,6 +21,7 @@ from typing import Any, TypeVar, cast
 import gymnasium
 from gymnasium.spaces import Space
 from omegaconf import DictConfig, OmegaConf
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
@@ -70,6 +71,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         super().__init__(
             action_space, observation_space, seed, primitives, env_description_path
         )
+        # A variable-count env hands the policy an ObjectCentricState, not a vector;
+        # the interface spec then describes the object-centric API accordingly.
+        self._object_centric = isinstance(observation_space, ObjectCentricStateSpace)
         self._seed = seed
         self._completion_cfg = completion
         self._container_backend = resolve_container_backend(
@@ -141,6 +145,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         Best-of-K reuses this verbatim, calling it fresh per candidate so a CoT
         run resamples the summary/strategy exchanges independently.
         """
+        interface_spec = prompts.genplan_interface_spec(self._object_centric)
         messages: list[dict[str, str]] = []
         if not self._chain_of_thought:
             messages.append(
@@ -149,7 +154,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     "content": (
                         f"{context}\n\nThere is a simple strategy for solving "
                         "all instances of this environment without using "
-                        f"search. {prompts.GENPLAN_INTERFACE_SPEC}"
+                        f"search. {interface_spec}"
                     ),
                 }
             )
@@ -161,7 +166,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 0,
             )
             self._exchange(messages, prompts.GENPLAN_STRATEGY_PROMPT, sandbox_dir, 1)
-            messages.append({"role": "user", "content": prompts.GENPLAN_INTERFACE_SPEC})
+            messages.append({"role": "user", "content": interface_spec})
         return messages
 
     def _driver_config(self, completion: dict[str, Any]) -> dict[str, Any]:
