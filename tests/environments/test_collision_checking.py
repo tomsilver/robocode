@@ -143,27 +143,33 @@ def _find_variable_count_collision(
 def test_variable_count_collision():
     """Stepping into a wall collides through the variable-count dispatch too."""
     env = _make_variable_count_env()
-    env.reset(seed=0, options={"object_count": 1})
-    state, action = _find_variable_count_collision(env)
-    assert check_action_collision(env, state, action)
-    env.close()
+    try:
+        env.reset(seed=0, options={"object_count": 1})
+        state, action = _find_variable_count_collision(env)
+        assert check_action_collision(env, state, action)
+    finally:
+        env.close()
 
 
 def test_variable_count_free_move():
     """A zero action does not collide."""
     env = _make_variable_count_env()
-    state, _ = env.reset(seed=0, options={"object_count": 1})
-    action = np.zeros(env.action_space.shape, dtype=np.float32)
-    assert not check_action_collision(env, state, action)
-    env.close()
+    try:
+        state, _ = env.reset(seed=0, options={"object_count": 1})
+        action = np.zeros(env.action_space.shape, dtype=np.float32)
+        assert not check_action_collision(env, state, action)
+    finally:
+        env.close()
 
 
 def test_variable_count_state_preservation():
     """check_action_collision restores the object-centric env state."""
     env = _make_variable_count_env()
-    saved, _ = env.reset(seed=0, options={"object_count": 1})
-    state, action = _find_variable_count_collision(env)
-    env.set_state(saved)
-    check_action_collision(env, state, action)
-    assert env.get_state().allclose(saved)
-    env.close()
+    try:
+        saved, _ = env.reset(seed=0, options={"object_count": 1})
+        state, action = _find_variable_count_collision(env)
+        env.set_state(saved)
+        check_action_collision(env, state, action)
+        assert env.get_state().allclose(saved)
+    finally:
+        env.close()

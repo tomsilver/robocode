@@ -33,7 +33,7 @@ import numpy as np
 from gymnasium.core import RenderFrame
 from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
-from relational_structs.object_centric_state import ObjectCentricState
+from relational_structs import ObjectCentricState
 
 from robocode.environments.base_env import BaseEnv
 from robocode.environments.mujoco_gl import configure_gl_backend

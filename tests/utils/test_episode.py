@@ -58,6 +58,12 @@ def test_summarize_by_count_largest_all_solved() -> None:
     assert largest_any == 1
 
 
+def test_summarize_by_count_rejects_length_mismatch() -> None:
+    """Scheduled counts and episode entries must be parallel."""
+    with pytest.raises(ValueError, match="scheduled_counts and per_episode"):
+        summarize_by_count([1, 2], [{"solved": True}])
+
+
 class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
     """A per-instance approach whose solve_instance returns canned results."""
 
@@ -190,6 +196,20 @@ def test_per_instance_eval_tags_every_entry_with_scheduled_count(
     # by-count covers all scheduled episodes; the unreached count-8 episode is a failure.
     assert out["by_count"][8]["n"] == 1
     assert out["by_count"][8]["n_solved"] == 0
+
+
+def test_per_instance_eval_rejects_mismatched_eval_counts(tmp_path: Path) -> None:
+    """Eval counts must be parallel to eval seeds."""
+    approach = _ScriptedPerInstanceApproach([])
+    with pytest.raises(ValueError, match="eval_counts and eval_seeds"):
+        run_per_instance_eval(
+            None,
+            approach,
+            [10, 11],
+            max_budget_usd=1.0,
+            output_dir=tmp_path,
+            eval_counts=[2],
+        )
 
 
 def test_per_instance_eval_aggregates_extras(tmp_path: Path) -> None:

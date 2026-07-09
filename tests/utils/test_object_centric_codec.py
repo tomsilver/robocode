@@ -27,6 +27,11 @@ from robocode.utils.object_centric_codec import (
 )
 
 _OBSTRUCTION2D_PATH = "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv"
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+_ENV_CLIENT_PATH = _REPO_ROOT / "src" / "robocode" / "utils" / "env_client.py"
+_OBSTRUCTION2D_CFG = (
+    _REPO_ROOT / "experiments" / "conf" / "environment" / "obstruction2d_generalized.yaml"
+)
 
 
 def _env() -> VariableObjectCountEnv:
@@ -43,36 +48,42 @@ def _env() -> VariableObjectCountEnv:
 def test_codec_round_trip_is_json_safe_and_faithful() -> None:
     """Encode -> JSON -> decode reproduces the state's objects, features, and types."""
     env = _env()
-    for count in (1, 4):  # a design count and a held-out one
-        state, _ = env.reset(seed=count, options={"object_count": count})
-        payload = json.loads(json.dumps(encode_object_centric_state(state)))
-        back = decode_object_centric_state(payload)
-        assert back.allclose(state)
-        assert set(back.get_object_names()) == set(state.get_object_names())
-        # get(obj, feature) works -> type_features preserved.
-        for name in state.get_object_names():
-            obj_a = state.get_object_from_name(name)
-            obj_b = back.get_object_from_name(name)
-            for feat in state.type_features[obj_a.type]:
-                assert np.isclose(state.get(obj_a, feat), back.get(obj_b, feat))
+    try:
+        for count in (1, 4):  # a design count and a held-out one
+            state, _ = env.reset(seed=count, options={"object_count": count})
+            payload = json.loads(json.dumps(encode_object_centric_state(state)))
+            back = decode_object_centric_state(payload)
+            assert back.allclose(state)
+            assert set(back.get_object_names()) == set(state.get_object_names())
+            # get(obj, feature) works -> type_features preserved.
+            for name in state.get_object_names():
+                obj_a = state.get_object_from_name(name)
+                obj_b = back.get_object_from_name(name)
+                for feat in state.type_features[obj_a.type]:
+                    assert np.isclose(state.get(obj_a, feat), back.get(obj_b, feat))
+    finally:
+        env.close()
 
 
 def test_codec_preserves_type_ancestors() -> None:
     """is_instance over ancestors survives the round trip (subtype rectangles match)."""
     env = _env()
-    state, _ = env.reset(seed=0, options={"object_count": 2})
-    back = decode_object_centric_state(
-        json.loads(json.dumps(encode_object_centric_state(state)))
-    )
-    real = {o.name for o in state.get_objects(RectangleType)}
-    back_rect = next(
-        o.type
-        for o in (back.get_object_from_name(n) for n in back.get_object_names())
-        if o.type.name == "rectangle"
-    )
-    assert {o.name for o in back.get_objects(back_rect)} == real
-    # target_block/target_surface are subtypes of rectangle, so they are included.
-    assert {"target_block", "target_surface"} <= real
+    try:
+        state, _ = env.reset(seed=0, options={"object_count": 2})
+        back = decode_object_centric_state(
+            json.loads(json.dumps(encode_object_centric_state(state)))
+        )
+        real = {o.name for o in state.get_objects(RectangleType)}
+        back_rect = next(
+            o.type
+            for o in (back.get_object_from_name(n) for n in back.get_object_names())
+            if o.type.name == "rectangle"
+        )
+        assert {o.name for o in back.get_objects(back_rect)} == real
+        # target_block/target_surface are subtypes of rectangle, so they are included.
+        assert {"target_block", "target_surface"} <= real
+    finally:
+        env.close()
 
 
 def test_decode_ref_rebuilds_local_ocs_for_remote_module() -> None:
@@ -84,31 +95,37 @@ def test_decode_ref_rebuilds_local_ocs_for_remote_module() -> None:
     handle-aware ``decode_ref`` must honor the codec tag as ``decode`` does.
     """
     env = _env()
-    state, _ = env.reset(seed=0, options={"object_count": 3})
-    wire = {OCS_TAG: encode_object_centric_state(state)}
-    registry = _HandleRegistry()
+    try:
+        state, _ = env.reset(seed=0, options={"object_count": 3})
+        wire = {OCS_TAG: encode_object_centric_state(state)}
+        registry = _HandleRegistry()
 
-    back = decode_ref(wire, registry)
-    assert back.allclose(state)
+        back = decode_ref(wire, registry)
+        assert back.allclose(state)
 
-    # As it actually arrives on the host: nested in a call's positional args.
-    (arg,) = decode_ref([wire], registry)
-    assert arg.allclose(state)
+        # As it actually arrives on the host: nested in a call's positional args.
+        (arg,) = decode_ref([wire], registry)
+        assert arg.allclose(state)
+    finally:
+        env.close()
 
 
 def test_serialize_object_centric_space_has_types_and_parents() -> None:
     """serialize_space emits an ObjectCentric schema with a real type hierarchy."""
     env = _env()
-    schema = serialize_object_centric_space(env.type_features)
-    assert schema["type"] == "ObjectCentric"
-    assert any(t["parent"] is not None for t in schema["types"])  # a real hierarchy
-    # env_server.serialize_space dispatches to the ObjectCentric branch.
-    assert env_server.serialize_space(env.observation_space)["type"] == "ObjectCentric"
+    try:
+        schema = serialize_object_centric_space(env.type_features)
+        assert schema["type"] == "ObjectCentric"
+        assert any(t["parent"] is not None for t in schema["types"])  # a real hierarchy
+        # env_server.serialize_space dispatches to the ObjectCentric branch.
+        assert env_server.serialize_space(env.observation_space)["type"] == "ObjectCentric"
+    finally:
+        env.close()
 
 
 def _load_env_client(metadata_path: pathlib.Path):
     spec = importlib.util.spec_from_file_location(
-        "env_client_undertest", "src/robocode/utils/env_client.py"
+        "env_client_undertest", _ENV_CLIENT_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -123,7 +140,7 @@ def _blackbox_client(primitive_names: list[str]):
     Mirrors what a black-box sandbox sees: a live env server plus an ``env_client``
     built from ``env_spaces.json`` with the requested primitives.
     """
-    cfg = OmegaConf.load("experiments/conf/environment/obstruction2d_generalized.yaml")
+    cfg = OmegaConf.load(_OBSTRUCTION2D_CFG)
     container = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(container, dict)
     kwargs: dict[str, Any] = {

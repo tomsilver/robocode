@@ -217,6 +217,12 @@ def run_per_instance_eval(
     failures); reward/step means are taken only over attempted, non-crashed,
     scored episodes.
     """
+    if eval_counts is not None and len(eval_counts) != len(eval_seeds):
+        raise ValueError(
+            "eval_counts and eval_seeds must be parallel, got "
+            f"{len(eval_counts)} and {len(eval_seeds)}; scheduled counts would "
+            "otherwise misalign with evaluated seeds."
+        )
     per_episode: list[dict[str, Any]] = []
     remaining = max_budget_usd
     total_cost = 0.0
