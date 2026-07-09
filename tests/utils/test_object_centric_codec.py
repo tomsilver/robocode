@@ -30,7 +30,11 @@ _OBSTRUCTION2D_PATH = "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv"
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _ENV_CLIENT_PATH = _REPO_ROOT / "src" / "robocode" / "utils" / "env_client.py"
 _OBSTRUCTION2D_CFG = (
-    _REPO_ROOT / "experiments" / "conf" / "environment" / "obstruction2d_generalized.yaml"
+    _REPO_ROOT
+    / "experiments"
+    / "conf"
+    / "environment"
+    / "obstruction2d_generalized.yaml"
 )
 
 
@@ -118,7 +122,9 @@ def test_serialize_object_centric_space_has_types_and_parents() -> None:
         assert schema["type"] == "ObjectCentric"
         assert any(t["parent"] is not None for t in schema["types"])  # a real hierarchy
         # env_server.serialize_space dispatches to the ObjectCentric branch.
-        assert env_server.serialize_space(env.observation_space)["type"] == "ObjectCentric"
+        assert (
+            env_server.serialize_space(env.observation_space)["type"] == "ObjectCentric"
+        )
     finally:
         env.close()
 
