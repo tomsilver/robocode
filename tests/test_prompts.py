@@ -190,6 +190,42 @@ def test_agentic_prompt_blackbox():
     assert "IFACE" in p
 
 
+def test_blackbox_interaction_spec_vector_is_default():
+    """The default black-box spec describes the flat-vector env_client API."""
+    spec = prompts.blackbox_interaction_spec()
+    assert "devectorize" in spec
+    assert "numpy snapshot" in spec
+    assert "observation vector" in spec
+
+
+def test_blackbox_interaction_spec_object_centric():
+    """The object-centric black-box spec reads typed objects, not a vector."""
+    spec = prompts.blackbox_interaction_spec(object_centric=True)
+    assert "devectorize" not in spec
+    assert "vectorize" not in spec
+    assert "numpy snapshot" not in spec
+    assert "observation vector" not in spec
+    assert "get_objects" in spec
+    assert ".get_type(name)" in spec
+    assert "ObjectCentricState" in spec
+    assert "the number of objects VARIES" in spec
+
+
+def test_agentic_prompt_blackbox_object_centric_swaps_spec():
+    """A variable-count black-box agentic prompt carries the object-centric spec."""
+    p = prompts.build_agentic_prompt(
+        blackbox=True,
+        interface_spec="IFACE",
+        geometry=False,
+        modular_code=False,
+        env_description=None,
+        object_centric=True,
+    )
+    assert "get_objects" in p
+    assert "devectorize" not in p
+    assert "\n\n\n" not in p
+
+
 def test_agentic_prompt_blackbox_with_description_and_no_geometry():
     """Blackbox prompt wraps the description and omits geometry when disabled."""
     p = prompts.build_agentic_prompt(
@@ -556,7 +592,7 @@ def test_golden_cdl_task_prompt_blackbox_with_helpers():
     expected = (
         _SCAFFOLD_CDL_BLACKBOX
         + "\n\n"
-        + prompts.BLACKBOX_INTERACTION_SPEC.format(
+        + prompts.blackbox_interaction_spec(
             set_state_note=prompts.BLACKBOX_SET_STATE_NOTE
         )
         + "\n"

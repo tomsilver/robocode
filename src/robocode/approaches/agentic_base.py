@@ -168,6 +168,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             env_description=env_description,
             per_instance_seed=per_instance_seed,
             per_instance_count=per_instance_count,
+            object_centric=self._object_centric,
         )
 
         system_prompt = prompts.build_system_prompt(

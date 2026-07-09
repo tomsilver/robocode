@@ -124,7 +124,7 @@ Then read the source to inform your approach.\
 # How to interact with the live env server in blackbox mode. Takes
 # {set_state_note}: empty for the monolithic approach, the behavior-precondition
 # note for CDL (the only difference between the two blackbox interaction specs).
-BLACKBOX_INTERACTION_SPEC = """\
+_BLACKBOX_INTERACTION_SPEC_TEMPLATE = """\
 The environment is a BLACK BOX. You CANNOT read its source code; it is not \
 available anywhere on this machine. A live environment server is running. \
 Interact with it through `env_client.py` in your working directory:
@@ -135,14 +135,12 @@ from env_client import make_env
 env = make_env()  # fresh environment instance per call
 obs, info = env.reset(seed=0)
 obs, reward, terminated, truncated, info = env.step(action)
-state = env.get_state()  # numpy snapshot of the full environment state
+state = env.get_state(){get_state_comment}
 env.set_state(state)  # restore a snapshot
 env.close()
 ```
 
-`env.observation_space` and `env.action_space` expose `shape`, `low`, \
-`high`, `dtype`, and `sample()`; the same metadata is in `env_spaces.json`. \
-`env.max_steps` is the episode step limit used at evaluation time.
+{space_metadata}
 
 `env.make_primitives()` returns the SAME `primitives` dict the evaluation \
 harness passes to `GeneratedApproach.__init__`. Use it in test scripts so \
@@ -155,21 +153,12 @@ env = make_env()
 primitives = env.make_primitives()
 ```
 
-You can also call `env.observation_space.devectorize(obs)` to get an \
-object-centric view of an observation. It returns an `ObjectCentricState` \
-with `get_object_names()`, `get_object_from_name(name)`, `get_objects(type)`, \
-and `get(obj, feature)`; iterate objects via `get_objects(...)`, NOT \
-`for obj in ocs`. Call `env.observation_space.vectorize(ocs)` to go back to a \
-flat array. The evaluation harness passes the SAME `observation_space` to \
-`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically \
-there, and `approach.py` can use it directly.
+{obs_conversion}
 
 Parallel test scripts are fine: every `make_env()` call creates an \
 independent environment instance.{set_state_note}
 
-Start by exploring systematically: reset with several seeds, apply \
-controlled actions, and study how the observation vector changes to \
-identify what each dimension means and how actions affect the state.
+{exploration}
 
 CRITICAL: `approach.py` itself must NOT import `env_client`. It will be \
 evaluated against the real environment by a separate harness that calls \
@@ -177,7 +166,85 @@ evaluated against the real environment by a separate harness that calls \
 ONLY in test and exploration scripts.\
 """
 
-# CDL-only {set_state_note} value for BLACKBOX_INTERACTION_SPEC.
+# Obs-model-specific slots for the black-box spec: a fixed-length vector (default) or
+# a variable-count ObjectCentricState. The vector fillers reproduce the original spec
+# verbatim; the object-centric fillers describe the object-centric client API instead.
+_BB_GET_STATE_COMMENT_VECTOR = "  # numpy snapshot of the full environment state"
+_BB_SPACE_METADATA_VECTOR = (
+    "`env.observation_space` and `env.action_space` expose `shape`, `low`, "
+    "`high`, `dtype`, and `sample()`; the same metadata is in `env_spaces.json`. "
+    "`env.max_steps` is the episode step limit used at evaluation time."
+)
+_BB_OBS_CONVERSION_VECTOR = (
+    "You can also call `env.observation_space.devectorize(obs)` to get an "
+    "object-centric view of an observation. It returns an `ObjectCentricState` "
+    "with `get_object_names()`, `get_object_from_name(name)`, `get_objects(type)`, "
+    "and `get(obj, feature)`; iterate objects via `get_objects(...)`, NOT "
+    "`for obj in ocs`. Call `env.observation_space.vectorize(ocs)` to go back to a "
+    "flat array. The evaluation harness passes the SAME `observation_space` to "
+    "`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically "
+    "there, and `approach.py` can use it directly."
+)
+_BB_EXPLORATION_VECTOR = (
+    "Start by exploring systematically: reset with several seeds, apply "
+    "controlled actions, and study how the observation vector changes to "
+    "identify what each dimension means and how actions affect the state."
+)
+
+_BB_GET_STATE_COMMENT_OBJECT_CENTRIC = "  # a local ObjectCentricState"
+_BB_SPACE_METADATA_OBJECT_CENTRIC = (
+    "`env.observation_space` describes the objects, NOT a vector: `.types` lists the "
+    "object types, `.type_features` maps each type to its feature names, and "
+    "`.get_type(name)` fetches one; `env.action_space` exposes `shape`, `low`, "
+    "`high`, `dtype`, and `sample()`. The same metadata is in `env_spaces.json`. "
+    "`env.max_steps` is the episode step limit used at evaluation time."
+)
+_BB_OBS_CONVERSION_OBJECT_CENTRIC = (
+    "Observations and `env.get_state()` are `ObjectCentricState` objects (the number "
+    "of objects VARIES between episodes), not fixed-length arrays. Read a state with "
+    "`get_objects(type)`, `get_object_names()`, `get_object_from_name(name)`, and "
+    "`get(obj, feature)`; iterate objects via `get_objects(...)`, NOT `for obj in "
+    "ocs`, and never assume a fixed object count. The evaluation harness passes the "
+    "SAME object-centric `observation_space` to `GeneratedApproach`, and the `state` "
+    "it receives is the same `ObjectCentricState`."
+)
+_BB_EXPLORATION_OBJECT_CENTRIC = (
+    "Start by exploring systematically: reset with several seeds, apply controlled "
+    "actions, and study how the objects and their features change to identify what "
+    "each feature means and how actions affect the state. Do NOT assume a fixed "
+    "number of objects."
+)
+
+
+def blackbox_interaction_spec(
+    *, object_centric: bool = False, set_state_note: str = ""
+) -> str:
+    """The black-box ``env_client`` interaction spec.
+
+    For a variable-count env the observation is an ``ObjectCentricState``, so the spec
+    describes the object-centric client space and access (no ``devectorize`` / vector
+    layout) rather than a flat numpy observation.
+    """
+    if object_centric:
+        fillers = {
+            "get_state_comment": _BB_GET_STATE_COMMENT_OBJECT_CENTRIC,
+            "space_metadata": _BB_SPACE_METADATA_OBJECT_CENTRIC,
+            "obs_conversion": _BB_OBS_CONVERSION_OBJECT_CENTRIC,
+            "exploration": _BB_EXPLORATION_OBJECT_CENTRIC,
+        }
+    else:
+        fillers = {
+            "get_state_comment": _BB_GET_STATE_COMMENT_VECTOR,
+            "space_metadata": _BB_SPACE_METADATA_VECTOR,
+            "obs_conversion": _BB_OBS_CONVERSION_VECTOR,
+            "exploration": _BB_EXPLORATION_VECTOR,
+        }
+    return _BLACKBOX_INTERACTION_SPEC_TEMPLATE.format(
+        set_state_note=set_state_note, **fillers
+    )
+
+
+# CDL-only set_state_note value for blackbox_interaction_spec.
 BLACKBOX_SET_STATE_NOTE = (
     " Use `set_state` to put the environment "
     "into the state a behavior's precondition requires when testing it in "
@@ -812,14 +879,16 @@ def build_agentic_prompt(
     env_description: str | None,
     per_instance_seed: int | None = None,
     per_instance_count: int | None = None,
+    object_centric: bool = False,
 ) -> str:
     """Compose the monolithic-approach task prompt.
 
     When ``per_instance_seed`` is set, the generalization clause is replaced by a
     per-instance directive naming the target instance and a budget-stewardship note is
     appended; ``per_instance_count`` pins the object count for a variable-count env so
-    the named instance matches what is scored. With ``per_instance_seed=None`` the
-    output is unchanged.
+    the named instance matches what is scored. ``object_centric`` selects the
+    object-centric black-box interaction spec. With ``per_instance_seed=None`` and
+    ``object_centric=False`` the output is unchanged.
     """
     geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     modular = MODULAR_CODE_PROMPT if modular_code else ""
@@ -837,8 +906,8 @@ def build_agentic_prompt(
                 per_instance_count=per_instance_count,
             ),
             env_description_section=_env_description_section(env_description),
-            blackbox_interaction_spec=BLACKBOX_INTERACTION_SPEC.format(
-                set_state_note=""
+            blackbox_interaction_spec=blackbox_interaction_spec(
+                object_centric=object_centric, set_state_note=""
             ),
             geometry_prompt=geometry_prompt,
             interface_spec=interface_spec,
@@ -913,8 +982,8 @@ def build_cdl_prompt(
         return _CDL_BLACKBOX.format(
             scaffold_intro=_scaffold_intro("a behavior-based approach", blackbox=True),
             env_description_section=_env_description_section(env_description),
-            blackbox_interaction_spec=BLACKBOX_INTERACTION_SPEC.format(
-                set_state_note=BLACKBOX_SET_STATE_NOTE
+            blackbox_interaction_spec=blackbox_interaction_spec(
+                object_centric=object_centric, set_state_note=BLACKBOX_SET_STATE_NOTE
             ),
             initial_helpers_prompt=initial_helpers,
             geometry_prompt=geometry_prompt,
