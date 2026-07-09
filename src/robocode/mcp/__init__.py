@@ -139,16 +139,21 @@ _TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
 # ObjectCentricState with a varying number of objects, so there is no flat state
 # vector: render_state's arbitrary-state mode (a list of floats) does not apply, and
 # the devectorize/vectorize/constant_objects guidance is meaningless. Only seed mode
-# and render_policy are useful. render_policy needs no override (it never references a
-# vector), so it stays shared.
+# and render_policy are useful. render_policy needs no per-tool override (it never
+# references a vector); its object_count argument is advertised in the object-centric
+# system-prompt suffix instead.
 _TOOL_DESC_TEMPLATES_OBJECT_CENTRIC: dict[str, str] = {
     "render_state": (
-        '`{render_state}(seed=42, label="")`: renders the environment\'s initial '
-        "state after `env.reset(seed=seed)` as a PNG and returns the file path.\n"
+        '`{render_state}(seed=42, object_count=None, label="")`: renders the '
+        "environment's initial state after `env.reset(seed=seed)` as a PNG and returns "
+        "the file path.\n"
         "  This environment's observations are object-centric states with a VARIABLE "
         "number of objects, so there is no flat state vector: the arbitrary-state mode "
         "(passing a list of floats) does NOT apply here. Use seed mode to see layouts, "
         "and use {render_policy} to watch your policy act.\n"
+        "  Pass `object_count` to pin the number of objects for this render (e.g. to "
+        "visualize the exact held-out instance a per-instance evaluation targets); omit "
+        "it to sample the count as `env.reset(seed=seed)` does.\n"
         "  The optional `label` parameter is included in the output filename.\n"
         "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are NOT available "
         "inside subagents. Call it yourself, then delegate image reading to a subagent: "
@@ -176,10 +181,10 @@ def mcp_tool_descriptions(
     In blackbox mode the render_state description swaps the in-process
     devectorize/vectorize/ObjectCentricState guidance for the host-proxied handle API
     (no constant_objects/type_features), matching what env_client exposes when the
-    sandbox has no env source. For a variable-count (object-centric) env the render_state
-    description drops the flat-vector arbitrary-state mode entirely -- it does not apply
-    to a state with a varying number of objects -- taking precedence over the blackbox
-    variant.
+    sandbox has no env source. For a variable-count (object-centric) env the
+    render_state description drops the flat-vector arbitrary-state mode entirely -- it
+    does not apply to a state with a varying number of objects -- taking precedence over
+    the blackbox variant.
     """
     if backend_name == "opencode":
         namer = mcp_tool_name_opencode
@@ -225,7 +230,9 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC = (
     "failure BEFORE guessing at fixes. This environment's observations are "
     "object-centric states (a set of typed objects), not flat vectors, so "
     "render_state's arbitrary-state mode does not apply -- use seed mode and "
-    "render_policy. "
+    "render_policy. Both render_state and render_policy take an optional "
+    "object_count to pin the number of objects, so you can visualize the exact "
+    "instance an evaluation targets rather than a sampled one. "
     "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
     "called from inside subagents. Always call MCP tools yourself, then "
     "delegate image reading to a subagent."
