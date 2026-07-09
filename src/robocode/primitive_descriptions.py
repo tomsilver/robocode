@@ -97,11 +97,10 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-# Extra guidance appended in black-box mode only. In black-box the planner
-# state is not an obs vector but the object-centric view from
-# observation_space.devectorize(obs), and the CRV module runs on the host via a
-# remote-module proxy; spell that out so the agent calls them correctly. Normal
-# mode descriptions stay unchanged.
+# Extra guidance appended in black-box mode only. In black-box with a flat-vector
+# observation the planner state is the object-centric view from
+# observation_space.devectorize(obs); the CRV module runs on the host via a
+# remote-module proxy. Normal-mode descriptions stay unchanged.
 _BLACKBOX_PRIMITIVE_NOTES: dict[str, str] = {
     "crv_motion_planning": (
         "  Black-box note: build the planner state with "
@@ -121,22 +120,50 @@ _BLACKBOX_PRIMITIVE_NOTES: dict[str, str] = {
     ),
 }
 
+# Black-box notes for a variable-count env: the observation and get_state() are
+# already ObjectCentricState objects (there is no devectorize), so the state is
+# passed straight to the host-side CRV planners.
+_BLACKBOX_PRIMITIVE_NOTES_OBJECT_CENTRIC: dict[str, str] = {
+    "crv_motion_planning": (
+        "  Black-box note: the observation and `env.get_state()` are already "
+        "`ObjectCentricState` objects, so pass the state straight to "
+        "`primitives['crv_motion_planning'].plan_crv_actions(state, "
+        "primitives['crv_motion_planning'].CRVConfig(x, y, theta), "
+        "carrying=..., seed=...)`. The module runs on the host."
+    ),
+    "crv_motion_planning_grasp": (
+        "  Black-box note: the observation and `env.get_state()` are already "
+        "`ObjectCentricState` objects, so pass the state straight (plus the "
+        "target object name and a "
+        "`primitives['crv_motion_planning_grasp'].RelativeGraspPose(...)`) to "
+        "`primitives['crv_motion_planning_grasp'].plan_crv_grasp(...)`. The "
+        "module runs on the host."
+    ),
+}
 
-def format_primitives_description(names: list[str], blackbox: bool = False) -> str:
+
+def format_primitives_description(
+    names: list[str], blackbox: bool = False, object_centric: bool = False
+) -> str:
     """Markdown describing the ``primitives`` dict passed to GeneratedApproach.
 
     Shared by the agentic and llm_genplan prompts so both describe primitives the same
-    way. With *blackbox*, appends per-primitive notes (e.g. for the CRV planners, how to
-    build the planner state via observation_space.devectorize) without changing the
-    normal-mode descriptions.
+    way. With *blackbox*, appends per-primitive CRV-planner notes; *object_centric*
+    selects the variant that passes the state directly (no ``devectorize``) for a
+    variable-count env. Normal-mode descriptions are unchanged.
     """
     if not names:
         return "`primitives` is an empty dict."
+    blackbox_notes = (
+        _BLACKBOX_PRIMITIVE_NOTES_OBJECT_CENTRIC
+        if object_centric
+        else _BLACKBOX_PRIMITIVE_NOTES
+    )
     lines = ["`primitives` is a dict with these callables:\n"]
     for name in sorted(names):
         lines.append(f"- {PRIMITIVE_DESCRIPTIONS.get(name, f'`{name}`')}")
-        if blackbox and name in _BLACKBOX_PRIMITIVE_NOTES:
-            lines.append(_BLACKBOX_PRIMITIVE_NOTES[name])
+        if blackbox and name in blackbox_notes:
+            lines.append(blackbox_notes[name])
     listed = ", ".join(f"`{n}`" for n in sorted(names))
     lines.append(
         f"\nIMPORTANT: Your approach MUST use the following primitives: {listed}. "

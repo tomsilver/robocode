@@ -157,11 +157,13 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                     init_files[helper_name] = helper_path
                     has_initial_helpers = True
 
-        # Build primitives description (shared with AgenticApproach; the
-        # blackbox flag appends per-primitive black-box notes, e.g. how to feed
-        # the CRV planners the devectorized state).
+        # Build primitives description (shared with AgenticApproach; the blackbox flag
+        # appends per-primitive black-box notes, e.g. how to feed the CRV planners the
+        # state -- devectorized for a vector env, passed directly for object-centric).
         primitives_desc = format_primitives_description(
-            list(self._primitives), blackbox=self._blackbox
+            list(self._primitives),
+            blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         primitives_desc += prompts.build_mcp_tool_lines(

@@ -302,7 +302,10 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             parts.append(Path(self._env_description_path).read_text(encoding="utf-8"))
         parts.append("## Full source code\n\n" + _gather_env_source(self._env))
         parts.append(
-            "## Primitives\n\n" + format_primitives_description(list(self._primitives))
+            "## Primitives\n\n"
+            + format_primitives_description(
+                list(self._primitives), object_centric=self._object_centric
+            )
         )
         parts.append(
             "## Example initial states\n\n"

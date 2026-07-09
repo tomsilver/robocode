@@ -134,7 +134,9 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         env description it is inlined; otherwise the agent is asked to read source files.
         """
         primitives_desc = format_primitives_description(
-            list(self._primitives), blackbox=self._blackbox
+            list(self._primitives),
+            blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
         primitives_desc += prompts.build_mcp_tool_lines(
             mcp_tools=self._mcp_tools,
