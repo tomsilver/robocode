@@ -17,7 +17,9 @@ from robocode.environments.variable_object_count_env import VariableObjectCountE
 from robocode.primitives import blackbox_primitive_manifest
 from robocode.utils import env_server
 from robocode.utils.env_server import env_server_running, write_env_spaces
+from robocode.utils.env_server_runtime import _HandleRegistry, decode_ref
 from robocode.utils.object_centric_codec import (
+    OCS_TAG,
     decode_object_centric_state,
     encode_object_centric_state,
     serialize_object_centric_space,
@@ -70,6 +72,27 @@ def test_codec_preserves_type_ancestors() -> None:
     assert {o.name for o in back.get_objects(back_rect)} == real
     # target_block/target_surface are subtypes of rectangle, so they are included.
     assert {"target_block", "target_surface"} <= real
+
+
+def test_decode_ref_rebuilds_local_ocs_for_remote_module() -> None:
+    """A by-value ObjectCentricState reaching a remote-module primitive (as an
+    ``{__ocs__}`` leaf, not a handle) is rebuilt into a real host state.
+
+    The variable-count observation is a local state, not a remote handle, so a
+    program passing it to e.g. ``crv_motion_planning`` sends it by value; the
+    handle-aware ``decode_ref`` must honor the codec tag as ``decode`` does.
+    """
+    env = _env()
+    state, _ = env.reset(seed=0, options={"object_count": 3})
+    wire = {OCS_TAG: encode_object_centric_state(state)}
+    registry = _HandleRegistry()
+
+    back = decode_ref(wire, registry)
+    assert back.allclose(state)
+
+    # As it actually arrives on the host: nested in a call's positional args.
+    (arg,) = decode_ref([wire], registry)
+    assert arg.allclose(state)
 
 
 def test_serialize_object_centric_space_has_types_and_parents() -> None:

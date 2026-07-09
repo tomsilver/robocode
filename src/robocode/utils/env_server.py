@@ -145,6 +145,21 @@ def decode(obj: Any) -> Any:
     return obj
 
 
+def decode_registered_codec(obj: dict[str, Any]) -> tuple[bool, Any]:
+    """Decode a registered-codec leaf (e.g. an ObjectCentricState payload).
+
+    Returns ``(True, value)`` if *obj* carries a registered codec tag, else
+    ``(False, None)``. Lets the handle-aware ``decode_ref`` reconstruct by-value
+    custom types (their payloads carry no nested handles) the same way ``decode``
+    does, so a local ObjectCentricState passed to a host remote-module primitive
+    rebuilds as a real state instead of a raw dict.
+    """
+    for tag, decode_fn in _DECODERS.items():
+        if tag in obj:
+            return True, decode_fn(obj[tag])
+    return False, None
+
+
 def serialize_space(space: Space[Any]) -> dict[str, Any]:
     """Serialize a gym space's metadata for the agent's env_spaces.json.
 

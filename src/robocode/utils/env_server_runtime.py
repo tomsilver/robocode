@@ -45,7 +45,12 @@ from robocode.primitives.crv_motion_planning_grasp import (
     RelativeGraspPose,
 )
 from robocode.rendering.render_state import render_state as render_state_fn
-from robocode.utils.env_server import decode, encode, serialize_space
+from robocode.utils.env_server import (
+    decode,
+    decode_registered_codec,
+    encode,
+    serialize_space,
+)
 from robocode.utils.render_paths import safe_label, unique_path
 
 logger = logging.getLogger(__name__)
@@ -197,6 +202,11 @@ def decode_ref(obj: Any, registry: _HandleRegistry) -> Any:
             return np.array(obj[_NDARRAY_TAG], dtype=np.dtype(obj["dtype"]))
         if _SET_TAG in obj:
             return {decode_ref(value, registry) for value in obj[_SET_TAG]}
+        # A by-value custom type (e.g. a local ObjectCentricState sent to a
+        # remote-module primitive) carries a registered codec tag, not a handle.
+        decoded, value = decode_registered_codec(obj)
+        if decoded:
+            return value
         return {key: decode_ref(value, registry) for key, value in obj.items()}
     if isinstance(obj, list):
         return [decode_ref(value, registry) for value in obj]
