@@ -394,11 +394,7 @@ IMPORTANT: You MUST follow this EXACT file structure. Do NOT put everything in \
 one file. Do NOT put helper functions inside approach.py or behavior files.
 
 Required files:
-- ``obs_helpers.py`` — ALL functions that parse/interpret the observation vector. \
-This includes extracting object positions, computing geometric predicates, \
-and any named constants for observation indices. \
-Every "magic number" related to observation parsing MUST be a named constant here. \
-{obs_inspection_note}\
+{obs_helpers_desc}{obs_inspection_note}\
 {obs_helpers_note}
 - ``act_helpers.py`` — ALL functions that help generate actions. This includes \
 waypoint interpolation, action clipping, proportional controllers, etc. \
@@ -419,9 +415,7 @@ CRITICAL RULES:
 - NO magic numbers anywhere except as named constants in obs_helpers.py or \
 act_helpers.py. Every numeric literal (tolerances, offsets, indices, limits) \
 must have a descriptive name. ``0.05`` is WRONG; ``DX_LIMIT = 0.05`` is RIGHT.
-- Behaviors must use obs_helpers for ALL observation access. Never index into \
-the observation array directly inside a behavior — use named extraction \
-functions like ``extract_robot(obs)``, ``extract_rect(obs, "target_block")``.
+{obs_access_rule}
 - approach.py must be THIN. Its reset() only builds a behavior deque using \
 backward precondition checking. Its get_action() only delegates to the \
 current behavior and advances on termination. Nothing else.
@@ -477,6 +471,43 @@ with env_client: reset with several seeds, perturb the state with \
 ``set_state``, and observe which observation entries change as you act. \
 Do NOT guess the observation layout. \
 """
+
+CDL_OBS_INSPECTION_NOTE_OBJECT_CENTRIC = (
+    "BEFORE writing this file, you MUST inspect the state: iterate "
+    "``state.get_objects(type)`` / ``state.get_object_names()`` and print each "
+    "object's features with ``state.get(obj, feature)`` to see the types and "
+    "features present. Do NOT guess the layout, and do NOT assume a fixed number "
+    "of objects. "
+)
+
+# obs_helpers.py description + the behavior obs-access rule, selected by whether the
+# observation is a flat vector or a variable-count ObjectCentricState.
+CDL_OBS_HELPERS_DESC_VECTOR = (
+    "- ``obs_helpers.py`` — ALL functions that parse/interpret the observation "
+    "vector. This includes extracting object positions, computing geometric "
+    "predicates, and any named constants for observation indices. Every "
+    '"magic number" related to observation parsing MUST be a named constant here. '
+)
+CDL_OBS_HELPERS_DESC_OBJECT_CENTRIC = (
+    "- ``obs_helpers.py`` — ALL functions that read the ``ObjectCentricState``. "
+    "This includes extracting object poses/features, computing geometric "
+    "predicates, and any named constants for feature names or thresholds (the "
+    'state has NO fixed indices). Every "magic number" related to reading the '
+    "state MUST be a named constant here. "
+)
+CDL_OBS_ACCESS_RULE_VECTOR = (
+    "- Behaviors must use obs_helpers for ALL observation access. Never index "
+    "into the observation array directly inside a behavior — use named "
+    "extraction functions like ``extract_robot(obs)``, "
+    '``extract_rect(obs, "target_block")``.'
+)
+CDL_OBS_ACCESS_RULE_OBJECT_CENTRIC = (
+    "- Behaviors must use obs_helpers for ALL state access. Never touch the raw "
+    "``ObjectCentricState`` inside a behavior — use named functions like "
+    '``robot_pose(state)`` or ``objects_of_type(state, "obstruction")`` that read '
+    "the typed objects (``state.get_objects`` / ``state.get_object_from_name`` / "
+    "``state.get``) and never assume a fixed object count."
+)
 
 CDL_CLASS_INTERFACE = """\
 ```python
@@ -822,17 +853,33 @@ def build_cdl_prompt(
     geometry: bool,
     env_description: str | None,
     has_initial_helpers: bool,
+    object_centric: bool = False,
 ) -> str:
-    """Compose the behavior-decomposed-approach task prompt."""
+    """Compose the behavior-decomposed-approach task prompt.
+
+    For a variable-count env the observation is an ObjectCentricState, so the obs-
+    parsing guidance (inspection note, obs_helpers description, obs-access rule) reads
+    typed objects instead of indexing a vector.
+    """
     geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     initial_helpers = CDL_INITIAL_HELPERS_PROMPT if has_initial_helpers else ""
     helpers_note = CDL_HELPERS_PROVIDED_NOTE if has_initial_helpers else ""
-    behavior_impl_prompt = CDL_BEHAVIOR_IMPLEMENTATION_PROMPT.format(
-        obs_inspection_note=(
+    if object_centric:
+        obs_inspection_note = CDL_OBS_INSPECTION_NOTE_OBJECT_CENTRIC
+        obs_helpers_desc = CDL_OBS_HELPERS_DESC_OBJECT_CENTRIC
+        obs_access_rule = CDL_OBS_ACCESS_RULE_OBJECT_CENTRIC
+    else:
+        obs_inspection_note = (
             CDL_OBS_INSPECTION_NOTE_BLACKBOX if blackbox else CDL_OBS_INSPECTION_NOTE
-        ),
+        )
+        obs_helpers_desc = CDL_OBS_HELPERS_DESC_VECTOR
+        obs_access_rule = CDL_OBS_ACCESS_RULE_VECTOR
+    behavior_impl_prompt = CDL_BEHAVIOR_IMPLEMENTATION_PROMPT.format(
+        obs_helpers_desc=obs_helpers_desc,
+        obs_inspection_note=obs_inspection_note,
         obs_helpers_note=helpers_note,
         act_helpers_note=helpers_note,
+        obs_access_rule=obs_access_rule,
     )
     if blackbox:
         return _CDL_BLACKBOX.format(

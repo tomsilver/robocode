@@ -20,6 +20,7 @@ from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
 from omegaconf import DictConfig
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
@@ -113,6 +114,9 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                     "the OS sandbox cannot prevent reading env source from "
                     "the host filesystem"
                 )
+        # A variable-count env hands the policy an ObjectCentricState; the prompt then
+        # describes reading typed objects instead of indexing a flat vector.
+        self._object_centric = isinstance(observation_space, ObjectCentricStateSpace)
         self._generated: Any = None
         self.total_cost_usd: float | None = None
 
@@ -164,6 +168,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             mcp_tools=self._mcp_tools,
             backend_name=self._backend_cfg["backend"],
             blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         python_exe = (
@@ -175,6 +180,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             python_executable=python_exe,
             primitives_description=primitives_desc,
             blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         env_description: str | None = None
@@ -188,6 +194,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             geometry=self._geometry_prompt,
             env_description=env_description,
             has_initial_helpers=has_initial_helpers,
+            object_centric=self._object_centric,
         )
 
         system_prompt = prompts.build_system_prompt(
@@ -195,6 +202,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
             mcp_tools=self._mcp_tools,
+            object_centric=self._object_centric,
         )
 
         docker_config: DockerSandboxConfig | None = None

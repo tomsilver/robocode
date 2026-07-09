@@ -294,6 +294,38 @@ def test_cdl_prompt_initial_helpers_non_blackbox():
     assert "ALREADY PROVIDED" in p
     assert "devectorize" in p
     assert "map the observation layout empirically" not in p
+
+
+def test_cdl_prompt_object_centric():
+    """A variable-count CDL prompt reads typed objects instead of indexing a vector."""
+    p = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec="IFACE",
+        geometry=True,
+        env_description="ENVDESC",
+        has_initial_helpers=False,
+        object_centric=True,
+    )
+    assert "ObjectCentricState" in p
+    assert "state.get_objects" in p
+    # No vector/index guidance leaks into the object-centric prompt.
+    assert "devectorize" not in p
+    assert "index into the observation array" not in p
+    assert "observation vector" not in p
+
+
+def test_cdl_prompt_vector_is_default():
+    """Without object_centric the prompt keeps the flat-vector obs guidance."""
+    p = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec="IFACE",
+        geometry=True,
+        env_description="ENVDESC",
+        has_initial_helpers=False,
+    )
+    assert "observation vector" in p
+    assert "index into the observation array" in p
+    assert "ObjectCentricState" not in p
     assert "BLACK BOX" not in p
 
 
@@ -392,6 +424,7 @@ _SCAFFOLD_CDL_BLACKBOX = (
 
 def _cdl_behavior_impl(blackbox, helpers_note):
     return prompts.CDL_BEHAVIOR_IMPLEMENTATION_PROMPT.format(
+        obs_helpers_desc=prompts.CDL_OBS_HELPERS_DESC_VECTOR,
         obs_inspection_note=(
             prompts.CDL_OBS_INSPECTION_NOTE_BLACKBOX
             if blackbox
@@ -399,6 +432,7 @@ def _cdl_behavior_impl(blackbox, helpers_note):
         ),
         obs_helpers_note=helpers_note,
         act_helpers_note=helpers_note,
+        obs_access_rule=prompts.CDL_OBS_ACCESS_RULE_VECTOR,
     )
 
 

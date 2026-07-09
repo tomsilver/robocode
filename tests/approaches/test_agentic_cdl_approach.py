@@ -3,7 +3,11 @@
 import json
 import socket
 
+import numpy as np
 import pytest
+from gymnasium.spaces import Box
+from relational_structs import Type
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode.approaches.agentic_cdl_approach import AgenticCDLApproach
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
@@ -33,6 +37,37 @@ def test_accepts_run_experiment_kwargs():
         max_steps=100,
     )
     assert approach.total_cost_usd is None
+
+
+def test_object_centric_env_supported():
+    """A variable-count (ObjectCentricState) env is supported: construction succeeds and
+    flips the object-centric flag (no fixed-vector assumption)."""
+    approach = AgenticCDLApproach(
+        action_space=Box(-1.0, 1.0, shape=(2,), dtype=np.float32),
+        observation_space=ObjectCentricStateSpace({Type("obj", ["x", "y"])}),
+        seed=0,
+        primitives={},
+        backend=DEFAULT_BACKEND_CFG,
+        env_cfg="{}",
+        max_steps=100,
+    )
+    assert approach._object_centric is True  # pylint: disable=protected-access
+
+
+def test_fixed_count_env_flag_false():
+    """A Box-observation env keeps the vector (non-object-centric) path."""
+    env = MazeEnv(5, 8, 5, 8)
+    approach = AgenticCDLApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=0,
+        primitives={},
+        backend=DEFAULT_BACKEND_CFG,
+        env=env,
+        env_cfg="{}",
+        max_steps=100,
+    )
+    assert approach._object_centric is False  # pylint: disable=protected-access
 
 
 def test_blackbox_validation():
