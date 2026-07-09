@@ -206,14 +206,31 @@ _GENERALIZE_CLAUSE = (
 _SCAFFOLD_INTRO = _SCAFFOLD_INTRO_OPENER + _GENERALIZE_CLAUSE
 
 # Per-instance baselines (one fresh agent run per eval seed) replace the
-# generalization clause with this directive, naming the concrete target seed.
+# generalization clause with this directive, naming the concrete target instance.
 # In the read-source branch (which has no scaffold intro) it is prepended on its
 # own instead.
-PER_INSTANCE_DIRECTIVE = (
+_PER_INSTANCE_DIRECTIVE_TEMPLATE = (
     "Your approach only needs to solve the single specific instance produced by "
-    "`env.reset(seed={seed})`. You do NOT need to generalize to other instances "
+    "`{reset_call}`. You do NOT need to generalize to other instances "
     "or environments; you may specialize entirely to this instance."
 )
+
+
+def per_instance_directive(seed: int, count: int | None = None) -> str:
+    """The per-instance target directive, naming the exact reset call.
+
+    For a variable-count env *count* pins the object count, so the agent develops
+    against the same ``(seed, count)`` instance it is scored on rather than an
+    unpinned reset that would sample a different in-distribution count.
+    """
+    reset_call = (
+        f"env.reset(seed={seed})"
+        if count is None
+        else f"env.reset(seed={seed}, options={{'object_count': {count}}})"
+    )
+    return _PER_INSTANCE_DIRECTIVE_TEMPLATE.format(reset_call=reset_call)
+
+
 _SOURCE_OPENER = (
     "Read the environment source files in this directory to understand the "
     "state type, action space, and dynamics."
@@ -770,7 +787,10 @@ def _env_description_section(blackbox_description: str | None) -> str:
 
 
 def _scaffold_intro(
-    approach_kind: str, blackbox: bool, per_instance_seed: int | None = None
+    approach_kind: str,
+    blackbox: bool,
+    per_instance_seed: int | None = None,
+    per_instance_count: int | None = None,
 ) -> str:
     target = (
         "an environment that you can only access as a black box"
@@ -779,9 +799,8 @@ def _scaffold_intro(
     )
     if per_instance_seed is None:
         return _SCAFFOLD_INTRO.format(approach_kind=approach_kind, target=target)
-    return (_SCAFFOLD_INTRO_OPENER + PER_INSTANCE_DIRECTIVE).format(
-        approach_kind=approach_kind, target=target, seed=per_instance_seed
-    )
+    opener = _SCAFFOLD_INTRO_OPENER.format(approach_kind=approach_kind, target=target)
+    return opener + per_instance_directive(per_instance_seed, per_instance_count)
 
 
 def build_agentic_prompt(
@@ -792,12 +811,15 @@ def build_agentic_prompt(
     modular_code: bool,
     env_description: str | None,
     per_instance_seed: int | None = None,
+    per_instance_count: int | None = None,
 ) -> str:
     """Compose the monolithic-approach task prompt.
 
     When ``per_instance_seed`` is set, the generalization clause is replaced by a
-    per-instance directive naming the target seed and a budget-stewardship note is
-    appended; with ``per_instance_seed=None`` the output is unchanged.
+    per-instance directive naming the target instance and a budget-stewardship note is
+    appended; ``per_instance_count`` pins the object count for a variable-count env so
+    the named instance matches what is scored. With ``per_instance_seed=None`` the
+    output is unchanged.
     """
     geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     modular = MODULAR_CODE_PROMPT if modular_code else ""
@@ -809,7 +831,10 @@ def build_agentic_prompt(
     if blackbox:
         return _AGENTIC_BLACKBOX.format(
             scaffold_intro=_scaffold_intro(
-                "an approach", blackbox=True, per_instance_seed=per_instance_seed
+                "an approach",
+                blackbox=True,
+                per_instance_seed=per_instance_seed,
+                per_instance_count=per_instance_count,
             ),
             env_description_section=_env_description_section(env_description),
             blackbox_interaction_spec=BLACKBOX_INTERACTION_SPEC.format(
@@ -823,7 +848,10 @@ def build_agentic_prompt(
     if env_description is not None:
         return _AGENTIC_WITH_DESCRIPTION.format(
             scaffold_intro=_scaffold_intro(
-                "an approach", blackbox=False, per_instance_seed=per_instance_seed
+                "an approach",
+                blackbox=False,
+                per_instance_seed=per_instance_seed,
+                per_instance_count=per_instance_count,
             ),
             env_description=env_description,
             geometry_prompt=geometry_prompt,
@@ -831,13 +859,13 @@ def build_agentic_prompt(
             interface_spec=interface_spec,
             budget_stewardship=budget_stewardship,
         )
-    per_instance_directive = (
-        PER_INSTANCE_DIRECTIVE.format(seed=per_instance_seed) + "\n\n"
+    directive_block = (
+        per_instance_directive(per_instance_seed, per_instance_count) + "\n\n"
         if per_instance_seed is not None
         else ""
     )
     return _AGENTIC_WITH_SOURCE.format(
-        per_instance_directive=per_instance_directive,
+        per_instance_directive=directive_block,
         source_opener=_SOURCE_OPENER,
         geometry_prompt=geometry_prompt,
         modular_code_prompt=modular,

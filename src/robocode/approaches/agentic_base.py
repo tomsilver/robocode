@@ -120,14 +120,18 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self.total_cost_usd: float | None = None
 
     def _build_agentic_prompts(
-        self, *, per_instance_seed: int | None = None
+        self,
+        *,
+        per_instance_seed: int | None = None,
+        per_instance_count: int | None = None,
     ) -> tuple[str, str, dict[str, Path]]:
         """Assemble the (task prompt, system prompt, init files) for one run.
 
         Shared by the generalized ``train()`` (``per_instance_seed=None``) and
-        per-instance ``solve_instance()`` (a concrete seed); the only difference
-        is the seed threaded into the task prompt. If we have an env description
-        it is inlined; otherwise the agent is asked to read source files.
+        per-instance ``solve_instance()`` (a concrete seed); the seed -- and, for a
+        variable-count env, ``per_instance_count`` -- are threaded into the task prompt
+        so the agent develops against the same instance it is scored on. If we have an
+        env description it is inlined; otherwise the agent is asked to read source files.
         """
         primitives_desc = format_primitives_description(
             list(self._primitives), blackbox=self._blackbox
@@ -163,6 +167,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             modular_code=self._modular_code_prompt,
             env_description=env_description,
             per_instance_seed=per_instance_seed,
+            per_instance_count=per_instance_count,
         )
 
         system_prompt = prompts.build_system_prompt(

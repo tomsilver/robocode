@@ -699,6 +699,33 @@ def test_per_instance_seed_blackbox():
     assert "\n\n\n" not in p
 
 
+def test_per_instance_directive_pins_count():
+    """The directive names the unpinned reset call, or the count-pinned one."""
+    assert "env.reset(seed=7)" in prompts.per_instance_directive(7)
+    assert "object_count" not in prompts.per_instance_directive(7)
+    pinned = prompts.per_instance_directive(7, 4)
+    assert "env.reset(seed=7, options={'object_count': 4})" in pinned
+
+
+def test_per_instance_count_names_pinned_reset_in_every_branch():
+    """A pinned object count names the exact scored instance in every prompt branch, so
+    the agent develops against what it is scored on (not an unpinned design-count
+    reset)."""
+    for blackbox, env in ((False, "ENVDESC"), (False, None), (True, None)):
+        p = prompts.build_agentic_prompt(
+            blackbox=blackbox,
+            interface_spec=_IFACE,
+            geometry=True,
+            modular_code=False,
+            env_description=env,
+            per_instance_seed=7,
+            per_instance_count=4,
+        )
+        assert "env.reset(seed=7, options={'object_count': 4})" in p
+        assert "env.reset(seed=7)`" not in p  # not the unpinned form
+        assert "\n\n\n" not in p
+
+
 def test_per_instance_no_doubled_blank_lines_grid():
     """No per-instance prompt contains a doubled blank line, in any config."""
     for blackbox, geometry, modular, env in itertools.product(
