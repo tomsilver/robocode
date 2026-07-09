@@ -21,18 +21,6 @@ def _num_prefixed(state, prefix: str) -> int:
     return sum(1 for name in state.get_object_names() if name.startswith(prefix))
 
 
-def test_pinned_count_produces_exactly_that_many_objects() -> None:
-    """reset(options={'object_count': k}) yields exactly k count-defining objects."""
-    env = VariableObjectCountEnv(**OBSTRUCTION2D)
-    for k in env.eval_counts:  # design AND held-out counts
-        state, info = env.reset(seed=k, options={"object_count": k})
-        assert env.observation_space.contains(state)
-        assert _num_prefixed(state, "obstruction") == k
-        assert info["object_count"] == k
-        assert env.current_count == k
-    env.close()
-
-
 def test_unpinned_reset_stays_in_design_range() -> None:
     """An unpinned reset never samples a held-out count (OOD hygiene)."""
     env = VariableObjectCountEnv(**OBSTRUCTION2D)
@@ -105,28 +93,6 @@ def test_infeasible_count_raises_clearly() -> None:
         )
 
 
-def test_count_inference_uses_prefix_not_type_motion2d() -> None:
-    """Motion2D makes ~2 obstacle objects per passage; count is num_passages, not the
-    obstacle-object count, and it is inferred correctly from a bare state."""
-    env = VariableObjectCountEnv(
-        constant_object_env_path="kinder.envs.kinematic2d.motion2d:Motion2DEnv",
-        count_kwarg="num_passages",
-        count_object_prefix="obstacle",
-        design_counts=[1, 2],
-        eval_counts=[1, 2, 3],
-        bilevel_env_name="motion2d",
-    )
-    state, info = env.reset(seed=0, options={"object_count": 2})
-    n_obstacles = _num_prefixed(state, "obstacle")
-    assert info["object_count"] == 2  # the passage count
-    assert n_obstacles > 2  # more obstacle objects than passages
-    # Inference from a bare state recovers the passage count, not the obstacle count.
-    env.reset(seed=1)  # unrelated reset
-    env.set_state(state)
-    assert env.current_count == 2
-    env.close()
-
-
 def test_description_is_object_centric() -> None:
     """The env card describes an object-centric, variable-count observation."""
     env = VariableObjectCountEnv(**OBSTRUCTION2D)
@@ -145,3 +111,107 @@ def test_description_is_object_centric() -> None:
     assert "## Example Usage" in full
     assert "## Example Usage" not in blackbox
     assert full.startswith(blackbox)
+
+
+# Every 2D family. ``one_to_one`` marks families whose count-defining objects are named
+# ``<prefix>0``..``<prefix>(k-1)`` exactly; Motion2D makes ~2 obstacle objects per
+# passage, so its prefixed-object count is not the count parameter (inference recovers
+# it from the prefix->count map regardless).
+_FAMILY_CASES = [
+    pytest.param(OBSTRUCTION2D, True, id="obstruction2d"),
+    pytest.param(
+        {
+            "constant_object_env_path": (
+                "kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv"
+            ),
+            "count_kwarg": "num_obstructions",
+            "count_object_prefix": "obstruction",
+            "design_counts": [1, 3],
+            "eval_counts": [1, 3, 5],
+            "bilevel_env_name": "clutteredretrieval2d",
+        },
+        True,
+        id="clutteredretrieval2d",
+    ),
+    pytest.param(
+        {
+            "constant_object_env_path": (
+                "kinder.envs.kinematic2d.clutteredstorage2d:ClutteredStorage2DEnv"
+            ),
+            "count_kwarg": "num_blocks",
+            "count_object_prefix": "block",
+            "design_counts": [1, 3],
+            "eval_counts": [1, 3, 7],  # odd only (family requires it)
+            "bilevel_env_name": "clutteredstorage2d",
+        },
+        True,
+        id="clutteredstorage2d",
+    ),
+    pytest.param(
+        {
+            "constant_object_env_path": (
+                "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv"
+            ),
+            "count_kwarg": "num_buttons",
+            "count_object_prefix": "button",
+            "design_counts": [1, 2],
+            "eval_counts": [1, 2, 3],
+            "bilevel_env_name": "stickbutton2d",
+        },
+        True,
+        id="stickbutton2d",
+    ),
+    pytest.param(
+        {
+            "constant_object_env_path": "kinder.envs.kinematic2d.motion2d:Motion2DEnv",
+            "count_kwarg": "num_passages",
+            "count_object_prefix": "obstacle",
+            "design_counts": [1, 2],
+            "eval_counts": [1, 2, 3],
+            "bilevel_env_name": "motion2d",
+        },
+        False,
+        id="motion2d",
+    ),
+]
+
+
+@pytest.mark.parametrize("cfg, one_to_one", _FAMILY_CASES)
+def test_family_pinned_count_and_prefix_inference(
+    cfg: dict[str, Any], one_to_one: bool
+) -> None:
+    """For every 2D family: a pinned count is reported and set_state infers it back from
+    the object-name prefix. One-to-one families expose exactly that many prefixed
+    objects; Motion2D makes more (inference uses the prefix->count map either way)."""
+    env = VariableObjectCountEnv(**cfg)
+    prefix = cfg["count_object_prefix"]
+    for k in cfg["eval_counts"]:  # design AND held-out counts
+        state, info = env.reset(seed=k, options={"object_count": k})
+        assert env.observation_space.contains(state)
+        assert info["object_count"] == k
+        assert env.current_count == k
+        n_prefixed = _num_prefixed(state, prefix)
+        assert n_prefixed == k if one_to_one else n_prefixed > k
+    # Inference from a bare state recovers its count, not the current instance's.
+    biggest = cfg["eval_counts"][-1]
+    state, _ = env.reset(seed=0, options={"object_count": biggest})
+    env.reset(seed=1, options={"object_count": cfg["design_counts"][0]})
+    env.set_state(state)
+    assert env.current_count == biggest
+    env.close()
+
+
+def test_clutteredstorage_requires_odd_count() -> None:
+    """ClutteredStorage2D splits its blocks across a shelf, so an even count is rejected
+    at construction (the backend is built eagerly per configured count)."""
+    with pytest.raises(AssertionError, match="must be odd"):
+        VariableObjectCountEnv(
+            constant_object_env_path=(
+                "kinder.envs.kinematic2d.clutteredstorage2d:ClutteredStorage2DEnv"
+            ),
+            count_kwarg="num_blocks",
+            count_object_prefix="block",
+            design_counts=[2],
+            eval_counts=[2],
+            bilevel_env_name="clutteredstorage2d",
+        )
