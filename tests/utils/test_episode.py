@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from robocode.utils.episode import (
     load_generated_approach,
     run_episode,
     run_episode_with_timeout,
+    run_in_forked_worker,
     run_per_instance_eval,
     save_frames,
     save_video,
@@ -427,6 +429,38 @@ class _CrashApproach(BaseApproach[Any, Any]):
 
     def _get_action(self) -> Any:
         raise ValueError("boom")
+
+
+def _worker_writes_result(result: Any) -> None:
+    result["value"] = 42
+
+
+def _worker_sleeps(result: Any) -> None:
+    del result
+    time.sleep(30)
+
+
+def test_run_in_forked_worker_finishes() -> None:
+    """A worker that returns writes its result and reports 'finished'."""
+    ctx = mp.get_context("fork")
+    with ctx.Manager() as manager:
+        result = manager.dict()
+        outcome, exitcode = run_in_forked_worker(
+            ctx, _worker_writes_result, (result,), timeout=10
+        )
+        assert outcome == "finished"
+        assert result["value"] == 42
+        assert exitcode == 0
+
+
+def test_run_in_forked_worker_times_out() -> None:
+    """A worker that overruns the timeout is killed and reports 'timeout'."""
+    ctx = mp.get_context("fork")
+    with ctx.Manager() as manager:
+        result = manager.dict()
+        outcome, _ = run_in_forked_worker(ctx, _worker_sleeps, (result,), timeout=0.3)
+        assert outcome == "timeout"
+        assert "value" not in result
 
 
 def test_run_episode_returns_final_state() -> None:

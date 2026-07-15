@@ -9,8 +9,6 @@ this runs there too.
 from __future__ import annotations
 
 import multiprocessing as mp
-import os
-import signal
 import traceback
 from collections.abc import Callable
 from multiprocessing.managers import SyncManager
@@ -21,7 +19,11 @@ import gymnasium
 from gymnasium.spaces import Space
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.utils.episode import load_generated_approach, run_episode
+from robocode.utils.episode import (
+    load_generated_approach,
+    run_episode,
+    run_in_forked_worker,
+)
 
 
 def render_state(observation_space: Space[Any], obs: Any) -> str:
@@ -188,9 +190,10 @@ def _validate_episode(
     :func:`validate_tasks` and :func:`score_tasks`.
     """
     result = manager.dict()
-    proc = ctx.Process(
-        target=_episode_worker,
-        args=(
+    outcome, exitcode = run_in_forked_worker(
+        ctx,
+        _episode_worker,
+        (
             env,
             approach_path,
             action_space,
@@ -200,16 +203,9 @@ def _validate_episode(
             max_steps,
             result,
         ),
+        timeout,
     )
-    proc.start()
-    assert proc.pid is not None
-    proc.join(timeout)
-    if proc.is_alive():
-        os.kill(proc.pid, signal.SIGINT)
-        proc.join(3)
-        if proc.is_alive():
-            proc.kill()
-            proc.join()
+    if outcome == "timeout":
         return {
             "solved": False,
             "total_reward": 0.0,
@@ -231,7 +227,7 @@ def _validate_episode(
             "error_type": "worker-crashed",
             "feedback": (
                 f"On the task with seed {seed}, the episode worker died with "
-                f"exit code {proc.exitcode} before reporting a result (e.g. out "
+                f"exit code {exitcode} before reporting a result (e.g. out "
                 "of memory or a crash in native code). Make the code terminate "
                 "normally and reduce memory use."
             ),

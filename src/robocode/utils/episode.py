@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -136,6 +137,34 @@ def run_episode(
     return metrics, frames, state
 
 
+def run_in_forked_worker(
+    ctx: mp.context.ForkContext,
+    target: Callable[..., None],
+    args: tuple[Any, ...],
+    timeout: float,
+) -> tuple[str, int | None]:
+    """Run ``target(*args)`` in a forked worker, killing it if it overruns ``timeout``.
+
+    ``target`` writes its outcome into a shared dict it is handed in ``args`` (the
+    caller reads that dict afterward). Returns ``(outcome, exitcode)``: ``"timeout"``
+    means the worker overran and got a SIGINT, a short grace period, then SIGKILL;
+    ``"finished"`` means it exited on its own (an empty shared dict then means it died
+    before reporting).
+    """
+    proc = ctx.Process(target=target, args=args)
+    proc.start()
+    assert proc.pid is not None
+    proc.join(timeout)
+    if proc.is_alive():
+        os.kill(proc.pid, signal.SIGINT)
+        proc.join(3)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+        return "timeout", proc.exitcode
+    return "finished", proc.exitcode
+
+
 def run_episode_with_timeout(
     env: Any,
     approach: BaseApproach,
@@ -158,19 +187,13 @@ def run_episode_with_timeout(
     ctx = mp.get_context("fork")  # fork: the worker inherits the live env + approach
     with ctx.Manager() as manager:
         result = manager.dict()
-        proc = ctx.Process(
-            target=_timed_episode_worker,
-            args=(env, approach, seed, max_steps, render, count, result),
+        outcome, exitcode = run_in_forked_worker(
+            ctx,
+            _timed_episode_worker,
+            (env, approach, seed, max_steps, render, count, result),
+            timeout,
         )
-        proc.start()
-        assert proc.pid is not None
-        proc.join(timeout)
-        if proc.is_alive():
-            os.kill(proc.pid, signal.SIGINT)
-            proc.join(3)
-            if proc.is_alive():
-                proc.kill()
-                proc.join()
+        if outcome == "timeout":
             metrics: dict[str, Any] = {
                 "total_reward": 0.0,
                 "num_steps": 0,
@@ -187,7 +210,7 @@ def run_episode_with_timeout(
             result.get(
                 "error",
                 f"eval episode worker (seed {seed}) exited with code "
-                f"{proc.exitcode} before reporting a result",
+                f"{exitcode} before reporting a result",
             )
         )
 
