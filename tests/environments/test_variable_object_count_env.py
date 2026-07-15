@@ -120,6 +120,17 @@ def test_description_is_object_centric() -> None:
     # No fixed-vector language for this setting.
     assert "obs.shape" not in full
     assert "devectorize" not in full
+
+    # The card reuses kinder's family/action/reward prose. That prose lives on the
+    # constant-object env's metadata; reading the inner object-centric env's metadata
+    # instead leaves these sections silently empty.
+    def _section(header: str) -> str:
+        return full.split(header, 1)[1].split("\n## ", 1)[0].strip()
+
+    assert _section("## Action Space")
+    assert _section("## Reward")
+    # Family description sits between the title line and the first section header.
+    assert full.split("\n## ", 1)[0].split("\n", 1)[1].strip()
     # Blackbox omits the direct-import example.
     assert "## Example Usage" in full
     assert "## Example Usage" not in blackbox

@@ -357,7 +357,9 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         )
 
     def _describe(self, include_access: bool) -> str:
-        md = self._backend_for(min(self._design_counts))._object_centric_env.metadata
+        # The family/action/reward prose is built by ConstantObjectKinDEREnv and stored
+        # on its metadata; the inner object-centric env only carries render metadata.
+        md = self._backend_for(min(self._design_counts)).metadata
         description = (
             f"# {self._env_path.rsplit(':', 1)[-1]} (variable object count)\n\n"
             f"{md.get('description', '')}\n\n"
