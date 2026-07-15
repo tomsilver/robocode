@@ -21,6 +21,11 @@ def _num_prefixed(state, prefix: str) -> int:
     return sum(1 for name in state.get_object_names() if name.startswith(prefix))
 
 
+def _section(card: str, header: str) -> str:
+    """Body of a `## Header` markdown section, up to the next `## `."""
+    return card.split(header, 1)[1].split("\n## ", 1)[0].strip()
+
+
 def test_unpinned_reset_stays_in_design_range() -> None:
     """An unpinned reset never samples a held-out count (OOD hygiene)."""
     env = VariableObjectCountEnv(**OBSTRUCTION2D)
@@ -122,16 +127,13 @@ def test_description_is_object_centric() -> None:
     assert "devectorize" not in full
 
     # Kinder's prose (from the wrapper metadata); a wrong source renders empty.
-    def _section(header: str) -> str:
-        return full.split(header, 1)[1].split("\n## ", 1)[0].strip()
-
-    assert _section("## Action Space")
-    assert _section("## Reward")
+    assert _section(full, "## Action Space")
+    assert _section(full, "## Reward")
     assert full.split("\n## ", 1)[0].split("\n", 1)[1].strip()  # family description
 
     # Obs table, not just the footnote, must list the count-defining type.
     obs_rows = [
-        ln for ln in _section("## Observation").splitlines() if ln.startswith("|")
+        ln for ln in _section(full, "## Observation").splitlines() if ln.startswith("|")
     ]
     assert any("obstruction" in row for row in obs_rows[2:])
     # Blackbox omits the direct-import example.
@@ -207,9 +209,10 @@ _FAMILY_CASES = [
 def test_family_pinned_count_and_prefix_inference(
     cfg: dict[str, Any], one_to_one: bool
 ) -> None:
-    """For every 2D family: a pinned count is reported and set_state infers it back from
-    the object-name prefix. One-to-one families expose exactly that many prefixed
-    objects; Motion2D makes more (inference uses the prefix->count map either way)."""
+    """For every 2D family: a pinned count is reported, set_state infers it back from the
+    object-name prefix, and the generated env card is complete. One-to-one families
+    expose exactly that many prefixed objects; Motion2D makes more (inference uses the
+    prefix->count map either way)."""
     env = VariableObjectCountEnv(**cfg)
     prefix = cfg["count_object_prefix"]
     for k in cfg["eval_counts"]:  # design AND held-out counts
@@ -225,6 +228,19 @@ def test_family_pinned_count_and_prefix_inference(
     env.reset(seed=1, options={"object_count": cfg["design_counts"][0]})
     env.set_state(state)
     assert env.current_count == biggest
+
+    # Every card section is populated, including the count-defining type row.
+    full = env.env_description
+    assert full.split("\n## ", 1)[0].split("\n", 1)[1].strip()  # family description
+    assert _section(full, "## Action Space")
+    assert _section(full, "## Reward")
+    assert "## Generalization" in full
+    card_rows = [
+        ln for ln in _section(full, "## Observation").splitlines() if ln.startswith("|")
+    ]
+    assert any(prefix in row for row in card_rows[2:])
+    assert "## Example Usage" in full
+    assert "## Example Usage" not in env.env_description_blackbox
     env.close()
 
 
