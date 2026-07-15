@@ -5,8 +5,8 @@ sequence, which is then executed without replanning. This is a reference baselin
 whose planning cost grows with the object count `N`: it degrades (slow, then no
 plan within the timeout) as instances get harder, in contrast to a frozen
 generalized program. It runs entirely on the host (no LLM, no sandbox), so every
-attempt is free (`cost_usd=0.0`) and per-instance time is bounded by
-`planning_timeout` (planning) and `max_steps` (execution).
+attempt is free (`cost_usd=0.0`) and per-instance time is bounded by the shared
+`eval_timeout` (planning) and `max_steps` (execution).
 
 The bilevel planning models (predicates, operators, parameterized skills,
 samplers, and a transition simulator) come from `kinder_bilevel_planning`, built
@@ -43,7 +43,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         samples_per_step: int = 10,
         max_skill_horizon: int = 100,
         heuristic_name: str = "hff",
-        planning_timeout: float = 30.0,
+        eval_timeout: float = 30.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(action_space, observation_space, seed, primitives, **kwargs)
@@ -52,7 +52,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         self._samples_per_step = samples_per_step
         self._max_skill_horizon = max_skill_horizon
         self._heuristic_name = heuristic_name
-        self._planning_timeout = planning_timeout
+        self._eval_timeout = eval_timeout
         # Fixed-count env: SesameModels depend only on the env, so build once and reuse.
         # Variable-count env: the models bake in the object count, so they are rebuilt
         # per count and cached by count (see _get_models).
@@ -121,7 +121,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             samples_per_step=self._samples_per_step,
             max_skill_horizon=self._max_skill_horizon,
             heuristic_name=self._heuristic_name,
-            planning_timeout=self._planning_timeout,
+            planning_timeout=self._eval_timeout,
         )
         self._agent = agent
 

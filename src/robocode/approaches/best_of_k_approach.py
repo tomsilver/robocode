@@ -113,7 +113,7 @@ class BestOfKApproach(LLMGenPlanApproach):
             self._primitives,
             seeds,
             self._max_steps,
-            self._episode_timeout_s,
+            self._eval_timeout,
         )
 
     def _driver_config(self, completion: dict[str, Any]) -> dict[str, Any]:

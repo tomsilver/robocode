@@ -74,6 +74,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         blackbox: bool = False,
         env_cfg: str | None = None,
         max_steps: int | None = None,
+        eval_timeout: float = 30.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -102,6 +103,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         self._blackbox = blackbox
         self._env_cfg = env_cfg
         self._max_steps = max_steps
+        self._eval_timeout = eval_timeout
         if blackbox:
             if env_cfg is None:
                 raise ValueError("blackbox mode requires env_cfg")
@@ -203,6 +205,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             intro=(prompts.CDL_INTRO_BLACKBOX if self._blackbox else prompts.CDL_INTRO),
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
+            timeout=self._eval_timeout,
             mcp_tools=self._mcp_tools,
             object_centric=self._object_centric,
         )

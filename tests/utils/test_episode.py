@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from robocode.approaches.base_approach import BaseApproach, InstanceResult
 from robocode.utils.episode import (
     load_generated_approach,
     run_episode,
+    run_episode_with_timeout,
     run_per_instance_eval,
     save_frames,
     save_video,
@@ -383,37 +385,102 @@ def test_anti_cheat_not_enforced_without_bilevel_models(tmp_path: Path) -> None:
     assert hasattr(approach, "get_action")
 
 
+class _CountEnv(Env):
+    """A tiny env that terminates after three steps (goal at pos 3.0)."""
+
+    def __init__(self) -> None:
+        self.observation_space = Box(0.0, 10.0, shape=(1,), dtype=np.float32)
+        self.action_space = Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
+        self._pos = 0.0
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self._pos = 0.0
+        return np.array([self._pos], dtype=np.float32), {}
+
+    def step(self, action):
+        self._pos += 1.0
+        obs = np.array([self._pos], dtype=np.float32)
+        return obs, 0.0, self._pos >= 3.0, False, {}
+
+    def render(self):
+        return None
+
+
+class _NoopApproach(BaseApproach[Any, Any]):
+    """Always returns the zero action; the env drives termination."""
+
+    def _get_action(self) -> Any:
+        return np.zeros(1, dtype=np.float32)
+
+
+class _SlowApproach(BaseApproach[Any, Any]):
+    """Sleeps far past any test timeout, so the rollout must be killed."""
+
+    def _get_action(self) -> Any:
+        time.sleep(30)
+        return np.zeros(1, dtype=np.float32)
+
+
+class _CrashApproach(BaseApproach[Any, Any]):
+    """Raises on the first action, to exercise worker-crash propagation."""
+
+    def _get_action(self) -> Any:
+        raise ValueError("boom")
+
+
 def test_run_episode_returns_final_state() -> None:
     """run_episode returns the observation the episode ended on."""
-
-    class _CountEnv(Env):
-        def __init__(self) -> None:
-            self.observation_space = Box(0.0, 10.0, shape=(1,), dtype=np.float32)
-            self.action_space = Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
-            self._pos = 0.0
-
-        def reset(self, *, seed=None, options=None):
-            super().reset(seed=seed)
-            self._pos = 0.0
-            return np.array([self._pos], dtype=np.float32), {}
-
-        def step(self, action):
-            self._pos += 1.0
-            obs = np.array([self._pos], dtype=np.float32)
-            return obs, 0.0, self._pos >= 3.0, False, {}
-
-        def render(self):
-            return None
-
-    class _NoopApproach(BaseApproach[Any, Any]):
-        def _get_action(self) -> Any:
-            return np.zeros(1, dtype=np.float32)
-
     env = _CountEnv()
     approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
     metrics, _, final_state = run_episode(env, approach, seed=0, max_steps=10)
     assert metrics["solved"]
     assert final_state == np.array([3.0], dtype=np.float32)
+
+
+def test_run_episode_with_timeout_none_runs_in_process() -> None:
+    """Timeout=None matches run_episode and adds no timed_out flag."""
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, final_state = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=None
+    )
+    assert metrics["solved"]
+    assert "timed_out" not in metrics
+    assert final_state == np.array([3.0], dtype=np.float32)
+
+
+def test_run_episode_with_timeout_solves_within_budget() -> None:
+    """A fast policy finishes inside the forked worker and is scored normally."""
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30
+    )
+    assert metrics["solved"]
+    assert not metrics.get("timed_out")
+
+
+def test_run_episode_with_timeout_kills_slow_policy() -> None:
+    """A policy that overruns the budget is killed and scored unsolved."""
+    env = _CountEnv()
+    approach = _SlowApproach(env.action_space, env.observation_space, 0, {})
+    metrics, frames, final_state = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5
+    )
+    assert metrics["solved"] is False
+    assert metrics["timed_out"] is True
+    assert metrics["num_steps"] == 0
+    assert not frames
+    assert final_state is None
+
+
+def test_run_episode_with_timeout_reraises_worker_crash() -> None:
+    """A crash in the policy is carried back and re-raised for the caller to score."""
+    env = _CountEnv()
+    approach = _CrashApproach(env.action_space, env.observation_space, 0, {})
+    with pytest.raises(RuntimeError, match="boom"):
+        run_episode_with_timeout(env, approach, seed=0, max_steps=10, timeout=30)
 
 
 def test_save_frames_creates_pngs(

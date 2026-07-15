@@ -6,7 +6,7 @@ Single source of truth for the instructions fed to the coding-agent backends
 stdlib plus the already-centralized backend and MCP suffix constants, never the
 env or primitives packages, so it stays safe to import on the host during
 ``train()``. Dynamic strings (the primitives description, env-description text,
-the python-executable path) are passed in as arguments.
+the python-executable path, the eval-time budget) are passed in as arguments.
 
 Two axes of variation are kept orthogonal and are NEVER expressed as near-copies:
 - approach (agentic / CDL / genplan): legitimately different structural content,
@@ -18,6 +18,10 @@ own piece. The four agentic/CDL system prompts, for instance, share their
 file-discipline and subagent boilerplate verbatim and differ only in a short
 identity sentence and a blackbox-discovery clause, so they are composed from
 fragments here rather than stored as four full strings.
+
+The overall goal and the eval-time budget are stated once, at the top of the
+system prompt (``generalization_goal``): generalize to any instance, or specialize
+to one named instance, under the shared ``timeout``.
 """
 
 from robocode.mcp import (
@@ -258,33 +262,33 @@ The environment is described below.
 
 """
 
-# Shared task-prompt scaffold. The opener sentences and the interface-spec
-# wrapper are common to both approaches; only small slotted pieces (approach
-# kind, class-interface code, run commands, section ordering) differ.
-# The scaffold intro is an opener line plus a generalization clause. The clause
-# is the one piece that flips for per-instance baselines: generalized approaches
-# solve any instance, per-instance approaches specialize to a single seed.
-_SCAFFOLD_INTRO_OPENER = "You are writing {approach_kind} for {target}.\n\n"
-_GENERALIZE_CLAUSE = (
-    "Your approach should be general enough to solve any instance of this "
-    "environment (env.reset()), but it does NOT need to be adaptable to "
-    "different other environments."
-)
-_SCAFFOLD_INTRO = _SCAFFOLD_INTRO_OPENER + _GENERALIZE_CLAUSE
+# Task-prompt opener; the goal + eval budget live in the system prompt
+# (generalization_goal), so the scaffold is just this line.
+_SCAFFOLD_INTRO_OPENER = "You are writing {approach_kind} for {target}."
 
-# Per-instance baselines (one fresh agent run per eval seed) replace the
-# generalization clause with this directive, naming the concrete target instance.
-# In the read-source branch (which has no scaffold intro) it is prepended on its
-# own instead.
-_PER_INSTANCE_DIRECTIVE_TEMPLATE = (
-    "Your approach only needs to solve the single specific instance produced by "
-    "`{reset_call}`. You do NOT need to generalize to other instances "
-    "or environments; you may specialize entirely to this instance."
+# System-prompt goal: generalize to any instance, or specialize to one named
+# instance. Trailing space joins the eval-budget clause below.
+_GENERALIZE_GOAL = (
+    "Your program must generalize to any instance of this environment (any "
+    "env.reset()); it does not need to work on any other environment. "
+)
+_PER_INSTANCE_GOAL_TEMPLATE = (
+    "Your program only needs to solve the single instance produced by "
+    "`{reset_call}`; you may specialize entirely to it, and it does not need to "
+    "generalize to other instances or environments. "
+)
+
+# Eval-time wall-clock budget appended to the goal; {timeout} is the shared eval_timeout.
+_EVAL_BUDGET_CLAUSE = (
+    "At evaluation time your program is given {timeout:g} seconds of wall-clock "
+    "per instance; if it exceeds this budget it is stopped and the instance is "
+    "scored as a failure, so it must select actions efficiently rather than rely "
+    "on exhaustive search or slow planners."
 )
 
 
 def per_instance_directive(seed: int, count: int | None = None) -> str:
-    """The per-instance target directive, naming the exact reset call.
+    """The per-instance goal sentence, naming the exact reset call.
 
     For a variable-count env *count* pins the object count, so the agent develops
     against the same ``(seed, count)`` instance it is scored on rather than an
@@ -295,7 +299,27 @@ def per_instance_directive(seed: int, count: int | None = None) -> str:
         if count is None
         else f"env.reset(seed={seed}, options={{'object_count': {count}}})"
     )
-    return _PER_INSTANCE_DIRECTIVE_TEMPLATE.format(reset_call=reset_call)
+    return _PER_INSTANCE_GOAL_TEMPLATE.format(reset_call=reset_call)
+
+
+def generalization_goal(
+    timeout: float,
+    *,
+    per_instance_seed: int | None = None,
+    per_instance_count: int | None = None,
+) -> str:
+    """The goal + eval-budget statement placed at the top of the system prompt.
+
+    Generalized runs (``per_instance_seed=None``) must solve any instance; a
+    per-instance baseline names the single target instance instead. Both are then
+    told the per-instance wall-clock ``timeout`` enforced at evaluation.
+    """
+    goal = (
+        _GENERALIZE_GOAL
+        if per_instance_seed is None
+        else per_instance_directive(per_instance_seed, per_instance_count)
+    )
+    return goal + _EVAL_BUDGET_CLAUSE.format(timeout=timeout)
 
 
 _SOURCE_OPENER = (
@@ -426,7 +450,7 @@ _AGENTIC_WITH_DESCRIPTION = """\
 """
 
 _AGENTIC_WITH_SOURCE = """\
-{per_instance_directive}{source_opener}
+{source_opener}
 {geometry_prompt}
 {interface_spec}
 {modular_code_prompt}{budget_stewardship}\
@@ -769,19 +793,29 @@ def build_system_prompt(
     intro: str,
     blackbox: bool,
     backend_name: str,
+    timeout: float,
     mcp_tools: tuple[str, ...] = (),
     object_centric: bool = False,
+    per_instance_seed: int | None = None,
+    per_instance_count: int | None = None,
 ) -> str:
     """Compose a coding-agent system prompt from shared fragments.
 
-    ``intro`` is one of the composed intro constants (AGENTIC_INTRO[_BLACKBOX],
-    CDL_INTRO[_BLACKBOX]). The shared file-discipline block, blackbox-aware
-    subagent guidance, token-budget guidance, the backend-specific suffix, and
-    the optional MCP-tools suffix follow. For a variable-count (object_centric) env
-    the render guidance drops the flat-vector arbitrary-state mode.
+    After ``intro`` comes the goal + eval budget (``generalization_goal``):
+    generalize, or specialize to the ``per_instance_seed`` instance, under the
+    ``timeout``. Then the shared file-discipline, subagent, token-budget,
+    backend-suffix, and optional MCP-tools fragments. ``object_centric`` drops the
+    flat-vector render mode.
     """
+    goal = generalization_goal(
+        timeout,
+        per_instance_seed=per_instance_seed,
+        per_instance_count=per_instance_count,
+    )
     subagents = SYSTEM_SUBAGENTS_BLACKBOX if blackbox else SYSTEM_SUBAGENTS
-    system_prompt = intro + SYSTEM_FILE_DISCIPLINE + subagents + SYSTEM_TOKEN_BUDGET
+    system_prompt = (
+        intro + goal + " " + SYSTEM_FILE_DISCIPLINE + subagents + SYSTEM_TOKEN_BUDGET
+    )
     if backend_name == "opencode":
         system_prompt += OPENCODE_PROMPT_SUFFIX
     else:
@@ -853,21 +887,14 @@ def _env_description_section(blackbox_description: str | None) -> str:
     return BLACKBOX_DESCRIPTION_PREFIX + blackbox_description + "\n"
 
 
-def _scaffold_intro(
-    approach_kind: str,
-    blackbox: bool,
-    per_instance_seed: int | None = None,
-    per_instance_count: int | None = None,
-) -> str:
+def _scaffold_intro(approach_kind: str, blackbox: bool) -> str:
+    """The task-prompt opener line; the goal now lives in the system prompt."""
     target = (
         "an environment that you can only access as a black box"
         if blackbox
         else "the environment described below"
     )
-    if per_instance_seed is None:
-        return _SCAFFOLD_INTRO.format(approach_kind=approach_kind, target=target)
-    opener = _SCAFFOLD_INTRO_OPENER.format(approach_kind=approach_kind, target=target)
-    return opener + per_instance_directive(per_instance_seed, per_instance_count)
+    return _SCAFFOLD_INTRO_OPENER.format(approach_kind=approach_kind, target=target)
 
 
 def build_agentic_prompt(
@@ -878,17 +905,14 @@ def build_agentic_prompt(
     modular_code: bool,
     env_description: str | None,
     per_instance_seed: int | None = None,
-    per_instance_count: int | None = None,
     object_centric: bool = False,
 ) -> str:
     """Compose the monolithic-approach task prompt.
 
-    When ``per_instance_seed`` is set, the generalization clause is replaced by a
-    per-instance directive naming the target instance and a budget-stewardship note is
-    appended; ``per_instance_count`` pins the object count for a variable-count env so
-    the named instance matches what is scored. ``object_centric`` selects the
-    object-centric black-box interaction spec. With ``per_instance_seed=None`` and
-    ``object_centric=False`` the output is unchanged.
+    The goal + eval budget are in the system prompt, not here; a
+    ``per_instance_seed`` only adds the budget-stewardship note. ``object_centric``
+    selects the object-centric black-box interaction spec. With
+    ``per_instance_seed=None`` and ``object_centric=False`` the output is unchanged.
     """
     geometry_prompt = GEOMETRY_PROMPT if geometry else ""
     modular = MODULAR_CODE_PROMPT if modular_code else ""
@@ -899,12 +923,7 @@ def build_agentic_prompt(
     )
     if blackbox:
         return _AGENTIC_BLACKBOX.format(
-            scaffold_intro=_scaffold_intro(
-                "an approach",
-                blackbox=True,
-                per_instance_seed=per_instance_seed,
-                per_instance_count=per_instance_count,
-            ),
+            scaffold_intro=_scaffold_intro("an approach", blackbox=True),
             env_description_section=_env_description_section(env_description),
             blackbox_interaction_spec=blackbox_interaction_spec(
                 object_centric=object_centric, set_state_note=""
@@ -916,25 +935,14 @@ def build_agentic_prompt(
         )
     if env_description is not None:
         return _AGENTIC_WITH_DESCRIPTION.format(
-            scaffold_intro=_scaffold_intro(
-                "an approach",
-                blackbox=False,
-                per_instance_seed=per_instance_seed,
-                per_instance_count=per_instance_count,
-            ),
+            scaffold_intro=_scaffold_intro("an approach", blackbox=False),
             env_description=env_description,
             geometry_prompt=geometry_prompt,
             modular_code_prompt=modular,
             interface_spec=interface_spec,
             budget_stewardship=budget_stewardship,
         )
-    directive_block = (
-        per_instance_directive(per_instance_seed, per_instance_count) + "\n\n"
-        if per_instance_seed is not None
-        else ""
-    )
     return _AGENTIC_WITH_SOURCE.format(
-        per_instance_directive=directive_block,
         source_opener=_SOURCE_OPENER,
         geometry_prompt=geometry_prompt,
         modular_code_prompt=modular,

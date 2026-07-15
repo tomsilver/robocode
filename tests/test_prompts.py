@@ -48,7 +48,7 @@ def test_learning_clause_shared_across_approaches():
 def test_system_prompt_agentic_non_blackbox():
     """Non-blackbox agentic system prompt reads source and ends with the suffix."""
     sp = prompts.build_system_prompt(
-        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude"
+        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude", timeout=30
     )
     assert "expert at writing policies" in sp
     assert "VERSION CONTROL" in sp
@@ -58,10 +58,24 @@ def test_system_prompt_agentic_non_blackbox():
     assert MCP_TOOLS_SYSTEM_PROMPT_SUFFIX not in sp
 
 
+def test_system_prompt_states_goal_and_eval_budget():
+    """The system prompt carries the generalize goal and the eval-time budget."""
+    sp = prompts.build_system_prompt(
+        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude", timeout=30
+    )
+    assert "generalize to any instance" in sp
+    assert "30 seconds of wall-clock" in sp
+    # The goal sits between the intro and the file-discipline block.
+    assert sp.index("generalize to any instance") < sp.index("VERSION CONTROL")
+
+
 def test_system_prompt_blackbox_swaps_subagents():
     """Blackbox selects the empirical-exploration subagent guidance."""
     sp = prompts.build_system_prompt(
-        intro=prompts.AGENTIC_INTRO_BLACKBOX, blackbox=True, backend_name="claude"
+        intro=prompts.AGENTIC_INTRO_BLACKBOX,
+        blackbox=True,
+        backend_name="claude",
+        timeout=30,
     )
     assert "black box" in sp
     assert "run exploration experiments" in sp
@@ -71,7 +85,7 @@ def test_system_prompt_blackbox_swaps_subagents():
 def test_system_prompt_opencode_backend_suffix():
     """The opencode backend swaps in its own prompt suffix."""
     sp = prompts.build_system_prompt(
-        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="opencode"
+        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="opencode", timeout=30
     )
     assert sp.endswith(OPENCODE_PROMPT_SUFFIX)
     assert CLAUDE_PROMPT_SUFFIX not in sp
@@ -83,6 +97,7 @@ def test_system_prompt_mcp_suffix_blackbox_variant():
         intro=prompts.AGENTIC_INTRO_BLACKBOX,
         blackbox=True,
         backend_name="claude",
+        timeout=30,
         mcp_tools=("render_state",),
     )
     assert MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX in sp
@@ -95,6 +110,7 @@ def test_system_prompt_mcp_suffix_non_blackbox_variant():
         intro=prompts.AGENTIC_INTRO,
         blackbox=False,
         backend_name="claude",
+        timeout=30,
         mcp_tools=("render_state",),
     )
     assert MCP_TOOLS_SYSTEM_PROMPT_SUFFIX in sp
@@ -103,13 +119,77 @@ def test_system_prompt_mcp_suffix_non_blackbox_variant():
 def test_system_prompt_token_budget_on_both_approaches():
     """Token-budget guidance is appended to every system prompt (both approaches)."""
     agentic = prompts.build_system_prompt(
-        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude"
+        intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude", timeout=30
     )
     cdl = prompts.build_system_prompt(
-        intro=prompts.CDL_INTRO, blackbox=False, backend_name="claude"
+        intro=prompts.CDL_INTRO, blackbox=False, backend_name="claude", timeout=30
     )
     assert "TOKEN BUDGET" in agentic
     assert "TOKEN BUDGET" in cdl
+
+
+# ---------------------------------------------------------------------------
+# generalization_goal: the goal + eval-budget statement in the system prompt
+# ---------------------------------------------------------------------------
+
+
+def test_generalization_goal_generalized():
+    """Without a per-instance seed the goal asks to generalize and names the budget."""
+    goal = prompts.generalization_goal(30)
+    assert "generalize to any instance" in goal
+    assert "30 seconds of wall-clock" in goal
+    assert "scored as a failure" in goal
+
+
+def test_generalization_goal_per_instance_names_reset_call():
+    """A per-instance seed swaps in the single-instance goal, still with the budget."""
+    goal = prompts.generalization_goal(30, per_instance_seed=7)
+    assert "generalize to any instance" not in goal
+    assert "env.reset(seed=7)" in goal
+    assert "specialize entirely to it" in goal
+    assert "30 seconds of wall-clock" in goal
+
+
+def test_generalization_goal_pins_count():
+    """A per-instance count names the pinned reset call in the goal."""
+    goal = prompts.generalization_goal(30, per_instance_seed=7, per_instance_count=4)
+    assert "env.reset(seed=7, options={'object_count': 4})" in goal
+
+
+def test_generalization_goal_timeout_formats_without_trailing_zero():
+    """The timeout renders compactly (30, not 30.0; a fractional value is kept)."""
+    assert "30 seconds" in prompts.generalization_goal(30.0)
+    assert "30.0 seconds" not in prompts.generalization_goal(30.0)
+    assert "0.5 seconds" in prompts.generalization_goal(0.5)
+
+
+def test_system_prompt_per_instance_goal():
+    """A per-instance seed names the target instance in the system-prompt goal."""
+    sp = prompts.build_system_prompt(
+        intro=prompts.AGENTIC_INTRO,
+        blackbox=False,
+        backend_name="claude",
+        timeout=30,
+        per_instance_seed=4242,
+    )
+    assert "generalize to any instance" not in sp
+    assert "env.reset(seed=4242)" in sp
+    assert "specialize entirely to it" in sp
+    assert "30 seconds of wall-clock" in sp
+
+
+def test_system_prompt_per_instance_count_pins_reset():
+    """A per-instance count pins the named reset call in the system prompt."""
+    sp = prompts.build_system_prompt(
+        intro=prompts.AGENTIC_INTRO,
+        blackbox=False,
+        backend_name="claude",
+        timeout=30,
+        per_instance_seed=7,
+        per_instance_count=4,
+    )
+    assert "env.reset(seed=7, options={'object_count': 4})" in sp
+    assert "env.reset(seed=7)`" not in sp
 
 
 # ---------------------------------------------------------------------------
@@ -444,17 +524,14 @@ _SOURCE_OPENER = (
     "Read the environment source files in this directory to understand the "
     "state type, action space, and dynamics."
 )
+# The goal moved to the system prompt, so the task-prompt scaffold is just the
+# opener line.
 _SCAFFOLD_CDL_DESCRIPTION = (
-    "You are writing a behavior-based approach for the environment described "
-    "below.\n\nYour approach should be general enough to solve any instance of "
-    "this environment (env.reset()), but it does NOT need to be adaptable to "
-    "different other environments."
+    "You are writing a behavior-based approach for the environment described below."
 )
 _SCAFFOLD_CDL_BLACKBOX = (
     "You are writing a behavior-based approach for an environment that you can "
-    "only access as a black box.\n\nYour approach should be general enough to "
-    "solve any instance of this environment (env.reset()), but it does NOT need "
-    "to be adaptable to different other environments."
+    "only access as a black box."
 )
 
 
@@ -473,9 +550,11 @@ def _cdl_behavior_impl(blackbox, helpers_note):
 
 
 def test_golden_system_prompt_agentic_nonblackbox_claude():
-    """Exact agentic (non-blackbox) system prompt: intro + shared tails + suffix."""
+    """Exact agentic (non-blackbox) system prompt: intro + goal + tails + suffix."""
     expected = (
         prompts.AGENTIC_INTRO
+        + prompts.generalization_goal(30)
+        + " "
         + prompts.SYSTEM_FILE_DISCIPLINE
         + prompts.SYSTEM_SUBAGENTS
         + prompts.SYSTEM_TOKEN_BUDGET
@@ -483,7 +562,10 @@ def test_golden_system_prompt_agentic_nonblackbox_claude():
     )
     assert (
         prompts.build_system_prompt(
-            intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude"
+            intro=prompts.AGENTIC_INTRO,
+            blackbox=False,
+            backend_name="claude",
+            timeout=30,
         )
         == expected
     )
@@ -493,6 +575,8 @@ def test_golden_system_prompt_cdl_blackbox_claude_with_mcp():
     """Exact CDL blackbox system prompt: blackbox subagents + blackbox MCP suffix."""
     expected = (
         prompts.CDL_INTRO_BLACKBOX
+        + prompts.generalization_goal(30)
+        + " "
         + prompts.SYSTEM_FILE_DISCIPLINE
         + prompts.SYSTEM_SUBAGENTS_BLACKBOX
         + prompts.SYSTEM_TOKEN_BUDGET
@@ -504,6 +588,7 @@ def test_golden_system_prompt_cdl_blackbox_claude_with_mcp():
             intro=prompts.CDL_INTRO_BLACKBOX,
             blackbox=True,
             backend_name="claude",
+            timeout=30,
             mcp_tools=("render_state",),
         )
         == expected
@@ -514,6 +599,8 @@ def test_golden_system_prompt_opencode_suffix():
     """Exact agentic system prompt under the opencode backend suffix."""
     expected = (
         prompts.AGENTIC_INTRO
+        + prompts.generalization_goal(30)
+        + " "
         + prompts.SYSTEM_FILE_DISCIPLINE
         + prompts.SYSTEM_SUBAGENTS
         + prompts.SYSTEM_TOKEN_BUDGET
@@ -521,7 +608,10 @@ def test_golden_system_prompt_opencode_suffix():
     )
     assert (
         prompts.build_system_prompt(
-            intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="opencode"
+            intro=prompts.AGENTIC_INTRO,
+            blackbox=False,
+            backend_name="opencode",
+            timeout=30,
         )
         == expected
     )
@@ -661,8 +751,9 @@ def test_no_doubled_blank_lines_in_any_task_prompt():
 
 
 # ---------------------------------------------------------------------------
-# Per-instance task-prompt delta: target-seed directive + budget stewardship,
-# byte-identical to the generalized prompt when no seed is given.
+# Per-instance delta: the goal/target-instance directive lives in the system
+# prompt (tested above). The task prompt only gains a budget-stewardship note,
+# and is byte-identical to the generalized task prompt when no seed is given.
 # ---------------------------------------------------------------------------
 
 
@@ -683,8 +774,8 @@ def test_per_instance_seed_none_is_unchanged():
         )
 
 
-def test_per_instance_seed_swaps_generalize_clause_with_description():
-    """With a description, the generalize clause is replaced by the seed directive."""
+def test_per_instance_seed_adds_budget_note_not_goal_to_task_prompt():
+    """The task prompt gains only the budget note; the goal/directive is not here."""
     p = prompts.build_agentic_prompt(
         blackbox=False,
         interface_spec=_IFACE,
@@ -693,16 +784,17 @@ def test_per_instance_seed_swaps_generalize_clause_with_description():
         env_description="ENVDESC",
         per_instance_seed=4242,
     )
-    assert "general enough to solve any instance" not in p
-    assert "env.reset(seed=4242)" in p
-    assert "you may specialize entirely to this instance" in p
     assert "BUDGET:" in p
     assert "seed 4242" in p
+    # The goal and the target-instance directive live in the system prompt only.
+    assert "env.reset(seed=4242)" not in p
+    assert "specialize entirely to it" not in p
+    assert "generalize to any instance" not in p
     assert "\n\n\n" not in p
 
 
-def test_per_instance_seed_prepends_directive_in_source_branch():
-    """The read-source branch (no scaffold intro) prepends the seed directive."""
+def test_per_instance_task_prompt_source_branch_starts_with_source_opener():
+    """The read-source task prompt still opens with the source instruction."""
     p = prompts.build_agentic_prompt(
         blackbox=False,
         interface_spec=_IFACE,
@@ -711,15 +803,14 @@ def test_per_instance_seed_prepends_directive_in_source_branch():
         env_description=None,
         per_instance_seed=7,
     )
-    assert p.startswith("Your approach only needs to solve")
-    assert "env.reset(seed=7)" in p
-    assert "Read the environment source files" in p
+    assert p.startswith("Read the environment source files")
+    assert "env.reset(seed=7)" not in p  # goal moved to the system prompt
     assert "BUDGET:" in p
     assert "\n\n\n" not in p
 
 
-def test_per_instance_seed_blackbox():
-    """Blackbox per-instance prompt swaps the clause and keeps the interaction spec."""
+def test_per_instance_task_prompt_blackbox_keeps_interaction_spec():
+    """The blackbox per-instance task prompt keeps env_client + budget, not the goal."""
     p = prompts.build_agentic_prompt(
         blackbox=True,
         interface_spec=_IFACE,
@@ -728,8 +819,7 @@ def test_per_instance_seed_blackbox():
         env_description=None,
         per_instance_seed=11,
     )
-    assert "general enough to solve any instance" not in p
-    assert "env.reset(seed=11)" in p
+    assert "env.reset(seed=11)" not in p
     assert "must NOT import `env_client`" in p
     assert "BUDGET:" in p
     assert "\n\n\n" not in p
@@ -741,25 +831,6 @@ def test_per_instance_directive_pins_count():
     assert "object_count" not in prompts.per_instance_directive(7)
     pinned = prompts.per_instance_directive(7, 4)
     assert "env.reset(seed=7, options={'object_count': 4})" in pinned
-
-
-def test_per_instance_count_names_pinned_reset_in_every_branch():
-    """A pinned object count names the exact scored instance in every prompt branch, so
-    the agent develops against what it is scored on (not an unpinned design-count
-    reset)."""
-    for blackbox, env in ((False, "ENVDESC"), (False, None), (True, None)):
-        p = prompts.build_agentic_prompt(
-            blackbox=blackbox,
-            interface_spec=_IFACE,
-            geometry=True,
-            modular_code=False,
-            env_description=env,
-            per_instance_seed=7,
-            per_instance_count=4,
-        )
-        assert "env.reset(seed=7, options={'object_count': 4})" in p
-        assert "env.reset(seed=7)`" not in p  # not the unpinned form
-        assert "\n\n\n" not in p
 
 
 def test_per_instance_no_doubled_blank_lines_grid():
