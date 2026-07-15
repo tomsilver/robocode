@@ -177,7 +177,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
                 f"(known prefixed counts: {sorted(self._prefixed_count_to_kwarg)})"
             ) from exc
 
-    def count_for_seed(self, seed: int | None) -> int:
+    def _count_for_seed(self, seed: int | None) -> int:
         """A design-range count for an unpinned reset (keeps dev in-distribution).
 
         Held-out counts are never produced here; they reach the env only through an
@@ -227,7 +227,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
                 seed=seed, options={"init_state": state}
             )
         else:
-            count = self.count_for_seed(seed)
+            count = self._count_for_seed(seed)
             backend = self._backend_for(count)
             ocs, info = backend._object_centric_env.reset(seed=seed)
         self._current_backend = backend
@@ -275,20 +275,13 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
 
     # -- per-count Box view for the bilevel planner -------------------------
 
-    @property
-    def current_box_space(self) -> Any:
-        """The current instance's fixed-length ``ObjectCentricBoxSpace``."""
-        assert self._current_backend is not None, "Must call reset()"
-        return self._current_backend.observation_space
-
-    def current_box_obs(self) -> NDArray[Any]:
-        """Vectorize the current object-centric observation for the planner."""
-        assert self._current_ocs is not None, "Must call reset()"
-        return self.current_box_space.vectorize(self._current_ocs)
-
     def to_box(self, state: ObjectCentricState) -> NDArray[Any]:
         """Vectorize an object-centric state through the current count's Box space."""
-        return self.current_box_space.vectorize(state)
+        assert self._current_backend is not None, "Must call reset()"
+        # The backend's observation_space is a concrete ObjectCentricBoxSpace; the gym
+        # stub types it as a bare Space, which does not advertise vectorize().
+        box_space: Any = self._current_backend.observation_space
+        return box_space.vectorize(state)
 
     def models_for_count(self, count: int) -> Any:
         """Build the SeSamE models for a given count (per-count Box space + kwargs)."""

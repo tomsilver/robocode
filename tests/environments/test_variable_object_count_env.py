@@ -68,7 +68,7 @@ def test_spaces_are_count_invariant_but_box_view_is_not() -> None:
         env.reset(seed=0, options={"object_count": k})
         assert env.observation_space is obs_space
         assert env.action_space is act_space
-        box_dims[k] = env.current_box_obs().shape[0]
+        box_dims[k] = env.to_box(env.get_state()).shape[0]
     # Each object adds features, so the per-count Box view is strictly larger.
     assert box_dims[0] < box_dims[2] < box_dims[4]
     env.close()
