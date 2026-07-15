@@ -6,7 +6,7 @@ defaults:
 seed: 42
 max_steps: 1000
 num_eval_tasks: 100
-# Per-instance eval wall-clock budget (seconds), shared by every approach. null disables it.
+# Per-instance eval wall-clock budget (seconds), shared by every approach.
 eval_timeout: 30
 render_videos: false
 record_approach_history: false
