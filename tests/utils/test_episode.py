@@ -472,18 +472,6 @@ def test_run_episode_returns_final_state() -> None:
     assert final_state == np.array([3.0], dtype=np.float32)
 
 
-def test_run_episode_with_timeout_none_runs_in_process() -> None:
-    """Timeout=None matches run_episode and adds no timed_out flag."""
-    env = _CountEnv()
-    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
-    metrics, _, final_state = run_episode_with_timeout(
-        env, approach, seed=0, max_steps=10, timeout=None
-    )
-    assert metrics["solved"]
-    assert "timed_out" not in metrics
-    assert final_state == np.array([3.0], dtype=np.float32)
-
-
 def test_run_episode_with_timeout_solves_within_budget() -> None:
     """A fast policy finishes inside the forked worker and is scored normally."""
     env = _CountEnv()

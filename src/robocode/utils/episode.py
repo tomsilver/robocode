@@ -171,7 +171,7 @@ def run_episode_with_timeout(
     seed: int,
     max_steps: int,
     *,
-    timeout: float | None,
+    timeout: float,
     render: bool = False,
     count: int | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
@@ -180,10 +180,8 @@ def run_episode_with_timeout(
     The rollout runs in a forked worker (inheriting the live env and approach) so a
     hung or too-slow policy can be killed; on overrun it is scored unsolved
     (``metrics["timed_out"]``). A worker that dies before reporting (policy
-    exception, OOM, native crash) re-raises here. ``timeout=None`` runs in-process.
+    exception, OOM, native crash) re-raises here.
     """
-    if timeout is None:
-        return run_episode(env, approach, seed, max_steps, render=render, count=count)
     ctx = mp.get_context("fork")  # fork: the worker inherits the live env + approach
     with ctx.Manager() as manager:
         result = manager.dict()

@@ -51,6 +51,12 @@ def _main(cfg: DictConfig) -> float:
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if cfg.eval_timeout is None:
+        raise ValueError(
+            "eval_timeout must be set to a number of seconds; it bounds every "
+            "evaluation rollout. Use a large value for an effectively unlimited budget."
+        )
+
     env = hydra.utils.instantiate(cfg.environment)
 
     # If the environment provides a description (e.g. kinder envs), write it
