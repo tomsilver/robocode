@@ -73,6 +73,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         reference_count: int | None = None,
         base_steps: int = 300,
         steps_per_object: int = 150,
+        render_dpi: int | None = None,
     ) -> None:
         # Lock the GL backend before building any backend env so rendering works;
         # driving the kinder classes directly needs no gym registry.
@@ -85,6 +86,10 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         # scored as failed merely for running out of steps before it could finish.
         self._base_steps = base_steps
         self._steps_per_object = steps_per_object
+        # Optional render-resolution override applied to every backend. Unset, each
+        # family keeps its own default DPI; lowering it (e.g. for gif capture) shrinks
+        # each frame so long, high-object-count rollouts fit in memory.
+        self._render_dpi = render_dpi
         self._design_counts = [int(c) for c in design_counts]
         self._eval_counts = [int(c) for c in eval_counts]
         if not self._design_counts:
@@ -147,6 +152,12 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
                     f"feasible object count. Lower the configured counts."
                 ) from exc
             self._backends[count] = backend
+            if self._render_dpi is not None:
+                # The kinematic env's config is a frozen dataclass; set the field
+                # through object.__setattr__ (render() reads config.render_dpi fresh).
+                object.__setattr__(
+                    backend._object_centric_env.config, "render_dpi", self._render_dpi
+                )
             exemplar, _ = backend._object_centric_env.reset(seed=0)
             self._prefixed_count_to_kwarg[self._count_prefixed(exemplar)] = count
         return backend
