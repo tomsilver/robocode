@@ -22,6 +22,7 @@ import numpy as np
 from kinder_bilevel_planning.agent import AgentFailure, BilevelPlanningAgent
 
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.bilevel import build_sesame_models
 
 
@@ -68,10 +69,10 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         )
 
     def _get_models(self, env: Any, count: int | None) -> Any:
-        # A variable-count env exposes models_for_count: the models bake in the object
-        # count, so cache one bundle per count. Otherwise the env is fixed-count and a
-        # single bundle is reused across seeds.
-        if count is not None and hasattr(env, "models_for_count"):
+        # A variable-count env bakes the object count into its models, so cache one
+        # bundle per count. Otherwise the env is fixed-count and a single bundle is
+        # reused across seeds.
+        if count is not None and isinstance(env, VariableObjectCountEnv):
             if count not in self._models_by_count:
                 self._models_by_count[count] = env.models_for_count(count)
             return self._models_by_count[count]
@@ -84,7 +85,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         # The SeSamE models consume a fixed-length Box. A variable-count env yields an
         # object-centric state, which it vectorizes through the current count's Box
         # space; a fixed-count env already yields the Box vector.
-        if hasattr(env, "to_box"):
+        if isinstance(env, VariableObjectCountEnv):
             return env.to_box(obs)
         return obs
 
@@ -130,9 +131,9 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             obs, info = env.reset(seed=seed, options={"object_count": count})
         else:
             obs, info = env.reset(seed=seed)
-        object_count = (
-            count if count is not None else getattr(env, "current_count", None)
-        )
+        object_count = count
+        if object_count is None and isinstance(env, VariableObjectCountEnv):
+            object_count = env.current_count
 
         plan_start = time.perf_counter()
         try:
@@ -181,7 +182,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         # so a large instance is not cut off before its (longer) plan can execute.
         max_steps = (
             env.max_steps_for_count(count)
-            if count is not None and hasattr(env, "max_steps_for_count")
+            if count is not None and isinstance(env, VariableObjectCountEnv)
             else self._max_steps
         )
         for _ in range(max_steps):
