@@ -70,7 +70,6 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         design_counts: list[int],
         eval_counts: list[int],
         bilevel_env_name: str | None = None,
-        reference_count: int | None = None,
         base_steps: int = 300,
         steps_per_object: int = 150,
         render_dpi: int | None = None,
@@ -108,12 +107,8 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         for count in sorted(set(self._design_counts) | set(self._eval_counts)):
             self._backend_for(count)
 
-        ref_count = (
-            reference_count if reference_count is not None else min(self._design_counts)
-        )
-        ref_env = self._backend_for(ref_count)._object_centric_env
-        # The object-centric spaces do not depend on the object count, so they can be
-        # fixed once from any backend and are honestly count-invariant.
+        # Largest design count: a count-0 exemplar omits the count-defining type row.
+        ref_env = self._backend_for(max(self._design_counts))._object_centric_env
         self.observation_space = ref_env.observation_space
         self.action_space = ref_env.action_space
         self.type_features = ref_env.type_features
@@ -278,8 +273,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
     def to_box(self, state: ObjectCentricState) -> NDArray[Any]:
         """Vectorize an object-centric state through the current count's Box space."""
         assert self._current_backend is not None, "Must call reset()"
-        # The backend's observation_space is a concrete ObjectCentricBoxSpace; the gym
-        # stub types it as a bare Space, which does not advertise vectorize().
+        # Really an ObjectCentricBoxSpace; the gym stub hides vectorize().
         box_space: Any = self._current_backend.observation_space
         return box_space.vectorize(state)
 
@@ -357,8 +351,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         )
 
     def _describe(self, include_access: bool) -> str:
-        # The family/action/reward prose is built by ConstantObjectKinDEREnv and stored
-        # on its metadata; the inner object-centric env only carries render metadata.
+        # Prose lives on the constant-object wrapper's metadata, not the inner env's.
         md = self._backend_for(min(self._design_counts)).metadata
         description = (
             f"# {self._env_path.rsplit(':', 1)[-1]} (variable object count)\n\n"

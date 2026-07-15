@@ -69,9 +69,7 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         )
 
     def _get_models(self, env: Any, count: int | None) -> Any:
-        # A variable-count env bakes the object count into its models, so cache one
-        # bundle per count. Otherwise the env is fixed-count and a single bundle is
-        # reused across seeds.
+        # Variable-count models bake in the count, so cache one bundle per count.
         if count is not None and isinstance(env, VariableObjectCountEnv):
             if count not in self._models_by_count:
                 self._models_by_count[count] = env.models_for_count(count)
