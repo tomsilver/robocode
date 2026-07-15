@@ -17,6 +17,7 @@ from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.mcp import (
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC,
     mcp_tool_descriptions,
 )
 from robocode.mcp.local_render import build_local_server
@@ -272,6 +273,23 @@ def test_mcp_system_prompt_suffix_blackbox_keeps_devectorize() -> None:
     """The blackbox system-prompt suffix keeps the devectorize/vectorize guidance."""
     assert "devectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX
     assert "devectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
+
+
+def test_mcp_tool_descriptions_object_centric_advertise_object_count() -> None:
+    """The object-centric render_state description advertises object_count and drops the
+    flat-vector guidance."""
+    desc = mcp_tool_descriptions("claude", object_centric=True)["render_state"]
+    assert "object_count" in desc
+    assert "seed=42, object_count=None" in desc
+    assert "arbitrary-state mode" in desc  # named only to say it does not apply
+    assert "devectorize" not in desc
+
+
+def test_mcp_object_centric_system_suffix_advertises_object_count() -> None:
+    """The object-centric system suffix advertises object_count for both render
+    tools."""
+    assert "object_count" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC
+    assert "render_policy" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC
     assert "vectorize" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
     assert "render_policy" in MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
 

@@ -5,6 +5,8 @@ import pytest
 from gymnasium import Env
 from gymnasium.spaces import Box
 from omegaconf import DictConfig
+from relational_structs import Type
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode.approaches.llm_genplan_approach import (
     LLMGenPlanApproach,
@@ -144,6 +146,40 @@ def _make_approach(env, client, tmp_path):
     )
     approach._client = client  # pylint: disable=protected-access
     return approach
+
+
+def test_fixed_count_uses_numpy_wording(tmp_path):
+    """A Box observation keeps the numpy-vector interface spec, flag off."""
+    # pylint: disable=protected-access
+    env = _ToyEnv()
+    approach = _make_approach(env, _FakeClient([]), tmp_path)
+    assert approach._object_centric is False
+    content = approach._build_initial_messages("CONTEXT", tmp_path)[-1]["content"]
+    assert "numpy observation" in content
+    assert "ObjectCentricState" not in content
+
+
+def test_object_centric_obs_switches_interface_spec(tmp_path):
+    """A variable-count (ObjectCentricStateSpace) observation flips the flag and the
+    genplan interface spec to the object-centric wording (no numpy vector)."""
+    # pylint: disable=protected-access
+    env = _ToyEnv()
+    approach = LLMGenPlanApproach(
+        action_space=env.action_space,
+        observation_space=ObjectCentricStateSpace({Type("obj", ["x", "y"])}),
+        seed=0,
+        primitives={},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env=env,
+        output_dir=str(tmp_path),
+        chain_of_thought=False,
+        use_docker=False,
+    )
+    assert approach._object_centric is True
+    content = approach._build_initial_messages("CONTEXT", tmp_path)[-1]["content"]
+    assert "ObjectCentricState" in content
+    assert "VARIABLE number of objects" in content
+    assert "numpy observation" not in content
 
 
 def test_debug_loop_fixes_broken_policy(tmp_path):

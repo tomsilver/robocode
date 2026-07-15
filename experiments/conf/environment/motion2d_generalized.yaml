@@ -1,0 +1,11 @@
+# Motion2D with a variable object count. The count parameter is the number of
+# narrow passages; each passage is formed by a top and bottom obstacle, so the
+# scene has ~2x as many `obstacle` objects as passages. Design counts are small;
+# held-out counts (4, 5) are larger.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.kinematic2d.motion2d:Motion2DEnv
+count_kwarg: num_passages
+count_object_prefix: obstacle
+design_counts: [0, 1, 2, 3]
+eval_counts: [0, 1, 2, 3, 4, 5]
+bilevel_env_name: motion2d

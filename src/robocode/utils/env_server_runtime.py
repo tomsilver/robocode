@@ -45,7 +45,12 @@ from robocode.primitives.crv_motion_planning_grasp import (
     RelativeGraspPose,
 )
 from robocode.rendering.render_state import render_state as render_state_fn
-from robocode.utils.env_server import decode, encode, serialize_space
+from robocode.utils.env_server import (
+    decode,
+    decode_registered_codec,
+    encode,
+    serialize_space,
+)
 from robocode.utils.render_paths import safe_label, unique_path
 
 logger = logging.getLogger(__name__)
@@ -197,6 +202,11 @@ def decode_ref(obj: Any, registry: _HandleRegistry) -> Any:
             return np.array(obj[_NDARRAY_TAG], dtype=np.dtype(obj["dtype"]))
         if _SET_TAG in obj:
             return {decode_ref(value, registry) for value in obj[_SET_TAG]}
+        # A by-value custom type (e.g. a local ObjectCentricState sent to a
+        # remote-module primitive) carries a registered codec tag, not a handle.
+        decoded, value = decode_registered_codec(obj)
+        if decoded:
+            return value
         return {key: decode_ref(value, registry) for key, value in obj.items()}
     if isinstance(obj, list):
         return [decode_ref(value, registry) for value in obj]
@@ -346,6 +356,7 @@ def _dispatch(
                 request.get("seed", 42),
                 request.get("state"),
                 request.get("label", ""),
+                request.get("object_count"),
             )
         }
     # Remote-object proxy commands. They use the handle-aware encode_ref/
@@ -373,8 +384,9 @@ def _render_state(
     env: Any,
     sandbox_dir: Path,
     seed: int,
-    state: list[float] | None,
+    state: list[float] | dict[str, Any] | None,
     label: str,
+    object_count: int | None = None,
 ) -> str:
     """Render a state to a PNG under ``mcp_renders/``; return the relative path.
 
@@ -387,10 +399,19 @@ def _render_state(
     saved = env.get_state()
     try:
         if state is not None:
-            env_state = np.array(state, dtype=np.float32)
+            # A variable-count env sends its state as a tagged object-centric payload;
+            # a fixed-count env sends a flat list of floats.
+            env_state = (
+                decode(state)
+                if isinstance(state, dict)
+                else np.array(state, dtype=np.float32)
+            )
             stem = "state_custom"
         else:
-            env.reset(seed=seed)
+            options = (
+                {"object_count": object_count} if object_count is not None else None
+            )
+            env.reset(seed=seed, options=options)
             env_state = env.get_state()
             stem = f"state_seed{seed}"
         if label:

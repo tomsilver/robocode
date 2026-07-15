@@ -51,6 +51,11 @@ def test_infer_bilevel_mapping_agrees_with_env_configs() -> None:
         name = cfg.get("bilevel_env_name")
         if name is None:
             continue
+        # env_id-based inference only applies to the fixed-count KinderGeom2DEnv
+        # configs; variable-count (VariableObjectCountEnv) configs carry no env_id and
+        # resolve their per-count model kwargs differently.
+        if "env_id" not in cfg:
+            continue
         inferred_name, inferred_kwargs = infer_bilevel_mapping(str(cfg["env_id"]))
         assert inferred_name == name, yaml_file.name
         assert inferred_kwargs == dict(cfg["bilevel_env_model_kwargs"]), yaml_file.name

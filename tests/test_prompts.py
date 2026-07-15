@@ -190,6 +190,42 @@ def test_agentic_prompt_blackbox():
     assert "IFACE" in p
 
 
+def test_blackbox_interaction_spec_vector_is_default():
+    """The default black-box spec describes the flat-vector env_client API."""
+    spec = prompts.blackbox_interaction_spec()
+    assert "devectorize" in spec
+    assert "numpy snapshot" in spec
+    assert "observation vector" in spec
+
+
+def test_blackbox_interaction_spec_object_centric():
+    """The object-centric black-box spec reads typed objects, not a vector."""
+    spec = prompts.blackbox_interaction_spec(object_centric=True)
+    assert "devectorize" not in spec
+    assert "vectorize" not in spec
+    assert "numpy snapshot" not in spec
+    assert "observation vector" not in spec
+    assert "get_objects" in spec
+    assert ".get_type(name)" in spec
+    assert "ObjectCentricState" in spec
+    assert "the number of objects VARIES" in spec
+
+
+def test_agentic_prompt_blackbox_object_centric_swaps_spec():
+    """A variable-count black-box agentic prompt carries the object-centric spec."""
+    p = prompts.build_agentic_prompt(
+        blackbox=True,
+        interface_spec="IFACE",
+        geometry=False,
+        modular_code=False,
+        env_description=None,
+        object_centric=True,
+    )
+    assert "get_objects" in p
+    assert "devectorize" not in p
+    assert "\n\n\n" not in p
+
+
 def test_agentic_prompt_blackbox_with_description_and_no_geometry():
     """Blackbox prompt wraps the description and omits geometry when disabled."""
     p = prompts.build_agentic_prompt(
@@ -294,6 +330,38 @@ def test_cdl_prompt_initial_helpers_non_blackbox():
     assert "ALREADY PROVIDED" in p
     assert "devectorize" in p
     assert "map the observation layout empirically" not in p
+
+
+def test_cdl_prompt_object_centric():
+    """A variable-count CDL prompt reads typed objects instead of indexing a vector."""
+    p = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec="IFACE",
+        geometry=True,
+        env_description="ENVDESC",
+        has_initial_helpers=False,
+        object_centric=True,
+    )
+    assert "ObjectCentricState" in p
+    assert "state.get_objects" in p
+    # No vector/index guidance leaks into the object-centric prompt.
+    assert "devectorize" not in p
+    assert "index into the observation array" not in p
+    assert "observation vector" not in p
+
+
+def test_cdl_prompt_vector_is_default():
+    """Without object_centric the prompt keeps the flat-vector obs guidance."""
+    p = prompts.build_cdl_prompt(
+        blackbox=False,
+        interface_spec="IFACE",
+        geometry=True,
+        env_description="ENVDESC",
+        has_initial_helpers=False,
+    )
+    assert "observation vector" in p
+    assert "index into the observation array" in p
+    assert "ObjectCentricState" not in p
     assert "BLACK BOX" not in p
 
 
@@ -342,6 +410,27 @@ def test_genplan_constants():
     assert "simple strategy" in prompts.GENPLAN_STRATEGY_PROMPT
 
 
+def test_genplan_interface_spec_fixed_count():
+    """The fixed-count spec describes a numpy observation and no object-centric note."""
+    spec = prompts.genplan_interface_spec(object_centric=False)
+    assert spec == prompts.GENPLAN_INTERFACE_SPEC
+    assert "numpy observation" in spec
+    assert "ObjectCentricState" not in spec
+
+
+def test_genplan_interface_spec_object_centric():
+    """The variable-count spec drops the numpy wording and appends the OCS note."""
+    spec = prompts.genplan_interface_spec(object_centric=True)
+    assert "numpy observation" not in spec
+    assert "ObjectCentricState" in spec
+    # The shared object-centric usage note is appended verbatim.
+    assert prompts.OBJECT_CENTRIC_STATE_NOTE in spec
+    assert "get_objects" in spec
+    # The class skeleton is preserved.
+    assert "class GeneratedApproach" in spec
+    assert "Return ONLY" in spec
+
+
 # ---------------------------------------------------------------------------
 # Golden composition tests: pin the exact assembled output so a future fragment
 # reorder, dropped section, or stray separator (e.g. a reintroduced blank line)
@@ -371,6 +460,7 @@ _SCAFFOLD_CDL_BLACKBOX = (
 
 def _cdl_behavior_impl(blackbox, helpers_note):
     return prompts.CDL_BEHAVIOR_IMPLEMENTATION_PROMPT.format(
+        obs_helpers_desc=prompts.CDL_OBS_HELPERS_DESC_VECTOR,
         obs_inspection_note=(
             prompts.CDL_OBS_INSPECTION_NOTE_BLACKBOX
             if blackbox
@@ -378,6 +468,7 @@ def _cdl_behavior_impl(blackbox, helpers_note):
         ),
         obs_helpers_note=helpers_note,
         act_helpers_note=helpers_note,
+        obs_access_rule=prompts.CDL_OBS_ACCESS_RULE_VECTOR,
     )
 
 
@@ -501,7 +592,7 @@ def test_golden_cdl_task_prompt_blackbox_with_helpers():
     expected = (
         _SCAFFOLD_CDL_BLACKBOX
         + "\n\n"
-        + prompts.BLACKBOX_INTERACTION_SPEC.format(
+        + prompts.blackbox_interaction_spec(
             set_state_note=prompts.BLACKBOX_SET_STATE_NOTE
         )
         + "\n"
@@ -642,6 +733,33 @@ def test_per_instance_seed_blackbox():
     assert "must NOT import `env_client`" in p
     assert "BUDGET:" in p
     assert "\n\n\n" not in p
+
+
+def test_per_instance_directive_pins_count():
+    """The directive names the unpinned reset call, or the count-pinned one."""
+    assert "env.reset(seed=7)" in prompts.per_instance_directive(7)
+    assert "object_count" not in prompts.per_instance_directive(7)
+    pinned = prompts.per_instance_directive(7, 4)
+    assert "env.reset(seed=7, options={'object_count': 4})" in pinned
+
+
+def test_per_instance_count_names_pinned_reset_in_every_branch():
+    """A pinned object count names the exact scored instance in every prompt branch, so
+    the agent develops against what it is scored on (not an unpinned design-count
+    reset)."""
+    for blackbox, env in ((False, "ENVDESC"), (False, None), (True, None)):
+        p = prompts.build_agentic_prompt(
+            blackbox=blackbox,
+            interface_spec=_IFACE,
+            geometry=True,
+            modular_code=False,
+            env_description=env,
+            per_instance_seed=7,
+            per_instance_count=4,
+        )
+        assert "env.reset(seed=7, options={'object_count': 4})" in p
+        assert "env.reset(seed=7)`" not in p  # not the unpinned form
+        assert "\n\n\n" not in p
 
 
 def test_per_instance_no_doubled_blank_lines_grid():

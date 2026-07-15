@@ -110,12 +110,20 @@ def build_local_server(
     primitives = _build_sandbox_primitives(env, primitives_dir)
     out_dir = renders_dir or Path("mcp_renders")
 
-    def render_state_impl(seed: int, state: list[float] | None, label: str) -> str:
+    def render_state_impl(
+        seed: int,
+        state: list[float] | None,
+        label: str,
+        object_count: int | None = None,
+    ) -> str:
         if state is not None:
             env_state = np.array(state, dtype=np.float32)
             env.set_state(env_state)
         else:
-            env.reset(seed=seed)
+            options = (
+                {"object_count": object_count} if object_count is not None else None
+            )
+            env.reset(seed=seed, options=options)
             env_state = env.get_state()
 
         frame = _render_state_fn(env, env_state)
@@ -133,7 +141,11 @@ def build_local_server(
         return str(out)
 
     def render_policy_impl(
-        approach_dir: str, seed: int, max_steps: int, max_frames: int
+        approach_dir: str,
+        seed: int,
+        max_steps: int,
+        max_frames: int,
+        object_count: int | None = None,
     ) -> list[str]:
         out = out_dir / f"policy_seed{seed}"
         out.mkdir(parents=True, exist_ok=True)
@@ -145,6 +157,7 @@ def build_local_server(
             str(out),
             max_steps=max_steps,
             max_frames=max_frames,
+            object_count=object_count,
         )
         return [str(out / f) for f in filenames]
 

@@ -79,6 +79,32 @@ def test_solve_instance_targets_seed_and_scores_program(tmp_path, monkeypatch):
     assert result.num_steps is not None
 
 
+def test_solve_instance_pins_count_in_prompt(tmp_path, monkeypatch):
+    """For a variable-count env the prompt names the pinned (seed, count) instance, so
+    the agent develops against exactly what it is scored on."""
+    env, approach = _make_approach(tmp_path)
+    captured = {}
+
+    def fake_run(*, sandbox_dir, prompt, system_prompt, max_budget_usd, init_files):
+        del sandbox_dir, system_prompt, max_budget_usd, init_files
+        captured["prompt"] = prompt
+        # Stop before scoring: this test only checks the prompt the agent receives.
+        return SandboxResult(
+            success=False, output_file=None, error="stop", total_cost_usd=0.0
+        )
+
+    monkeypatch.setattr(approach, "_run_sandbox", fake_run)
+    approach.solve_instance(
+        env=env,
+        seed=99,
+        budget_usd=2.0,
+        output_subdir=tmp_path / "instance_0",
+        count=4,
+    )
+    assert "env.reset(seed=99, options={'object_count': 4})" in captured["prompt"]
+    assert "env.reset(seed=99)`" not in captured["prompt"]  # not the unpinned form
+
+
 def test_solve_instance_no_program_is_crashed(tmp_path, monkeypatch):
     """When the agent commits no approach.py, the attempt is crashed but charged."""
     env, approach = _make_approach(tmp_path)

@@ -49,6 +49,7 @@ from typing import Any
 
 import numpy as np
 from gymnasium.spaces import Box, Space
+from relational_structs.spaces import ObjectCentricStateSpace
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,29 @@ def register_codec(
     """
     _ENCODERS[cls] = (tag, encode_fn)
     _DECODERS[tag] = decode_fn
+
+
+def _register_builtin_codecs() -> None:
+    """Register codecs for non-Box observation/state types shipped with robocode."""
+    from relational_structs import (  # pylint: disable=import-outside-toplevel
+        ObjectCentricState,
+    )
+
+    from robocode.utils.object_centric_codec import (  # pylint: disable=import-outside-toplevel
+        OCS_TAG,
+        decode_object_centric_state,
+        encode_object_centric_state,
+    )
+
+    register_codec(
+        ObjectCentricState,
+        OCS_TAG,
+        encode_object_centric_state,
+        decode_object_centric_state,
+    )
+
+
+_register_builtin_codecs()
 
 
 def encode(obj: Any) -> Any:
@@ -121,6 +145,21 @@ def decode(obj: Any) -> Any:
     return obj
 
 
+def decode_registered_codec(obj: dict[str, Any]) -> tuple[bool, Any]:
+    """Decode a registered-codec leaf (e.g. an ObjectCentricState payload).
+
+    Returns ``(True, value)`` if *obj* carries a registered codec tag, else
+    ``(False, None)``. Lets the handle-aware ``decode_ref`` reconstruct by-value
+    custom types (their payloads carry no nested handles) the same way ``decode``
+    does, so a local ObjectCentricState passed to a host remote-module primitive
+    rebuilds as a real state instead of a raw dict.
+    """
+    for tag, decode_fn in _DECODERS.items():
+        if tag in obj:
+            return True, decode_fn(obj[tag])
+    return False, None
+
+
 def serialize_space(space: Space[Any]) -> dict[str, Any]:
     """Serialize a gym space's metadata for the agent's env_spaces.json.
 
@@ -135,9 +174,23 @@ def serialize_space(space: Space[Any]) -> dict[str, Any]:
             "high": space.high.tolist(),
             "dtype": str(space.dtype),
         }
+    if isinstance(space, ObjectCentricStateSpace):
+        # A variable-count env's observation space. It carries no feature names, so the
+        # env attaches `type_features` (needed to reconstruct states on both sides).
+        type_features = getattr(space, "type_features", None)
+        if type_features is None:
+            raise TypeError(
+                "ObjectCentricStateSpace has no `type_features`; the env must attach it "
+                "(VariableObjectCountEnv does) for blackbox serialization."
+            )
+        from robocode.utils.object_centric_codec import (  # pylint: disable=import-outside-toplevel
+            serialize_object_centric_space,
+        )
+
+        return serialize_object_centric_space(type_features)
     raise TypeError(
         f"No serializer for space type {type(space).__name__}; blackbox mode "
-        "currently supports Box spaces. Add a branch in "
+        "supports Box and ObjectCentric spaces. Add a branch in "
         "robocode.utils.env_server.serialize_space and mirror it in "
         "env_client.SpaceInfo"
     )

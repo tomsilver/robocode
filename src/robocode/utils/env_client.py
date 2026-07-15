@@ -40,10 +40,197 @@ _NDARRAY_TAG = "__ndarray__"
 _HANDLE_TAG = "__handle__"
 _MODULE_TAG = "__module__"
 _SET_TAG = "__set__"
+_OCS_TAG = "__ocs__"
+
+
+# ---------------------------------------------------------------------------
+# Local ObjectCentricState mirror
+#
+# A variable-count env hands the program an ObjectCentricState. This sandbox module
+# must stay importable with only the standard library and numpy, so rather than import
+# relational_structs it reconstructs a faithful local mirror from the self-contained
+# codec payload (which embeds the type hierarchy). The mirror implements the subset of
+# the ObjectCentricState API a generated program uses, with the same semantics -- most
+# importantly `is_instance` over the ancestor chain and `get(obj, feature)` by name --
+# so a program tested here behaves as it will at eval against the real state.
+# ---------------------------------------------------------------------------
+
+
+class _Type:
+    """A local mirror of relational_structs.Type (name + optional parent)."""
+
+    def __init__(self, name: str, parent: "_Type | None" = None) -> None:
+        self.name = name
+        self.parent = parent
+
+    def get_ancestors(self) -> set["_Type"]:
+        """Return this type and all of its ancestors (parents, grandparents, ...)."""
+        ancestors: set[_Type] = set()
+        cur: _Type | None = self
+        while cur is not None:
+            ancestors.add(cur)
+            cur = cur.parent
+        return ancestors
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, _Type) and other.name == self.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __repr__(self) -> str:
+        return f"Type({self.name})"
+
+
+class _Object:
+    """A local mirror of relational_structs.Object (name + type)."""
+
+    def __init__(self, name: str, typ: _Type) -> None:
+        self.name = name
+        self.type = typ
+
+    def is_instance(self, typ: _Type) -> bool:
+        """True if this object's type is *typ* or a descendant of it."""
+        return typ in self.type.get_ancestors()
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, _Object) and other.name == self.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __repr__(self) -> str:
+        return f"{self.name}:{self.type.name}"
+
+
+class _ObjectCentricState:
+    """A local mirror of relational_structs.ObjectCentricState.
+
+    Holds ``{Object: feature ndarray}`` as ``data`` plus ``{Type: [feature names]}`` as
+    ``type_features`` (both public, matching the real state) and exposes the read/write
+    API a program uses. Iteration yields the objects, sorted by name for determinism.
+    """
+
+    def __init__(
+        self,
+        data: dict[_Object, np.ndarray],
+        type_features: dict[_Type, list[str]],
+    ) -> None:
+        self.data = data
+        self.type_features = type_features
+
+    def __iter__(self) -> Any:
+        return iter(sorted(self.data, key=lambda o: o.name))
+
+    def get_object_names(self) -> set[str]:
+        """The set of object names in this state."""
+        return {o.name for o in self.data}
+
+    def get_object_from_name(self, name: str) -> _Object:
+        """The object with the given name."""
+        for obj in self.data:
+            if obj.name == name:
+                return obj
+        raise ValueError(f"No object named {name!r}")
+
+    def get_objects(self, typ: _Type) -> list[_Object]:
+        """Objects that are instances of *typ* (its subtypes included), by name."""
+        return sorted(
+            (o for o in self.data if o.is_instance(typ)), key=lambda o: o.name
+        )
+
+    def _feature_index(self, obj: _Object, feature: str) -> int:
+        return self.type_features[obj.type].index(feature)
+
+    def get(self, obj: _Object, feature: str) -> float:
+        """Read a named feature of an object."""
+        return float(self.data[obj][self._feature_index(obj, feature)])
+
+    def set(self, obj: _Object, feature: str, value: float) -> None:
+        """Write a named feature of an object in place."""
+        self.data[obj][self._feature_index(obj, feature)] = value
+
+    def vec(self, objects: Any) -> np.ndarray:
+        """Concatenate the feature vectors of the given objects."""
+        return (
+            np.concatenate([self.data[o] for o in objects]) if objects else np.array([])
+        )
+
+    def copy(self) -> "_ObjectCentricState":
+        """A deep copy of this state."""
+        return _ObjectCentricState(
+            {o: arr.copy() for o, arr in self.data.items()},
+            {t: list(f) for t, f in self.type_features.items()},
+        )
+
+    def allclose(self, other: "_ObjectCentricState") -> bool:
+        """True if *other* has the same objects with numerically-close features."""
+        if self.get_object_names() != other.get_object_names():
+            return False
+        return all(
+            np.allclose(self.data[o], other.data[other.get_object_from_name(o.name)])
+            for o in self.data
+        )
+
+
+def _build_local_types(
+    types_payload: list[dict[str, Any]],
+) -> tuple[dict[str, _Type], dict[_Type, list[str]]]:
+    """Rebuild local {name: _Type} and {_Type: [features]} (parents-first payload)."""
+    type_by_name: dict[str, _Type] = {}
+    type_features: dict[_Type, list[str]] = {}
+    for entry in types_payload:
+        parent = type_by_name[entry["parent"]] if entry["parent"] is not None else None
+        typ = _Type(entry["name"], parent)
+        type_by_name[entry["name"]] = typ
+        type_features[typ] = list(entry["features"])
+    return type_by_name, type_features
+
+
+def _ocs_from_payload(payload: dict[str, Any]) -> _ObjectCentricState:
+    """Reconstruct a local ObjectCentricState from a self-contained codec payload."""
+    type_by_name, type_features = _build_local_types(payload["types"])
+    data: dict[_Object, np.ndarray] = {}
+    for entry in payload["objects"]:
+        obj = _Object(entry["name"], type_by_name[entry["type"]])
+        data[obj] = np.array(entry["features"], dtype=np.float32)
+    return _ObjectCentricState(data, type_features)
+
+
+def _ocs_to_payload(state: _ObjectCentricState) -> dict[str, Any]:
+    """Encode a local ObjectCentricState back to the self-contained codec payload."""
+
+    def depth(t: _Type) -> int:
+        n, p = 0, t.parent
+        while p is not None:
+            n, p = n + 1, p.parent
+        return n
+
+    types = sorted(state.type_features, key=lambda t: (depth(t), t.name))
+    return {
+        "types": [
+            {
+                "name": t.name,
+                "parent": t.parent.name if t.parent is not None else None,
+                "features": list(state.type_features[t]),
+            }
+            for t in types
+        ],
+        "objects": [
+            {
+                "name": o.name,
+                "type": o.type.name,
+                "features": [float(v) for v in state.data[o]],
+            }
+            for o in sorted(state.data, key=lambda o: o.name)
+        ],
+    }
 
 
 def _encode(obj: Any) -> Any:
     """Encode values as tagged JSON (mirrors robocode.utils.env_server)."""
+    if isinstance(obj, _ObjectCentricState):
+        return {_OCS_TAG: _ocs_to_payload(obj)}
     if isinstance(obj, np.generic):
         return obj.item()
     if isinstance(obj, np.ndarray):
@@ -58,6 +245,8 @@ def _encode(obj: Any) -> Any:
 def _decode(obj: Any) -> Any:
     """Decode tagged JSON (mirrors robocode.utils.env_server)."""
     if isinstance(obj, dict):
+        if _OCS_TAG in obj:
+            return _ocs_from_payload(obj[_OCS_TAG])
         if _NDARRAY_TAG in obj:
             return np.array(obj[_NDARRAY_TAG], dtype=np.dtype(obj["dtype"]))
         return {key: _decode(value) for key, value in obj.items()}
@@ -75,6 +264,8 @@ def _encode_ref(obj: Any) -> Any:
     """
     if isinstance(obj, _RemoteHandle):
         return {_HANDLE_TAG: obj._handle_id}  # pylint: disable=protected-access
+    if isinstance(obj, _ObjectCentricState):
+        return {_OCS_TAG: _ocs_to_payload(obj)}
     if isinstance(obj, np.generic):
         return obj.item()
     if isinstance(obj, np.ndarray):
@@ -210,13 +401,46 @@ class _BlackboxObservationSpace(SpaceInfo):
         return self._client.vectorize(state)
 
 
+class _ObjectCentricObservationSpace:
+    """Client-side view of a variable-count env's ObjectCentricStateSpace.
+
+    The observation is already an object-centric state (reconstructed locally from the
+    wire), so this space has no fixed shape/vector: it exposes the domain ``types`` and
+    ``type_features`` the program needs to enumerate objects, matching the eval-time
+    ``observation_space.types``. There is no ``devectorize`` -- the state is not a
+    vector.
+    """
+
+    def __init__(self, spec: dict[str, Any]) -> None:
+        self._type_by_name, self._type_features = _build_local_types(spec["types"])
+
+    @property
+    def types(self) -> set[_Type]:
+        """The domain object types (matches the eval-time observation_space.types)."""
+        return set(self._type_features)
+
+    @property
+    def type_features(self) -> dict[_Type, list[str]]:
+        """Feature names for each type."""
+        return {t: list(f) for t, f in self._type_features.items()}
+
+    def get_type(self, name: str) -> _Type:
+        """The domain type with the given name (e.g. ``"rectangle"``)."""
+        return self._type_by_name[name]
+
+
 class BlackboxEnv:
     """A live environment instance, accessed over the wire."""
 
     def __init__(self, meta: dict[str, Any], sandbox_root: Any = None) -> None:
-        self.observation_space = _BlackboxObservationSpace(
-            meta["observation_space"], self
-        )
+        obs_spec = meta["observation_space"]
+        # A variable-count env sends object-centric states, reconstructed locally; a
+        # fixed-count env sends Box vectors as before.
+        self._object_centric = obs_spec.get("type") == "ObjectCentric"
+        if self._object_centric:
+            self.observation_space: Any = _ObjectCentricObservationSpace(obs_spec)
+        else:
+            self.observation_space = _BlackboxObservationSpace(obs_spec, self)
         self.action_space = SpaceInfo(meta["action_space"])
         self.max_steps: int | None = meta["max_steps"]
         # How make_primitives rebuilds the eval-time primitives dict (see
@@ -301,21 +525,46 @@ class BlackboxEnv:
             response["info"],
         )
 
-    def get_state(self) -> np.ndarray:
-        """Return a snapshot of the full environment state."""
+    def get_state(self) -> Any:
+        """Return a snapshot of the full environment state.
+
+        A Box vector for a fixed-count env; a local ObjectCentricState for a
+        variable-count env (reconstructed by ``_decode``).
+        """
         return self._request({"cmd": "get_state"})["state"]
 
-    def render_state(self, seed: int = 42, state: Any = None, label: str = "") -> str:
+    def _encode_state(self, state: Any) -> Any:
+        """Encode a state for the wire: an object-centric state or a Box vector."""
+        if isinstance(state, _ObjectCentricState):
+            return _encode(state)
+        return _encode(np.asarray(state))
+
+    def render_state(
+        self,
+        seed: int = 42,
+        state: Any = None,
+        label: str = "",
+        object_count: int | None = None,
+    ) -> str:
         """Render a state on the host; returns a PNG path inside the sandbox.
 
-        Either pass ``seed`` to render the initial state after a reset, or
-        ``state`` (a flat list of floats, as from ``get_state().tolist()``)
-        to render an arbitrary state. The path is relative to the sandbox dir.
+        Either pass ``seed`` to render the initial state after a reset (with
+        ``object_count`` to pin a variable-count env's object count), or ``state`` (a
+        flat list of floats, as from ``get_state().tolist()``) to render an arbitrary
+        state. The path is relative to the sandbox dir.
         """
-        if state is not None and isinstance(state, np.ndarray):
+        if isinstance(state, _ObjectCentricState):
+            state = _encode(state)  # tagged object-centric payload, decoded host-side
+        elif isinstance(state, np.ndarray):
             state = state.tolist()
         return self._request(
-            {"cmd": "render_state", "seed": seed, "state": state, "label": label}
+            {
+                "cmd": "render_state",
+                "seed": seed,
+                "state": state,
+                "label": label,
+                "object_count": object_count,
+            }
         )["path"]
 
     def render_policy(
@@ -324,14 +573,16 @@ class BlackboxEnv:
         max_steps: int = 1000,
         max_frames: int = 100,
         approach_path: Any = None,
+        object_count: int | None = None,
     ) -> list[str]:
         """Run an episode of approach.py here and render the visited states.
 
         The policy runs in this process: only ``get_action`` (which needs the
         observation alone) executes locally, while each visited state is
         rendered on the host via ``render_state``. No approach code runs on the
-        host, so a black-box agent cannot reach the env source through
-        rendering. Returns the PNG paths (relative to the sandbox dir).
+        host, so a black-box agent cannot reach the env source through rendering.
+        ``object_count`` pins a variable-count env's object count on the rollout reset.
+        Returns the PNG paths (relative to the sandbox dir).
         """
         path = (
             Path(approach_path)
@@ -341,7 +592,8 @@ class BlackboxEnv:
         approach = _load_generated_approach(
             path, self.action_space, self.observation_space, self.make_primitives()
         )
-        obs, info = self.reset(seed=seed)
+        options = {"object_count": object_count} if object_count is not None else None
+        obs, info = self.reset(seed=seed, options=options)
         approach.reset(obs, info)
         states = [self.get_state()]
         for _ in range(max_steps):
@@ -360,7 +612,7 @@ class BlackboxEnv:
 
     def set_state(self, state: Any) -> None:
         """Restore a state snapshot previously returned by get_state()."""
-        self._request({"cmd": "set_state", "state": _encode(np.asarray(state))})
+        self._request({"cmd": "set_state", "state": self._encode_state(state)})
 
     def check_action_collision(self, state: Any, action: Any) -> bool:
         """Return True if taking *action* in *state* causes a collision.
@@ -373,7 +625,7 @@ class BlackboxEnv:
         response = self._request(
             {
                 "cmd": "check_action_collision",
-                "state": _encode(np.asarray(state)),
+                "state": self._encode_state(state),
                 "action": _encode(np.asarray(action, dtype=self.action_space.dtype)),
             }
         )

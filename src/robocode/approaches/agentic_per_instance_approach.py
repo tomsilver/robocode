@@ -2,8 +2,9 @@
 
 Unlike the generalized :class:`AgenticApproach` (one program for all seeds), this
 baseline spends eval-time agent budget on each seed in turn: for every eval seed
-the coding agent writes a program targeting *that* instance, which is then scored
-on ``env.reset(seed=S)``. The runner (``run_per_instance_eval``) owns the global
+the coding agent writes a program targeting *that* instance, which is then scored on
+it -- ``env.reset(seed=S)``, or the pinned ``env.reset(seed=S, options={"object_count":
+K})`` for a variable-count env. The runner (``run_per_instance_eval``) owns the global
 budget that carries across seeds; this class solves one instance at a time.
 """
 
@@ -13,6 +14,7 @@ from typing import Any
 
 from robocode.approaches.agentic_base import GeneratedProgramApproach
 from robocode.approaches.base_approach import InstanceResult
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.episode import run_episode
 
 logger = logging.getLogger(__name__)
@@ -40,12 +42,14 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         budget_usd: float,
         output_subdir: Path,
         render: bool = False,
+        count: int | None = None,
     ) -> InstanceResult:
         """Run the agent on a single seed, then score the program it wrote.
 
-        The agent is told its target is ``env.reset(seed=S)`` and writes a program
-        that only needs to solve that instance. We score that program on exactly
-        that seed. A fresh sandbox is used per seed: no state from prior seeds is
+        The agent is told its target is the exact instance it is scored on --
+        ``env.reset(seed=S)``, or ``env.reset(seed=S, options={"object_count": K})``
+        for a variable-count env -- and writes a program that only needs to solve that
+        instance. A fresh sandbox is used per seed: no state from prior seeds is
         carried in.
         """
         sandbox_dir = output_subdir / "sandbox"
@@ -62,7 +66,7 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
             )
 
         prompt, system_prompt, init_files = self._build_agentic_prompts(
-            per_instance_seed=seed
+            per_instance_seed=seed, per_instance_count=count
         )
         result = self._run_sandbox(
             sandbox_dir=sandbox_dir,
@@ -97,10 +101,15 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         assert self._max_steps is not None  # the runner always provides max_steps
         # Each seed gets a fresh program; clear any policy from a prior seed.
         self._generated = None
+        episode_max_steps = (
+            env.max_steps_for_count(count)
+            if count is not None and isinstance(env, VariableObjectCountEnv)
+            else self._max_steps
+        )
         try:
             self._load_generated(result.output_file)
             metrics, frames, _ = run_episode(
-                env, self, seed, self._max_steps, render=render
+                env, self, seed, episode_max_steps, render=render, count=count
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Isolate a single seed's bad program (load error or runtime crash):
@@ -127,4 +136,9 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
             cost_usd=cost,
             crashed=False,
             frames=frames,
+            extras=(
+                {"object_count": metrics["object_count"]}
+                if "object_count" in metrics
+                else {}
+            ),
         )

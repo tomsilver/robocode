@@ -45,27 +45,71 @@ def infer_bilevel_mapping(env_id: str) -> tuple[str | None, dict[str, int]]:
     return family, {kwarg: int(match.group(2))}
 
 
-def build_sesame_models(env: Any) -> Any:
+class VariableCountBilevelModels:
+    """The ``bilevel_models`` primitive for a variable-object-count env.
+
+    The planning models bake in the object count, so there is no single
+    ``SesameModels`` bundle. Call :meth:`models_for_state` (or :meth:`models_for_count`)
+    to get the bundle for the current instance's count; bundles are built once per count
+    and cached.
+    """
+
+    def __init__(self, env: Any) -> None:
+        self._env = env
+        self._by_count: dict[int, Any] = {}
+
+    def models_for_count(self, count: int) -> Any:
+        """Return the ``SesameModels`` bundle for a given object count (cached)."""
+        if count not in self._by_count:
+            self._by_count[count] = self._env.models_for_count(count)
+        return self._by_count[count]
+
+    def models_for_state(self, state: Any) -> Any:
+        """Return the ``SesameModels`` bundle for the count implied by *state*."""
+        return self.models_for_count(self._env.infer_count(state))
+
+
+def build_sesame_models(
+    env: Any,
+    *,
+    observation_space: Any | None = None,
+    model_kwargs: dict[str, Any] | None = None,
+) -> Any:
     """Build the `SesameModels` (predicates, operators, skills, transition sim).
 
-    Reads the bilevel env-family name and object-count kwargs off *env*. Fails loudly if
-    the env config is missing the mapping rather than planning silently.
+    Reads the bilevel env-family name off *env*. The observation space and object-count
+    kwargs default to the env's own (the fixed-count case), but a variable-count env
+    passes them explicitly so the models are built for the *current* instance's count:
+    its per-count `ObjectCentricBoxSpace` and `{count_kwarg: k}`. Fails loudly if the
+    env config is missing the family mapping rather than planning silently.
+
+    A variable-count env (one exposing `models_for_count`) has no single count, so a
+    call without explicit `model_kwargs` returns a :class:`VariableCountBilevelModels`
+    accessor instead of one bundle; per-count builds pass explicit kwargs and so take
+    the normal path below.
 
     `kinder_bilevel_planning` is imported lazily (it is an optional `bilevel` extra),
     so `import robocode.primitives` works even where the extra is not installed -- e.g.
     a "models OFF" sandbox. Only actually using the bilevel models requires it.
     """
-    # pylint: disable=import-outside-toplevel
-    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
-
     # We never run under python -O, so this assert fires as a loud config check.
     assert env.bilevel_env_name is not None, (
         "bilevel_env_name is not set on the environment; add bilevel_env_name and "
         "bilevel_env_model_kwargs to the env config to use bilevel planning models."
     )
+    if model_kwargs is None and hasattr(env, "models_for_count"):
+        return VariableCountBilevelModels(env)
+
+    # pylint: disable=import-outside-toplevel
+    from kinder_bilevel_planning.env_models import create_bilevel_planning_models
+
+    obs_space = (
+        observation_space if observation_space is not None else env.observation_space
+    )
+    kwargs = model_kwargs if model_kwargs is not None else env.bilevel_env_model_kwargs
     return create_bilevel_planning_models(
         env.bilevel_env_name,
-        env.observation_space,
+        obs_space,
         env.action_space,
-        **env.bilevel_env_model_kwargs,
+        **kwargs,
     )

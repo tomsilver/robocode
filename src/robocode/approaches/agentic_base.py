@@ -23,6 +23,7 @@ from typing import Any, TypeVar
 
 from gymnasium.spaces import Space
 from omegaconf import DictConfig
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
@@ -98,6 +99,9 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._blackbox = blackbox
+        # A variable-count env hands the program an ObjectCentricState (not a vector);
+        # the prompt then documents the object-centric API instead of vector/devectorize.
+        self._object_centric = isinstance(observation_space, ObjectCentricStateSpace)
         self._env_cfg = env_cfg
         self._max_steps = max_steps
         if blackbox:
@@ -116,22 +120,29 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self.total_cost_usd: float | None = None
 
     def _build_agentic_prompts(
-        self, *, per_instance_seed: int | None = None
+        self,
+        *,
+        per_instance_seed: int | None = None,
+        per_instance_count: int | None = None,
     ) -> tuple[str, str, dict[str, Path]]:
         """Assemble the (task prompt, system prompt, init files) for one run.
 
         Shared by the generalized ``train()`` (``per_instance_seed=None``) and
-        per-instance ``solve_instance()`` (a concrete seed); the only difference
-        is the seed threaded into the task prompt. If we have an env description
-        it is inlined; otherwise the agent is asked to read source files.
+        per-instance ``solve_instance()`` (a concrete seed); the seed -- and, for a
+        variable-count env, ``per_instance_count`` -- are threaded into the task prompt
+        so the agent develops against the same instance it is scored on. If we have an
+        env description it is inlined; otherwise the agent is asked to read source files.
         """
         primitives_desc = format_primitives_description(
-            list(self._primitives), blackbox=self._blackbox
+            list(self._primitives),
+            blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
         primitives_desc += prompts.build_mcp_tool_lines(
             mcp_tools=self._mcp_tools,
             backend_name=self._backend_cfg["backend"],
             blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         python_exe = (
@@ -143,6 +154,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             python_executable=python_exe,
             primitives_description=primitives_desc,
             blackbox=self._blackbox,
+            object_centric=self._object_centric,
         )
 
         env_description: str | None = None
@@ -157,6 +169,8 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             modular_code=self._modular_code_prompt,
             env_description=env_description,
             per_instance_seed=per_instance_seed,
+            per_instance_count=per_instance_count,
+            object_centric=self._object_centric,
         )
 
         system_prompt = prompts.build_system_prompt(
@@ -168,6 +182,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
             mcp_tools=self._mcp_tools,
+            object_centric=self._object_centric,
         )
         init_files: dict[str, Path] = {}
         if self._blackbox:

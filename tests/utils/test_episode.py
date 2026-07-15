@@ -21,7 +21,47 @@ from robocode.utils.episode import (
     run_per_instance_eval,
     save_frames,
     save_video,
+    summarize_by_count,
 )
+
+
+def test_summarize_by_count_uses_full_scheduled_denominator() -> None:
+    """Per-count solve rate counts every scheduled episode; crashes/unattempted fail."""
+    scheduled = [2, 2, 2, 5, 5]
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "num_steps": 10},  # count 2
+        {"solved": False, "num_steps": 30},  # count 2
+        {"solved": False, "crashed": True},  # count 2, crash -> failure in denominator
+        {"solved": False, "attempted": False},  # count 5, unattempted -> failure
+        {"solved": True, "num_steps": 40, "planning_time": 3.0},  # count 5
+    ]
+    by_count, largest_all, largest_any = summarize_by_count(scheduled, per_episode)
+    assert by_count[2]["n"] == 3 and by_count[2]["solve_rate"] == 1 / 3
+    assert by_count[5]["n"] == 2 and by_count[5]["solve_rate"] == 1 / 2
+    # numeric extras averaged per count over whoever has them.
+    assert by_count[5]["mean_planning_time"] == 3.0
+    # largest_count_all_solved needs solve_rate == 1.0 (no count qualifies here).
+    assert largest_all is None
+    assert largest_any == 5  # count 5 has a solve
+
+
+def test_summarize_by_count_largest_all_solved() -> None:
+    """largest_count_all_solved is the biggest count solved on every episode."""
+    scheduled = [1, 1, 3]
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "num_steps": 5},
+        {"solved": True, "num_steps": 6},
+        {"solved": False, "num_steps": 9},
+    ]
+    _by_count, largest_all, largest_any = summarize_by_count(scheduled, per_episode)
+    assert largest_all == 1  # count 1 fully solved, count 3 not
+    assert largest_any == 1
+
+
+def test_summarize_by_count_rejects_length_mismatch() -> None:
+    """Scheduled counts and episode entries must be parallel."""
+    with pytest.raises(ValueError, match="scheduled_counts and per_episode"):
+        summarize_by_count([1, 2], [{"solved": True}])
 
 
 class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
@@ -46,9 +86,12 @@ class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
         budget_usd: float,
         output_subdir: Path,
         render: bool = False,
+        count: int | None = None,
     ) -> InstanceResult:
         del env, output_subdir
-        self.calls.append({"seed": seed, "budget_usd": budget_usd, "render": render})
+        self.calls.append(
+            {"seed": seed, "budget_usd": budget_usd, "render": render, "count": count}
+        )
         return self._results.pop(0)
 
 
@@ -120,6 +163,53 @@ def test_per_instance_eval_charges_crashed_attempts(tmp_path: Path) -> None:
     assert out["mean_eval_steps"] == pytest.approx(4.0)
     assert out["solve_rate"] == pytest.approx(0.5)  # 1 of 2 seeds solved
     assert out["per_episode"][1]["crashed"] is True
+
+
+def test_per_instance_eval_tags_every_entry_with_scheduled_count(
+    tmp_path: Path,
+) -> None:
+    """Crashed and budget-exhausted entries keep their scheduled object_count, so the
+    by-count denominator covers every scheduled episode (nothing silently dropped)."""
+    results = [
+        InstanceResult(solved=True, total_reward=1.0, num_steps=3, cost_usd=1.0),
+        InstanceResult(
+            solved=False,
+            total_reward=None,
+            num_steps=None,
+            cost_usd=2.0,
+            crashed=True,
+        ),
+    ]
+    approach = _ScriptedPerInstanceApproach(results)
+    out = run_per_instance_eval(
+        None,
+        approach,
+        [10, 11, 12, 13],
+        max_budget_usd=3.0,  # fits solved ($1) + crashed ($2); seeds 12,13 unattempted
+        output_dir=tmp_path,
+        eval_counts=[2, 4, 6, 8],
+    )
+    per = out["per_episode"]
+    assert [e.get("object_count") for e in per] == [2, 4, 6, 8]
+    assert per[1]["crashed"] is True and per[1]["object_count"] == 4
+    assert per[2]["attempted"] is False and per[2]["object_count"] == 6
+    # by-count covers all scheduled episodes; the unreached count-8 episode is a failure.
+    assert out["by_count"][8]["n"] == 1
+    assert out["by_count"][8]["n_solved"] == 0
+
+
+def test_per_instance_eval_rejects_mismatched_eval_counts(tmp_path: Path) -> None:
+    """Eval counts must be parallel to eval seeds."""
+    approach = _ScriptedPerInstanceApproach([])
+    with pytest.raises(ValueError, match="eval_counts and eval_seeds"):
+        run_per_instance_eval(
+            None,
+            approach,
+            [10, 11],
+            max_budget_usd=1.0,
+            output_dir=tmp_path,
+            eval_counts=[2],
+        )
 
 
 def test_per_instance_eval_aggregates_extras(tmp_path: Path) -> None:

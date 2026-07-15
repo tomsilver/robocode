@@ -38,8 +38,8 @@ from robocode.utils.env_client import BlackboxEnv
 
 logger = logging.getLogger(MCP_SERVER_NAME)
 
-RenderStateImpl = Callable[[int, "list[float] | None", str], str]
-RenderPolicyImpl = Callable[[str, int, int, int], "list[str]"]
+RenderStateImpl = Callable[[int, "list[float] | None", str, "int | None"], str]
+RenderPolicyImpl = Callable[[str, int, int, int, "int | None"], "list[str]"]
 
 
 def _setup_logging(log_file: Path) -> None:
@@ -95,13 +95,16 @@ def register_tools(
             seed: int = 42,
             state: list[float] | None = None,
             label: str = "",
+            object_count: int | None = None,
         ) -> str:
             """Render the environment state as a PNG image.
 
             There are two modes:
 
             1. **Reset mode** (default): pass only ``seed`` to render the
-               initial state after ``env.reset(seed=seed)``.
+               initial state after ``env.reset(seed=seed)``. For a variable-count
+               env, pass ``object_count`` to pin the number of objects (matching a
+               held-out per-instance evaluation).
             2. **Arbitrary state mode**: pass ``state`` as a flat list of
                floats (the same format returned by
                ``env.get_state().tolist()``). ``seed`` is ignored when
@@ -112,6 +115,9 @@ def register_tools(
             seed:
                 Seed for resetting the environment (used only when
                 ``state`` is not provided).
+            object_count:
+                Optional object count for a variable-count env, pinned on the
+                reset (used only when ``state`` is not provided).
             state:
                 Optional flat list of floats representing an arbitrary
                 environment state. When provided, renders this state
@@ -122,7 +128,7 @@ def register_tools(
 
             Returns the file path of the saved PNG image.
             """
-            return render_state_impl(seed, state, label)
+            return render_state_impl(seed, state, label, object_count)
 
         logger.info("Registered tool: render_state")
 
@@ -135,13 +141,18 @@ def register_tools(
             seed: int = 42,
             max_steps: int = 1000,
             max_frames: int = 100,
+            object_count: int | None = None,
         ) -> list[str]:
             """Run a full episode of the approach and save frames as PNGs.
 
-            Returns the list of saved PNG file paths. Use a subagent to read and analyze
-            the frames — do NOT read them directly to avoid context bloat.
+            For a variable-count env, pass ``object_count`` to pin the number of
+            objects so the rollout matches the scored instance. Returns the list of
+            saved PNG file paths. Use a subagent to read and analyze the frames — do
+            NOT read them directly to avoid context bloat.
             """
-            return render_policy_impl(approach_dir, seed, max_steps, max_frames)
+            return render_policy_impl(
+                approach_dir, seed, max_steps, max_frames, object_count
+            )
 
         logger.info("Registered tool: render_policy")
 
@@ -159,12 +170,23 @@ def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastM
     client = BlackboxEnv(meta, sandbox_root=sandbox_root)
     logger.info("MCP server in blackbox mode, proxying to host env server")
 
-    def render_state_impl(seed: int, state: list[float] | None, label: str) -> str:
-        rel = client.render_state(seed=seed, state=state, label=label)
+    def render_state_impl(
+        seed: int,
+        state: list[float] | None,
+        label: str,
+        object_count: int | None = None,
+    ) -> str:
+        rel = client.render_state(
+            seed=seed, state=state, label=label, object_count=object_count
+        )
         return str(sandbox_root / rel)
 
     def render_policy_impl(
-        approach_dir: str, seed: int, max_steps: int, max_frames: int
+        approach_dir: str,
+        seed: int,
+        max_steps: int,
+        max_frames: int,
+        object_count: int | None = None,
     ) -> list[str]:
         # The policy runs in this container (only the per-state render is proxied
         # to the host), but honor the agent-supplied approach_dir so a requested
@@ -176,6 +198,7 @@ def build_blackbox_server(tool_names: list[str], env_spaces_path: Path) -> FastM
             max_steps=max_steps,
             max_frames=max_frames,
             approach_path=approach_path,
+            object_count=object_count,
         )
         return [str(sandbox_root / r) for r in rels]
 

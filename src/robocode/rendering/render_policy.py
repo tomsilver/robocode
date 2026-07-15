@@ -18,13 +18,15 @@ def render_policy(
     output_dir: str | Path,
     max_steps: int = 1000,
     max_frames: int = 100,
+    object_count: int | None = None,
 ) -> list[str]:
     """Run one episode of the sandbox's approach.py and save every frame.
 
     Loads the GeneratedApproach directly (reset/get_action interface) rather than
     wrapping it in AgenticApproach, so this module does not depend on the
-    robocode.primitives package (stripped from the agent sandbox). The env's own state
-    is saved and restored so rendering leaves no side effect.
+    robocode.primitives package (stripped from the agent sandbox). ``object_count`` pins
+    the object count for a variable-count env so the rollout matches the scored instance.
+    The env's own state is saved and restored so rendering leaves no side effect.
     """
     approach_dir = Path(approach_dir)
     output_dir = Path(output_dir)
@@ -34,10 +36,11 @@ def render_policy(
     approach = load_generated_approach(
         path, env.action_space, env.observation_space, primitives
     )
+    options = {"object_count": object_count} if object_count is not None else None
     saved_state = env.get_state()
     frames: list[np.ndarray] = []
     try:
-        obs, info = env.reset(seed=seed)
+        obs, info = env.reset(seed=seed, options=options)
         approach.reset(obs, info)
         rendered = env.render()
         if isinstance(rendered, np.ndarray):
