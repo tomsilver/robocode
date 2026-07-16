@@ -46,7 +46,7 @@ def main() -> None:
         "num_prompt_tasks": cfg["num_prompt_tasks"],
         "max_budget_usd": cfg["max_budget_usd"],
         "chain_of_thought": cfg["chain_of_thought"],
-        "episode_timeout_s": cfg["episode_timeout_s"],
+        "eval_timeout": cfg["eval_timeout"],
         "container_backend": "local",  # already isolated; run the loop in-process
     }
     approach: LLMGenPlanApproach

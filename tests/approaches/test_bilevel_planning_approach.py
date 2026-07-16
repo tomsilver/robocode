@@ -28,7 +28,7 @@ def _make_approach(env: KinderGeom2DEnv) -> BilevelPlanningApproach:
         primitives={},
         env=env,
         max_steps=1000,
-        planning_timeout=30.0,
+        eval_timeout=30.0,
     )
 
 
@@ -103,7 +103,7 @@ def test_planning_failure_is_unsolved_not_crashed(tmp_path: Path) -> None:
         primitives={},
         env=env,
         max_steps=1000,
-        planning_timeout=0.001,
+        eval_timeout=0.001,
     )
     result = approach.solve_instance(
         env=env, seed=0, budget_usd=0.0, output_subdir=tmp_path

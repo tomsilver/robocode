@@ -61,7 +61,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         max_debug_attempts: int | None = 4,
         max_budget_usd: float | None = 5.0,
         chain_of_thought: bool = True,
-        episode_timeout_s: float = 30.0,
+        eval_timeout: float = 30.0,
         use_docker: bool = True,
         container_backend: str | None = None,
         docker_image: str = "robocode-sandbox",
@@ -94,7 +94,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._max_debug_attempts = max_debug_attempts
         self._max_budget_usd = max_budget_usd
         self._chain_of_thought = chain_of_thought
-        self._episode_timeout_s = episode_timeout_s
+        self._eval_timeout = eval_timeout
         self._docker_image = docker_image
         self._sif_path = Path(sif_path) if sif_path is not None else _DEFAULT_SIF
         self._generated: Any = None
@@ -187,7 +187,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             "max_debug_attempts": self._max_debug_attempts,
             "max_budget_usd": self._max_budget_usd,
             "chain_of_thought": self._chain_of_thought,
-            "episode_timeout_s": self._episode_timeout_s,
+            "eval_timeout": self._eval_timeout,
         }
 
     def _train_in_container(self) -> None:
@@ -350,7 +350,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self._primitives,
             seeds,
             self._max_steps,
-            self._episode_timeout_s,
+            self._eval_timeout,
         )
 
     # ------------------------------------------------------------- delegation

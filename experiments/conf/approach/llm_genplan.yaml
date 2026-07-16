@@ -12,7 +12,7 @@ num_prompt_tasks: 2
 max_debug_attempts: 4  # step cap: 1 initial attempt + this many debug attempts
 max_budget_usd: 5.0  # dollar cap; only bounds cost-reporting backends (null -> step cap only)
 chain_of_thought: true  # summary -> strategy -> code; false: single prompt -> code
-episode_timeout_s: 30.0
+# The per-episode validation timeout is the shared top-level eval_timeout.
 # Run the whole genplan loop inside one sandbox container (like the agentic
 # approach), so generated code never executes on the host. local runs in-process.
 container_backend: docker  # docker | apptainer | local

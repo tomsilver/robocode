@@ -58,9 +58,10 @@ def test_solve_instance_targets_seed_and_scores_program(tmp_path, monkeypatch):
     env, approach = _make_approach(tmp_path)
 
     def fake_run(*, sandbox_dir, prompt, system_prompt, max_budget_usd, init_files):
-        del system_prompt, init_files
-        # The prompt targets the specific eval seed and carries budget stewardship.
-        assert "env.reset(seed=99)" in prompt
+        del init_files
+        # The system prompt targets the specific eval seed; the task prompt carries
+        # the budget-stewardship note.
+        assert "env.reset(seed=99)" in system_prompt
         assert "BUDGET:" in prompt
         assert max_budget_usd == pytest.approx(2.0)
         approach_file = sandbox_dir / "approach.py"
@@ -80,14 +81,14 @@ def test_solve_instance_targets_seed_and_scores_program(tmp_path, monkeypatch):
 
 
 def test_solve_instance_pins_count_in_prompt(tmp_path, monkeypatch):
-    """For a variable-count env the prompt names the pinned (seed, count) instance, so
-    the agent develops against exactly what it is scored on."""
+    """For a variable-count env the system prompt names the pinned (seed, count)
+    instance, so the agent develops against exactly what it is scored on."""
     env, approach = _make_approach(tmp_path)
     captured = {}
 
     def fake_run(*, sandbox_dir, prompt, system_prompt, max_budget_usd, init_files):
-        del sandbox_dir, system_prompt, max_budget_usd, init_files
-        captured["prompt"] = prompt
+        del sandbox_dir, prompt, max_budget_usd, init_files
+        captured["system_prompt"] = system_prompt
         # Stop before scoring: this test only checks the prompt the agent receives.
         return SandboxResult(
             success=False, output_file=None, error="stop", total_cost_usd=0.0
@@ -101,8 +102,9 @@ def test_solve_instance_pins_count_in_prompt(tmp_path, monkeypatch):
         output_subdir=tmp_path / "instance_0",
         count=4,
     )
-    assert "env.reset(seed=99, options={'object_count': 4})" in captured["prompt"]
-    assert "env.reset(seed=99)`" not in captured["prompt"]  # not the unpinned form
+    system_prompt = captured["system_prompt"]
+    assert "env.reset(seed=99, options={'object_count': 4})" in system_prompt
+    assert "env.reset(seed=99)`" not in system_prompt  # not the unpinned form
 
 
 def test_solve_instance_no_program_is_crashed(tmp_path, monkeypatch):
