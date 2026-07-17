@@ -173,3 +173,77 @@ def test_variable_count_state_preservation():
         assert env.get_state().allclose(saved)
     finally:
         env.close()
+
+
+def _step_identity_collision(env, backend_attr, state, action):
+    """Ground-truth collision: a full kinder step leaves _current_state unreplaced.
+
+    This is the exact semantics the primitive must reproduce: kinder's step only
+    reassigns the current-state object when the action is collision-free, so identity
+    equality before vs after the step is a collision. Restores env state afterward.
+    """
+    # pylint: disable=protected-access
+    saved = env.get_state()
+    env.set_state(state)
+    inner = getattr(env, backend_attr)._object_centric_env
+    before = inner._current_state
+    env.step(np.asarray(action, dtype=np.float32))
+    after = inner._current_state
+    env.set_state(saved)
+    return after is before
+
+
+def _candidate_actions(action_space, rng):
+    """Max/min/zero and random actions covering collisions, free moves, and grasps."""
+    assert isinstance(action_space, Box)
+    high = action_space.high.astype(np.float32)
+    low = action_space.low.astype(np.float32)
+    randoms = [rng.uniform(low, high).astype(np.float32) for _ in range(4)]
+    return [high.copy(), low.copy(), np.zeros_like(high), *randoms]
+
+
+def _assert_equivalent_over_episode(env, backend_attr, seed, num_steps=80):
+    """Drive an episode and assert the direct check matches the step-identity oracle."""
+    rng = np.random.default_rng(seed)
+    for _ in range(num_steps):
+        state = env.get_state()
+        for action in _candidate_actions(env.action_space, rng):
+            assert check_action_collision(
+                env, state, action
+            ) == _step_identity_collision(env, backend_attr, state, action)
+        _, _, terminated, truncated, _ = env.step(
+            np.asarray(env.action_space.sample(), dtype=np.float32)
+        )
+        if terminated or truncated:
+            env.reset(seed=seed)
+
+
+def test_equivalence_kinder_motion2d():
+    """Direct check matches a full step over a Motion2D episode (numpy path, walls)."""
+    env = KinderGeom2DEnv("kinder/Motion2D-p1-v0")
+    env.reset(seed=0)
+    try:
+        _assert_equivalent_over_episode(env, "_kinder_env", seed=0)
+    finally:
+        env.close()
+
+
+def test_equivalence_kinder_grasping():
+    """Direct check matches a full step on StickButton2D (suction and held objects)."""
+    env = KinderGeom2DEnv("kinder/StickButton2D-b3-v0")
+    env.reset(seed=0)
+    try:
+        _assert_equivalent_over_episode(env, "_kinder_env", seed=1)
+    finally:
+        env.close()
+
+
+def test_equivalence_variable_count():
+    """Direct check matches a full step through the variable-count dispatch (ocs
+    path)."""
+    env = _make_variable_count_env()
+    env.reset(seed=0, options={"object_count": 1})
+    try:
+        _assert_equivalent_over_episode(env, "_current_backend", seed=2)
+    finally:
+        env.close()
