@@ -36,7 +36,7 @@ from robocode.environments.variable_object_count_env import VariableObjectCountE
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
 from robocode.utils.episode import (
-    run_episode,
+    run_episode_with_timeout,
     run_per_instance_eval,
     save_video,
     summarize_by_count,
@@ -50,6 +50,12 @@ def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if cfg.eval_timeout is None:
+        raise ValueError(
+            "eval_timeout must be set to a number of seconds; it bounds every "
+            "evaluation rollout. Use a large value for an effectively unlimited budget."
+        )
 
     env = hydra.utils.instantiate(cfg.environment)
 
@@ -96,6 +102,7 @@ def _main(cfg: DictConfig) -> float:
         # instantiate it; the llm_genplan docker driver rebuilds the env from it.
         env_cfg=json.dumps(OmegaConf.to_container(cfg.environment, resolve=True)),
         max_steps=cfg.max_steps,
+        eval_timeout=cfg.eval_timeout,
         _partial_=True,
     )
     approach = approach_ctor(primitives=primitives)
@@ -171,8 +178,14 @@ def _main(cfg: DictConfig) -> float:
                 else cfg.max_steps
             )
             try:
-                episode_result, frames, _ = run_episode(
-                    env, approach, s, episode_max_steps, render=render, count=count
+                episode_result, frames, _ = run_episode_with_timeout(
+                    env,
+                    approach,
+                    s,
+                    episode_max_steps,
+                    timeout=cfg.eval_timeout,
+                    render=render,
+                    count=count,
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 # A loaded policy can raise on an unseen eval seed. We cannot fairly

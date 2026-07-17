@@ -15,7 +15,7 @@ max_budget_usd: 5.0  # dollar cap; only bounds cost-reporting backends (null -> 
 # false: a single prompt -> code, sampled per candidate (simplest baseline).
 # true: each candidate repeats GenPlan's summary -> strategy -> code flow, no debug loop.
 chain_of_thought: false
-episode_timeout_s: 30.0
+# The per-episode validation timeout is the shared top-level eval_timeout.
 # Run the whole loop inside one sandbox container (like the agentic approach),
 # so generated code never executes on the host. local runs in-process.
 container_backend: docker  # docker | apptainer | local

@@ -7,8 +7,8 @@ max_budget_usd: 1.0
 max_budget_per_instance_usd: null
 
 # SeSamE planner parameters (defaults match kinder_bilevel_planning.agent).
+# The planning-time budget is the shared top-level eval_timeout.
 max_abstract_plans: 10
 samples_per_step: 10
 max_skill_horizon: 100
 heuristic_name: hff
-planning_timeout: 30.0

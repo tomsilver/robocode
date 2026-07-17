@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing as mp
+import os
+import signal
 import sys
+import traceback
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +135,108 @@ def run_episode(
     if "object_count" in info:
         metrics["object_count"] = info["object_count"]
     return metrics, frames, state
+
+
+def run_in_forked_worker(
+    ctx: mp.context.ForkContext,
+    target: Callable[..., None],
+    args: tuple[Any, ...],
+    timeout: float,
+) -> tuple[str, int | None]:
+    """Run ``target(*args)`` in a forked worker, killing it if it overruns ``timeout``.
+
+    ``target`` writes its outcome into a shared dict it is handed in ``args`` (the
+    caller reads that dict afterward). Returns ``(outcome, exitcode)``: ``"timeout"``
+    means the worker overran and got a SIGINT, a short grace period, then SIGKILL;
+    ``"finished"`` means it exited on its own (an empty shared dict then means it died
+    before reporting).
+    """
+    proc = ctx.Process(target=target, args=args)
+    proc.start()
+    assert proc.pid is not None
+    proc.join(timeout)
+    if proc.is_alive():
+        os.kill(proc.pid, signal.SIGINT)
+        proc.join(3)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+        return "timeout", proc.exitcode
+    return "finished", proc.exitcode
+
+
+def run_episode_with_timeout(
+    env: Any,
+    approach: BaseApproach,
+    seed: int,
+    max_steps: int,
+    *,
+    timeout: float,
+    render: bool = False,
+    count: int | None = None,
+) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
+    """Run one eval episode under a hard per-instance wall-clock ``timeout``.
+
+    The rollout runs in a forked worker (inheriting the live env and approach) so a
+    hung or too-slow policy can be killed; on overrun it is scored unsolved
+    (``metrics["timed_out"]``). A worker that dies before reporting (policy
+    exception, OOM, native crash) re-raises here.
+    """
+    ctx = mp.get_context("fork")  # fork: the worker inherits the live env + approach
+    with ctx.Manager() as manager:
+        result = manager.dict()
+        outcome, exitcode = run_in_forked_worker(
+            ctx,
+            _timed_episode_worker,
+            (env, approach, seed, max_steps, render, count, result),
+            timeout,
+        )
+        if outcome == "timeout":
+            metrics: dict[str, Any] = {
+                "total_reward": 0.0,
+                "num_steps": 0,
+                "solved": False,
+                "timed_out": True,
+            }
+            if count is not None:
+                metrics["object_count"] = count
+            return metrics, [], None
+        if "metrics" in result:
+            return result["metrics"], list(result["frames"]), result["final_state"]
+        # The worker died before reporting; surface it so the caller scores a crash.
+        raise RuntimeError(
+            result.get(
+                "error",
+                f"eval episode worker (seed {seed}) exited with code "
+                f"{exitcode} before reporting a result",
+            )
+        )
+
+
+def _timed_episode_worker(
+    env: Any,
+    approach: BaseApproach,
+    seed: int,
+    max_steps: int,
+    render: bool,
+    count: int | None,
+    result: Any,
+) -> None:
+    """Run one episode in a subprocess and stash its outcome in ``result``.
+
+    The try/except deliberately carries a policy crash across the process boundary
+    as ``result["error"]`` for the parent to re-raise. ``metrics`` is written last,
+    so its presence means the run finished (a partial dict means the worker died).
+    """
+    try:
+        metrics, frames, final_state = run_episode(
+            env, approach, seed, max_steps, render=render, count=count
+        )
+        result["frames"] = frames
+        result["final_state"] = final_state
+        result["metrics"] = metrics
+    except Exception:  # pylint: disable=broad-exception-caught
+        result["error"] = traceback.format_exc()
 
 
 def summarize_by_count(

@@ -15,7 +15,7 @@ from typing import Any
 from robocode.approaches.agentic_base import GeneratedProgramApproach
 from robocode.approaches.base_approach import InstanceResult
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
-from robocode.utils.episode import run_episode
+from robocode.utils.episode import run_episode_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +108,14 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         )
         try:
             self._load_generated(result.output_file)
-            metrics, frames, _ = run_episode(
-                env, self, seed, episode_max_steps, render=render, count=count
+            metrics, frames, _ = run_episode_with_timeout(
+                env,
+                self,
+                seed,
+                episode_max_steps,
+                timeout=self._eval_timeout,
+                render=render,
+                count=count,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Isolate a single seed's bad program (load error or runtime crash):

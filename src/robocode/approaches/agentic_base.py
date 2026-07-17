@@ -74,6 +74,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         blackbox: bool = False,
         env_cfg: str | None = None,
         max_steps: int | None = None,
+        eval_timeout: float = 30.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -104,6 +105,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._object_centric = isinstance(observation_space, ObjectCentricStateSpace)
         self._env_cfg = env_cfg
         self._max_steps = max_steps
+        self._eval_timeout = eval_timeout
         if blackbox:
             if env_cfg is None:
                 raise ValueError("blackbox mode requires env_cfg")
@@ -129,8 +131,9 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
 
         Shared by the generalized ``train()`` (``per_instance_seed=None``) and
         per-instance ``solve_instance()`` (a concrete seed); the seed -- and, for a
-        variable-count env, ``per_instance_count`` -- are threaded into the task prompt
-        so the agent develops against the same instance it is scored on. If we have an
+        variable-count env, ``per_instance_count`` -- name the target instance in the
+        system prompt's goal so the agent develops against the same instance it is
+        scored on, and add a budget-stewardship note to the task prompt. If we have an
         env description it is inlined; otherwise the agent is asked to read source files.
         """
         primitives_desc = format_primitives_description(
@@ -169,7 +172,6 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             modular_code=self._modular_code_prompt,
             env_description=env_description,
             per_instance_seed=per_instance_seed,
-            per_instance_count=per_instance_count,
             object_centric=self._object_centric,
         )
 
@@ -181,8 +183,11 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             ),
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
+            timeout=self._eval_timeout,
             mcp_tools=self._mcp_tools,
             object_centric=self._object_centric,
+            per_instance_seed=per_instance_seed,
+            per_instance_count=per_instance_count,
         )
         init_files: dict[str, Path] = {}
         if self._blackbox:
