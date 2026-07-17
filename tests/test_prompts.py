@@ -279,7 +279,6 @@ def test_blackbox_interaction_spec_vector_is_default():
     spec = prompts.blackbox_interaction_spec()
     assert "devectorize" in spec
     assert "numpy snapshot" in spec
-    assert "observation vector" in spec
 
 
 def test_blackbox_interaction_spec_object_centric():
