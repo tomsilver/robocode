@@ -41,7 +41,11 @@ from robocode.utils.env_server import (
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.rate_limit import run_with_rate_limit_retry
 from robocode.utils.sandbox import SandboxConfig
-from robocode.utils.sandbox_types import SandboxResult, resolve_container_backend
+from robocode.utils.sandbox_types import (
+    GenerationMetrics,
+    SandboxResult,
+    resolve_container_backend,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 )
         self._generated: Any = None
         self.total_cost_usd: float | None = None
+        self.generation_metrics: GenerationMetrics | None = None
 
     def _build_agentic_prompts(
         self,

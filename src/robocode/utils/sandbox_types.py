@@ -6,6 +6,7 @@ the sandbox module and the backend implementations.
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 CONTAINER_BACKENDS = ("docker", "apptainer", "local")
 
@@ -55,6 +56,62 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True)
+class GenerationMetrics:
+    """Runtime metrics from one agent generation run.
+
+    These exist only while the generation subprocess is alive (the coding agent
+    writing approach.py); they are parsed from its CLI stream and persisted next
+    to the eval results. ``wall_time_s`` is our own end-to-end timer around the
+    subprocess; ``cli_duration_ms`` is the agent-session time the CLI reports.
+    """
+
+    wall_time_s: float | None = None
+    cli_duration_ms: int | None = None
+    cli_duration_api_ms: int | None = None
+    num_turns: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    num_tool_calls: int = 0
+    num_autocompactions: int = 0
+    num_permission_denials: int = 0
+    turn_limit_hit: bool = False
+    stop_reason: str | None = None
+    model_usage: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def total_tokens(self) -> int:
+        """Sum of input, output, and cache read/creation tokens."""
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_tokens
+            + self.cache_creation_tokens
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Flat ``gen_*`` keys for results.json (one analysis column each)."""
+        return {
+            "gen_wall_time_s": self.wall_time_s,
+            "gen_cli_duration_ms": self.cli_duration_ms,
+            "gen_cli_duration_api_ms": self.cli_duration_api_ms,
+            "gen_num_turns": self.num_turns,
+            "gen_input_tokens": self.input_tokens,
+            "gen_output_tokens": self.output_tokens,
+            "gen_cache_read_tokens": self.cache_read_tokens,
+            "gen_cache_creation_tokens": self.cache_creation_tokens,
+            "gen_total_tokens": self.total_tokens,
+            "gen_num_tool_calls": self.num_tool_calls,
+            "gen_num_autocompactions": self.num_autocompactions,
+            "gen_num_permission_denials": self.num_permission_denials,
+            "gen_turn_limit_hit": self.turn_limit_hit,
+            "gen_stop_reason": self.stop_reason,
+            "gen_model_usage": self.model_usage,
+        }
+
+
+@dataclass(frozen=True)
 class SandboxResult:
     """Result from a sandboxed agent run."""
 
@@ -63,6 +120,7 @@ class SandboxResult:
     error: str | None
     total_cost_usd: float | None = None
     rate_limit_reset: str | None = None  # e.g. "3am" from usage limit message
+    generation_metrics: GenerationMetrics | None = None
 
 
 @dataclass(frozen=True)
@@ -74,3 +132,15 @@ class _StreamParseResult:
     num_turns: int
     total_cost: float | None
     rate_limit_reset: str | None = None  # e.g. "3am" parsed from usage message
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    num_tool_calls: int = 0
+    num_autocompactions: int = 0
+    num_permission_denials: int = 0
+    turn_limit_hit: bool = False
+    cli_duration_ms: int | None = None
+    cli_duration_api_ms: int | None = None
+    stop_reason: str | None = None
+    model_usage: dict[str, Any] = field(default_factory=dict)

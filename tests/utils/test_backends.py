@@ -513,6 +513,78 @@ class TestProviderUtils:
 
 
 # ---------------------------------------------------------------------------
+# Claude stream parser
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeParseStreamMetrics:
+    """ClaudeBackend.parse_stream captures generation metrics from the stream."""
+
+    def _make_mock_proc(self, stdout_lines: list[str]) -> subprocess.Popen:
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter(stdout_lines)
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        return proc
+
+    def test_parse_captures_tokens_turns_tools(self) -> None:
+        """Tokens, turns, tool calls, autocompactions, and durations are parsed."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "planning"},
+                        {"type": "tool_use", "name": "Bash", "input": {"cmd": "ls"}},
+                        {"type": "tool_use", "name": "Write", "input": {"f": "a.py"}},
+                    ]
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "compact_metadata": {"trigger": "auto", "pre_tokens": 1000},
+            },
+            {
+                "type": "result",
+                "is_error": False,
+                "num_turns": 5,
+                "total_cost_usd": 0.37,
+                "duration_ms": 60000,
+                "duration_api_ms": 45000,
+                "stop_reason": "end_turn",
+                "permission_denials": [{"tool": "Bash"}],
+                "modelUsage": {"claude-sonnet-4-6": {"inputTokens": 100}},
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 2000,
+                    "cache_creation_input_tokens": 10,
+                },
+            },
+        ]
+        proc = self._make_mock_proc([json.dumps(e) + "\n" for e in events])
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert not result.is_error
+        assert result.num_turns == 5
+        assert result.num_tool_calls == 2
+        assert result.num_autocompactions == 1
+        assert result.num_permission_denials == 1
+        assert result.input_tokens == 100
+        assert result.output_tokens == 50
+        assert result.cache_read_tokens == 2000
+        assert result.cache_creation_tokens == 10
+        assert result.cli_duration_ms == 60000
+        assert result.cli_duration_api_ms == 45000
+        assert result.stop_reason == "end_turn"
+        assert result.model_usage == {"claude-sonnet-4-6": {"inputTokens": 100}}
+        assert result.total_cost == pytest.approx(0.37)
+
+
+# ---------------------------------------------------------------------------
 # OpenCode stream parser
 # ---------------------------------------------------------------------------
 

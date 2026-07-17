@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from omegaconf import DictConfig
 
@@ -214,6 +215,18 @@ class ClaudeBackend(AgentBackend):
         total_cost: float | None = None
         rate_limit_reset: str | None = None
         mcp_log: Path | None = None
+        num_tool_calls = 0
+        num_autocompactions = 0
+        num_permission_denials = 0
+        turn_limit_hit = False
+        input_tokens = 0
+        output_tokens = 0
+        cache_read_tokens = 0
+        cache_creation_tokens = 0
+        cli_duration_ms: int | None = None
+        cli_duration_api_ms: int | None = None
+        stop_reason: str | None = None
+        model_usage: dict[str, Any] = {}
 
         stream_log_fh = (
             open(stream_log_path, "a", encoding="utf-8")  # noqa: SIM115
@@ -286,6 +299,7 @@ class ClaudeBackend(AgentBackend):
                                 "image at build time."
                             )
                 elif subtype == "compact_boundary":
+                    num_autocompactions += 1
                     meta = msg.get("compact_metadata", {})
                     logger.info(
                         "Context compaction: trigger=%s, pre_tokens=%s",
@@ -308,6 +322,7 @@ class ClaudeBackend(AgentBackend):
                     )
                     os.killpg(proc.pid, 9)
                     is_error = True
+                    turn_limit_hit = True
                     error_text = (
                         f"Turn limit reached: {num_turns} >= " f"{self._max_turns}"
                     )
@@ -322,6 +337,7 @@ class ClaudeBackend(AgentBackend):
                         if m:
                             rate_limit_reset = m.group(0)
                     elif block.get("type") == "tool_use":
+                        num_tool_calls += 1
                         input_str = json.dumps(block.get("input", {}))
                         if len(input_str) > 300:
                             input_str = input_str[:300] + "..."
@@ -358,6 +374,16 @@ class ClaudeBackend(AgentBackend):
                 is_error = msg.get("is_error", False)
                 num_turns = msg.get("num_turns", 0)
                 total_cost = msg.get("total_cost_usd")
+                cli_duration_ms = msg.get("duration_ms")
+                cli_duration_api_ms = msg.get("duration_api_ms")
+                stop_reason = msg.get("stop_reason") or msg.get("terminal_reason")
+                num_permission_denials = len(msg.get("permission_denials", []))
+                model_usage = msg.get("modelUsage", {})
+                usage = msg.get("usage", {})
+                input_tokens = usage.get("input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+                cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+                cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
                 if is_error:
                     error_text = msg.get("result", "Unknown error")
                     if not rate_limit_reset:
@@ -394,6 +420,18 @@ class ClaudeBackend(AgentBackend):
             num_turns=num_turns,
             total_cost=total_cost,
             rate_limit_reset=rate_limit_reset,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            num_tool_calls=num_tool_calls,
+            num_autocompactions=num_autocompactions,
+            num_permission_denials=num_permission_denials,
+            turn_limit_hit=turn_limit_hit,
+            cli_duration_ms=cli_duration_ms,
+            cli_duration_api_ms=cli_duration_api_ms,
+            stop_reason=stop_reason,
+            model_usage=model_usage,
         )
 
 

@@ -43,7 +43,9 @@ def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
                 row["seed"] = cfg["seed"]
 
             for key, value in results.items():
-                if key == "per_episode":
+                # per_episode is a list; gen_model_usage is a nested per-model dict.
+                # Both stay in results.json but are not flat DataFrame columns.
+                if key in ("per_episode", "gen_model_usage"):
                     continue
                 # by_count is a nested {count: {...}} dict; flatten its solve rates to
                 # numeric solve_rate@<count> columns so they aggregate across seeds.

@@ -35,6 +35,7 @@ from robocode.primitive_specs import (
 )
 from robocode.utils.backends import AgentBackend
 from robocode.utils.sandbox_types import (
+    GenerationMetrics,
     SandboxConfig,
     SandboxResult,
     _StreamParseResult,
@@ -213,9 +214,26 @@ def _stream_result_to_sandbox_result(
     stream: _StreamParseResult,
     sandbox_dir: Path,
     output_filename: str,
+    wall_time_s: float | None = None,
 ) -> SandboxResult:
     """Convert a :class:`_StreamParseResult` to a :class:`SandboxResult`."""
     cost = stream.total_cost
+    metrics = GenerationMetrics(
+        wall_time_s=wall_time_s,
+        cli_duration_ms=stream.cli_duration_ms,
+        cli_duration_api_ms=stream.cli_duration_api_ms,
+        num_turns=stream.num_turns,
+        input_tokens=stream.input_tokens,
+        output_tokens=stream.output_tokens,
+        cache_read_tokens=stream.cache_read_tokens,
+        cache_creation_tokens=stream.cache_creation_tokens,
+        num_tool_calls=stream.num_tool_calls,
+        num_autocompactions=stream.num_autocompactions,
+        num_permission_denials=stream.num_permission_denials,
+        turn_limit_hit=stream.turn_limit_hit,
+        stop_reason=stream.stop_reason,
+        model_usage=stream.model_usage,
+    )
 
     # A rate-limit error must propagate so the retry loop can wait and rerun the
     # whole sandbox; never evaluate a partial approach from a rate-limited run.
@@ -226,6 +244,7 @@ def _stream_result_to_sandbox_result(
             error=stream.error_text,
             total_cost_usd=cost,
             rate_limit_reset=stream.rate_limit_reset,
+            generation_metrics=metrics,
         )
 
     # The agent commits its best-effort approach.py as it iterates, so if that
@@ -239,12 +258,14 @@ def _stream_result_to_sandbox_result(
             output_file=output_path,
             error=stream.error_text,
             total_cost_usd=cost,
+            generation_metrics=metrics,
         )
     return SandboxResult(
         success=False,
         output_file=None,
         error=stream.error_text or f"Output file not found: {output_filename}",
         total_cost_usd=cost,
+        generation_metrics=metrics,
     )
 
 
@@ -341,6 +362,7 @@ async def run_agent_in_sandbox(
         if config.mcp_tools
         else None
     )
+    wall_start = time.monotonic()
     try:
         proc = subprocess.Popen(  # pylint: disable=consider-using-with
             cmd,
@@ -376,5 +398,8 @@ async def run_agent_in_sandbox(
     _final_commit(config.sandbox_dir)
 
     return _stream_result_to_sandbox_result(
-        stream, config.sandbox_dir, config.output_filename
+        stream,
+        config.sandbox_dir,
+        config.output_filename,
+        wall_time_s=time.monotonic() - wall_start,
     )

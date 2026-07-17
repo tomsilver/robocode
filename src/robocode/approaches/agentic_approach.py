@@ -37,6 +37,7 @@ class AgenticApproach(GeneratedProgramApproach):
         )
 
         self.total_cost_usd = result.total_cost_usd
+        self.generation_metrics = result.generation_metrics
 
         if result.success and result.output_file is not None:
             if result.error:
