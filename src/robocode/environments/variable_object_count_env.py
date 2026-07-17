@@ -343,11 +343,10 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
     def _generalization_section(self) -> str:
         return (
             "This environment contains a VARIABLE number of objects. Your program "
-            "must handle ANY number of them -- in principle unbounded. Do not assume "
+            "must handle ANY number of them, in principle unbounded. Do not assume "
             "a fixed object count, a fixed number of objects of any type, or any "
             "fixed index layout; iterate the objects in the state and act on whatever "
-            "is there. You will be evaluated on a range of object counts, including "
-            "counts larger than those you see while developing."
+            "is there."
         )
 
     def _describe(self, include_access: bool) -> str:
