@@ -66,7 +66,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         load_dir: str | None = None,
         use_docker: bool = False,
         container_backend: str | None = None,
-        geometry_prompt: bool = True,
+        geometry_prompt: bool = False,
         modular_code_prompt: bool = False,
         token_budget_prompt: bool = False,
         mcp_tools: tuple[str, ...] = (),

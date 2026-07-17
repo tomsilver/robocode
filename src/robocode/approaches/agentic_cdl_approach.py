@@ -68,7 +68,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         load_dir: str | None = None,
         use_docker: bool = False,
         container_backend: str | None = None,
-        geometry_prompt: bool = True,
+        geometry_prompt: bool = False,
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
