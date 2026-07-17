@@ -9,6 +9,7 @@ load_dir: null
 container_backend: docker  # docker | apptainer | local
 geometry_prompt: true
 modular_code_prompt: false
+token_budget_prompt: false
 max_output_tokens: 32768
 autocompact_pct: 80
 blackbox: false  # hide env source; interact via host-side env server

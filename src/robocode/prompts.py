@@ -389,10 +389,7 @@ is a set of typed objects whose count changes between episodes. Read it with:
 - `state.get_objects(type)` -- objects of a type (types are in `observation_space.types`);
 - `state.get_object_names()` / `state.get_object_from_name(name)` -- objects by name;
 - `state.get(obj, feature)` -- a named feature of an object.
-Do NOT call `state.shape` or index `state` positionally, do NOT devectorize it, and \
-do NOT assume a fixed number of objects of any type. Your ONE program must work for \
-ANY object count; it will be evaluated on counts larger than any you see while \
-developing, so write count-agnostic code (loop over the objects that are present)."""
+Your approach should in principle work for any number of objects."""
 
 # Geometric-reasoning prompt, shared by both approaches.
 GEOMETRY_PROMPT = """\
@@ -794,6 +791,7 @@ def build_system_prompt(
     blackbox: bool,
     backend_name: str,
     timeout: float,
+    token_budget: bool = False,
     mcp_tools: tuple[str, ...] = (),
     object_centric: bool = False,
     per_instance_seed: int | None = None,
@@ -803,8 +801,9 @@ def build_system_prompt(
 
     After ``intro`` comes the goal + eval budget (``generalization_goal``):
     generalize, or specialize to the ``per_instance_seed`` instance, under the
-    ``timeout``. Then the shared file-discipline, subagent, token-budget,
-    backend-suffix, and optional MCP-tools fragments. ``object_centric`` drops the
+    ``timeout``. Then the shared file-discipline and subagent fragments, the
+    optional token-budget fragment (only when ``token_budget``), the backend
+    suffix, and the optional MCP-tools fragments. ``object_centric`` drops the
     flat-vector render mode.
     """
     goal = generalization_goal(
@@ -814,7 +813,12 @@ def build_system_prompt(
     )
     subagents = SYSTEM_SUBAGENTS_BLACKBOX if blackbox else SYSTEM_SUBAGENTS
     system_prompt = (
-        intro + goal + " " + SYSTEM_FILE_DISCIPLINE + subagents + SYSTEM_TOKEN_BUDGET
+        intro
+        + goal
+        + " "
+        + SYSTEM_FILE_DISCIPLINE
+        + subagents
+        + (SYSTEM_TOKEN_BUDGET if token_budget else "")
     )
     if backend_name == "opencode":
         system_prompt += OPENCODE_PROMPT_SUFFIX
