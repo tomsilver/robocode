@@ -46,7 +46,6 @@ def _kinder_collision_after_action(
     the backend's warm ``_static_object_body_cache`` so static geometry is built once per
     episode rather than rebuilt on every call.
     """
-    # pylint: disable=protected-access
     act = np.asarray(action, dtype=np.float32).reshape(-1)
     if act.shape != (5,):
         raise ValueError(f"Expected action of shape (5,), got {act.shape}")
@@ -76,9 +75,8 @@ def _kinder_collision_after_action(
     moving = {robot} | {o for o, _ in suctioned} | {o for o, _ in moved}
     full_state = inner.get_state_with_constant_objects(state)
     obstacles = set(full_state) - moving
-    return state_2d_has_collision(
-        full_state, moving, obstacles, inner._static_object_body_cache
-    )
+    cache = inner._static_object_body_cache  # pylint: disable=protected-access
+    return state_2d_has_collision(full_state, moving, obstacles, cache)
 
 
 def check_action_collision(env: Any, state: Any, action: Any) -> bool:
