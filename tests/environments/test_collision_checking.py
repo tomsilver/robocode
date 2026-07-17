@@ -2,10 +2,22 @@
 
 import numpy as np
 from gymnasium.spaces import Box
+from kinder.envs.kinematic2d.object_types import CRVRobotType
+from kinder.envs.kinematic2d.utils import (
+    get_suctioned_objects,
+    snap_suctioned_objects,
+)
+from prpl_utils.utils import wrap_angle
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.environments.maze_env import MazeEnv, _MazeState
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
+from robocode.oracles.pushpullhook2d.behaviors import (
+    GraspRotate,
+    PrePushPull,
+    Push,
+    Sweep,
+)
 from robocode.primitives.check_action_collision import check_action_collision
 
 # Maze action constants (public in MazeEnv but prefixed with _).
@@ -245,5 +257,85 @@ def test_equivalence_variable_count():
     env.reset(seed=0, options={"object_count": 1})
     try:
         _assert_equivalent_over_episode(env, "_current_backend", seed=2)
+    finally:
+        env.close()
+
+
+def _drive_behavior(env, obs, behavior, max_steps, name):
+    """Advance a pushpull oracle behavior to termination to reach a later phase."""
+    assert behavior.initializable(obs), f"{name} precondition not met."
+    behavior.reset(obs)
+    for _ in range(max_steps):
+        obs, _, _, _, _ = env.step(np.asarray(behavior.step(obs), dtype=np.float32))
+        if behavior.terminated(obs):
+            return obs
+    raise AssertionError(f"{name} did not finish in {max_steps} steps.")
+
+
+def _grasp_and_contact(env, ocs, action):
+    """Whether *action* has an object grasped, and whether it pushes another object.
+
+    The second flag detects PushPullHook2D's contact propagation firing, i.e. the
+    grasped hook moving the movable button through get_objects_to_move.
+    """
+    # pylint: disable=protected-access
+    inner = env._kinder_env._object_centric_env
+    robot = next(o for o in ocs if o.is_instance(CRVRobotType))
+    suctioned = get_suctioned_objects(ocs, robot)
+    dx, dy, dtheta, darm, vac = np.asarray(action, dtype=np.float32)
+    state = ocs.copy()
+    state.set(robot, "x", state.get(robot, "x") + float(dx))
+    state.set(robot, "y", state.get(robot, "y") + float(dy))
+    state.set(robot, "theta", wrap_angle(state.get(robot, "theta") + float(dtheta)))
+    lo, hi = state.get(robot, "base_radius"), state.get(robot, "arm_length")
+    state.set(
+        robot,
+        "arm_joint",
+        float(np.clip(state.get(robot, "arm_joint") + float(darm), lo, hi)),
+    )
+    state.set(robot, "vacuum", float(vac))
+    snap_suctioned_objects(state, robot, suctioned)
+    _, moved = inner.get_objects_to_move(state, suctioned)
+    return len(suctioned) > 0, len(moved) > 0
+
+
+def test_equivalence_pushpull_grasp_and_push():
+    """Direct check matches a full step while the grasped hook pushes the button.
+
+    Drives the PushPullHook2D oracle phases to reach Push, where the grasped hook
+    contacts and moves the movable button. This is the only path exercising
+    PushPullHook2D's overridden get_objects_to_move (contact propagation), so it guards
+    that branch. Asserts the hook is grasped and contact propagation fires.
+    """
+    # pylint: disable=protected-access
+    env = KinderGeom2DEnv("kinder/PushPullHook2D-v0")
+    try:
+        obs, _ = env.reset(seed=0)
+        obs = _drive_behavior(env, obs, GraspRotate(), 500, "GraspRotate")
+        obs = _drive_behavior(env, obs, Sweep(), 1000, "Sweep")
+        obs = _drive_behavior(env, obs, PrePushPull(), 2000, "PrePushPull")
+
+        push = Push()
+        assert push.initializable(obs), "Push precondition not met."
+        push.reset(obs)
+        box = env._kinder_env.observation_space
+        grasped = contact = 0
+        for _ in range(2000):
+            state = env.get_state()
+            ocs = box.devectorize(np.asarray(state, dtype=np.float32))
+            action = push.step(obs)
+            for cand in (action, np.zeros_like(action), env.action_space.high):
+                fast = check_action_collision(env, state, cand)
+                slow = _step_identity_collision(env, "_kinder_env", state, cand)
+                assert fast == slow, f"MISMATCH fast={fast} slow={slow}"
+                g, m = _grasp_and_contact(env, ocs, cand)
+                grasped += int(g)
+                contact += int(m)
+            obs, _, _, _, _ = env.step(np.asarray(action, dtype=np.float32))
+            if push.terminated(obs):
+                break
+        assert push.terminated(obs), "Push did not complete."
+        assert grasped > 0, "Hook was never grasped during Push."
+        assert contact > 0, "Contact propagation never fired."
     finally:
         env.close()
