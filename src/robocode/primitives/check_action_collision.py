@@ -91,7 +91,10 @@ def check_action_collision(env: Any, state: Any, action: Any) -> bool:
         ocs = state
     elif isinstance(env, KinderGeom2DEnv):
         box_space = env._kinder_env.observation_space
-        assert isinstance(box_space, ObjectCentricBoxSpace)
+        if not isinstance(box_space, ObjectCentricBoxSpace):
+            raise TypeError(
+                f"Expected ObjectCentricBoxSpace, got {type(box_space).__name__}"
+            )
         ocs = box_space.devectorize(np.asarray(state, dtype=np.float32))
         inner = env._kinder_env._object_centric_env
     else:
