@@ -80,7 +80,7 @@ def build_claude_md(docker_python: str, primitive_names: tuple[str, ...] = ()) -
 
 
 def build_agents_md(docker_python: str, primitive_names: tuple[str, ...] = ()) -> str:
-    """The AGENTS.md body (OpenCode), sans the leading system prompt the caller prepends."""
+    """The AGENTS.md body (OpenCode); the caller prepends the system prompt."""
     if not docker_python:
         return _RELATIVE_PATHS_LOCAL + "\n"
     return _container_body(_OPENCODE_CONTEXT_MANAGEMENT, docker_python, primitive_names)
