@@ -1,0 +1,7 @@
+# Low-level primitives experiment condition (inherits config.yaml).
+defaults:
+  - config
+  - _self_
+primitives:
+  - check_action_collision
+  - BiRRT

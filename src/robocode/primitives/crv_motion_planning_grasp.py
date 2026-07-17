@@ -1,5 +1,7 @@
 """CRV grasp planning built on top of geometric CRV motion planning.
 
+DEPRECATED: not used in current experiments.
+
 This module provides a higher-level grasp primitive for 2D CRV environments.
 Callers specify a target object, a relative grasp pose in the target frame, and
 the arm length to use for suction. The planner then:

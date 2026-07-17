@@ -1,5 +1,7 @@
 """Generic CRV motion planning based on exact geometric collision checking.
 
+DEPRECATED: not used in current experiments.
+
 This module exposes a small public API for planning collision-free SE(2) motion
 for the 2D CRV robot. Callers provide an ``ObjectCentricState`` together with a
 goal base pose, and the planner returns a list of bounded CRV actions.
