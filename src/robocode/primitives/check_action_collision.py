@@ -47,9 +47,13 @@ def _kinder_collision_after_action(
     episode rather than rebuilt on every call.
     """
     # pylint: disable=protected-access
-    dx, dy, dtheta, darm, vac = np.asarray(action, dtype=np.float32)
+    act = np.asarray(action, dtype=np.float32).reshape(-1)
+    if act.shape != (5,):
+        raise ValueError(f"Expected action of shape (5,), got {act.shape}")
+    dx, dy, dtheta, darm, vac = act
     robots = [o for o in ocs if o.is_instance(CRVRobotType)]
-    assert len(robots) == 1, "Kinematic2D collision check assumes a single CRV robot."
+    if len(robots) != 1:
+        raise ValueError(f"Expected exactly one CRV robot, found {len(robots)}")
     robot = robots[0]
 
     state = ocs.copy()
