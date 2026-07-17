@@ -25,6 +25,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from robocode.mcp import MCP_HTTP_PORT, setup_mcp_config
+from robocode.utils.backends.agent_files import build_agents_md
 from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
@@ -204,38 +205,8 @@ class OpenCodeBackend(AgentBackend):
             # Include the system prompt as instructions.
             if config.system_prompt:
                 parts.append(config.system_prompt)
-
-            if docker_python:
-                parts.append(
-                    "\nAll files you create MUST use relative paths so they "
-                    "stay in the current working directory (/sandbox). Never "
-                    "write files using absolute paths.\n\n"
-                    "CONTEXT MANAGEMENT: your context window is limited and "
-                    "you MUST protect it aggressively: "
-                    "(1) When running Bash commands, pipe output through "
-                    "`head` or `tail` to limit verbosity if possible. "
-                    "(2) Keep your thinking brief, do not write long "
-                    "reasoning traces. "
-                    "(3) Keep your main conversation focused on writing and "
-                    "testing code, not on reading source or reasoning at "
-                    "length.\n"
-                    f"The Python interpreter is at {docker_python}\n"
-                    "Run test scripts with:\n"
-                    f"    {docker_python} test_approach.py\n"
-                )
-                if primitive_names:
-                    parts.append(
-                        "\nPrimitive source files (for reference) are in "
-                        "./primitives/\n"
-                    )
-            else:
-                parts.append(
-                    "\nAll files you create MUST use relative paths so they "
-                    "stay in the current working directory. Never write files "
-                    "using absolute paths.\n"
-                )
-
-            agents_md.write_text("\n".join(parts))
+            parts.append(build_agents_md(docker_python, primitive_names))
+            agents_md.write_text("\n\n".join(parts))
 
     def parse_stream(
         self,
