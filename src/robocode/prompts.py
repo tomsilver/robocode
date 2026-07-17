@@ -466,6 +466,7 @@ _AGENTIC_BLACKBOX = """\
 # AgenticCDLApproach (behavior-decomposed policy) fragments
 # ---------------------------------------------------------------------------
 
+# DEPRECATED: CDL prompts kept for reference, unused in experiments, not cleaned.
 CDL_DECOMPOSITION_PROMPT = """\
 
 BEFORE writing any low-level code, you MUST first reason about the HIGH-LEVEL \

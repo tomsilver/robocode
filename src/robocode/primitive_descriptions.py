@@ -164,10 +164,4 @@ def format_primitives_description(
         lines.append(f"- {PRIMITIVE_DESCRIPTIONS.get(name, f'`{name}`')}")
         if blackbox and name in blackbox_notes:
             lines.append(blackbox_notes[name])
-    listed = ", ".join(f"`{n}`" for n in sorted(names))
-    lines.append(
-        f"\nIMPORTANT: Your approach MUST use the following primitives: {listed}. "
-        "These are essential for solving this environment. Read their descriptions "
-        "above and integrate them into your solution."
-    )
     return "\n".join(lines)

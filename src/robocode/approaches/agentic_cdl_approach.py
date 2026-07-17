@@ -1,5 +1,7 @@
 """An approach that uses a Claude agent to generate behavior-based solutions.
 
+DEPRECATED: kept for reference, not used in experiments. Prefer ``AgenticApproach``.
+
 Instead of writing a monolithic policy, the agent is guided to decompose the
 task into a fixed sequence of behaviors (CDL-style), each with an explicit
 precondition, subgoal, and a feedforward policy body.  The agent must:
@@ -84,6 +86,10 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
             primitives,
             env_description_path,
             **kwargs,
+        )
+        logger.warning(
+            "AgenticCDLApproach is deprecated and unused in experiments; "
+            "prefer AgenticApproach."
         )
         self._backend_cfg = backend
         self._backend = create_backend(backend)
