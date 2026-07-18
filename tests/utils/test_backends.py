@@ -529,8 +529,14 @@ class TestClaudeParseStreamMetrics:
         proc.wait.return_value = 0
         return proc
 
-    def test_parse_captures_tokens_turns_tools(self) -> None:
-        """Tokens, turns, tool calls, autocompactions, and durations are parsed."""
+    def test_parse_aggregates_across_cli_sessions(self) -> None:
+        """One generation can span several CLI sessions; metrics aggregate.
+
+        Turns are counted from assistant messages (the final session's num_turns is
+        stale); tokens come from the cumulative per-model usage (the top-level usage is
+        empty on a budget-error session); cost and modelUsage keep the latest
+        (cumulative) value; per-session fields accumulate.
+        """
         events = [
             {
                 "type": "assistant",
@@ -549,39 +555,55 @@ class TestClaudeParseStreamMetrics:
             },
             {
                 "type": "result",
+                "subtype": "success",
                 "is_error": False,
-                "num_turns": 5,
-                "total_cost_usd": 0.37,
-                "duration_ms": 60000,
-                "duration_api_ms": 45000,
-                "stop_reason": "end_turn",
+                "num_turns": 8,
+                "total_cost_usd": 0.30,
+                "duration_ms": 1000,
+                "duration_api_ms": 2000,
                 "permission_denials": [{"tool": "Bash"}],
-                "modelUsage": {"claude-sonnet-4-6": {"inputTokens": 100}},
-                "usage": {
-                    "input_tokens": 100,
-                    "output_tokens": 50,
-                    "cache_read_input_tokens": 2000,
-                    "cache_creation_input_tokens": 10,
+                "modelUsage": {"claude-sonnet-5": {"inputTokens": 100}},
+            },
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "x"}]},
+            },
+            {
+                "type": "result",
+                "subtype": "error_max_budget_usd",
+                "is_error": True,
+                "num_turns": 1,
+                "total_cost_usd": 0.90,
+                "duration_ms": 500,
+                "duration_api_ms": 5000,
+                "permission_denials": [{"tool": "Write"}, {"tool": "Edit"}],
+                "modelUsage": {
+                    "claude-sonnet-5": {
+                        "inputTokens": 300,
+                        "outputTokens": 50,
+                        "cacheReadInputTokens": 2000,
+                        "cacheCreationInputTokens": 10,
+                    },
+                    "claude-haiku-4-5": {"inputTokens": 20},
                 },
+                "usage": {},
             },
         ]
         proc = self._make_mock_proc([json.dumps(e) + "\n" for e in events])
         result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
 
-        assert not result.is_error
-        assert result.num_turns == 5
+        assert result.num_turns == 2  # two assistant messages, not the stale 1
         assert result.num_tool_calls == 2
         assert result.num_autocompactions == 1
-        assert result.num_permission_denials == 1
-        assert result.input_tokens == 100
+        assert result.num_permission_denials == 3  # 1 + 2 across sessions
+        assert result.input_tokens == 320  # 300 + 20, from the cumulative modelUsage
         assert result.output_tokens == 50
         assert result.cache_read_tokens == 2000
         assert result.cache_creation_tokens == 10
-        assert result.cli_duration_ms == 60000
-        assert result.cli_duration_api_ms == 45000
-        assert result.stop_reason == "end_turn"
-        assert result.model_usage == {"claude-sonnet-4-6": {"inputTokens": 100}}
-        assert result.total_cost == pytest.approx(0.37)
+        assert result.cli_duration_ms == 1500  # summed per-session
+        assert result.cli_duration_api_ms == 5000  # max (cumulative)
+        assert result.stop_reason == "error_max_budget_usd"  # last subtype
+        assert result.total_cost == pytest.approx(0.90)  # latest (cumulative)
 
 
 # ---------------------------------------------------------------------------

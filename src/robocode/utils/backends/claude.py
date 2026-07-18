@@ -371,19 +371,20 @@ class ClaudeBackend(AgentBackend):
                         logger.debug("Tool result: %s", tool_use_result)
 
             elif msg_type == "result":
+                # A single generation can span several CLI sessions (autocompaction
+                # or budget-continue re-inits the CLI, each emitting its own result).
+                # total_cost_usd and modelUsage are cumulative, so keep the latest;
+                # per-session fields accumulate. num_turns is counted from assistant
+                # messages above, not read here (the final session's value is stale).
                 is_error = msg.get("is_error", False)
-                num_turns = msg.get("num_turns", 0)
-                total_cost = msg.get("total_cost_usd")
-                cli_duration_ms = msg.get("duration_ms")
-                cli_duration_api_ms = msg.get("duration_api_ms")
-                stop_reason = msg.get("stop_reason") or msg.get("terminal_reason")
-                num_permission_denials = len(msg.get("permission_denials", []))
-                model_usage = msg.get("modelUsage", {})
-                usage = msg.get("usage", {})
-                input_tokens = usage.get("input_tokens", 0)
-                output_tokens = usage.get("output_tokens", 0)
-                cache_read_tokens = usage.get("cache_read_input_tokens", 0)
-                cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
+                total_cost = msg.get("total_cost_usd", total_cost)
+                model_usage = msg.get("modelUsage") or model_usage
+                stop_reason = msg.get("subtype") or stop_reason
+                num_permission_denials += len(msg.get("permission_denials", []))
+                cli_duration_ms = (cli_duration_ms or 0) + (msg.get("duration_ms") or 0)
+                cli_duration_api_ms = max(
+                    cli_duration_api_ms or 0, msg.get("duration_api_ms") or 0
+                )
                 if is_error:
                     error_text = msg.get("result", "Unknown error")
                     if not rate_limit_reset:
@@ -413,6 +414,14 @@ class ClaudeBackend(AgentBackend):
         if rate_limit_reset and not is_error:
             is_error = True
             error_text = f"Rate-limited: resets {rate_limit_reset}"
+
+        # Token counts come from the cumulative per-model usage, not the top-level
+        # ``usage`` (which is empty on a final budget-error session).
+        for usage in model_usage.values():
+            input_tokens += usage.get("inputTokens", 0)
+            output_tokens += usage.get("outputTokens", 0)
+            cache_read_tokens += usage.get("cacheReadInputTokens", 0)
+            cache_creation_tokens += usage.get("cacheCreationInputTokens", 0)
 
         return _StreamParseResult(
             is_error=is_error,
