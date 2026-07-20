@@ -11,28 +11,28 @@ from robocode.utils.rate_limit import (
 from robocode.utils.sandbox_types import GenerationMetrics, SandboxConfig, SandboxResult
 
 
-def _metrics(tokens: int) -> GenerationMetrics:
-    return GenerationMetrics(input_tokens=tokens)
+def _metrics(tokens: int, turns: int = 0) -> GenerationMetrics:
+    return GenerationMetrics(input_tokens=tokens, num_turns=turns)
 
 
-def _rate_limited(tokens: int, cost: float) -> SandboxResult:
+def _rate_limited(tokens: int, cost: float, turns: int = 0) -> SandboxResult:
     return SandboxResult(
         success=False,
         output_file=None,
         error="Rate-limited: resets 3am",
         total_cost_usd=cost,
         rate_limit_reset="3am",
-        generation_metrics=_metrics(tokens),
+        generation_metrics=_metrics(tokens, turns),
     )
 
 
-def _succeeded(tokens: int, cost: float, path: Path) -> SandboxResult:
+def _succeeded(tokens: int, cost: float, path: Path, turns: int = 0) -> SandboxResult:
     return SandboxResult(
         success=True,
         output_file=path,
         error=None,
         total_cost_usd=cost,
-        generation_metrics=_metrics(tokens),
+        generation_metrics=_metrics(tokens, turns),
     )
 
 
@@ -87,6 +87,39 @@ def test_retry_loop_accumulates_aborted_attempts(tmp_path: Path, monkeypatch) ->
     assert final.generation_metrics.aborted_cost_usd == 1.5  # 0.5 + 1.0
     assert final.generation_metrics.input_tokens == 300  # final attempt only
     assert final.total_cost_usd == 2.0
+
+
+def test_retry_loop_resumes_with_carried_budget(tmp_path: Path, monkeypatch) -> None:
+    """Retries resume the session and continue with the budget/turns left over."""
+    approach = tmp_path / "approach.py"
+    approach.write_text("x = 1\n")
+    results = iter(
+        [
+            _rate_limited(100, 0.5, turns=20),
+            _rate_limited(200, 1.0, turns=10),
+            _succeeded(300, 2.0, approach, turns=5),
+        ]
+    )
+    captured: list[SandboxConfig] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    monkeypatch.setattr(rate_limit.time, "sleep", lambda _s: None)
+
+    config = SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=5.0, max_turns=50)
+    run_with_rate_limit_retry(None, config, backend=None)  # type: ignore[arg-type]
+
+    # First attempt runs fresh; each retry resumes with the budget/turns left.
+    assert captured[0].resume_previous_session is False
+    assert captured[1].resume_previous_session is True
+    assert captured[1].max_budget_usd == 4.5  # 5.0 - 0.5
+    assert captured[1].max_turns == 30  # 50 - 20
+    assert captured[2].resume_previous_session is True
+    assert captured[2].max_budget_usd == 3.5  # 5.0 - (0.5 + 1.0)
+    assert captured[2].max_turns == 20  # 50 - (20 + 10)
 
 
 def test_parse_reset_hour_pm_utc() -> None:

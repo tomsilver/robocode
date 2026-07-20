@@ -266,6 +266,25 @@ def test_docker_run_prefix_adds_bilevel_when_present(tmp_path: Path) -> None:
     assert "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel" in cmd
 
 
+def test_docker_run_prefix_adds_extra_volumes(tmp_path: Path) -> None:
+    """extra_volumes become -v mounts (used to persist the resumable session)."""
+    sessions = tmp_path / ".agent_sessions"
+    volume = f"{sessions.resolve()}:/home/node/.claude/projects"
+    cmd = _docker_run_prefix(
+        "c",
+        "img",
+        tmp_path,
+        tmp_path / "src",
+        tmp_path / "kg",
+        None,
+        [],
+        [],
+        extra_volumes=[volume],
+    )
+    assert volume in cmd
+    assert cmd[cmd.index(volume) - 1] == "-v"
+
+
 def test_is_local_model() -> None:
     """Local model servers (ollama/vllm) are detected; remote API models are not."""
     assert _is_local_model("ollama/qwen3:0.6b")

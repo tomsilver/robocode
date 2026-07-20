@@ -135,12 +135,17 @@ class ClaudeBackend(AgentBackend):
             "--model",
             config.model,
             "--dangerously-skip-permissions",
-            "--no-session-persistence",
             "--tools",
             tools,
             "--setting-sources",
             "project",
         ]
+        # Persist the session (no --no-session-persistence) so a run interrupted
+        # by the usage cap can be continued. --continue resumes the most recent
+        # conversation in the working directory, which is unique to this
+        # generation, so it reattaches to exactly this run's context.
+        if config.resume_previous_session:
+            args.append("--continue")
         if config.system_prompt:
             args += ["--system-prompt", config.system_prompt]
         if config.max_budget_usd > 0:

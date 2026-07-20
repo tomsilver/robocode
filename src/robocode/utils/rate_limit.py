@@ -97,28 +97,39 @@ def _fold_retry_metrics(
     return replace(result, generation_metrics=metrics)
 
 
+def _run_active_sandbox(config: SandboxConfig, backend: AgentBackend) -> SandboxResult:
+    """Dispatch to the sandbox runner matching the config's backend type."""
+    if isinstance(config, ApptainerSandboxConfig):
+        return run_async(lambda: run_agent_in_apptainer_sandbox(config, backend))
+    if isinstance(config, DockerSandboxConfig):
+        return run_async(lambda: run_agent_in_docker_sandbox(config, backend))
+    return run_async(lambda: run_agent_in_sandbox(config, backend))
+
+
 def run_with_rate_limit_retry(
     docker_config: DockerSandboxConfig | None,
     local_config: SandboxConfig | None,
     backend: AgentBackend,
     apptainer_config: ApptainerSandboxConfig | None = None,
 ) -> SandboxResult:
-    """Run the sandbox, retrying on rate-limit by sleeping until reset."""
+    """Run the sandbox, retrying on rate-limit by sleeping until reset.
+
+    Each retry resumes the interrupted conversation (--continue) with the
+    budget the run had left, so an agent that hit the usage cap continues its
+    work rather than restarting cold, and the total budget it spends matches a
+    run that never hit the cap.
+    """
+    active: SandboxConfig | None = apptainer_config or docker_config or local_config
+    assert active is not None
+    original_budget = active.max_budget_usd
+    original_turns = active.max_turns
+
     aborted_tokens = 0
+    aborted_turns = 0
     aborted_cost = 0.0
     retries = 0
     while True:
-        if apptainer_config is not None:
-            result = run_async(
-                lambda: run_agent_in_apptainer_sandbox(apptainer_config, backend)
-            )
-        elif docker_config is not None:
-            result = run_async(
-                lambda: run_agent_in_docker_sandbox(docker_config, backend)
-            )
-        else:
-            assert local_config is not None
-            result = run_async(lambda: run_agent_in_sandbox(local_config, backend))
+        result = _run_active_sandbox(active, backend)
 
         if result.rate_limit_reset is None:
             return _fold_retry_metrics(result, aborted_tokens, aborted_cost, retries)
@@ -126,6 +137,7 @@ def run_with_rate_limit_retry(
         retries += 1
         assert result.generation_metrics is not None
         aborted_tokens += result.generation_metrics.total_tokens
+        aborted_turns += result.generation_metrics.num_turns
         aborted_cost += result.total_cost_usd or 0.0
 
         reset_hour, is_utc = parse_reset_hour(result.rate_limit_reset)
@@ -139,4 +151,16 @@ def run_with_rate_limit_retry(
             "UTC" if is_utc else "local",
         )
         time.sleep(wait_secs)
-        logger.info("Woke up after rate-limit sleep, retrying...")
+        logger.info("Woke up after rate-limit sleep, resuming with remaining budget...")
+
+        # 0 turns means unlimited, so keep it; otherwise carry what is left,
+        # never dropping to 0 (which would silently re-grant unlimited turns).
+        remaining_turns = (
+            max(original_turns - aborted_turns, 1) if original_turns else 0
+        )
+        active = replace(
+            active,
+            resume_previous_session=True,
+            max_budget_usd=max(original_budget - aborted_cost, 0.0),
+            max_turns=remaining_turns,
+        )

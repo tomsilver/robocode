@@ -103,6 +103,7 @@ __pycache__/
 *.mp4
 agent_log.txt
 .mcp/
+.agent_sessions/
 mcp_renders/
 """
 

@@ -247,6 +247,7 @@ def _docker_run_prefix(
     firewall_domains: list[str],
     env_args: list[str] | None = None,
     map_host_gateway: bool = False,
+    extra_volumes: list[str] | None = None,
 ) -> list[str]:
     """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
 
@@ -296,6 +297,8 @@ def _docker_run_prefix(
             f"{filtered_kinder_baselines.resolve()}"
             ":/robocode/third-party/kinder-baselines",
         ]
+    for volume in extra_volumes or []:
+        cmd += ["-v", volume]
     cmd += ["-w", "/sandbox", image]
     return cmd
 
@@ -592,6 +595,16 @@ async def run_agent_in_docker_sandbox(
             # OpenCode also needs access to its own telemetry/update servers.
             # firewall_domains.append("registry.npmjs.org")
 
+        # Persist the CLI session store on the host, under the sandbox dir, which
+        # survives the container --rm. A run interrupted by the usage cap can then
+        # be resumed in a fresh retry container (--continue in the same /sandbox
+        # working directory). Only Claude stores sessions at this path.
+        session_volumes: list[str] = []
+        if backend_name == "claude":
+            sessions_dir = config.sandbox_dir / ".agent_sessions"
+            sessions_dir.mkdir(exist_ok=True)
+            session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
+
         docker_cmd = _docker_run_prefix(
             container_name,
             config.docker_image,
@@ -601,6 +614,7 @@ async def run_agent_in_docker_sandbox(
             filtered_kinder_baselines,
             auth_args,
             firewall_domains,
+            extra_volumes=session_volumes,
             env_args=[
                 "-e",
                 f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",

@@ -53,6 +53,12 @@ class SandboxConfig:
     # (they share the host network namespace); DockerSandboxConfig overrides this
     # to host.docker.internal (mapped to the host gateway via --add-host).
     local_model_host: str = "127.0.0.1"
+    # Resume the prior CLI conversation in this sandbox's working directory
+    # instead of starting fresh. Set by the rate-limit retry loop so an agent
+    # interrupted by the usage cap continues with its full context and its
+    # remaining (carried-over) budget, making the run equivalent to one that
+    # never hit the cap.
+    resume_previous_session: bool = False
 
 
 @dataclass(frozen=True)

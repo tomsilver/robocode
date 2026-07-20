@@ -104,6 +104,22 @@ class TestClaudeBackend:
         cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
         assert "--max-budget-usd" not in cmd
 
+    def test_build_cli_cmd_persists_session_by_default(self, tmp_path: Path) -> None:
+        """Sessions persist (resumable) and no --continue without a resume request."""
+        config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
+        assert "--no-session-persistence" not in cmd
+        assert "--continue" not in cmd
+
+    def test_build_cli_cmd_resume_adds_continue(self, tmp_path: Path) -> None:
+        """resume_previous_session appends --continue to reattach to the run."""
+        config = SandboxConfig(
+            sandbox_dir=tmp_path, prompt="hi", resume_previous_session=True
+        )
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
+        assert "--continue" in cmd
+        assert "--no-session-persistence" not in cmd
+
     def test_build_cli_cmd_includes_tools(self, tmp_path: Path) -> None:
         """All standard tools are listed in --tools."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")

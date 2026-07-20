@@ -149,6 +149,7 @@ def _build_apptainer_cmd(
     auth_args: list[str],
     firewall_domains: list[str],
     agent_cmd: list[str],
+    extra_binds: list[str] | None = None,
 ) -> list[str]:
     """Assemble the full ``apptainer exec`` command line.
 
@@ -214,6 +215,8 @@ def _build_apptainer_cmd(
             "--bind",
             f"{kinder_baselines_abs}:/robocode/third-party/kinder-baselines",
         ]
+    for bind in extra_binds or []:
+        cmd += ["--bind", bind]
     cmd += [
         str(config.sif_path),
         "/usr/local/bin/entrypoint.sh",
@@ -279,6 +282,15 @@ async def run_agent_in_apptainer_sandbox(
         if config.mcp_tools:
             agent_cmd = _mcp_prestart_wrapper(agent_cmd, port=mcp_port)
 
+        # Persist the CLI session store under the sandbox dir (survives the
+        # ephemeral container) so a rate-limited run can be resumed via
+        # --continue in a fresh retry container. Claude only.
+        session_binds: list[str] = []
+        if backend_name == "claude":
+            sessions_dir = config.sandbox_dir / ".agent_sessions"
+            sessions_dir.mkdir(exist_ok=True)
+            session_binds = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
+
         apptainer_cmd = _build_apptainer_cmd(
             config,
             sandbox_abs=sandbox_abs,
@@ -292,6 +304,7 @@ async def run_agent_in_apptainer_sandbox(
             auth_args=auth_args,
             firewall_domains=firewall_domains,
             agent_cmd=agent_cmd,
+            extra_binds=session_binds,
         )
 
         backend.setup_sandbox_files(
