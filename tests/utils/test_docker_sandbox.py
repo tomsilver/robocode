@@ -33,7 +33,9 @@ from pathlib import Path
 import pytest
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
-from robocode.utils.backends import DEFAULT_BACKEND
+from robocode.utils import rate_limit
+from robocode.utils.backends import DEFAULT_BACKEND, DEFAULT_BACKEND_CFG
+from robocode.utils.backends.claude import ClaudeBackend
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -44,6 +46,7 @@ from robocode.utils.docker_sandbox import (
     _is_local_model,
     _setup_sandbox_dir,
 )
+from robocode.utils.rate_limit import run_with_rate_limit_retry
 from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
     env_server_running,
@@ -283,6 +286,61 @@ def test_docker_run_prefix_adds_extra_volumes(tmp_path: Path) -> None:
     )
     assert volume in cmd
     assert cmd[cmd.index(volume) - 1] == "-v"
+
+
+# A fake claude that runs inside the container: the counter lives in /sandbox
+# (bind-mounted, bounds the loop) and the marker in the mounted session store
+# ($HOME/.claude/projects), so the marker being visible on the second container
+# proves the store survived the first container's --rm.
+_FAKE_DOCKER_CLAUDE = r"""#!/bin/bash
+COUNTER=/sandbox/fake_counter.txt
+n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$COUNTER"
+PROJ="$HOME/.claude/projects"; mkdir -p "$PROJ"; MARKER="$PROJ/resume_marker.txt"
+cont=no; [[ " $* " == *" --continue "* ]] && cont=yes
+if [ "$n" -eq 1 ]; then
+  echo "s1" > "$MARKER"
+  echo '{"type":"result","subtype":"error","is_error":true,"result":"hit your limit resets 3am","total_cost_usd":0.5,"modelUsage":{}}'
+  exit 1
+fi
+if [ "$cont" = yes ] && [ -f "$MARKER" ]; then
+  printf 'class GeneratedApproach:\n    pass\n' > /sandbox/approach.py
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":1.0,"modelUsage":{}}'
+  exit 0
+fi
+echo '{"type":"result","subtype":"error","is_error":true,"result":"not resumed","total_cost_usd":0.0,"modelUsage":{}}'
+exit 1
+"""
+
+
+@requires_docker
+def test_docker_resume_persists_session_across_containers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A rate-limited container resumes in a fresh one; the store survives --rm."""
+    fake = tmp_path / "fake_claude.sh"
+    fake.write_text(_FAKE_DOCKER_CLAUDE)
+    fake.chmod(0o755)
+    monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", "/sandbox/fake_claude.sh")
+    monkeypatch.setattr(rate_limit.time, "sleep", lambda _s: None)
+
+    config = DockerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        init_files={"fake_claude.sh": fake},
+        output_filename="approach.py",
+        prompt="solve it",
+        mcp_tools=(),
+    )
+    final = run_with_rate_limit_retry(
+        config, None, backend=ClaudeBackend(DEFAULT_BACKEND_CFG)
+    )
+
+    assert final.success
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.rate_limit_retries == 1
+    # The marker the first container wrote into the mounted session store is
+    # present on the host, so it survived the --rm and reached the retry.
+    marker = config.sandbox_dir / ".agent_sessions" / "resume_marker.txt"
+    assert marker.exists()
 
 
 def test_is_local_model() -> None:
