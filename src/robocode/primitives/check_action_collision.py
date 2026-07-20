@@ -5,6 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+from kinder.envs.kinematic2d.base_env import ObjectCentricKinematic2DRobotEnv
+from kinder.envs.kinematic2d.object_types import CRVRobotType
+from kinder.envs.kinematic2d.utils import (
+    get_suctioned_objects,
+    snap_suctioned_objects,
+)
+from kinder.envs.utils import state_2d_has_collision
+from prpl_utils.utils import wrap_angle
+from relational_structs import ObjectCentricState
+from relational_structs.spaces import ObjectCentricBoxSpace
 
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.environments.maze_env import MazeEnv
@@ -24,40 +34,73 @@ def _maze_check(state: Any, action: Any) -> bool:
     )
 
 
-def _kinder_reference_check(
-    env: Any, backend_attr: str, state: Any, action: Any
+def _kinder_collision_after_action(
+    inner: ObjectCentricKinematic2DRobotEnv,
+    ocs: ObjectCentricState,
+    action: Any,
 ) -> bool:
-    """Collision iff the kinder step reuses the same state object (no movement).
+    """True iff applying ``action`` in ``ocs`` collides, by kinder's own step predicate.
 
-    ``backend_attr`` names the env attribute holding the active kinder backend, read
-    after set_state so a variable-count env resolves its per-count backend.
+    Mirrors ``ObjectCentricKinematic2DRobotEnv.step`` up to its collision test, without
+    running the reward/observation work and without mutating ``inner`` or ``ocs``. Reuses
+    the backend's warm ``_static_object_body_cache`` so static geometry is built once per
+    episode rather than rebuilt on every call.
     """
-    # pylint: disable=protected-access
-    saved = env.get_state()
-    env.set_state(state)
-    inner = getattr(env, backend_attr)._object_centric_env
-    ref_before = inner._current_state
-    env.step(np.array(action, dtype=np.float32))
-    ref_after = inner._current_state
-    env.set_state(saved)
-    return ref_after is ref_before
+    act = np.asarray(action, dtype=np.float32).reshape(-1)
+    if act.shape != (5,):
+        raise ValueError(f"Expected action of shape (5,), got {act.shape}")
+    dx, dy, dtheta, darm, vac = act
+    robots = [o for o in ocs if o.is_instance(CRVRobotType)]
+    if len(robots) != 1:
+        raise ValueError(f"Expected exactly one CRV robot, found {len(robots)}")
+    robot = robots[0]
 
+    state = ocs.copy()
+    state.set(robot, "x", state.get(robot, "x") + float(dx))
+    state.set(robot, "y", state.get(robot, "y") + float(dy))
+    state.set(robot, "theta", wrap_angle(state.get(robot, "theta") + float(dtheta)))
+    min_arm = state.get(robot, "base_radius")
+    max_arm = state.get(robot, "arm_length")
+    new_arm = float(
+        np.clip(state.get(robot, "arm_joint") + float(darm), min_arm, max_arm)
+    )
+    state.set(robot, "arm_joint", new_arm)
+    state.set(robot, "vacuum", float(vac))
 
-def _generic_check(env: Any, state: Any, action: Any) -> bool:
-    """Fallback: step the env and compare states."""
-    saved = env.get_state()
-    env.set_state(state)
-    next_state, _, _, _, _ = env.step(action)
-    env.set_state(saved)
-    return bool(np.array_equal(np.asarray(state), np.asarray(next_state)))
+    # Suction and contact are read from the pre-action state, matching step()'s ordering.
+    suctioned = get_suctioned_objects(ocs, robot)
+    snap_suctioned_objects(state, robot, suctioned)
+    state, moved = inner.get_objects_to_move(state, suctioned)
+
+    moving = {robot} | {o for o, _ in suctioned} | {o for o, _ in moved}
+    full_state = inner.get_state_with_constant_objects(state)
+    obstacles = set(full_state) - moving
+    cache = inner._static_object_body_cache  # pylint: disable=protected-access
+    return state_2d_has_collision(full_state, moving, obstacles, cache)
 
 
 def check_action_collision(env: Any, state: Any, action: Any) -> bool:
     """Return True if taking *action* in *state* causes a collision."""
+    # pylint: disable=protected-access
     if isinstance(env, MazeEnv):
         return _maze_check(state, action)
     if isinstance(env, VariableObjectCountEnv):
-        return _kinder_reference_check(env, "_current_backend", state, action)
-    if isinstance(env, KinderGeom2DEnv):
-        return _kinder_reference_check(env, "_kinder_env", state, action)
-    return _generic_check(env, state, action)
+        inner = env._backend_for(env.infer_count(state))._object_centric_env
+        ocs = state
+    elif isinstance(env, KinderGeom2DEnv):
+        box_space = env._kinder_env.observation_space
+        if not isinstance(box_space, ObjectCentricBoxSpace):
+            raise TypeError(
+                f"Expected ObjectCentricBoxSpace, got {type(box_space).__name__}"
+            )
+        ocs = box_space.devectorize(np.asarray(state, dtype=np.float32))
+        inner = env._kinder_env._object_centric_env
+    else:
+        raise NotImplementedError(
+            f"check_action_collision supports MazeEnv and the kinematic2d kinder "
+            f"envs (KinderGeom2DEnv, VariableObjectCountEnv), not "
+            f"{type(env).__name__}. Collision checking for kinder 3D is not "
+            f"implemented yet."
+        )
+    assert isinstance(inner, ObjectCentricKinematic2DRobotEnv)
+    return _kinder_collision_after_action(inner, ocs, action)
