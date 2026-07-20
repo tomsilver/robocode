@@ -79,6 +79,14 @@ class GenerationMetrics:
     turn_limit_hit: bool = False
     stop_reason: str | None = None
     model_usage: dict[str, Any] = field(default_factory=dict)
+    # Rate-limit interruptions. The retry loop sleeps until the usage window
+    # resets and reruns the whole sandbox; the interrupted attempts are dropped
+    # from evaluation but their count and spend are recorded here so runs that
+    # straddled a reset can be identified and excluded in analysis. The main
+    # fields above describe the final, successful attempt only.
+    rate_limit_retries: int = 0
+    aborted_tokens: int = 0
+    aborted_cost_usd: float = 0.0
 
     @property
     def total_tokens(self) -> int:
@@ -108,6 +116,9 @@ class GenerationMetrics:
             "gen_turn_limit_hit": self.turn_limit_hit,
             "gen_stop_reason": self.stop_reason,
             "gen_model_usage": self.model_usage,
+            "gen_rate_limit_retries": self.rate_limit_retries,
+            "gen_aborted_tokens": self.aborted_tokens,
+            "gen_aborted_cost_usd": self.aborted_cost_usd,
         }
 
 

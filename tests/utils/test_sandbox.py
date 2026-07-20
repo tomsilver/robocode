@@ -22,12 +22,18 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
         cache_read_tokens=2000,
         cache_creation_tokens=10,
         num_tool_calls=9,
+        rate_limit_retries=2,
+        aborted_tokens=300,
+        aborted_cost_usd=1.5,
     )
     d = m.to_dict()
     assert d["gen_wall_time_s"] == 12.5
     assert d["gen_num_turns"] == 7
     assert d["gen_num_tool_calls"] == 9
     assert d["gen_total_tokens"] == 2160
+    assert d["gen_rate_limit_retries"] == 2
+    assert d["gen_aborted_tokens"] == 300
+    assert d["gen_aborted_cost_usd"] == 1.5
     assert all(k.startswith("gen_") for k in d)
 
 

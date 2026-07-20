@@ -8,6 +8,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -21,6 +22,7 @@ from robocode.utils.docker_sandbox import (
     run_agent_in_docker_sandbox,
 )
 from robocode.utils.sandbox import SandboxConfig, SandboxResult, run_agent_in_sandbox
+from robocode.utils.sandbox_types import GenerationMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,22 @@ def seconds_until_reset(reset_hour: int, is_utc: bool = False) -> float:
     return min(wait, _MAX_WAIT_SECS)
 
 
+def _fold_retry_metrics(
+    result: SandboxResult, aborted_tokens: int, aborted_cost: float, retries: int
+) -> SandboxResult:
+    """Record the discarded rate-limited attempts' count and spend on *result*."""
+    if retries == 0:
+        return result
+    base = result.generation_metrics or GenerationMetrics()
+    metrics = replace(
+        base,
+        rate_limit_retries=retries,
+        aborted_tokens=aborted_tokens,
+        aborted_cost_usd=aborted_cost,
+    )
+    return replace(result, generation_metrics=metrics)
+
+
 def run_with_rate_limit_retry(
     docker_config: DockerSandboxConfig | None,
     local_config: SandboxConfig | None,
@@ -86,6 +104,9 @@ def run_with_rate_limit_retry(
     apptainer_config: ApptainerSandboxConfig | None = None,
 ) -> SandboxResult:
     """Run the sandbox, retrying on rate-limit by sleeping until reset."""
+    aborted_tokens = 0
+    aborted_cost = 0.0
+    retries = 0
     while True:
         if apptainer_config is not None:
             result = run_async(
@@ -100,7 +121,12 @@ def run_with_rate_limit_retry(
             result = run_async(lambda: run_agent_in_sandbox(local_config, backend))
 
         if result.rate_limit_reset is None:
-            return result
+            return _fold_retry_metrics(result, aborted_tokens, aborted_cost, retries)
+
+        retries += 1
+        assert result.generation_metrics is not None
+        aborted_tokens += result.generation_metrics.total_tokens
+        aborted_cost += result.total_cost_usd or 0.0
 
         reset_hour, is_utc = parse_reset_hour(result.rate_limit_reset)
         wait_secs = seconds_until_reset(reset_hour, is_utc)
