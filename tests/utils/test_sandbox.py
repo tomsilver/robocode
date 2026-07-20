@@ -7,6 +7,7 @@ from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _is_path_within_sandbox,
+    _redirect_claude_config_to_sandbox,
     _stream_result_to_sandbox_result,
 )
 from robocode.utils.sandbox_types import GenerationMetrics, _StreamParseResult
@@ -61,6 +62,40 @@ def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
     assert result.generation_metrics.num_turns == 4
     assert result.generation_metrics.num_autocompactions == 2
     assert result.generation_metrics.stop_reason == "end_turn"
+
+
+def test_redirect_claude_config_symlinks_creds(tmp_path: Path, monkeypatch) -> None:
+    """The sandbox-local config dir is created with host creds symlinked in."""
+    host = tmp_path / "host_claude"
+    host.mkdir()
+    (host / ".credentials.json").write_text("{}")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    result = _redirect_claude_config_to_sandbox(sandbox)
+
+    agent_home = sandbox / ".agent_home"
+    assert result == str(agent_home)
+    assert agent_home.is_dir()
+    link = agent_home / ".credentials.json"
+    assert link.is_symlink()
+    assert link.resolve() == (host / ".credentials.json").resolve()
+
+
+def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) -> None:
+    """No symlink when the host has no credentials file (token-env auth)."""
+    host = tmp_path / "host_claude"
+    host.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    _redirect_claude_config_to_sandbox(sandbox)
+
+    agent_home = sandbox / ".agent_home"
+    assert agent_home.is_dir()
+    assert not (agent_home / ".credentials.json").exists()
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:

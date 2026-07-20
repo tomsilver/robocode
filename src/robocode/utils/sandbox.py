@@ -20,6 +20,7 @@ to override the default binary paths.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -104,6 +105,7 @@ __pycache__/
 agent_log.txt
 .mcp/
 .agent_sessions/
+.agent_home/
 mcp_renders/
 """
 
@@ -312,6 +314,29 @@ def _final_commit(sandbox_dir: Path) -> None:
         logger.info("No uncommitted changes to commit in sandbox.")
 
 
+def _redirect_claude_config_to_sandbox(sandbox_dir: Path) -> str:
+    """Point the Claude CLI's config and session store inside the sandbox.
+
+    The CLI writes its conversation transcripts (needed to resume after a rate
+    limit), history, and caches to the returned directory instead of the host
+    ``~/.claude``, so a local run leaves nothing on the host and cleanup is just
+    removing the sandbox dir. Host credentials are symlinked in, not copied, so
+    auth works without duplicating the secret into the sandbox; token auth via
+    ``CLAUDE_CODE_OAUTH_TOKEN`` reaches the CLI through the environment and needs
+    no file.
+    """
+    agent_home = sandbox_dir / ".agent_home"
+    agent_home.mkdir(exist_ok=True)
+    host_claude = Path(
+        os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
+    )
+    creds = host_claude / ".credentials.json"
+    link = agent_home / ".credentials.json"
+    if creds.exists() and not link.exists():
+        link.symlink_to(creds)
+    return str(agent_home)
+
+
 async def run_agent_in_sandbox(
     config: SandboxConfig,
     backend: AgentBackend,
@@ -352,6 +377,10 @@ async def run_agent_in_sandbox(
     _initial_commit(config.sandbox_dir)
 
     env = backend.build_env(config)
+    if backend.name == "claude":
+        env["CLAUDE_CONFIG_DIR"] = _redirect_claude_config_to_sandbox(
+            config.sandbox_dir
+        )
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
