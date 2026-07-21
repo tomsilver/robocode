@@ -47,7 +47,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,6 +64,7 @@ from robocode.utils.backends import (
     firewall_domains_for_provider,
     provider_from_model,
 )
+from robocode.utils.claude_auth import throwaway_claude_config
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -422,18 +423,14 @@ def _build_docker_auth_args(
     """Yield Docker CLI args and env vars for backend authentication.
 
     For Claude: OAuth token, or -- as a fallback when no token is found -- a
-    THROWAWAY COPY of ~/.claude bind-mounted read-write. Mounting the live host
-    ~/.claude would let anything the container writes under it, notably Claude
-    auto-memory, persist on the host and reach the next run; the copy is discarded
-    when this context exits, so writes stay ephemeral while the CLI can still read
-    the credentials and refresh session state.
+    writable, throwaway config containing only copied credentials. The CLI
+    cannot read the operator's history or memory, and its writes and token
+    refreshes are discarded when this context exits.
     For OpenCode: ~/.local/share/opencode bind-mount + API key passthrough.
     """
     docker_args: list[str] = []
     extra_env: dict[str, str] = {}
-    cleanup_dir: Path | None = None
-
-    try:
+    with ExitStack() as stack:
         if backend_name == "claude":
             oauth_token = _get_claude_oauth_token()
             if oauth_token:
@@ -442,31 +439,10 @@ def _build_docker_auth_args(
             else:
                 logger.warning(
                     "No Claude OAuth token found (env var or Keychain); falling "
-                    "back to a throwaway copy of ~/.claude. Run `claude login` on "
-                    "the host if the container cannot authenticate."
+                    "back to a throwaway credentials-only config. Run `claude "
+                    "login` on the host if the container cannot authenticate."
                 )
-                host_claude_cfg = Path(
-                    os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
-                )
-                cleanup_dir = Path(tempfile.mkdtemp(prefix="robocode-claude-"))
-                claude_copy = cleanup_dir / ".claude"
-                # Copy only what auth needs; skip the heavy, sensitive session
-                # dirs so they neither cost a per-run copy nor become readable in
-                # the sandbox. symlinks=True copies links verbatim, so a dangling
-                # link (e.g. debug/latest) does not abort the copy.
-                shutil.copytree(
-                    host_claude_cfg,
-                    claude_copy,
-                    symlinks=True,
-                    ignore=shutil.ignore_patterns(
-                        "projects",
-                        "todos",
-                        "shell-snapshots",
-                        "statsig",
-                        "debug",
-                        "history.jsonl",
-                    ),
-                )
+                claude_copy = stack.enter_context(throwaway_claude_config())
                 docker_args += ["-v", f"{claude_copy}:/home/node/.claude"]
         else:
             # OpenCode: bind-mount auth store and pass through API key env vars.
@@ -486,9 +462,6 @@ def _build_docker_auth_args(
                         extra_env[info.api_key_env] = val
 
         yield docker_args, extra_env
-    finally:
-        if cleanup_dir is not None:
-            shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
 def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> list[str]:

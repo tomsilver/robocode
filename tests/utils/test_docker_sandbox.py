@@ -39,6 +39,7 @@ from robocode.utils.backends.claude import ClaudeBackend
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
+    _build_docker_auth_args,
     _copy_src,
     _docker_run_prefix,
     _filtered_repo_mounts,
@@ -46,12 +47,12 @@ from robocode.utils.docker_sandbox import (
     _is_local_model,
     _setup_sandbox_dir,
 )
-from robocode.utils.rate_limit import run_with_rate_limit_retry
 from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
     env_server_running,
     serialize_space,
 )
+from robocode.utils.rate_limit import run_with_rate_limit_retry
 
 _DOCKER_IMAGE = "robocode-sandbox"
 
@@ -286,6 +287,32 @@ def test_docker_run_prefix_adds_extra_volumes(tmp_path: Path) -> None:
     )
     assert volume in cmd
     assert cmd[cmd.index(volume) - 1] == "-v"
+
+
+def test_claude_auth_mount_excludes_host_state(tmp_path: Path, monkeypatch) -> None:
+    """Credential fallback cannot expose or modify the live host config."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "robocode.utils.docker_sandbox._get_claude_oauth_token", lambda: None
+    )
+    host = tmp_path / ".claude"
+    (host / "projects").mkdir(parents=True)
+    (host / "projects" / "past.jsonl").write_text("past")
+    (host / "CLAUDE.md").write_text("operator memory")
+    (host / ".credentials.json").write_text("credentials")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+
+    with _build_docker_auth_args("claude") as (args, env):
+        assert not env
+        mount = next(arg for arg in args if arg.endswith(":/home/node/.claude"))
+        mounted = Path(mount.split(":", 1)[0])
+        assert mounted != host
+        assert [path.name for path in mounted.iterdir()] == [".credentials.json"]
+        (mounted / ".credentials.json").write_text("refreshed")
+        copied = mounted
+
+    assert (host / ".credentials.json").read_text() == "credentials"
+    assert not copied.exists()
 
 
 # A fake claude that runs inside the container: the counter lives in /sandbox

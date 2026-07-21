@@ -20,12 +20,12 @@ to override the default binary paths.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from robocode.mcp import MCP_START_SCRIPT
@@ -35,6 +35,7 @@ from robocode.primitive_specs import (
     REMOTE_MODULE_PRIMITIVES,
 )
 from robocode.utils.backends import AgentBackend
+from robocode.utils.claude_auth import sandbox_claude_config
 from robocode.utils.sandbox_types import (
     GenerationMetrics,
     SandboxConfig,
@@ -314,29 +315,6 @@ def _final_commit(sandbox_dir: Path) -> None:
         logger.info("No uncommitted changes to commit in sandbox.")
 
 
-def _redirect_claude_config_to_sandbox(sandbox_dir: Path) -> str:
-    """Point the Claude CLI's config and session store inside the sandbox.
-
-    The CLI writes its conversation transcripts (needed to resume after a rate
-    limit), history, and caches to the returned directory instead of the host
-    ``~/.claude``, so a local run leaves nothing on the host and cleanup is just
-    removing the sandbox dir. Host credentials are symlinked in, not copied, so
-    auth works without duplicating the secret into the sandbox; token auth via
-    ``CLAUDE_CODE_OAUTH_TOKEN`` reaches the CLI through the environment and needs
-    no file.
-    """
-    agent_home = sandbox_dir / ".agent_home"
-    agent_home.mkdir(exist_ok=True)
-    host_claude = Path(
-        os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
-    )
-    creds = host_claude / ".credentials.json"
-    link = agent_home / ".credentials.json"
-    if creds.exists() and not link.exists():
-        link.symlink_to(creds)
-    return str(agent_home)
-
-
 async def run_agent_in_sandbox(
     config: SandboxConfig,
     backend: AgentBackend,
@@ -377,10 +355,6 @@ async def run_agent_in_sandbox(
     _initial_commit(config.sandbox_dir)
 
     env = backend.build_env(config)
-    if backend.name == "claude":
-        env["CLAUDE_CONFIG_DIR"] = _redirect_claude_config_to_sandbox(
-            config.sandbox_dir
-        )
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)
@@ -393,22 +367,30 @@ async def run_agent_in_sandbox(
         else None
     )
     wall_start = time.monotonic()
+    claude_config = (
+        sandbox_claude_config(config.sandbox_dir)
+        if backend.name == "claude"
+        else nullcontext(None)
+    )
     try:
-        proc = subprocess.Popen(  # pylint: disable=consider-using-with
-            cmd,
-            cwd=sandbox_abs,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
+        with claude_config as config_dir:
+            if config_dir is not None:
+                env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+            proc = subprocess.Popen(  # pylint: disable=consider-using-with
+                cmd,
+                cwd=sandbox_abs,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
 
-        stream = backend.parse_stream(
-            proc,
-            stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
-        )
+            stream = backend.parse_stream(
+                proc,
+                stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+            )
     finally:
         if server_proc is not None:
             server_proc.terminate()

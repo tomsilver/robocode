@@ -3,11 +3,11 @@
 from pathlib import Path
 
 from robocode.utils.backends.claude import _RATE_LIMIT_RE
+from robocode.utils.claude_auth import sandbox_claude_config
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _is_path_within_sandbox,
-    _redirect_claude_config_to_sandbox,
     _stream_result_to_sandbox_result,
 )
 from robocode.utils.sandbox_types import GenerationMetrics, _StreamParseResult
@@ -64,8 +64,10 @@ def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
     assert result.generation_metrics.stop_reason == "end_turn"
 
 
-def test_redirect_claude_config_symlinks_creds(tmp_path: Path, monkeypatch) -> None:
-    """The sandbox-local config dir is created with host creds symlinked in."""
+def test_sandbox_claude_config_copies_then_removes_creds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Host credentials cannot be modified and do not remain in run output."""
     host = tmp_path / "host_claude"
     host.mkdir()
     (host / ".credentials.json").write_text("{}")
@@ -73,14 +75,16 @@ def test_redirect_claude_config_symlinks_creds(tmp_path: Path, monkeypatch) -> N
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
 
-    result = _redirect_claude_config_to_sandbox(sandbox)
+    with sandbox_claude_config(sandbox) as agent_home:
+        copied = agent_home / ".credentials.json"
+        assert copied.read_text() == "{}"
+        assert not copied.is_symlink()
+        copied.write_text('{"refreshed": true}')
+        (agent_home / "projects").mkdir()
 
-    agent_home = sandbox / ".agent_home"
-    assert result == str(agent_home)
-    assert agent_home.is_dir()
-    link = agent_home / ".credentials.json"
-    assert link.is_symlink()
-    assert link.resolve() == (host / ".credentials.json").resolve()
+    assert (host / ".credentials.json").read_text() == "{}"
+    assert not copied.exists()
+    assert (agent_home / "projects").is_dir()
 
 
 def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) -> None:
@@ -91,11 +95,9 @@ def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) 
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
 
-    _redirect_claude_config_to_sandbox(sandbox)
-
-    agent_home = sandbox / ".agent_home"
-    assert agent_home.is_dir()
-    assert not (agent_home / ".credentials.json").exists()
+    with sandbox_claude_config(sandbox) as agent_home:
+        assert agent_home.is_dir()
+        assert not (agent_home / ".credentials.json").exists()
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:

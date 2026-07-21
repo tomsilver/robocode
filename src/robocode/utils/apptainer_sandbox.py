@@ -33,6 +33,8 @@ import os
 import subprocess
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,7 @@ from robocode.utils.backends import (
     firewall_domains_for_provider,
     provider_from_model,
 )
+from robocode.utils.claude_auth import throwaway_claude_config
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     _filtered_repo_mounts,
@@ -81,10 +84,11 @@ class ApptainerSandboxConfig(SandboxConfig):
     sif_path: Path = _DEFAULT_SIF
 
 
+@contextmanager
 def _build_apptainer_auth_args(
     backend_name: str,
-) -> tuple[list[str], dict[str, str]]:
-    """Return Apptainer CLI args and env vars for backend authentication.
+) -> Iterator[tuple[list[str], dict[str, str]]]:
+    """Yield Apptainer CLI args and env vars for backend authentication.
 
     Mirrors :func:`docker_sandbox._build_docker_auth_args`. Secrets (the
     Claude OAuth token, provider API keys) are returned as host env vars
@@ -94,50 +98,45 @@ def _build_apptainer_auth_args(
     via ``ps`` / ``/proc/<pid>/cmdline`` on shared nodes). Only non-secret
     bind mounts are returned as CLI args.
 
-    The ``~/.claude`` bind-mount fallback relies on the image being built
-    with build.sh / build_sif.sh (which pass USER_UID/USER_GID build args
-    so the in-container node user matches the host's UID and can read host
-    files). Without that, the in-container CLI would see the host config
-    as inaccessible and overwrite it.
+    The credentials fallback uses a writable throwaway copy, never the live
+    host config, so experiment reads and writes cannot leak across runs or into
+    the operator's Claude history.
     """
     apptainer_args: list[str] = []
     extra_env: dict[str, str] = {}
 
-    if backend_name == "claude":
-        oauth_token = _get_claude_oauth_token()
-        if oauth_token:
-            # APPTAINERENV_ prefix, not an inline --env flag, so the secret is
-            # injected into the container (surviving --cleanenv) without ever
-            # appearing on the command line.
-            extra_env["APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+    with ExitStack() as stack:
+        if backend_name == "claude":
+            oauth_token = _get_claude_oauth_token()
+            if oauth_token:
+                # APPTAINERENV_ prefix, not an inline --env flag, so the secret is
+                # injected into the container (surviving --cleanenv) without ever
+                # appearing on the command line.
+                extra_env["APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+            else:
+                logger.warning(
+                    "No Claude OAuth token found; falling back to a throwaway "
+                    "credentials-only config. Run `claude login` on the host "
+                    "if the container cannot authenticate."
+                )
+                claude_copy = stack.enter_context(throwaway_claude_config())
+                apptainer_args += ["--bind", f"{claude_copy}:/home/node/.claude"]
         else:
-            logger.warning(
-                "No Claude OAuth token found; falling back to ~/.claude "
-                "bind-mount. Requires the image to be built via build_sif.sh "
-                "(matching host UID/GID). Run `claude login` on the host "
-                "if the container cannot authenticate."
-            )
-            host_claude_cfg = Path(
-                os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
-            )
-            apptainer_args += ["--bind", f"{host_claude_cfg}:/home/node/.claude"]
-    else:
-        opencode_data = Path.home() / ".local" / "share" / "opencode"
-        if opencode_data.exists():
-            apptainer_args += [
-                "--bind",
-                f"{opencode_data}:/home/node/.local/share/opencode",
-            ]
+            opencode_data = Path.home() / ".local" / "share" / "opencode"
+            if opencode_data.exists():
+                apptainer_args += [
+                    "--bind",
+                    f"{opencode_data}:/home/node/.local/share/opencode",
+                ]
 
-        for info in PROVIDERS.values():
-            if info.api_key_env:
-                val = os.environ.get(info.api_key_env)
-                if val:
-                    # APPTAINERENV_ prefix keeps the key off argv (see the
-                    # OAuth token note above).
-                    extra_env[f"APPTAINERENV_{info.api_key_env}"] = val
+            for info in PROVIDERS.values():
+                if info.api_key_env:
+                    val = os.environ.get(info.api_key_env)
+                    if val:
+                        # APPTAINERENV_ keeps the key off argv (see above).
+                        extra_env[f"APPTAINERENV_{info.api_key_env}"] = val
 
-    return apptainer_args, extra_env
+        yield apptainer_args, extra_env
 
 
 def _build_apptainer_cmd(
@@ -248,16 +247,17 @@ async def run_agent_in_apptainer_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     run_id = f"apptainer-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with _filtered_repo_mounts(
-        blackbox=config.blackbox,
-        include_bilevel="bilevel_models" in config.primitive_names,
-    ) as (
-        filtered_src,
-        filtered_kindergarden,
-        filtered_kinder_baselines,
+    with (
+        _filtered_repo_mounts(
+            blackbox=config.blackbox,
+            include_bilevel="bilevel_models" in config.primitive_names,
+        ) as (
+            filtered_src,
+            filtered_kindergarden,
+            filtered_kinder_baselines,
+        ),
+        _build_apptainer_auth_args(backend_name) as (auth_args, auth_env),
     ):
-        auth_args, auth_env = _build_apptainer_auth_args(backend_name)
-
         firewall_domains: list[str] = []
         if backend_name == "opencode":
             firewall_domains = firewall_domains_for_provider(
@@ -381,15 +381,17 @@ def run_genplan_in_apptainer(
             f"SIF image not found at {sif_path}; build it with: bash docker/build_sif.sh"
         )
     run_id = f"apptainer-genplan-{uuid.uuid4().hex[:8]}"
-    with _filtered_repo_mounts(
-        keep_primitives=True, include_bilevel=include_bilevel
-    ) as (
-        filtered_src,
-        filtered_kindergarden,
-        filtered_kinder_baselines,
+    auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
+    with (
+        _filtered_repo_mounts(
+            keep_primitives=True, include_bilevel=include_bilevel
+        ) as (
+            filtered_src,
+            filtered_kindergarden,
+            filtered_kinder_baselines,
+        ),
+        _build_apptainer_auth_args(auth_backend) as (auth_args, auth_env),
     ):
-        auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
-        auth_args, auth_env = _build_apptainer_auth_args(auth_backend)
         firewall_domains = firewall_domains_for_provider(
             completion_cfg["provider"], completion_cfg.get("base_url", "")
         )

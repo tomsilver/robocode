@@ -116,8 +116,10 @@ def run_with_rate_limit_retry(
 
     Each retry resumes the interrupted conversation (--continue) with the
     budget the run had left, so an agent that hit the usage cap continues its
-    work rather than restarting cold, and the total budget it spends matches a
-    run that never hit the cap.
+    work rather than restarting cold without receiving a fresh experimental
+    budget. Rehydrating the transcript may itself consume uncached input tokens,
+    so a resumed run is recorded explicitly and is not claimed to be identical
+    to an uninterrupted run.
     """
     active: SandboxConfig | None = apptainer_config or docker_config or local_config
     assert active is not None
@@ -140,6 +142,27 @@ def run_with_rate_limit_retry(
         aborted_turns += result.generation_metrics.num_turns
         aborted_cost += result.total_cost_usd or 0.0
 
+        # Both CLI limits use zero to mean unlimited.  Never turn an exhausted
+        # positive limit into zero on a retry, which would silently grant an
+        # unbounded second run.  Likewise, without a reported cost we cannot
+        # carry a positive dollar budget forward without changing the
+        # experimental condition.
+        missing_cost = original_budget > 0 and result.total_cost_usd is None
+        budget_exhausted = 0 < original_budget <= aborted_cost
+        turns_exhausted = 0 < original_turns <= aborted_turns
+        if missing_cost or budget_exhausted or turns_exhausted:
+            reason = (
+                "the interrupted attempt did not report its cost"
+                if missing_cost
+                else (
+                    "the dollar budget is exhausted"
+                    if budget_exhausted
+                    else "the turn budget is exhausted"
+                )
+            )
+            logger.warning("Not retrying rate-limited run because %s.", reason)
+            return _fold_retry_metrics(result, aborted_tokens, aborted_cost, retries)
+
         reset_hour, is_utc = parse_reset_hour(result.rate_limit_reset)
         wait_secs = seconds_until_reset(reset_hour, is_utc)
         hours = wait_secs / 3600
@@ -153,14 +176,12 @@ def run_with_rate_limit_retry(
         time.sleep(wait_secs)
         logger.info("Woke up after rate-limit sleep, resuming with remaining budget...")
 
-        # 0 turns means unlimited, so keep it; otherwise carry what is left,
-        # never dropping to 0 (which would silently re-grant unlimited turns).
-        remaining_turns = (
-            max(original_turns - aborted_turns, 1) if original_turns else 0
-        )
+        # Zero means unlimited for both fields; exhausted positive limits were
+        # handled above, so every finite remainder here is strictly positive.
+        remaining_turns = original_turns - aborted_turns if original_turns else 0
         active = replace(
             active,
             resume_previous_session=True,
-            max_budget_usd=max(original_budget - aborted_cost, 0.0),
+            max_budget_usd=original_budget - aborted_cost if original_budget else 0.0,
             max_turns=remaining_turns,
         )

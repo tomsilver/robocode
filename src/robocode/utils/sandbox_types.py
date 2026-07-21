@@ -55,9 +55,9 @@ class SandboxConfig:
     local_model_host: str = "127.0.0.1"
     # Resume the prior CLI conversation in this sandbox's working directory
     # instead of starting fresh. Set by the rate-limit retry loop so an agent
-    # interrupted by the usage cap continues with its full context and its
-    # remaining (carried-over) budget, making the run equivalent to one that
-    # never hit the cap.
+    # interrupted by the usage cap continues with its conversation context and
+    # remaining (carried-over) budget. Resume overhead can still differ from an
+    # uninterrupted run and is exposed by the retry metrics below.
     resume_previous_session: bool = False
 
 

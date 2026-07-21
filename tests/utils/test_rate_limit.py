@@ -15,7 +15,7 @@ def _metrics(tokens: int, turns: int = 0) -> GenerationMetrics:
     return GenerationMetrics(input_tokens=tokens, num_turns=turns)
 
 
-def _rate_limited(tokens: int, cost: float, turns: int = 0) -> SandboxResult:
+def _rate_limited(tokens: int, cost: float | None, turns: int = 0) -> SandboxResult:
     return SandboxResult(
         success=False,
         output_file=None,
@@ -120,6 +120,61 @@ def test_retry_loop_resumes_with_carried_budget(tmp_path: Path, monkeypatch) -> 
     assert captured[2].resume_previous_session is True
     assert captured[2].max_budget_usd == 3.5  # 5.0 - (0.5 + 1.0)
     assert captured[2].max_turns == 20  # 50 - (20 + 10)
+
+
+def test_retry_does_not_turn_exhausted_limits_into_unlimited(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An exhausted positive limit stops instead of becoming unlimited zero."""
+    results = iter([_rate_limited(100, 5.0, turns=50)])
+    captured: list[SandboxConfig] = []
+    slept: list[float] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    monkeypatch.setattr(rate_limit.time, "sleep", slept.append)
+    config = SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=5.0, max_turns=50)
+
+    final = run_with_rate_limit_retry(
+        None, config, backend=None  # type: ignore[arg-type]
+    )
+
+    assert not final.success
+    assert len(captured) == 1
+    assert not slept
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.rate_limit_retries == 1
+
+
+def test_retry_stops_when_interrupted_cost_is_unknown(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A finite budget cannot be carried safely without an attempt cost."""
+    results = iter([_rate_limited(100, None)])
+    captured: list[SandboxConfig] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    monkeypatch.setattr(
+        rate_limit.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("must not sleep")),
+    )
+
+    final = run_with_rate_limit_retry(
+        None,
+        SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=5.0),
+        backend=None,  # type: ignore[arg-type]
+    )
+
+    assert not final.success
+    assert len(captured) == 1
 
 
 def test_parse_reset_hour_pm_utc() -> None:
