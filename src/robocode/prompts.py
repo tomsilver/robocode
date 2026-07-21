@@ -162,8 +162,6 @@ primitives = env.make_primitives()
 Parallel test scripts are fine: every `make_env()` call creates an \
 independent environment instance.{set_state_note}
 
-{exploration}
-
 CRITICAL: `approach.py` itself must NOT import `env_client`. It will be \
 evaluated against the real environment by a separate harness that calls \
 `reset(state, info)` and `get_action(state)` directly. Use `env_client` \
@@ -189,12 +187,6 @@ _BB_OBS_CONVERSION_VECTOR = (
     "`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically "
     "there, and `approach.py` can use it directly."
 )
-_BB_EXPLORATION_VECTOR = (
-    "Start by exploring systematically: reset with several seeds, apply "
-    "controlled actions, and study how the observation vector changes to "
-    "identify what each dimension means and how actions affect the state."
-)
-
 _BB_GET_STATE_COMMENT_OBJECT_CENTRIC = "  # a local ObjectCentricState"
 _BB_SPACE_METADATA_OBJECT_CENTRIC = (
     "`env.observation_space` describes the objects, NOT a vector: `.types` lists the "
@@ -212,12 +204,6 @@ _BB_OBS_CONVERSION_OBJECT_CENTRIC = (
     "SAME object-centric `observation_space` to `GeneratedApproach`, and the `state` "
     "it receives is the same `ObjectCentricState`."
 )
-_BB_EXPLORATION_OBJECT_CENTRIC = (
-    "Start by exploring systematically: reset with several seeds, apply controlled "
-    "actions, and study how the objects and their features change to identify what "
-    "each feature means and how actions affect the state. Do NOT assume a fixed "
-    "number of objects."
-)
 
 
 def blackbox_interaction_spec(
@@ -234,14 +220,12 @@ def blackbox_interaction_spec(
             "get_state_comment": _BB_GET_STATE_COMMENT_OBJECT_CENTRIC,
             "space_metadata": _BB_SPACE_METADATA_OBJECT_CENTRIC,
             "obs_conversion": _BB_OBS_CONVERSION_OBJECT_CENTRIC,
-            "exploration": _BB_EXPLORATION_OBJECT_CENTRIC,
         }
     else:
         fillers = {
             "get_state_comment": _BB_GET_STATE_COMMENT_VECTOR,
             "space_metadata": _BB_SPACE_METADATA_VECTOR,
             "obs_conversion": _BB_OBS_CONVERSION_VECTOR,
-            "exploration": _BB_EXPLORATION_VECTOR,
         }
     return _BLACKBOX_INTERACTION_SPEC_TEMPLATE.format(
         set_state_note=set_state_note, **fillers
@@ -267,15 +251,14 @@ The environment is described below.
 _SCAFFOLD_INTRO_OPENER = "You are writing {approach_kind} for {target}."
 
 # System-prompt goal: generalize to any instance, or specialize to one named
-# instance. Trailing space joins the eval-budget clause below.
+# instance.
 _GENERALIZE_GOAL = (
     "Your program must generalize to any instance of this environment (any "
-    "env.reset()); it does not need to work on any other environment. "
+    "env.reset())."
 )
 _PER_INSTANCE_GOAL_TEMPLATE = (
     "Your program only needs to solve the single instance produced by "
-    "`{reset_call}`; you may specialize entirely to it, and it does not need to "
-    "generalize to other instances or environments. "
+    "`{reset_call}`; you may specialize entirely to it."
 )
 
 # Eval-time wall-clock budget appended to the goal; {timeout} is the shared eval_timeout.
@@ -319,7 +302,7 @@ def generalization_goal(
         if per_instance_seed is None
         else per_instance_directive(per_instance_seed, per_instance_count)
     )
-    return goal + _EVAL_BUDGET_CLAUSE.format(timeout=timeout)
+    return f"{goal} {_EVAL_BUDGET_CLAUSE.format(timeout=timeout)}"
 
 
 _SOURCE_OPENER = (
@@ -389,10 +372,7 @@ is a set of typed objects whose count changes between episodes. Read it with:
 - `state.get_objects(type)` -- objects of a type (types are in `observation_space.types`);
 - `state.get_object_names()` / `state.get_object_from_name(name)` -- objects by name;
 - `state.get(obj, feature)` -- a named feature of an object.
-Do NOT call `state.shape` or index `state` positionally, do NOT devectorize it, and \
-do NOT assume a fixed number of objects of any type. Your ONE program must work for \
-ANY object count; it will be evaluated on counts larger than any you see while \
-developing, so write count-agnostic code (loop over the objects that are present)."""
+Your approach should in principle work for any number of objects."""
 
 # Geometric-reasoning prompt, shared by both approaches.
 GEOMETRY_PROMPT = """\
@@ -469,6 +449,7 @@ _AGENTIC_BLACKBOX = """\
 # AgenticCDLApproach (behavior-decomposed policy) fragments
 # ---------------------------------------------------------------------------
 
+# DEPRECATED: CDL prompts kept for reference, unused in experiments, not cleaned.
 CDL_DECOMPOSITION_PROMPT = """\
 
 BEFORE writing any low-level code, you MUST first reason about the HIGH-LEVEL \
@@ -794,6 +775,7 @@ def build_system_prompt(
     blackbox: bool,
     backend_name: str,
     timeout: float,
+    token_budget: bool = False,
     mcp_tools: tuple[str, ...] = (),
     object_centric: bool = False,
     per_instance_seed: int | None = None,
@@ -803,8 +785,9 @@ def build_system_prompt(
 
     After ``intro`` comes the goal + eval budget (``generalization_goal``):
     generalize, or specialize to the ``per_instance_seed`` instance, under the
-    ``timeout``. Then the shared file-discipline, subagent, token-budget,
-    backend-suffix, and optional MCP-tools fragments. ``object_centric`` drops the
+    ``timeout``. Then the shared file-discipline and subagent fragments, the
+    optional token-budget fragment (only when ``token_budget``), the backend
+    suffix, and the optional MCP-tools fragments. ``object_centric`` drops the
     flat-vector render mode.
     """
     goal = generalization_goal(
@@ -814,7 +797,12 @@ def build_system_prompt(
     )
     subagents = SYSTEM_SUBAGENTS_BLACKBOX if blackbox else SYSTEM_SUBAGENTS
     system_prompt = (
-        intro + goal + " " + SYSTEM_FILE_DISCIPLINE + subagents + SYSTEM_TOKEN_BUDGET
+        intro
+        + goal
+        + " "
+        + SYSTEM_FILE_DISCIPLINE
+        + subagents
+        + (SYSTEM_TOKEN_BUDGET if token_budget else "")
     )
     if backend_name == "opencode":
         system_prompt += OPENCODE_PROMPT_SUFFIX

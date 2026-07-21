@@ -22,6 +22,7 @@ from robocode.mcp import (
     mcp_tool_cli_names,
     setup_mcp_config,
 )
+from robocode.utils.backends.agent_files import build_claude_md
 from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
@@ -199,43 +200,7 @@ class ClaudeBackend(AgentBackend):
 
         claude_md = config.sandbox_dir / "CLAUDE.md"
         if not claude_md.exists():
-            if docker_python:
-                text = (
-                    "All files you create MUST use relative paths so they "
-                    "stay in the current working directory (/sandbox). Never "
-                    "write files using absolute paths.\n\n"
-                    "CONTEXT MANAGEMENT: your context window is limited and "
-                    "you MUST protect it aggressively: "
-                    "(1) Delegate ALL source code reading, exploration, and "
-                    "deep reasoning to subagents: have them return only "
-                    "concise summaries and actionable suggestions. "
-                    "(2) Never read large files directly; spawn a subagent to "
-                    "read and summarize them. "
-                    "(3) When running Bash commands, pipe output through "
-                    "`head` or `tail` to limit verbosity if possible. "
-                    "(4) Keep your thinking brief, do not write long reasoning "
-                    "traces. If you need to reason deeply about a design "
-                    "decision, delegate that to a subagent and have it return "
-                    "the conclusion. "
-                    "(5) Keep your main conversation focused on writing and "
-                    "testing code, not on reading source or reasoning at "
-                    "length."
-                    f"The Python interpreter is at {docker_python}\n"
-                    "Run test scripts with:\n"
-                    f"    {docker_python} test_approach.py\n"
-                )
-                if primitive_names:
-                    text += (
-                        "\nPrimitive source files (for reference) are in "
-                        "./primitives/\n"
-                    )
-            else:
-                text = (
-                    "All files you create MUST use relative paths so they "
-                    "stay in the current working directory. Never write files "
-                    "using absolute paths.\n"
-                )
-            claude_md.write_text(text)
+            claude_md.write_text(build_claude_md(docker_python, primitive_names))
 
     def parse_stream(
         self,

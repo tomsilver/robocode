@@ -173,21 +173,21 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             ) from exc
 
     def _count_for_seed(self, seed: int | None) -> int:
-        """A design-range count for an unpinned reset (keeps dev in-distribution).
+        """A design-range count for an unpinned reset.
 
-        Held-out counts are never produced here; they reach the env only through an
-        explicit ``options={"object_count": k}`` from the eval harness.
+        Any other count reaches the env only through an explicit
+        ``options={"object_count": k}``.
         """
         return int(np.random.default_rng(seed).choice(self._design_counts))
 
     @property
     def design_counts(self) -> list[int]:
-        """The object counts the agent develops against (in-distribution)."""
+        """The object counts an unpinned reset samples from."""
         return list(self._design_counts)
 
     @property
     def eval_counts(self) -> list[int]:
-        """The object counts swept at evaluation (design plus held-out)."""
+        """The object counts swept at evaluation."""
         return list(self._eval_counts)
 
     @property
@@ -311,6 +311,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         objects (and hence any index layout) varies, so the observation is described
         by the types present and their features, not by absolute indices.
         """
+        prefix = self._count_object_prefix
         by_type: dict[str, list[str]] = {}
         type_features: dict[str, list[str]] = {}
         for name in sorted(self._reference_state.get_object_names()):
@@ -326,13 +327,17 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             "`state.get_object_from_name(name)` to enumerate objects,",
             "- `state.get(obj, feature)` to read a feature.",
             "",
-            "| **Type** | **Features** | **Example objects (this reset)** |",
+            "| **Type** | **Features** | **Example objects** |",
             "| --- | --- | --- |",
         ]
         for type_name in sorted(by_type):
             feats = ", ".join(type_features[type_name])
-            examples = ", ".join(by_type[type_name])
-            lines.append(f"| {type_name} | {feats} | {examples} |")
+            names = [n for n in by_type[type_name] if not n.startswith(prefix)]
+            if len(names) < len(by_type[type_name]):
+                # How many count-defining objects a state holds varies per reset, so
+                # name the pattern instead of enumerating one instance's objects.
+                names += [f"{prefix}0", f"{prefix}1", "..."]
+            lines.append(f"| {type_name} | {feats} | {', '.join(names)} |")
         lines.append("")
         lines.append(
             f"The count-defining objects are named `{self._count_object_prefix}0`, "
@@ -343,23 +348,36 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
     def _generalization_section(self) -> str:
         return (
             "This environment contains a VARIABLE number of objects. Your program "
-            "must handle ANY number of them -- in principle unbounded. Do not assume "
+            "must handle ANY number of them, in principle unbounded. Do not assume "
             "a fixed object count, a fixed number of objects of any type, or any "
             "fixed index layout; iterate the objects in the state and act on whatever "
-            "is there. You will be evaluated on a range of object counts, including "
-            "counts larger than those you see while developing."
+            "is there."
         )
 
+    def _count_invariant_prose(self, metadata_key: str) -> str:
+        """The paragraphs of a family metadata field that hold for every object count.
+
+        The prose lives on the constant-object wrapper's metadata, not the inner env's,
+        and each wrapper writes it for its own fixed count, so a paragraph that differs
+        between counts does not describe this env.
+        """
+        per_count = [
+            self._backends[count].metadata[metadata_key].split("\n\n")
+            for count in sorted(self._backends)
+        ]
+        first, *others = per_count
+        return "\n\n".join(p for p in first if all(p in other for other in others))
+
     def _describe(self, include_access: bool) -> str:
-        # Prose lives on the constant-object wrapper's metadata, not the inner env's.
-        md = self._backend_for(min(self._design_counts)).metadata
+        # The card must read the same whatever counts are configured.
         description = (
             f"# {self._env_path.rsplit(':', 1)[-1]} (variable object count)\n\n"
-            f"{md.get('description', '')}\n\n"
+            f"{self._count_invariant_prose('description')}\n\n"
             f"## Generalization\n\n{self._generalization_section()}\n\n"
             f"## Observation\n\n{self._observation_section()}\n\n"
-            f"## Action Space\n\n{md.get('action_space_description', '')}\n\n"
-            f"## Reward\n\n{md.get('reward_description', '')}\n\n"
+            "## Action Space\n\n"
+            f"{self._count_invariant_prose('action_space_description')}\n\n"
+            f"## Reward\n\n{self._count_invariant_prose('reward_description')}\n\n"
         )
         if not include_access:
             return description
@@ -372,10 +390,12 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             f'    constant_object_env_path="{self._env_path}",\n'
             f'    count_kwarg="{self._count_kwarg}",\n'
             f'    count_object_prefix="{self._count_object_prefix}",\n'
-            f"    design_counts={self._design_counts},\n"
-            f"    eval_counts={self._eval_counts},\n"
+            "    # Counts an unpinned reset draws from; use whichever you want to\n"
+            "    # develop against.\n"
+            "    design_counts=[1],\n"
+            "    eval_counts=[1],\n"
             ")\n\n"
-            "# Unpinned reset samples a design-range count; pin one for testing:\n"
+            "# Pin a count to build an instance of that size, for any count:\n"
             "state, info = env.reset(seed=0, options={'object_count': 3})\n"
             "for name in state.get_object_names():\n"
             "    obj = state.get_object_from_name(name)\n"

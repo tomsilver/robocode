@@ -14,6 +14,7 @@ re-export resolves.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from functools import partial
 from typing import Any
@@ -61,6 +62,20 @@ _PRIMITIVE_BUILDERS: dict[str, Callable[[Any], Any]] = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+# Primitives kept for reference but not used in current experiments.
+_DEPRECATED_PRIMITIVES = frozenset(
+    {"csp", "crv_motion_planning", "crv_motion_planning_grasp"}
+)
+
+
 def build_primitives(env: Any, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
     """Build a primitives dict containing only the requested *names*."""
+    for name in names:
+        if name in _DEPRECATED_PRIMITIVES:
+            logger.warning(
+                "Primitive %r is deprecated and not used in current experiments.",
+                name,
+            )
     return {name: _PRIMITIVE_BUILDERS[name](env) for name in names}

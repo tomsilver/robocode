@@ -47,10 +47,6 @@ _TOOL_DESC_TEMPLATES: dict[str, str] = {
         "provided.\n"
         "  The optional `label` parameter is included in the output filename "
         'for easier identification (e.g. label="after_grasp").\n'
-        "  Use reset mode to visually understand the spatial layout, obstacle "
-        "placement, and goal positions. Use arbitrary state mode to visualize "
-        "intermediate states during debugging, e.g. after applying actions or "
-        "to verify a planned trajectory.\n"
         "  How to get a state list:\n"
         "  - From an existing observation: `obs.tolist()`\n"
         "  - To inspect/modify named features: use "
@@ -72,9 +68,7 @@ _TOOL_DESC_TEMPLATES: dict[str, str] = {
         '`{render_policy}(approach_dir=".", seed=42, '
         "max_steps=1000, max_frames=100)`: runs a full episode of the "
         "approach in `approach_dir/approach.py` on the given seed and saves "
-        "each frame as a PNG. Returns a list of file paths. Use this to "
-        "visually debug policy failures: see where the agent gets stuck, "
-        "overshoots, or collides.\n"
+        "each frame as a PNG. Returns a list of file paths.\n"
         "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
         "NOT available inside subagents. Call it yourself to generate "
         "frames, then delegate reading to a subagent. The subagent "
@@ -86,8 +80,7 @@ _TOOL_DESC_TEMPLATES: dict[str, str] = {
         "  1. Call {render_policy} yourself to generate frames\n"
         '  2. Spawn a subagent: "Read these frame PNGs and describe '
         "the agent's trajectory. What goes wrong? Return a short summary.\"\n"
-        "  3. Use the summary to fix your approach\n"
-        "  4. Delete the frames directory"
+        "  3. Delete the frames directory"
     ),
 }
 
@@ -112,10 +105,6 @@ _TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
         "provided.\n"
         "  The optional `label` parameter is included in the output filename "
         'for easier identification (e.g. label="after_grasp").\n'
-        "  Use reset mode to visually understand the spatial layout, obstacle "
-        "placement, and goal positions. Use arbitrary state mode to visualize "
-        "intermediate states during debugging, e.g. after applying actions or "
-        "to verify a planned trajectory.\n"
         "  How to get a state list (a flat list of floats):\n"
         "  - From an existing observation: `obs.tolist()`\n"
         "  - From the live env: `env.get_state().tolist()`\n"
@@ -149,10 +138,8 @@ _TOOL_DESC_TEMPLATES_OBJECT_CENTRIC: dict[str, str] = {
         "the file path.\n"
         "  This environment's observations are object-centric states with a VARIABLE "
         "number of objects, so there is no flat state vector: the arbitrary-state mode "
-        "(passing a list of floats) does NOT apply here. Use seed mode to see layouts, "
-        "and use {render_policy} to watch your policy act.\n"
-        "  Pass `object_count` to pin the number of objects for this render (e.g. to "
-        "visualize the exact held-out instance a per-instance evaluation targets); omit "
+        "(passing a list of floats) does NOT apply here.\n"
+        "  Pass `object_count` to pin the number of objects for this render; omit "
         "it to sample the count as `env.reset(seed=seed)` does.\n"
         "  The optional `label` parameter is included in the output filename.\n"
         "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are NOT available "
@@ -209,9 +196,7 @@ MCP_TOOL_NAMES: tuple[str, ...] = tuple(MCP_TOOL_DESCRIPTIONS)
 # System prompt suffix appended when MCP tools are available.
 MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
     " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
-    "Start by calling render_state to see the environment before writing code. "
-    "When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes. You can also render arbitrary states by "
+    "You can render arbitrary states by "
     "passing a flat list of floats to render_state's `state` parameter; use "
     "devectorize/vectorize on env.observation_space to construct or modify "
     "states with named features. "
@@ -225,14 +210,10 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
 # mode and render_policy are useful.
 MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC = (
     " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
-    "Start by calling render_state(seed=...) to see the environment before writing "
-    "code. When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes. This environment's observations are "
-    "object-centric states (a set of typed objects), not flat vectors, so "
-    "render_state's arbitrary-state mode does not apply -- use seed mode and "
-    "render_policy. Both render_state and render_policy take an optional "
-    "object_count to pin the number of objects, so you can visualize the exact "
-    "instance an evaluation targets rather than a sampled one. "
+    "This environment's observations are object-centric states (a set of typed "
+    "objects), not flat vectors, so render_state's arbitrary-state mode does not "
+    "apply. Both render_state and render_policy take an optional object_count to "
+    "pin the number of objects. "
     "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
     "called from inside subagents. Always call MCP tools yourself, then "
     "delegate image reading to a subagent."
@@ -244,9 +225,7 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC = (
 # than the in-process dict-of-arrays form.
 MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX = (
     " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
-    "Start by calling render_state to see the environment before writing code. "
-    "When your approach fails, call render_policy to visually diagnose the "
-    "failure BEFORE guessing at fixes. You can also render arbitrary states by "
+    "You can render arbitrary states by "
     "passing a flat list of floats (e.g. from obs.tolist() or "
     "env.get_state().tolist()) to render_state's `state` parameter, or use "
     "env.observation_space.devectorize/vectorize to inspect or modify states "

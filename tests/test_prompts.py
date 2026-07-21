@@ -116,16 +116,20 @@ def test_system_prompt_mcp_suffix_non_blackbox_variant():
     assert MCP_TOOLS_SYSTEM_PROMPT_SUFFIX in sp
 
 
-def test_system_prompt_token_budget_on_both_approaches():
-    """Token-budget guidance is appended to every system prompt (both approaches)."""
-    agentic = prompts.build_system_prompt(
+def test_system_prompt_token_budget_optional():
+    """Token-budget guidance is off by default and added only when requested."""
+    off = prompts.build_system_prompt(
         intro=prompts.AGENTIC_INTRO, blackbox=False, backend_name="claude", timeout=30
     )
-    cdl = prompts.build_system_prompt(
-        intro=prompts.CDL_INTRO, blackbox=False, backend_name="claude", timeout=30
+    on = prompts.build_system_prompt(
+        intro=prompts.AGENTIC_INTRO,
+        blackbox=False,
+        backend_name="claude",
+        timeout=30,
+        token_budget=True,
     )
-    assert "TOKEN BUDGET" in agentic
-    assert "TOKEN BUDGET" in cdl
+    assert "TOKEN BUDGET" not in off
+    assert "TOKEN BUDGET" in on
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +279,6 @@ def test_blackbox_interaction_spec_vector_is_default():
     spec = prompts.blackbox_interaction_spec()
     assert "devectorize" in spec
     assert "numpy snapshot" in spec
-    assert "observation vector" in spec
 
 
 def test_blackbox_interaction_spec_object_centric():
@@ -557,7 +560,6 @@ def test_golden_system_prompt_agentic_nonblackbox_claude():
         + " "
         + prompts.SYSTEM_FILE_DISCIPLINE
         + prompts.SYSTEM_SUBAGENTS
-        + prompts.SYSTEM_TOKEN_BUDGET
         + CLAUDE_PROMPT_SUFFIX
     )
     assert (
@@ -579,7 +581,6 @@ def test_golden_system_prompt_cdl_blackbox_claude_with_mcp():
         + " "
         + prompts.SYSTEM_FILE_DISCIPLINE
         + prompts.SYSTEM_SUBAGENTS_BLACKBOX
-        + prompts.SYSTEM_TOKEN_BUDGET
         + CLAUDE_PROMPT_SUFFIX
         + MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
     )
@@ -603,7 +604,6 @@ def test_golden_system_prompt_opencode_suffix():
         + " "
         + prompts.SYSTEM_FILE_DISCIPLINE
         + prompts.SYSTEM_SUBAGENTS
-        + prompts.SYSTEM_TOKEN_BUDGET
         + OPENCODE_PROMPT_SUFFIX
     )
     assert (

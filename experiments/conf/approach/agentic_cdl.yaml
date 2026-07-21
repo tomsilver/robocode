@@ -7,7 +7,7 @@ max_turns: 0
 output_dir: ${hydra:runtime.output_dir}
 load_dir: null
 container_backend: docker  # docker | apptainer | local
-geometry_prompt: true
+geometry_prompt: false
 max_output_tokens: 32000
 autocompact_pct: 80
 blackbox: false  # hide env source; interact via host-side env server

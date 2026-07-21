@@ -1,4 +1,7 @@
-"""Constraint satisfaction problem (CSP) primitive."""
+"""Constraint satisfaction problem (CSP) primitive.
+
+DEPRECATED: not used in current experiments.
+"""
 
 import abc
 import logging

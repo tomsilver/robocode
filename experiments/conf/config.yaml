@@ -12,7 +12,6 @@ render_videos: false
 record_approach_history: false
 primitives:
   - check_action_collision
-  - csp
   - BiRRT
 mcp_tools:
   - render_state

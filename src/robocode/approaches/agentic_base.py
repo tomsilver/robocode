@@ -66,8 +66,9 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         load_dir: str | None = None,
         use_docker: bool = False,
         container_backend: str | None = None,
-        geometry_prompt: bool = True,
+        geometry_prompt: bool = False,
         modular_code_prompt: bool = False,
+        token_budget_prompt: bool = False,
         mcp_tools: tuple[str, ...] = (),
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
@@ -96,6 +97,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         )
         self._geometry_prompt = geometry_prompt
         self._modular_code_prompt = modular_code_prompt
+        self._token_budget_prompt = token_budget_prompt
         self._mcp_tools = mcp_tools
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
@@ -184,6 +186,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             blackbox=self._blackbox,
             backend_name=self._backend_cfg["backend"],
             timeout=self._eval_timeout,
+            token_budget=self._token_budget_prompt,
             mcp_tools=self._mcp_tools,
             object_centric=self._object_centric,
             per_instance_seed=per_instance_seed,

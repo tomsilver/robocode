@@ -147,8 +147,8 @@ def register_tools(
 
             For a variable-count env, pass ``object_count`` to pin the number of
             objects so the rollout matches the scored instance. Returns the list of
-            saved PNG file paths. Use a subagent to read and analyze the frames — do
-            NOT read them directly to avoid context bloat.
+            saved PNG file paths. Use a subagent to read and analyze the frames; do
+            NOT read them directly, to avoid context bloat.
             """
             return render_policy_impl(
                 approach_dir, seed, max_steps, max_frames, object_count
