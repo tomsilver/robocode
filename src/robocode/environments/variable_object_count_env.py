@@ -173,21 +173,21 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             ) from exc
 
     def _count_for_seed(self, seed: int | None) -> int:
-        """A design-range count for an unpinned reset (keeps dev in-distribution).
+        """A design-range count for an unpinned reset.
 
-        Held-out counts are never produced here; they reach the env only through an
-        explicit ``options={"object_count": k}`` from the eval harness.
+        Any other count reaches the env only through an explicit
+        ``options={"object_count": k}``.
         """
         return int(np.random.default_rng(seed).choice(self._design_counts))
 
     @property
     def design_counts(self) -> list[int]:
-        """The object counts the agent develops against (in-distribution)."""
+        """The object counts an unpinned reset samples from."""
         return list(self._design_counts)
 
     @property
     def eval_counts(self) -> list[int]:
-        """The object counts swept at evaluation (design plus held-out)."""
+        """The object counts swept at evaluation."""
         return list(self._eval_counts)
 
     @property
@@ -355,13 +355,11 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         )
 
     def _count_invariant_prose(self, metadata_key: str) -> str:
-        """A family's markdown metadata field, minus its count-dependent paragraphs.
+        """The paragraphs of a family metadata field that hold for every object count.
 
-        Prose lives on the constant-object wrapper's metadata, not the inner env's, and
-        is written for one fixed-count instance, so it can state that count outright
-        ("there are always 3 buttons"), which is false where the count changes per
-        reset. A paragraph that differs between backends built at different counts is
-        exactly a count-dependent one, so keep only the paragraphs every backend shares.
+        The prose lives on the constant-object wrapper's metadata, not the inner env's,
+        and each wrapper writes it for its own fixed count, so a paragraph that differs
+        between counts does not describe this env.
         """
         per_count = [
             self._backends[count].metadata[metadata_key].split("\n\n")
@@ -371,8 +369,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         return "\n\n".join(p for p in first if all(p in other for other in others))
 
     def _describe(self, include_access: bool) -> str:
-        # Nothing here may encode the configured counts: the agent is evaluated on
-        # counts it has not seen, so the card must read the same for any of them.
+        # The card must read the same whatever counts are configured.
         description = (
             f"# {self._env_path.rsplit(':', 1)[-1]} (variable object count)\n\n"
             f"{self._count_invariant_prose('description')}\n\n"
