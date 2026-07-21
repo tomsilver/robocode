@@ -16,6 +16,15 @@ OBSTRUCTION2D: dict[str, Any] = {
     "bilevel_env_name": "obstruction2d",
 }
 
+STICKBUTTON2D: dict[str, Any] = {
+    "constant_object_env_path": "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv",
+    "count_kwarg": "num_buttons",
+    "count_object_prefix": "button",
+    "design_counts": [1, 2],
+    "eval_counts": [1, 2, 3],
+    "bilevel_env_name": "stickbutton2d",
+}
+
 
 def _num_prefixed(state, prefix: str) -> int:
     return sum(1 for name in state.get_object_names() if name.startswith(prefix))
@@ -81,8 +90,8 @@ def test_spaces_are_count_invariant_but_box_view_is_not() -> None:
 
 def test_observation_space_exposes_get_type_for_blackbox_parity() -> None:
     """The eval-time space exposes get_type(name) like the blackbox client mirror, so a
-    program developed against the client runs unchanged at eval (KeyError on unknown).
-    """
+    program developed against the client runs unchanged at eval (KeyError on
+    unknown)."""
     env = VariableObjectCountEnv(**OBSTRUCTION2D)
     # get_type is attached at construction; the space is typed as a bare gym Space.
     get_type = getattr(env.observation_space, "get_type")
@@ -176,20 +185,7 @@ _FAMILY_CASES = [
         True,
         id="clutteredstorage2d",
     ),
-    pytest.param(
-        {
-            "constant_object_env_path": (
-                "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv"
-            ),
-            "count_kwarg": "num_buttons",
-            "count_object_prefix": "button",
-            "design_counts": [1, 2],
-            "eval_counts": [1, 2, 3],
-            "bilevel_env_name": "stickbutton2d",
-        },
-        True,
-        id="stickbutton2d",
-    ),
+    pytest.param(STICKBUTTON2D, True, id="stickbutton2d"),
     pytest.param(
         {
             "constant_object_env_path": "kinder.envs.kinematic2d.motion2d:Motion2DEnv",
@@ -241,6 +237,42 @@ def test_family_pinned_count_and_prefix_inference(
     assert any(prefix in row for row in card_rows[2:])
     assert "## Example Usage" in full
     assert "## Example Usage" not in env.env_description_blackbox
+    env.close()
+
+
+@pytest.mark.parametrize("cfg, _one_to_one", _FAMILY_CASES)
+def test_card_hides_the_configured_counts(
+    cfg: dict[str, Any], _one_to_one: bool
+) -> None:
+    """The card must read the same whatever counts are configured.
+
+    Evaluation sweeps counts the agent never develops against, so nothing in the card
+    (family prose, object table, usage example) may encode which counts are configured.
+    """
+    counts = [cfg["design_counts"][0], cfg["eval_counts"][-1]]
+    env = VariableObjectCountEnv(**cfg)
+    other = VariableObjectCountEnv(
+        **{**cfg, "design_counts": counts, "eval_counts": counts}
+    )
+    card = env.env_description
+    assert card == other.env_description
+    assert str(cfg["design_counts"]) not in card
+    assert str(cfg["eval_counts"]) not in card
+    env.close()
+    other.close()
+
+
+def test_family_prose_drops_count_specific_claims() -> None:
+    """StickButton2D's family description states the instance's button count ("there are
+    always 3 buttons").
+
+    That claim is false when the count varies per reset, so the card keeps the rest of
+    the prose and drops it.
+    """
+    env = VariableObjectCountEnv(**STICKBUTTON2D)
+    card = env.env_description
+    assert "touch all buttons" in card
+    assert "there are always" not in card
     env.close()
 
 
