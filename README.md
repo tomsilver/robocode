@@ -257,6 +257,11 @@ Analyze results from one or more runs:
 python experiments/analyze_results.py multirun/
 ```
 
+Browse runs in the browser (metrics, per-episode GIFs, and the sandbox git history of the generated `approach.py`), then open http://localhost:8000:
+```bash
+python experiments/results_viewer.py --root . --port 8000
+```
+
 ### Agentic approach
 
 The `agentic` approach launches a coding agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.
