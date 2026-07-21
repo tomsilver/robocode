@@ -93,6 +93,35 @@ def _choice(hydra_dir: Path, key: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _primitives(hydra_dir: Path) -> str:
+    """The run's primitives as a hydra override value, e.g. ``[BiRRT,csp]``.
+
+    A generated approach.py indexes the exact primitives it was written against, so a
+    replay must rebuild the same set or it raises KeyError. Prefer the recorded
+    override; fall back to the resolved list in config.yaml.
+    """
+    ov = _parse_overrides(hydra_dir)
+    if "primitives" in ov:
+        return ov["primitives"]
+    cfg = hydra_dir / "config.yaml"
+    if not cfg.exists():
+        return "[]"
+    lines = cfg.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("primitives:"):
+            continue
+        inline = line.split(":", 1)[1].strip()
+        if inline:
+            return inline
+        names = []
+        for entry in lines[i + 1 :]:
+            if not entry.startswith("- "):
+                break
+            names.append(entry[2:].strip())
+        return "[" + ",".join(names) + "]"
+    return "[]"
+
+
 # Trees that never hold experiment runs; pruned so the recursive scan stays fast.
 _SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "third-party"}
 
@@ -552,7 +581,7 @@ def _render_worker() -> None:
                             "approach=agentic",
                             f"approach.load_dir={load_dir}",
                             f"approach.output_dir={tmp}/out",
-                            "primitives=[]",
+                            f"primitives={_primitives(run.path / '.hydra')}",
                             "mcp_tools=[]",
                             f"environment={run.environment}",
                             f"seed={run.seed}",
@@ -650,7 +679,7 @@ class Handler(BaseHTTPRequestHandler):
     def _safe(self, run: RunInfo, rel: str) -> Optional[Path]:
         """Resolve rel within the run dir; None if it escapes."""
         p = (run.path / rel).resolve()
-        return p if str(p).startswith(str(run.path.resolve())) else None
+        return p if p.is_relative_to(run.path.resolve()) else None
 
     # -- GET --
     def do_GET(self) -> None:  # noqa: N802
@@ -1048,6 +1077,11 @@ def main() -> None:
         help="directory names to prune from the scan (e.g. --exclude outputs multirun)",
     )
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="bind address; pass 0.0.0.0 to reach the viewer from another machine",
+    )
     args = ap.parse_args()
 
     SCAN.root = Path(args.root).resolve()
@@ -1057,8 +1091,8 @@ def main() -> None:
 
     threading.Thread(target=_render_worker, daemon=True).start()
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
-    print(f"serving on http://localhost:{args.port}  (Ctrl-C to stop)")
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(f"serving on http://{args.host}:{args.port}  (Ctrl-C to stop)")
     server.serve_forever()
 
 
