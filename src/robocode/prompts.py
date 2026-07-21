@@ -251,15 +251,14 @@ The environment is described below.
 _SCAFFOLD_INTRO_OPENER = "You are writing {approach_kind} for {target}."
 
 # System-prompt goal: generalize to any instance, or specialize to one named
-# instance. Trailing space joins the eval-budget clause below.
+# instance.
 _GENERALIZE_GOAL = (
     "Your program must generalize to any instance of this environment (any "
-    "env.reset()); it does not need to work on any other environment. "
+    "env.reset())."
 )
 _PER_INSTANCE_GOAL_TEMPLATE = (
     "Your program only needs to solve the single instance produced by "
-    "`{reset_call}`; you may specialize entirely to it, and it does not need to "
-    "generalize to other instances or environments. "
+    "`{reset_call}`; you may specialize entirely to it."
 )
 
 # Eval-time wall-clock budget appended to the goal; {timeout} is the shared eval_timeout.
@@ -303,7 +302,7 @@ def generalization_goal(
         if per_instance_seed is None
         else per_instance_directive(per_instance_seed, per_instance_count)
     )
-    return goal + _EVAL_BUDGET_CLAUSE.format(timeout=timeout)
+    return f"{goal} {_EVAL_BUDGET_CLAUSE.format(timeout=timeout)}"
 
 
 _SOURCE_OPENER = (
