@@ -394,6 +394,8 @@ async def run_agent_in_sandbox(
         stream.is_error,
     )
 
+    wall_time_s = time.monotonic() - wall_start
+
     # Auto-commit any uncommitted changes so nothing is lost.
     _final_commit(config.sandbox_dir)
 
@@ -401,5 +403,5 @@ async def run_agent_in_sandbox(
         stream,
         config.sandbox_dir,
         config.output_filename,
-        wall_time_s=time.monotonic() - wall_start,
+        wall_time_s=wall_time_s,
     )
