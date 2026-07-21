@@ -14,7 +14,25 @@ _CREDENTIALS = ".credentials.json"
 
 def host_claude_config_dir() -> Path:
     """Return the operator's Claude configuration directory."""
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
+    return Path(
+        os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
+    ).expanduser()
+
+
+def _checked_sandbox_subdir(sandbox_dir: Path, name: str) -> Path:
+    """Create a real direct child of *sandbox_dir*, rejecting symlink escapes."""
+    path = sandbox_dir / name
+    if path.is_symlink():
+        raise RuntimeError(f"Refusing symlinked Claude state directory: {path}")
+    path.mkdir(exist_ok=True)
+    if not path.is_dir() or path.resolve().parent != sandbox_dir.resolve():
+        raise RuntimeError(f"Claude state directory escaped the sandbox: {path}")
+    return path
+
+
+def sandbox_claude_session_store(sandbox_dir: Path) -> Path:
+    """Return the checked, sandbox-local persistent session-store directory."""
+    return _checked_sandbox_subdir(sandbox_dir, ".agent_sessions")
 
 
 def _copy_credentials(destination: Path) -> Path | None:
@@ -67,8 +85,7 @@ def sandbox_claude_config(sandbox_dir: Path) -> Iterator[Path]:
     prevents either reads from or writes to the operator's live config and
     avoids leaving an authentication secret in experiment output.
     """
-    config_dir = sandbox_dir / ".agent_home"
-    config_dir.mkdir(exist_ok=True)
+    config_dir = _checked_sandbox_subdir(sandbox_dir, ".agent_home")
     copied = _copy_credentials(config_dir)
     try:
         yield config_dir

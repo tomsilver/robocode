@@ -46,7 +46,10 @@ from robocode.utils.backends import (
     firewall_domains_for_provider,
     provider_from_model,
 )
-from robocode.utils.claude_auth import throwaway_claude_config
+from robocode.utils.claude_auth import (
+    sandbox_claude_session_store,
+    throwaway_claude_config,
+)
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     _filtered_repo_mounts,
@@ -287,8 +290,7 @@ async def run_agent_in_apptainer_sandbox(
         # --continue in a fresh retry container. Claude only.
         session_binds: list[str] = []
         if backend_name == "claude":
-            sessions_dir = config.sandbox_dir / ".agent_sessions"
-            sessions_dir.mkdir(exist_ok=True)
+            sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_binds = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
         apptainer_cmd = _build_apptainer_cmd(

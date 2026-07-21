@@ -64,7 +64,10 @@ from robocode.utils.backends import (
     firewall_domains_for_provider,
     provider_from_model,
 )
-from robocode.utils.claude_auth import throwaway_claude_config
+from robocode.utils.claude_auth import (
+    sandbox_claude_session_store,
+    throwaway_claude_config,
+)
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -574,8 +577,7 @@ async def run_agent_in_docker_sandbox(
         # working directory). Only Claude stores sessions at this path.
         session_volumes: list[str] = []
         if backend_name == "claude":
-            sessions_dir = config.sandbox_dir / ".agent_sessions"
-            sessions_dir.mkdir(exist_ok=True)
+            sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
         docker_cmd = _docker_run_prefix(
