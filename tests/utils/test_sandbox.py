@@ -7,7 +7,60 @@ from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _is_path_within_sandbox,
+    _stream_result_to_sandbox_result,
 )
+from robocode.utils.sandbox_types import GenerationMetrics, _StreamParseResult
+
+
+def test_generation_metrics_to_dict_flat_keys() -> None:
+    """to_dict() emits flat gen_* keys and sums total_tokens."""
+    m = GenerationMetrics(
+        wall_time_s=12.5,
+        num_turns=7,
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_tokens=2000,
+        cache_creation_tokens=10,
+        num_tool_calls=9,
+        rate_limit_retries=2,
+        aborted_tokens=300,
+        aborted_cost_usd=1.5,
+    )
+    d = m.to_dict()
+    assert d["gen_wall_time_s"] == 12.5
+    assert d["gen_num_turns"] == 7
+    assert d["gen_num_tool_calls"] == 9
+    assert d["gen_total_tokens"] == 2160
+    assert d["gen_rate_limit_retries"] == 2
+    assert d["gen_aborted_tokens"] == 300
+    assert d["gen_aborted_cost_usd"] == 1.5
+    assert all(k.startswith("gen_") for k in d)
+
+
+def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
+    """The stream->SandboxResult conversion attaches metrics and wall time."""
+    (tmp_path / "approach.py").write_text("x = 1\n")
+    stream = _StreamParseResult(
+        is_error=False,
+        error_text=None,
+        num_turns=4,
+        total_cost=0.42,
+        input_tokens=100,
+        output_tokens=50,
+        num_tool_calls=8,
+        num_autocompactions=2,
+        cli_duration_ms=1234,
+        stop_reason="end_turn",
+    )
+    result = _stream_result_to_sandbox_result(
+        stream, tmp_path, "approach.py", wall_time_s=9.0
+    )
+    assert result.success
+    assert result.generation_metrics is not None
+    assert result.generation_metrics.wall_time_s == 9.0
+    assert result.generation_metrics.num_turns == 4
+    assert result.generation_metrics.num_autocompactions == 2
+    assert result.generation_metrics.stop_reason == "end_turn"
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:
