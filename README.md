@@ -257,7 +257,7 @@ Analyze results from one or more runs:
 python experiments/analyze_results.py multirun/
 ```
 
-Browse runs in the browser (metrics, per-episode GIFs, and the sandbox git history of the generated `approach.py`), then open http://localhost:8000:
+Browse runs in the browser (metrics, per-episode GIFs, and the sandbox git history of the generated `approach.py`), then open http://localhost:8000. The history view charts replay solve rate and per-commit effort, and can replay the same failed seed across versions to show where it was fixed:
 ```bash
 python experiments/results_viewer.py --root . --port 8000
 ```
