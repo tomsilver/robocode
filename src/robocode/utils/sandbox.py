@@ -236,13 +236,18 @@ def _stream_result_to_sandbox_result(
         num_permission_denials=stream.num_permission_denials,
         turn_limit_hit=stream.turn_limit_hit,
         output_token_limit_hit=stream.output_token_limit_hit,
+        prompt_too_long_hit=stream.prompt_too_long_hit,
         stop_reason=stream.stop_reason,
         model_usage=stream.model_usage,
     )
 
     # Retryable interruptions must propagate before considering a partial output.
     # The retry loop resumes the same conversation with the remaining budget.
-    if stream.rate_limit_reset is not None or stream.output_token_limit_hit:
+    if (
+        stream.rate_limit_reset is not None
+        or stream.output_token_limit_hit
+        or stream.prompt_too_long_hit
+    ):
         return SandboxResult(
             success=False,
             output_file=None,
@@ -250,6 +255,7 @@ def _stream_result_to_sandbox_result(
             total_cost_usd=cost,
             rate_limit_reset=stream.rate_limit_reset,
             output_token_limit_hit=stream.output_token_limit_hit,
+            prompt_too_long_hit=stream.prompt_too_long_hit,
             generation_metrics=metrics,
         )
 

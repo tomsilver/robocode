@@ -152,6 +152,49 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
 """
 
 
+_PROMPT_TOO_LONG_FAKE_CLAUDE = """\
+#!/usr/bin/env python3
+import json, os, pathlib, sys
+
+counter = pathlib.Path.cwd() / "fake_counter.txt"
+n = (int(counter.read_text()) if counter.exists() else 0) + 1
+counter.write_text(str(n))
+marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "context_marker.txt"
+prompt = sys.argv[sys.argv.index("-p") + 1]
+
+if n == 1:
+    marker.write_text("oversized")
+    print(json.dumps({"type": "assistant", "message": {"content": [{
+        "type": "text", "text": "Prompt is too long"
+    }]}}))
+    print(json.dumps({"type": "result", "subtype": "error_during_execution",
+                      "is_error": True, "result": "Prompt is too long",
+                      "total_cost_usd": 0.5, "modelUsage": {}}))
+    sys.exit(1)
+
+resumed = "--continue" in sys.argv and marker.exists()
+if n == 2 and resumed and prompt.startswith("/compact "):
+    print(json.dumps({"type": "system", "subtype": "compact_boundary",
+                      "compact_metadata": {"trigger": "manual",
+                                           "pre_tokens": 1000}}))
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "result": "Conversation compacted", "total_cost_usd": 0.25,
+                      "modelUsage": {}}))
+    sys.exit(0)
+
+if n != 3 or not resumed or "compacted conversation" not in prompt:
+    print(json.dumps({"type": "result", "subtype": "error", "is_error": True,
+                      "result": "invalid compaction recovery", "total_cost_usd": 0.0,
+                      "modelUsage": {}}))
+    sys.exit(1)
+
+pathlib.Path("approach.py").write_text("class GeneratedApproach:\\n    pass\\n")
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "done", "total_cost_usd": 0.25,
+                  "modelUsage": {}}))
+"""
+
+
 def test_end_to_end_resume_with_fake_cli(tmp_path: Path, monkeypatch) -> None:
     """A rate-limited first attempt is resumed and completes on retry."""
     fake = tmp_path / "fake_claude.py"
@@ -250,3 +293,31 @@ def test_end_to_end_resume_after_output_token_limit(
     assert final.generation_metrics is not None
     assert final.generation_metrics.output_token_retries == 1
     assert final.generation_metrics.aborted_cost_usd == 0.5
+
+
+def test_end_to_end_compact_then_resume_after_prompt_too_long(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The exact context error triggers /compact before continuing work."""
+    fake = tmp_path / "prompt_too_long_fake_claude.py"
+    fake.write_text(_PROMPT_TOO_LONG_FAKE_CLAUDE)
+    fake.chmod(0o755)
+    monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
+    config = SandboxConfig(
+        sandbox_dir=tmp_path / "sandbox-prompt-too-long",
+        prompt="solve it",
+        output_filename="approach.py",
+        max_budget_usd=2.0,
+        max_turns=10,
+        mcp_tools=(),
+    )
+
+    final = run_with_rate_limit_retry(
+        None, config, backend=ClaudeBackend(DEFAULT_BACKEND_CFG)
+    )
+
+    assert final.success
+    assert (config.sandbox_dir / "fake_counter.txt").read_text() == "3"
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.prompt_too_long_retries == 1
+    assert final.generation_metrics.aborted_cost_usd == 0.75

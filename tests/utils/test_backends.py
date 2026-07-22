@@ -193,6 +193,13 @@ class TestClaudeBackend:
         assert m is not None
         assert m.group(1) == "2pm"
 
+    def test_claude_rate_limit_regex_session_limit_with_minutes(self) -> None:
+        """Matches the current minute-bearing session-limit message."""
+        msg = "You've hit your session limit · resets 1:30pm (UTC)"
+        m = _RATE_LIMIT_RE.search(msg)
+        assert m is not None
+        assert m.group(1) == "1:30pm"
+
 
 # ---------------------------------------------------------------------------
 # OpenCodeBackend
@@ -673,6 +680,19 @@ class TestClaudeParseStreamMetrics:
         assert result.is_error
         assert result.output_token_limit_hit
         assert result.total_cost == 0.5
+
+    def test_parse_detects_prompt_too_long_in_assistant_text(self) -> None:
+        """An oversized prompt is exposed for the compaction recovery path."""
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Prompt is too long"}]},
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.prompt_too_long_hit
 
 
 # ---------------------------------------------------------------------------

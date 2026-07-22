@@ -33,11 +33,20 @@ _MAX_WAIT_SECS = 5.5 * 3600
 # Avoid an infinite resume loop when a model repeatedly produces an oversized
 # response, especially for configurations where both cost and turns are unlimited.
 _MAX_OUTPUT_TOKEN_RETRIES = 2
+_MAX_PROMPT_TOO_LONG_RETRIES = 2
 
 _OUTPUT_TOKEN_RESUME_PROMPT = (
     "Continue the task from where the previous response was interrupted because it "
     "exceeded the output-token limit. Be concise: do not repeat prior reasoning or "
     "emit a long explanation. Use tools directly and finish the implementation."
+)
+_COMPACT_PROMPT = (
+    "/compact Preserve the task requirements, decisions, failed approaches, and "
+    "current implementation state. Drop verbose tool output and repeated reasoning."
+)
+_CONTEXT_RESUME_PROMPT = (
+    "Continue the task from the compacted conversation. Inspect the current files, "
+    "use tools directly, and finish the implementation concisely."
 )
 
 
@@ -55,27 +64,38 @@ def run_async(make_coro: Callable[[], Any]) -> SandboxResult:
         return pool.submit(_run).result()
 
 
-def parse_reset_hour(reset_str: str) -> tuple[int, bool]:
-    """Parse a reset message into (hour_24, is_utc).
+def parse_reset_time(reset_str: str) -> tuple[int, int, bool]:
+    """Parse a reset message into (hour_24, minute, is_utc).
 
-    Handles bare times like '3am' as well as full messages such as "You've hit your
-    session limit . resets 11pm (UTC)". The timezone flag matters because the box may
-    not be in UTC.
+    Handles bare times like ``3am`` and minute-bearing times like ``1:30pm``
+    as well as full usage-limit messages. The timezone flag matters because
+    the box may not be in UTC.
     """
     text = reset_str.strip().lower()
-    match = re.search(r"(\d{1,2})\s*(am|pm)", text)
+    match = re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)", text)
     if not match:
-        return _DEFAULT_RESET_HOUR, False
+        return _DEFAULT_RESET_HOUR, 0, False
     hour = int(match.group(1))
-    period = match.group(2)
+    minute = int(match.group(2) or 0)
+    period = match.group(3)
+    if not 1 <= hour <= 12 or not 0 <= minute <= 59:
+        return _DEFAULT_RESET_HOUR, 0, False
     if period == "am":
         hour = 0 if hour == 12 else hour
     else:
         hour = hour if hour == 12 else hour + 12
-    return hour, "utc" in text
+    return hour, minute, "utc" in text
 
 
-def seconds_until_reset(reset_hour: int, is_utc: bool = False) -> float:
+def parse_reset_hour(reset_str: str) -> tuple[int, bool]:
+    """Parse a reset message into (hour_24, is_utc), for compatibility."""
+    hour, _minute, is_utc = parse_reset_time(reset_str)
+    return hour, is_utc
+
+
+def seconds_until_reset(
+    reset_hour: int, is_utc: bool = False, reset_minute: int = 0
+) -> float:
     """Return seconds until the given reset hour, capped at the window length.
 
     When ``is_utc`` the hour is interpreted in UTC (and compared against UTC
@@ -83,7 +103,9 @@ def seconds_until_reset(reset_hour: int, is_utc: bool = False) -> float:
     so a misparsed time cannot cause a multi-hour oversleep.
     """
     now = datetime.now(timezone.utc) if is_utc else datetime.now().astimezone()
-    target = now.replace(hour=reset_hour, minute=5, second=0, microsecond=0)
+    target = now.replace(
+        hour=reset_hour, minute=reset_minute, second=0, microsecond=0
+    ) + timedelta(minutes=5)
     if target <= now:
         target += timedelta(days=1)
     wait = (target - now).total_seconds()
@@ -96,11 +118,13 @@ def _fold_retry_metrics(
     aborted_cost: float,
     rate_limit_retries: int,
     output_token_retries: int = 0,
+    prompt_too_long_retries: int = 0,
 ) -> SandboxResult:
     """Record discarded retryable attempts' counts and spend on *result*."""
     if (
         rate_limit_retries == 0
         and output_token_retries == 0
+        and prompt_too_long_retries == 0
         and aborted_tokens == 0
         and aborted_cost == 0.0
     ):
@@ -110,6 +134,7 @@ def _fold_retry_metrics(
         base,
         rate_limit_retries=rate_limit_retries,
         output_token_retries=output_token_retries,
+        prompt_too_long_retries=prompt_too_long_retries,
         aborted_tokens=aborted_tokens,
         aborted_cost_usd=aborted_cost,
     )
@@ -150,18 +175,32 @@ def run_with_rate_limit_retry(
     aborted_cost = 0.0
     rate_limit_retries = 0
     output_token_retries = 0
+    prompt_too_long_retries = 0
+
+    def budget_stop_reason(latest: SandboxResult) -> str | None:
+        """Explain why another process cannot safely receive carried budget."""
+        if original_budget > 0 and latest.total_cost_usd is None:
+            return "the interrupted attempt did not report its cost"
+        if 0 < original_budget <= aborted_cost:
+            return "the dollar budget is exhausted"
+        if 0 < original_turns <= aborted_turns:
+            return "the turn budget is exhausted"
+        return None
+
     while True:
         result = _run_active_sandbox(active, backend)
 
         rate_limited = result.rate_limit_reset is not None
         output_token_limited = result.output_token_limit_hit
-        if not rate_limited and not output_token_limited:
+        prompt_too_long = result.prompt_too_long_hit
+        if not rate_limited and not output_token_limited and not prompt_too_long:
             return _fold_retry_metrics(
                 result,
                 aborted_tokens,
                 aborted_cost,
                 rate_limit_retries,
                 output_token_retries,
+                prompt_too_long_retries,
             )
 
         if rate_limited:
@@ -176,19 +215,8 @@ def run_with_rate_limit_retry(
         # unbounded second run.  Likewise, without a reported cost we cannot
         # carry a positive dollar budget forward without changing the
         # experimental condition.
-        missing_cost = original_budget > 0 and result.total_cost_usd is None
-        budget_exhausted = 0 < original_budget <= aborted_cost
-        turns_exhausted = 0 < original_turns <= aborted_turns
-        if missing_cost or budget_exhausted or turns_exhausted:
-            reason = (
-                "the interrupted attempt did not report its cost"
-                if missing_cost
-                else (
-                    "the dollar budget is exhausted"
-                    if budget_exhausted
-                    else "the turn budget is exhausted"
-                )
-            )
+        reason = budget_stop_reason(result)
+        if reason is not None:
             logger.warning("Not resuming interrupted run because %s.", reason)
             return _fold_retry_metrics(
                 result,
@@ -196,6 +224,7 @@ def run_with_rate_limit_retry(
                 aborted_cost,
                 rate_limit_retries,
                 output_token_retries,
+                prompt_too_long_retries,
             )
 
         if output_token_limited and output_token_retries >= _MAX_OUTPUT_TOKEN_RETRIES:
@@ -209,18 +238,97 @@ def run_with_rate_limit_retry(
                 aborted_cost,
                 rate_limit_retries,
                 output_token_retries,
+                prompt_too_long_retries,
             )
+
+        if prompt_too_long and not rate_limited:
+            if prompt_too_long_retries >= _MAX_PROMPT_TOO_LONG_RETRIES:
+                logger.warning(
+                    "Not resuming after an oversized prompt: compaction retry limit "
+                    "(%d) reached.",
+                    _MAX_PROMPT_TOO_LONG_RETRIES,
+                )
+                return _fold_retry_metrics(
+                    result,
+                    aborted_tokens,
+                    aborted_cost,
+                    rate_limit_retries,
+                    output_token_retries,
+                    prompt_too_long_retries,
+                )
+
+            remaining_turns = original_turns - aborted_turns if original_turns else 0
+            compact_config = replace(
+                active,
+                resume_previous_session=True,
+                prompt=_COMPACT_PROMPT,
+                max_budget_usd=(
+                    original_budget - aborted_cost if original_budget else 0.0
+                ),
+                max_turns=remaining_turns,
+            )
+            logger.warning(
+                "Claude reported that its prompt is too long; compacting the "
+                "isolated session before resuming (attempt %d/%d).",
+                prompt_too_long_retries + 1,
+                _MAX_PROMPT_TOO_LONG_RETRIES,
+            )
+            compact_result = _run_active_sandbox(compact_config, backend)
+            assert compact_result.generation_metrics is not None
+            compact_metrics = compact_result.generation_metrics
+            aborted_tokens += compact_metrics.total_tokens
+            aborted_turns += compact_metrics.num_turns
+            aborted_cost += compact_result.total_cost_usd or 0.0
+
+            # The sandbox runner may report "output file not found" for the local
+            # /compact command. The compact-boundary stream event is the reliable
+            # success signal; other failures must not be mistaken for compaction.
+            compacted = compact_metrics.num_autocompactions > 0
+            reason = budget_stop_reason(compact_result)
+            if not compacted or reason is not None:
+                if reason is None:
+                    reason = "Claude did not confirm that conversation compaction ran"
+                logger.warning("Not resuming oversized prompt because %s.", reason)
+                compact_result = replace(
+                    compact_result,
+                    prompt_too_long_hit=True,
+                    generation_metrics=replace(
+                        compact_metrics, prompt_too_long_hit=True
+                    ),
+                )
+                return _fold_retry_metrics(
+                    compact_result,
+                    aborted_tokens,
+                    aborted_cost,
+                    rate_limit_retries,
+                    output_token_retries,
+                    prompt_too_long_retries,
+                )
+
+            prompt_too_long_retries += 1
+            remaining_turns = original_turns - aborted_turns if original_turns else 0
+            active = replace(
+                compact_config,
+                prompt=_CONTEXT_RESUME_PROMPT,
+                max_budget_usd=(
+                    original_budget - aborted_cost if original_budget else 0.0
+                ),
+                max_turns=remaining_turns,
+            )
+            continue
 
         if rate_limited:
             assert result.rate_limit_reset is not None
-            reset_hour, is_utc = parse_reset_hour(result.rate_limit_reset)
-            wait_secs = seconds_until_reset(reset_hour, is_utc)
+            reset_hour, reset_minute, is_utc = parse_reset_time(result.rate_limit_reset)
+            wait_secs = seconds_until_reset(reset_hour, is_utc, reset_minute)
             hours = wait_secs / 3600
             logger.warning(
-                "Rate-limited (%s). Sleeping %.1f hours until %d:05 %s ...",
+                "Rate-limited (%s). Sleeping %.1f hours for reset at %02d:%02d %s "
+                "(plus 5-minute grace) ...",
                 result.error,
                 hours,
                 reset_hour,
+                reset_minute,
                 "UTC" if is_utc else "local",
             )
             time.sleep(wait_secs)

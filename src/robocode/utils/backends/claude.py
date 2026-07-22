@@ -32,12 +32,14 @@ logger = logging.getLogger(__name__)
 
 _RATE_LIMIT_RE = re.compile(
     r"(?:out of extra usage|hit your (?:\w+\s+)*limit)"
-    r".*?resets\s+(\d{1,2}(?:am|pm))(?:\s*\(?([A-Za-z][A-Za-z/_]*)\)?)?",
+    r".*?resets\s+(\d{1,2}(?::\d{2})?(?:am|pm))"
+    r"(?:\s*\(?([A-Za-z][A-Za-z/_]*)\)?)?",
     re.IGNORECASE,
 )
 _OUTPUT_TOKEN_LIMIT_RE = re.compile(
     r"response exceeded (?:the )?\d+ output token maximum", re.IGNORECASE
 )
+_PROMPT_TOO_LONG_RE = re.compile(r"\bprompt is too long\b", re.IGNORECASE)
 
 _VALIDATE_SANDBOX_SCRIPT = """\
 #!/usr/bin/env python3
@@ -223,6 +225,7 @@ class ClaudeBackend(AgentBackend):
         total_cost: float | None = None
         rate_limit_reset: str | None = None
         output_token_limit_hit = False
+        prompt_too_long_hit = False
         mcp_log: Path | None = None
         num_tool_calls = 0
         num_autocompactions = 0
@@ -347,6 +350,8 @@ class ClaudeBackend(AgentBackend):
                             rate_limit_reset = m.group(0)
                         if _OUTPUT_TOKEN_LIMIT_RE.search(text):
                             output_token_limit_hit = True
+                        if _PROMPT_TOO_LONG_RE.search(text):
+                            prompt_too_long_hit = True
                     elif block.get("type") == "tool_use":
                         num_tool_calls += 1
                         input_str = json.dumps(block.get("input", {}))
@@ -404,6 +409,8 @@ class ClaudeBackend(AgentBackend):
                             rate_limit_reset = m.group(0)
                     if _OUTPUT_TOKEN_LIMIT_RE.search(error_text or ""):
                         output_token_limit_hit = True
+                    if _PROMPT_TOO_LONG_RE.search(error_text):
+                        prompt_too_long_hit = True
 
         proc.wait()
 
@@ -418,6 +425,8 @@ class ClaudeBackend(AgentBackend):
                 rate_limit_reset = m.group(0)
         if stderr_output and _OUTPUT_TOKEN_LIMIT_RE.search(stderr_output):
             output_token_limit_hit = True
+        if stderr_output and _PROMPT_TOO_LONG_RE.search(stderr_output):
+            prompt_too_long_hit = True
         if proc.returncode != 0 and not is_error:
             is_error = True
             error_text = (
@@ -432,6 +441,9 @@ class ClaudeBackend(AgentBackend):
         if output_token_limit_hit and not is_error:
             is_error = True
             error_text = "Claude response exceeded the output token maximum"
+        if prompt_too_long_hit and not is_error:
+            is_error = True
+            error_text = "Claude prompt is too long"
 
         # Token counts come from the cumulative per-model usage, not the top-level
         # ``usage`` (which is empty on a final budget-error session).
@@ -448,6 +460,7 @@ class ClaudeBackend(AgentBackend):
             total_cost=total_cost,
             rate_limit_reset=rate_limit_reset,
             output_token_limit_hit=output_token_limit_hit,
+            prompt_too_long_hit=prompt_too_long_hit,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
