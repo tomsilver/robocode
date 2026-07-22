@@ -1,5 +1,8 @@
 """Focused tests for the stdlib experiment results viewer."""
 
+# These tests intentionally exercise the viewer's private, stdlib-only helpers.
+# pylint: disable=protected-access
+
 from __future__ import annotations
 
 import json
@@ -46,6 +49,7 @@ def _assistant(subject: str, tokens: tuple[int, int]) -> dict:
 
 
 def test_snapshots_include_effort_and_replay_progress(tmp_path: Path) -> None:
+    """Git snapshots include stream effort and persisted replay outcomes."""
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
     _git(sandbox, "init")
@@ -97,6 +101,7 @@ def test_snapshots_include_effort_and_replay_progress(tmp_path: Path) -> None:
 
 
 def test_run_detail_exposes_reproducible_episode_seeds(tmp_path: Path) -> None:
+    """Run details reconstruct the exact deterministic evaluation seeds."""
     (tmp_path / "results.json").write_text(
         json.dumps(
             {
@@ -124,6 +129,7 @@ def test_run_detail_exposes_reproducible_episode_seeds(tmp_path: Path) -> None:
 
 
 def test_record_history_episode_merges_existing_results(tmp_path: Path) -> None:
+    """Recording a replay preserves metrics for other episode indices."""
     run = _run(tmp_path)
     viewer._record_history_episode(run, 0, 1, {"episode_index": 1, "solved": False})
     viewer._record_history_episode(run, 0, 2, {"episode_index": 2, "solved": True})
@@ -135,6 +141,7 @@ def test_record_history_episode_merges_existing_results(tmp_path: Path) -> None:
 
 
 def test_seed_mentions_recovers_agent_test_curriculum() -> None:
+    """Literal assignments, explicit lists, and ranges yield training seeds."""
     command = """
 for seed in [0, 1, 2, 42]:
     env.reset(seed=seed)
