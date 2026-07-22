@@ -44,6 +44,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -658,6 +659,7 @@ async def run_agent_in_docker_sandbox(
         logger.info("System prompt:\n%s", config.system_prompt)
         logger.info("Prompt:\n%s", config.prompt)
 
+        wall_start = time.monotonic()
         proc = subprocess.Popen(  # pylint: disable=consider-using-with
             docker_cmd,
             env=env,
@@ -671,6 +673,7 @@ async def run_agent_in_docker_sandbox(
             proc,
             stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
         )
+        wall_time_s = time.monotonic() - wall_start
 
         logger.info(
             "Docker session done: container=%s turns=%d cost=$%s error=%s",
@@ -683,5 +686,8 @@ async def run_agent_in_docker_sandbox(
         _final_commit(config.sandbox_dir)
 
         return _stream_result_to_sandbox_result(
-            stream, config.sandbox_dir, config.output_filename
+            stream,
+            config.sandbox_dir,
+            config.output_filename,
+            wall_time_s=wall_time_s,
         )

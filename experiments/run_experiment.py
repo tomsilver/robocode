@@ -258,6 +258,9 @@ def _main(cfg: DictConfig) -> float:
     num_generations = getattr(approach, "num_generations", None)
     if num_generations is not None:
         results["num_generations"] = num_generations
+    gen_metrics = getattr(approach, "generation_metrics", None)
+    if gen_metrics is not None:
+        results.update(gen_metrics.to_dict())
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)
