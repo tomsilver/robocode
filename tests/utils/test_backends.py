@@ -536,13 +536,18 @@ class TestProviderUtils:
 class TestClaudeParseStreamMetrics:
     """ClaudeBackend.parse_stream captures generation metrics from the stream."""
 
-    def _make_mock_proc(self, stdout_lines: list[str]) -> subprocess.Popen:
+    def _make_mock_proc(
+        self,
+        stdout_lines: list[str],
+        stderr_output: str = "",
+        returncode: int = 0,
+    ) -> subprocess.Popen:
         proc = MagicMock(spec=subprocess.Popen)
         proc.stdout = iter(stdout_lines)
         proc.stderr = MagicMock()
-        proc.stderr.read.return_value = ""
-        proc.returncode = 0
-        proc.wait.return_value = 0
+        proc.stderr.read.return_value = stderr_output
+        proc.returncode = returncode
+        proc.wait.return_value = returncode
         return proc
 
     def test_parse_aggregates_across_cli_sessions(self) -> None:
@@ -620,6 +625,54 @@ class TestClaudeParseStreamMetrics:
         assert result.cli_duration_api_ms == 5000  # max (cumulative)
         assert result.stop_reason == "error_max_budget_usd"  # last subtype
         assert result.total_cost == pytest.approx(0.90)  # latest (cumulative)
+
+    def test_parse_detects_output_token_limit_in_assistant_text(self) -> None:
+        """The retry signal is detected from Claude's observed API error text."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "API Error: Claude's response exceeded the 32768 "
+                                "output token maximum. To configure this behavior, "
+                                "set CLAUDE_CODE_MAX_OUTPUT_TOKENS."
+                            ),
+                        }
+                    ]
+                },
+            }
+        ]
+        proc = self._make_mock_proc([json.dumps(e) + "\n" for e in events])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.output_token_limit_hit
+        assert "output token maximum" in (result.error_text or "")
+
+    def test_parse_detects_output_token_limit_in_stderr(self) -> None:
+        """The retry signal is not lost when a result already marked an error."""
+        event = {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "result": "API request failed",
+            "total_cost_usd": 0.5,
+        }
+        proc = self._make_mock_proc(
+            [json.dumps(event) + "\n"],
+            stderr_output=("Claude's response exceeded the 32768 output token maximum"),
+            returncode=1,
+        )
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.output_token_limit_hit
+        assert result.total_cost == 0.5
 
 
 # ---------------------------------------------------------------------------

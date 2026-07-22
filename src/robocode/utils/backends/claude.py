@@ -35,6 +35,9 @@ _RATE_LIMIT_RE = re.compile(
     r".*?resets\s+(\d{1,2}(?:am|pm))(?:\s*\(?([A-Za-z][A-Za-z/_]*)\)?)?",
     re.IGNORECASE,
 )
+_OUTPUT_TOKEN_LIMIT_RE = re.compile(
+    r"response exceeded (?:the )?\d+ output token maximum", re.IGNORECASE
+)
 
 _VALIDATE_SANDBOX_SCRIPT = """\
 #!/usr/bin/env python3
@@ -219,6 +222,7 @@ class ClaudeBackend(AgentBackend):
         num_turns = 0
         total_cost: float | None = None
         rate_limit_reset: str | None = None
+        output_token_limit_hit = False
         mcp_log: Path | None = None
         num_tool_calls = 0
         num_autocompactions = 0
@@ -341,6 +345,8 @@ class ClaudeBackend(AgentBackend):
                         m = _RATE_LIMIT_RE.search(text)
                         if m:
                             rate_limit_reset = m.group(0)
+                        if _OUTPUT_TOKEN_LIMIT_RE.search(text):
+                            output_token_limit_hit = True
                     elif block.get("type") == "tool_use":
                         num_tool_calls += 1
                         input_str = json.dumps(block.get("input", {}))
@@ -391,11 +397,13 @@ class ClaudeBackend(AgentBackend):
                     cli_duration_api_ms or 0, msg.get("duration_api_ms") or 0
                 )
                 if is_error:
-                    error_text = msg.get("result", "Unknown error")
+                    error_text = str(msg.get("result") or "Unknown error")
                     if not rate_limit_reset:
                         m = _RATE_LIMIT_RE.search(error_text)
                         if m:
                             rate_limit_reset = m.group(0)
+                    if _OUTPUT_TOKEN_LIMIT_RE.search(error_text or ""):
+                        output_token_limit_hit = True
 
         proc.wait()
 
@@ -404,6 +412,12 @@ class ClaudeBackend(AgentBackend):
 
         assert proc.stderr is not None
         stderr_output = proc.stderr.read()
+        if not rate_limit_reset and stderr_output:
+            m = _RATE_LIMIT_RE.search(stderr_output)
+            if m:
+                rate_limit_reset = m.group(0)
+        if stderr_output and _OUTPUT_TOKEN_LIMIT_RE.search(stderr_output):
+            output_token_limit_hit = True
         if proc.returncode != 0 and not is_error:
             is_error = True
             error_text = (
@@ -411,14 +425,13 @@ class ClaudeBackend(AgentBackend):
                 if stderr_output
                 else f"Process exited with code {proc.returncode}"
             )
-            if not rate_limit_reset and stderr_output:
-                m = _RATE_LIMIT_RE.search(stderr_output)
-                if m:
-                    rate_limit_reset = m.group(0)
 
         if rate_limit_reset and not is_error:
             is_error = True
             error_text = f"Rate-limited: resets {rate_limit_reset}"
+        if output_token_limit_hit and not is_error:
+            is_error = True
+            error_text = "Claude response exceeded the output token maximum"
 
         # Token counts come from the cumulative per-model usage, not the top-level
         # ``usage`` (which is empty on a final budget-error session).
@@ -434,6 +447,7 @@ class ClaudeBackend(AgentBackend):
             num_turns=num_turns,
             total_cost=total_cost,
             rate_limit_reset=rate_limit_reset,
+            output_token_limit_hit=output_token_limit_hit,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,

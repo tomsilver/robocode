@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from robocode.utils import rate_limit
 from robocode.utils.rate_limit import (
     _fold_retry_metrics,
@@ -36,6 +38,17 @@ def _succeeded(tokens: int, cost: float, path: Path, turns: int = 0) -> SandboxR
     )
 
 
+def _output_limited(tokens: int, cost: float | None, turns: int = 0) -> SandboxResult:
+    return SandboxResult(
+        success=False,
+        output_file=None,
+        error="Claude response exceeded the output token maximum",
+        total_cost_usd=cost,
+        output_token_limit_hit=True,
+        generation_metrics=_metrics(tokens, turns),
+    )
+
+
 def test_fold_retry_metrics_noop_when_no_retries() -> None:
     """With zero retries the result is returned untouched."""
     result = _succeeded(300, 2.0, Path("approach.py"))
@@ -46,7 +59,7 @@ def test_fold_retry_metrics_records_aborted_spend() -> None:
     """Retry count and aborted spend attach without disturbing final metrics."""
     result = _succeeded(300, 2.0, Path("approach.py"))
     folded = _fold_retry_metrics(
-        result, aborted_tokens=300, aborted_cost=1.5, retries=2
+        result, aborted_tokens=300, aborted_cost=1.5, rate_limit_retries=2
     )
     assert folded.generation_metrics is not None
     assert folded.generation_metrics.rate_limit_retries == 2
@@ -175,6 +188,71 @@ def test_retry_stops_when_interrupted_cost_is_unknown(
 
     assert not final.success
     assert len(captured) == 1
+
+
+def test_output_token_limit_resumes_with_remaining_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An oversized response resumes immediately with a concise prompt."""
+    approach = tmp_path / "approach.py"
+    approach.write_text("x = 1\n")
+    results = iter(
+        [
+            _output_limited(100, 0.75, turns=4),
+            _succeeded(200, 1.0, approach, turns=2),
+        ]
+    )
+    captured: list[SandboxConfig] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    monkeypatch.setattr(
+        rate_limit.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("must not sleep")),
+    )
+    config = SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=5.0, max_turns=20)
+
+    final = run_with_rate_limit_retry(
+        None, config, backend=None  # type: ignore[arg-type]
+    )
+
+    assert final.success
+    assert len(captured) == 2
+    assert captured[1].resume_previous_session
+    assert captured[1].max_budget_usd == 4.25
+    assert captured[1].max_turns == 16
+    assert "Be concise" in captured[1].prompt
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.output_token_retries == 1
+    assert final.generation_metrics.aborted_tokens == 100
+    assert final.generation_metrics.aborted_cost_usd == 0.75
+
+
+def test_output_token_limit_retry_count_is_bounded(tmp_path: Path, monkeypatch) -> None:
+    """Repeated oversized responses cannot loop forever with unlimited budgets."""
+    results = iter([_output_limited(10, 0.1) for _ in range(3)])
+    captured: list[SandboxConfig] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    final = run_with_rate_limit_retry(
+        None,
+        SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=0.0, max_turns=0),
+        backend=None,  # type: ignore[arg-type]
+    )
+
+    assert not final.success
+    assert len(captured) == 3  # initial attempt plus two resumptions
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.output_token_retries == 2
+    assert final.generation_metrics.aborted_cost_usd == pytest.approx(0.3)
 
 
 def test_parse_reset_hour_pm_utc() -> None:

@@ -53,11 +53,10 @@ class SandboxConfig:
     # (they share the host network namespace); DockerSandboxConfig overrides this
     # to host.docker.internal (mapped to the host gateway via --add-host).
     local_model_host: str = "127.0.0.1"
-    # Resume the prior CLI conversation in this sandbox's working directory
-    # instead of starting fresh. Set by the rate-limit retry loop so an agent
-    # interrupted by the usage cap continues with its conversation context and
-    # remaining (carried-over) budget. Resume overhead can still differ from an
-    # uninterrupted run and is exposed by the retry metrics below.
+    # Resume the isolated CLI conversation belonging to this sandbox after a
+    # retryable interruption, carrying over only the remaining budget. Resume
+    # overhead can still differ from an uninterrupted run and is exposed by the
+    # retry metrics below.
     resume_previous_session: bool = False
 
 
@@ -83,14 +82,16 @@ class GenerationMetrics:
     num_autocompactions: int = 0
     num_permission_denials: int = 0
     turn_limit_hit: bool = False
+    output_token_limit_hit: bool = False
     stop_reason: str | None = None
     model_usage: dict[str, Any] = field(default_factory=dict)
-    # Rate-limit interruptions. The retry loop sleeps until the usage window
-    # resets and reruns the whole sandbox; the interrupted attempts are dropped
-    # from evaluation but their count and spend are recorded here so runs that
-    # straddled a reset can be identified and excluded in analysis. The main
-    # fields above describe the final, successful attempt only.
+    # Retryable interruptions. The loop resumes with only the remaining budget;
+    # rate limits wait for the usage window, while output-token overflows retry
+    # immediately. Keep discarded attempts separate from final-attempt metrics
+    # so affected generations can be identified and excluded in analysis. The
+    # main fields above describe the final attempt only.
     rate_limit_retries: int = 0
+    output_token_retries: int = 0
     aborted_tokens: int = 0
     aborted_cost_usd: float = 0.0
 
@@ -120,9 +121,11 @@ class GenerationMetrics:
             "gen_num_autocompactions": self.num_autocompactions,
             "gen_num_permission_denials": self.num_permission_denials,
             "gen_turn_limit_hit": self.turn_limit_hit,
+            "gen_output_token_limit_hit": self.output_token_limit_hit,
             "gen_stop_reason": self.stop_reason,
             "gen_model_usage": self.model_usage,
             "gen_rate_limit_retries": self.rate_limit_retries,
+            "gen_output_token_retries": self.output_token_retries,
             "gen_aborted_tokens": self.aborted_tokens,
             "gen_aborted_cost_usd": self.aborted_cost_usd,
         }
@@ -137,6 +140,7 @@ class SandboxResult:
     error: str | None
     total_cost_usd: float | None = None
     rate_limit_reset: str | None = None  # e.g. "3am" from usage limit message
+    output_token_limit_hit: bool = False
     generation_metrics: GenerationMetrics | None = None
 
 
@@ -149,6 +153,7 @@ class _StreamParseResult:
     num_turns: int
     total_cost: float | None
     rate_limit_reset: str | None = None  # e.g. "3am" parsed from usage message
+    output_token_limit_hit: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0

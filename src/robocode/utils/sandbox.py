@@ -235,19 +235,21 @@ def _stream_result_to_sandbox_result(
         num_autocompactions=stream.num_autocompactions,
         num_permission_denials=stream.num_permission_denials,
         turn_limit_hit=stream.turn_limit_hit,
+        output_token_limit_hit=stream.output_token_limit_hit,
         stop_reason=stream.stop_reason,
         model_usage=stream.model_usage,
     )
 
-    # A rate-limit error must propagate so the retry loop can wait and rerun the
-    # whole sandbox; never evaluate a partial approach from a rate-limited run.
-    if stream.rate_limit_reset is not None:
+    # Retryable interruptions must propagate before considering a partial output.
+    # The retry loop resumes the same conversation with the remaining budget.
+    if stream.rate_limit_reset is not None or stream.output_token_limit_hit:
         return SandboxResult(
             success=False,
             output_file=None,
             error=stream.error_text,
             total_cost_usd=cost,
             rate_limit_reset=stream.rate_limit_reset,
+            output_token_limit_hit=stream.output_token_limit_hit,
             generation_metrics=metrics,
         )
 

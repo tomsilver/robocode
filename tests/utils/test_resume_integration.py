@@ -113,6 +113,45 @@ emit({"type": "result", "subtype": "success", "is_error": False,
 """
 
 
+_OUTPUT_LIMIT_FAKE_CLAUDE = """\
+#!/usr/bin/env python3
+import json, os, pathlib, sys
+
+counter = pathlib.Path.cwd() / "fake_counter.txt"
+n = (int(counter.read_text()) if counter.exists() else 0) + 1
+counter.write_text(str(n))
+marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "output_limit_marker.txt"
+prompt = sys.argv[sys.argv.index("-p") + 1]
+
+if n == 1:
+    marker.write_text("interrupted")
+    print(json.dumps({"type": "assistant", "message": {"content": [{
+        "type": "text", "text": "API Error: Claude's response exceeded the 32768 "
+        "output token maximum. To configure this behavior, set the "
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable."
+    }]}}))
+    print(json.dumps({"type": "result", "subtype": "error_during_execution",
+                      "is_error": True, "result": "response exceeded the 32768 "
+                      "output token maximum", "total_cost_usd": 0.5,
+                      "modelUsage": {}}))
+    sys.exit(1)
+
+resumed = (
+    "--continue" in sys.argv and marker.exists() and "Be concise" in prompt
+)
+if not resumed:
+    print(json.dumps({"type": "result", "subtype": "error", "is_error": True,
+                      "result": "not resumed concisely", "total_cost_usd": 0.0,
+                      "modelUsage": {}}))
+    sys.exit(1)
+
+pathlib.Path("approach.py").write_text("class GeneratedApproach:\\n    pass\\n")
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "done", "total_cost_usd": 0.25,
+                  "modelUsage": {}}))
+"""
+
+
 def test_end_to_end_resume_with_fake_cli(tmp_path: Path, monkeypatch) -> None:
     """A rate-limited first attempt is resumed and completes on retry."""
     fake = tmp_path / "fake_claude.py"
@@ -183,3 +222,31 @@ def test_parallel_runs_resume_only_their_own_session(
         assert (config.sandbox_dir / "fake_counter.txt").read_text() == "2"
         assert result.generation_metrics is not None
         assert result.generation_metrics.rate_limit_retries == 1
+
+
+def test_end_to_end_resume_after_output_token_limit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The observed Claude output-limit error resumes with remaining budget."""
+    fake = tmp_path / "output_limit_fake_claude.py"
+    fake.write_text(_OUTPUT_LIMIT_FAKE_CLAUDE)
+    fake.chmod(0o755)
+    monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
+    config = SandboxConfig(
+        sandbox_dir=tmp_path / "sandbox-output-limit",
+        prompt="solve it",
+        output_filename="approach.py",
+        max_budget_usd=2.0,
+        max_turns=10,
+        mcp_tools=(),
+    )
+
+    final = run_with_rate_limit_retry(
+        None, config, backend=ClaudeBackend(DEFAULT_BACKEND_CFG)
+    )
+
+    assert final.success
+    assert (config.sandbox_dir / "fake_counter.txt").read_text() == "2"
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.output_token_retries == 1
+    assert final.generation_metrics.aborted_cost_usd == 0.5

@@ -1,4 +1,4 @@
-"""Helpers for running sandboxed agents with rate-limit retry."""
+"""Helpers for resuming sandboxed agents after retryable interruptions."""
 
 from __future__ import annotations
 
@@ -30,6 +30,15 @@ _DEFAULT_RESET_HOUR = 3  # fallback hour if we can't parse the reset time
 # Subscription usage caps reset on a 5-hour window, so a wait longer than this
 # means we mis-parsed the reset time. Cap the sleep; the retry loop re-checks.
 _MAX_WAIT_SECS = 5.5 * 3600
+# Avoid an infinite resume loop when a model repeatedly produces an oversized
+# response, especially for configurations where both cost and turns are unlimited.
+_MAX_OUTPUT_TOKEN_RETRIES = 2
+
+_OUTPUT_TOKEN_RESUME_PROMPT = (
+    "Continue the task from where the previous response was interrupted because it "
+    "exceeded the output-token limit. Be concise: do not repeat prior reasoning or "
+    "emit a long explanation. Use tools directly and finish the implementation."
+)
 
 
 def run_async(make_coro: Callable[[], Any]) -> SandboxResult:
@@ -82,15 +91,25 @@ def seconds_until_reset(reset_hour: int, is_utc: bool = False) -> float:
 
 
 def _fold_retry_metrics(
-    result: SandboxResult, aborted_tokens: int, aborted_cost: float, retries: int
+    result: SandboxResult,
+    aborted_tokens: int,
+    aborted_cost: float,
+    rate_limit_retries: int,
+    output_token_retries: int = 0,
 ) -> SandboxResult:
-    """Record the discarded rate-limited attempts' count and spend on *result*."""
-    if retries == 0:
+    """Record discarded retryable attempts' counts and spend on *result*."""
+    if (
+        rate_limit_retries == 0
+        and output_token_retries == 0
+        and aborted_tokens == 0
+        and aborted_cost == 0.0
+    ):
         return result
     base = result.generation_metrics or GenerationMetrics()
     metrics = replace(
         base,
-        rate_limit_retries=retries,
+        rate_limit_retries=rate_limit_retries,
+        output_token_retries=output_token_retries,
         aborted_tokens=aborted_tokens,
         aborted_cost_usd=aborted_cost,
     )
@@ -112,7 +131,7 @@ def run_with_rate_limit_retry(
     backend: AgentBackend,
     apptainer_config: ApptainerSandboxConfig | None = None,
 ) -> SandboxResult:
-    """Run the sandbox, retrying on rate-limit by sleeping until reset.
+    """Run the sandbox, resuming after retryable Claude interruptions.
 
     Each retry resumes the interrupted conversation (--continue) with the
     budget the run had left, so an agent that hit the usage cap continues its
@@ -129,14 +148,24 @@ def run_with_rate_limit_retry(
     aborted_tokens = 0
     aborted_turns = 0
     aborted_cost = 0.0
-    retries = 0
+    rate_limit_retries = 0
+    output_token_retries = 0
     while True:
         result = _run_active_sandbox(active, backend)
 
-        if result.rate_limit_reset is None:
-            return _fold_retry_metrics(result, aborted_tokens, aborted_cost, retries)
+        rate_limited = result.rate_limit_reset is not None
+        output_token_limited = result.output_token_limit_hit
+        if not rate_limited and not output_token_limited:
+            return _fold_retry_metrics(
+                result,
+                aborted_tokens,
+                aborted_cost,
+                rate_limit_retries,
+                output_token_retries,
+            )
 
-        retries += 1
+        if rate_limited:
+            rate_limit_retries += 1
         assert result.generation_metrics is not None
         aborted_tokens += result.generation_metrics.total_tokens
         aborted_turns += result.generation_metrics.num_turns
@@ -160,21 +189,54 @@ def run_with_rate_limit_retry(
                     else "the turn budget is exhausted"
                 )
             )
-            logger.warning("Not retrying rate-limited run because %s.", reason)
-            return _fold_retry_metrics(result, aborted_tokens, aborted_cost, retries)
+            logger.warning("Not resuming interrupted run because %s.", reason)
+            return _fold_retry_metrics(
+                result,
+                aborted_tokens,
+                aborted_cost,
+                rate_limit_retries,
+                output_token_retries,
+            )
 
-        reset_hour, is_utc = parse_reset_hour(result.rate_limit_reset)
-        wait_secs = seconds_until_reset(reset_hour, is_utc)
-        hours = wait_secs / 3600
-        logger.warning(
-            "Rate-limited (%s). Sleeping %.1f hours until %d:05 %s ...",
-            result.error,
-            hours,
-            reset_hour,
-            "UTC" if is_utc else "local",
-        )
-        time.sleep(wait_secs)
-        logger.info("Woke up after rate-limit sleep, resuming with remaining budget...")
+        if output_token_limited and output_token_retries >= _MAX_OUTPUT_TOKEN_RETRIES:
+            logger.warning(
+                "Not resuming after output-token overflow: retry limit (%d) reached.",
+                _MAX_OUTPUT_TOKEN_RETRIES,
+            )
+            return _fold_retry_metrics(
+                result,
+                aborted_tokens,
+                aborted_cost,
+                rate_limit_retries,
+                output_token_retries,
+            )
+
+        if rate_limited:
+            assert result.rate_limit_reset is not None
+            reset_hour, is_utc = parse_reset_hour(result.rate_limit_reset)
+            wait_secs = seconds_until_reset(reset_hour, is_utc)
+            hours = wait_secs / 3600
+            logger.warning(
+                "Rate-limited (%s). Sleeping %.1f hours until %d:05 %s ...",
+                result.error,
+                hours,
+                reset_hour,
+                "UTC" if is_utc else "local",
+            )
+            time.sleep(wait_secs)
+            logger.info(
+                "Woke up after rate-limit sleep, resuming with remaining budget..."
+            )
+            resume_prompt = active.prompt
+        else:
+            output_token_retries += 1
+            logger.warning(
+                "Claude exceeded its output-token maximum; resuming with remaining "
+                "budget (attempt %d/%d).",
+                output_token_retries,
+                _MAX_OUTPUT_TOKEN_RETRIES,
+            )
+            resume_prompt = _OUTPUT_TOKEN_RESUME_PROMPT
 
         # Zero means unlimited for both fields; exhausted positive limits were
         # handled above, so every finite remainder here is strictly positive.
@@ -182,6 +244,7 @@ def run_with_rate_limit_retry(
         active = replace(
             active,
             resume_previous_session=True,
+            prompt=resume_prompt,
             max_budget_usd=original_budget - aborted_cost if original_budget else 0.0,
             max_turns=remaining_turns,
         )

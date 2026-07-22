@@ -29,7 +29,9 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
         cache_read_tokens=2000,
         cache_creation_tokens=10,
         num_tool_calls=9,
+        output_token_limit_hit=True,
         rate_limit_retries=2,
+        output_token_retries=1,
         aborted_tokens=300,
         aborted_cost_usd=1.5,
     )
@@ -39,6 +41,8 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
     assert d["gen_num_tool_calls"] == 9
     assert d["gen_total_tokens"] == 2160
     assert d["gen_rate_limit_retries"] == 2
+    assert d["gen_output_token_limit_hit"] is True
+    assert d["gen_output_token_retries"] == 1
     assert d["gen_aborted_tokens"] == 300
     assert d["gen_aborted_cost_usd"] == 1.5
     assert all(k.startswith("gen_") for k in d)
@@ -68,6 +72,26 @@ def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
     assert result.generation_metrics.num_turns == 4
     assert result.generation_metrics.num_autocompactions == 2
     assert result.generation_metrics.stop_reason == "end_turn"
+
+
+def test_output_token_limit_ignores_partial_output_for_retry(tmp_path: Path) -> None:
+    """An oversized response is resumed rather than evaluating partial code."""
+    (tmp_path / "approach.py").write_text("partial = True\n")
+    stream = _StreamParseResult(
+        is_error=True,
+        error_text="Claude response exceeded the output token maximum",
+        num_turns=1,
+        total_cost=0.5,
+        output_token_limit_hit=True,
+    )
+
+    result = _stream_result_to_sandbox_result(stream, tmp_path, "approach.py")
+
+    assert not result.success
+    assert result.output_file is None
+    assert result.output_token_limit_hit
+    assert result.generation_metrics is not None
+    assert result.generation_metrics.output_token_limit_hit
 
 
 def test_sandbox_claude_config_copies_then_removes_creds(
