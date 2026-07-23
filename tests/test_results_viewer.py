@@ -157,3 +157,33 @@ seeds = [(5, 0.1, 0.2), (9, 0.3, 0.4)]
     assert mentions[17] == {"literal"}
     assert mentions[42] == {"list", "range"}
     assert mentions[49] == {"range"}
+
+
+def test_generation_time_breakdown_uses_api_wait_and_wall_time() -> None:
+    """Claude API wait is split from the remaining local generation time."""
+    breakdown = viewer._generation_time_breakdown(
+        {
+            "gen_wall_time_s": 100.0,
+            "gen_cli_duration_ms": 95_000,
+            "gen_cli_duration_api_ms": 75_000,
+        }
+    )
+
+    assert breakdown is not None
+    assert breakdown["claude_s"] == 75.0
+    assert breakdown["experiments_tools_s"] == 25.0
+    assert breakdown["claude_fraction"] == 0.75
+    assert breakdown["basis"] == "generation wall time"
+
+    instrumented = viewer._generation_time_breakdown(
+        {
+            "gen_wall_time_s": 100.0,
+            "gen_model_wait_time_s": 60.0,
+            "gen_experiment_time_s": 25.0,
+            "gen_other_tool_time_s": 10.0,
+        }
+    )
+    assert instrumented is not None
+    assert instrumented["instrumented"]
+    assert instrumented["experiments_tools_fraction"] == 0.25
+    assert instrumented["other_s"] == 15.0  # includes uninstrumented startup

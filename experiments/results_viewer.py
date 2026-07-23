@@ -276,6 +276,74 @@ def _episode_outcome(e: dict[str, Any]) -> str:
     return "success" if e.get("solved") else "failure"
 
 
+def _generation_time_breakdown(results: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Estimate Claude API wait versus local experiment/tool time.
+
+    Claude Code reports ``duration_api_ms`` directly. The complement of that
+    duration within our end-to-end generation timer is time outside the model:
+    environment rollouts, shell/file tools, CLI orchestration, and sandbox
+    startup. Successful tool-result boundaries were not timestamped, so the
+    experiment component cannot be separated further for historical runs.
+    """
+    wall_s = results.get("gen_wall_time_s")
+    cli_ms = results.get("gen_cli_duration_ms")
+    if isinstance(wall_s, (int, float)) and wall_s > 0:
+        total_s = float(wall_s)
+        basis = "generation wall time"
+    elif isinstance(cli_ms, (int, float)) and cli_ms > 0:
+        total_s = float(cli_ms) / 1000
+        basis = "Claude CLI duration"
+    else:
+        return None
+    model_raw = results.get("gen_model_wait_time_s")
+    experiment_raw = results.get("gen_experiment_time_s")
+    other_raw = results.get("gen_other_tool_time_s")
+    if (
+        isinstance(model_raw, (int, float))
+        and model_raw >= 0
+        and isinstance(experiment_raw, (int, float))
+        and experiment_raw >= 0
+        and isinstance(other_raw, (int, float))
+        and other_raw >= 0
+    ):
+        model_s = float(model_raw)
+        experiment_s = float(experiment_raw)
+        other_s = float(other_raw)
+        measured_s = model_s + experiment_s + other_s
+        total_s = max(total_s, measured_s)
+        other_s += max(0.0, total_s - measured_s)
+        return {
+            "total_s": total_s,
+            "claude_s": model_s,
+            "experiments_tools_s": experiment_s,
+            "other_s": other_s,
+            "claude_fraction": model_s / total_s,
+            "experiments_tools_fraction": experiment_s / total_s,
+            "other_fraction": other_s / total_s,
+            "basis": "instrumented stream wall time",
+            "instrumented": True,
+            "clamped": False,
+        }
+
+    api_ms = results.get("gen_cli_duration_api_ms")
+    if not isinstance(api_ms, (int, float)) or api_ms <= 0:
+        return None
+    claude_s = min(float(api_ms) / 1000, total_s)
+    local_s = max(0.0, total_s - claude_s)
+    return {
+        "total_s": total_s,
+        "claude_s": claude_s,
+        "experiments_tools_s": local_s,
+        "other_s": 0.0,
+        "claude_fraction": claude_s / total_s,
+        "experiments_tools_fraction": local_s / total_s,
+        "other_fraction": 0.0,
+        "basis": basis,
+        "instrumented": False,
+        "clamped": float(api_ms) / 1000 > total_s,
+    }
+
+
 def _run_detail(run: RunInfo) -> dict[str, Any]:
     r = _results(run)
     per = r.get("per_episode", [])
@@ -305,6 +373,7 @@ def _run_detail(run: RunInfo) -> dict[str, Any]:
     return {
         "summary": _summary(run),
         "metrics": metrics,
+        "generation_time_breakdown": _generation_time_breakdown(r),
         "episodes": episodes,
         "env_description": env_desc.read_text() if env_desc.exists() else None,
         "logs": logs,
@@ -1437,6 +1506,11 @@ h1{font-size:20px;margin:2px 0 4px}h2{font-size:15px;margin:22px 0 9px;border-bo
 .metric{border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:var(--card)}
 .metric .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
 .metric .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.time-split{border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--card);margin-top:9px}
+.time-track{height:18px;display:flex;border-radius:5px;overflow:hidden;background:var(--bg);border:1px solid var(--line)}
+.time-claude{background:var(--accent)}.time-local{background:var(--warn)}.time-other{background:var(--muted)}
+.time-legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:7px;font-variant-numeric:tabular-nums}
+.time-key{display:inline-flex;align-items:center;gap:6px}.time-swatch{width:9px;height:9px;border-radius:2px}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:20px}@media(max-width:800px){.cols{grid-template-columns:1fr}}
 .eph{display:flex;flex-wrap:wrap;gap:8px}
 .ep{width:132px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--card)}
@@ -1562,6 +1636,29 @@ const TOPK=["solve_rate","mean_eval_reward","mean_eval_steps","num_evaluated_epi
 
 function metricCard(k,v){return h("div",{class:"metric"},h("div",{class:"k"},k.replace(/_/g," ")),h("div",{class:"v"},num(v)));}
 
+function generationTimeSplit(b){
+ const claudePct=b.claude_fraction*100,localPct=b.experiments_tools_fraction*100,otherPct=b.other_fraction*100;
+ const key=(color,label,value)=>h("span",{class:"time-key"},
+  h("span",{class:"time-swatch",style:`background:${color}`}),
+  h("span",{},`${label}: ${value}`));
+ const box=h("div",{class:"time-split"},
+  h("div",{class:"muted",style:"font-size:11px;margin-bottom:6px"},"generation time estimate"),
+  h("div",{class:"time-track",title:`Measured from ${b.basis}`},
+   h("div",{class:"time-claude",style:`width:${claudePct}%`}),
+   h("div",{class:"time-local",style:`width:${localPct}%`}),
+   h("div",{class:"time-other",style:`width:${otherPct}%`})),
+  h("div",{class:"time-legend"},
+   key("var(--accent)","Claude API / thinking",`${claudePct.toFixed(1)}% · ${duration(b.claude_s)}`),
+   key("var(--warn)",b.instrumented?"environment experiments":"experiments & tools",`${localPct.toFixed(1)}% · ${duration(b.experiments_tools_s)}`),
+   b.instrumented?key("var(--muted)","other tools / overhead",`${otherPct.toFixed(1)}% · ${duration(b.other_s)}`):""));
+ box.append(h("div",{class:"muted",style:"font-size:10.5px;margin-top:6px"},
+  b.instrumented?
+   "Basis: live tool-call/result wall timing. Parallel calls are counted once; sandbox startup and unclassified time are included in overhead.":
+   `Basis: ${b.basis}. The non-Claude remainder includes environment runs, shell/file tools, CLI overhead, and sandbox startup; historical logs cannot isolate experiments exactly.`,
+  b.clamped?" Claude API time exceeded the available timer and was capped.":""));
+ return box;
+}
+
 function byCountBars(bc){
  const wrap=h("div",{class:"bars"});
  for(const c of Object.keys(bc).sort((a,b)=>+a-+b)){
@@ -1622,6 +1719,7 @@ async function renderRun(id){
  const gg=h("div",{class:"mgrid"});
  for(const k of GENK)if(k in m)gg.append(metricCard(k,m[k]));
  app.append(gg);
+ if(d.generation_time_breakdown)app.append(generationTimeSplit(d.generation_time_breakdown));
  if(m.by_count){app.append(h("h2",{},"scaling by object count"));app.append(byCountBars(m.by_count));}
 
  // episodes

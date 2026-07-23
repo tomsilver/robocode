@@ -68,6 +68,9 @@ class GenerationMetrics:
     wall_time_s: float | None = None
     cli_duration_ms: int | None = None
     cli_duration_api_ms: int | None = None
+    model_wait_time_s: float | None = None
+    experiment_time_s: float | None = None
+    other_tool_time_s: float | None = None
     num_turns: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -104,6 +107,9 @@ class GenerationMetrics:
             "gen_wall_time_s": self.wall_time_s,
             "gen_cli_duration_ms": self.cli_duration_ms,
             "gen_cli_duration_api_ms": self.cli_duration_api_ms,
+            "gen_model_wait_time_s": self.model_wait_time_s,
+            "gen_experiment_time_s": self.experiment_time_s,
+            "gen_other_tool_time_s": self.other_tool_time_s,
             "gen_num_turns": self.num_turns,
             "gen_input_tokens": self.input_tokens,
             "gen_output_tokens": self.output_tokens,
@@ -153,5 +159,8 @@ class _StreamParseResult:
     turn_limit_hit: bool = False
     cli_duration_ms: int | None = None
     cli_duration_api_ms: int | None = None
+    model_wait_time_s: float | None = None
+    experiment_time_s: float | None = None
+    other_tool_time_s: float | None = None
     stop_reason: str | None = None
     model_usage: dict[str, Any] = field(default_factory=dict)

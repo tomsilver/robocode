@@ -22,6 +22,9 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
         cache_read_tokens=2000,
         cache_creation_tokens=10,
         num_tool_calls=9,
+        model_wait_time_s=8.0,
+        experiment_time_s=3.0,
+        other_tool_time_s=1.0,
         rate_limit_retries=2,
         aborted_tokens=300,
         aborted_cost_usd=1.5,
@@ -30,6 +33,9 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
     assert d["gen_wall_time_s"] == 12.5
     assert d["gen_num_turns"] == 7
     assert d["gen_num_tool_calls"] == 9
+    assert d["gen_model_wait_time_s"] == 8.0
+    assert d["gen_experiment_time_s"] == 3.0
+    assert d["gen_other_tool_time_s"] == 1.0
     assert d["gen_total_tokens"] == 2160
     assert d["gen_rate_limit_retries"] == 2
     assert d["gen_aborted_tokens"] == 300
@@ -50,6 +56,9 @@ def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
         num_tool_calls=8,
         num_autocompactions=2,
         cli_duration_ms=1234,
+        model_wait_time_s=6.0,
+        experiment_time_s=2.0,
+        other_tool_time_s=1.0,
         stop_reason="end_turn",
     )
     result = _stream_result_to_sandbox_result(
@@ -60,6 +69,9 @@ def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
     assert result.generation_metrics.wall_time_s == 9.0
     assert result.generation_metrics.num_turns == 4
     assert result.generation_metrics.num_autocompactions == 2
+    assert result.generation_metrics.model_wait_time_s == 6.0
+    assert result.generation_metrics.experiment_time_s == 2.0
+    assert result.generation_metrics.other_tool_time_s == 1.0
     assert result.generation_metrics.stop_reason == "end_turn"
 
 
