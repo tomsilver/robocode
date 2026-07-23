@@ -25,6 +25,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from robocode.mcp import MCP_START_SCRIPT
@@ -34,6 +35,7 @@ from robocode.primitive_specs import (
     REMOTE_MODULE_PRIMITIVES,
 )
 from robocode.utils.backends import AgentBackend
+from robocode.utils.claude_auth import sandbox_claude_config
 from robocode.utils.sandbox_types import (
     GenerationMetrics,
     SandboxConfig,
@@ -103,6 +105,8 @@ __pycache__/
 *.mp4
 agent_log.txt
 .mcp/
+.agent_sessions/
+.agent_home/
 mcp_renders/
 """
 
@@ -231,19 +235,27 @@ def _stream_result_to_sandbox_result(
         num_autocompactions=stream.num_autocompactions,
         num_permission_denials=stream.num_permission_denials,
         turn_limit_hit=stream.turn_limit_hit,
+        output_token_limit_hit=stream.output_token_limit_hit,
+        prompt_too_long_hit=stream.prompt_too_long_hit,
         stop_reason=stream.stop_reason,
         model_usage=stream.model_usage,
     )
 
-    # A rate-limit error must propagate so the retry loop can wait and rerun the
-    # whole sandbox; never evaluate a partial approach from a rate-limited run.
-    if stream.rate_limit_reset is not None:
+    # Retryable interruptions must propagate before considering a partial output.
+    # The retry loop resumes the same conversation with the remaining budget.
+    if (
+        stream.rate_limit_reset is not None
+        or stream.output_token_limit_hit
+        or stream.prompt_too_long_hit
+    ):
         return SandboxResult(
             success=False,
             output_file=None,
             error=stream.error_text,
             total_cost_usd=cost,
             rate_limit_reset=stream.rate_limit_reset,
+            output_token_limit_hit=stream.output_token_limit_hit,
+            prompt_too_long_hit=stream.prompt_too_long_hit,
             generation_metrics=metrics,
         )
 
@@ -363,22 +375,30 @@ async def run_agent_in_sandbox(
         else None
     )
     wall_start = time.monotonic()
+    claude_config = (
+        sandbox_claude_config(config.sandbox_dir)
+        if backend.name == "claude"
+        else nullcontext(None)
+    )
     try:
-        proc = subprocess.Popen(  # pylint: disable=consider-using-with
-            cmd,
-            cwd=sandbox_abs,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
+        with claude_config as config_dir:
+            if config_dir is not None:
+                env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+            proc = subprocess.Popen(  # pylint: disable=consider-using-with
+                cmd,
+                cwd=sandbox_abs,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
 
-        stream = backend.parse_stream(
-            proc,
-            stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
-        )
+            stream = backend.parse_stream(
+                proc,
+                stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+            )
     finally:
         if server_proc is not None:
             server_proc.terminate()
