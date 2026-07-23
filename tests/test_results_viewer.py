@@ -159,6 +159,76 @@ seeds = [(5, 0.1, 0.2), (9, 0.3, 0.4)]
     assert mentions[49] == {"range"}
 
 
+def test_object_count_audit_detects_held_out_training_probe(tmp_path: Path) -> None:
+    """Explicit training probes outside design_counts are reported as leakage."""
+    hydra = tmp_path / ".hydra"
+    hydra.mkdir()
+    (hydra / "config.yaml").write_text("""environment:
+  design_counts:
+  - 0
+  - 1
+  - 2
+  eval_counts:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+seed: 7
+""")
+    source = """
+for obj_count in [0, 1, 2, 3]:
+    for seed in [0, 1, 42]:
+        env.reset(seed=seed, options={"object_count": obj_count})
+"""
+    (tmp_path / "stream.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": "test.py", "content": source},
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+
+    training = viewer._training_seed_info(_run(tmp_path))
+
+    assert training["object_count_audit"] == {
+        "status": "violation",
+        "design_counts": [0, 1, 2],
+        "eval_counts": [0, 1, 2, 3, 4],
+        "held_out_counts": [3, 4],
+        "observed_counts": [0, 1, 2, 3],
+        "violation_counts": [3],
+        "other_out_of_domain_counts": [],
+        "unresolved_expressions": [],
+        "evidence_complete": True,
+    }
+    seed_42 = next(item for item in training["seeds"] if item["seed"] == 42)
+    assert seed_42["object_counts"] == [0, 1, 2, 3]
+
+
+def test_object_count_mentions_resolves_seed_count_case_table() -> None:
+    """Count variables backed by diagnostic case tuples are resolved."""
+    source = """
+test_cases = [(42, 1), (42, 3), (0, 7)]
+for seed, count in test_cases:
+    env.reset(seed=seed, options={"object_count": count})
+"""
+
+    mentions = viewer._object_count_mentions(source)
+
+    assert mentions == {"counts": [1, 3, 7], "unresolved": []}
+
+
 def test_generation_time_breakdown_uses_api_wait_and_wall_time() -> None:
     """Claude API wait is split from the remaining local generation time."""
     breakdown = viewer._generation_time_breakdown(

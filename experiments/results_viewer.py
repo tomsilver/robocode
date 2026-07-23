@@ -123,6 +123,42 @@ def _primitives(hydra_dir: Path) -> str:
     return "[]"
 
 
+def _configured_object_counts(run: RunInfo) -> dict[str, list[int]]:
+    """Read variable-object-count train/eval domains from resolved Hydra YAML.
+
+    Keep this deliberately small and stdlib-only: the resolved config emitted by
+    Hydra uses a simple top-level ``environment`` mapping and integer lists.
+    """
+    config = run.path / ".hydra" / "config.yaml"
+    if not config.exists():
+        return {"design": [], "eval": []}
+    text = config.read_text()
+    environment = re.search(
+        r"^environment:\s*\n(?P<body>(?:^[ \t]+.*\n?)*)", text, re.MULTILINE
+    )
+    if environment is None:
+        return {"design": [], "eval": []}
+    body = environment.group("body")
+
+    def values(key: str) -> list[int]:
+        match = re.search(
+            rf"^[ \t]+{key}:[ \t]*(?P<inline>\[[^\]]*\])?[ \t]*\n"
+            rf"(?P<items>(?:^[ \t]*-[ \t]*-?\d+[ \t]*\n?)*)",
+            body,
+            re.MULTILINE,
+        )
+        if match is None:
+            return []
+        return [
+            int(value)
+            for value in re.findall(
+                r"-?\d+", (match.group("inline") or "") + match.group("items")
+            )
+        ]
+
+    return {"design": values("design_counts"), "eval": values("eval_counts")}
+
+
 # Trees that never hold experiment runs; pruned so the recursive scan stays fast.
 _SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "third-party"}
 
@@ -697,7 +733,9 @@ def _seed_mentions(command: str) -> dict[int, set[str]]:
         if 0 <= seed < 1_000_000:
             mentions.setdefault(seed, set()).add(kind)
 
-    for match in re.finditer(r"(?:reset\s*\(\s*seed|\bseed)\s*=\s*(\d+)", command):
+    for match in re.finditer(
+        r"(?:reset\s*\(\s*seed|\b[\"']?seed[\"']?)\s*(?:=|:)\s*(\d+)", command
+    ):
         add(int(match.group(1)), "literal")
     for match in re.finditer(r"for\s+seed\s+in\s*\[([^\]]+)\]", command):
         for value in re.findall(r"\b\d+\b", match.group(1)):
@@ -716,6 +754,64 @@ def _seed_mentions(command: str) -> dict[int, set[str]]:
     return mentions
 
 
+def _variable_integer_values(text: str, variable: str) -> set[int]:
+    """Best-effort values for a Python variable used as ``object_count``."""
+    values: set[int] = set()
+    escaped = re.escape(variable)
+    for match in re.finditer(
+        rf"(?:for\s+{escaped}\s+in|{escaped}\s*=)\s*\[([^\]]+)\]", text
+    ):
+        values.update(
+            int(value) for value in re.findall(r"(?<![\w.])-?\d+\b", match[1])
+        )
+    for match in re.finditer(rf"\b{escaped}\s*=\s*(-?\d+)\b", text):
+        values.add(int(match[1]))
+
+    # ``cases = [(seed, count), ...]; for seed, count in cases`` is common in
+    # diagnostic scripts. Resolve the relevant tuple column.
+    for loop in re.finditer(rf"for\s+([\w\s,]+)\s+in\s+(\w+)", text):
+        variables = [item.strip() for item in loop[1].split(",")]
+        if variable not in variables:
+            continue
+        assignment = re.search(
+            rf"\b{re.escape(loop[2])}\s*=\s*\[([^\]]+)\]", text, re.DOTALL
+        )
+        if assignment is None:
+            continue
+        column = variables.index(variable)
+        for tuple_text in re.findall(r"\(([^()]*)\)", assignment[1]):
+            fields = [field.strip() for field in tuple_text.split(",")]
+            if column < len(fields) and re.fullmatch(r"-?\d+", fields[column]):
+                values.add(int(fields[column]))
+    return values
+
+
+def _object_count_mentions(text: str) -> dict[str, Any]:
+    """Recover explicit object counts used in reset/render calls.
+
+    Constructor ``design_counts`` and ``eval_counts`` are intentionally ignored;
+    only values passed through an ``object_count`` argument are considered an
+    attempted configuration.
+    """
+    counts: set[int] = set()
+    unresolved: set[str] = set()
+    for match in re.finditer(
+        r"(?:[\"']object_count[\"']|\bobject_count)\s*(?:=|:)\s*"
+        r"(?P<value>-?\d+|[A-Za-z_]\w*)",
+        text,
+    ):
+        value = match.group("value")
+        if re.fullmatch(r"-?\d+", value):
+            counts.add(int(value))
+            continue
+        resolved = _variable_integer_values(text, value)
+        if resolved:
+            counts.update(resolved)
+        else:
+            unresolved.add(value)
+    return {"counts": sorted(counts), "unresolved": sorted(unresolved)}
+
+
 def _stream_index(run: RunInfo) -> dict[str, Any]:
     """Map commit messages to reasoning and best-effort per-commit effort.
 
@@ -725,7 +821,12 @@ def _stream_index(run: RunInfo) -> dict[str, Any]:
     """
     f = run.path / "stream.jsonl"
     if not f.exists():
-        return {"by_msg": {}, "effort_by_msg": {}, "seed_events": []}
+        return {
+            "by_msg": {},
+            "effort_by_msg": {},
+            "seed_events": [],
+            "count_events": [],
+        }
     key = run.run_id
     mtime = f.stat().st_mtime
     cached = _STREAM_CACHE.get(key)
@@ -735,6 +836,7 @@ def _stream_index(run: RunInfo) -> dict[str, Any]:
     by_msg: dict[str, dict[str, Any]] = {}
     effort_by_msg: dict[str, dict[str, Any]] = {}
     seed_events: list[dict[str, Any]] = []
+    count_events: list[dict[str, Any]] = []
     current_commit: Optional[str] = None
     prev_text = ""
     effort = {
@@ -769,6 +871,42 @@ def _stream_index(run: RunInfo) -> dict[str, Any]:
             None,
         )
         event_commit = message_commit or current_commit
+        for block in blocks:
+            if block.get("type") != "tool_use":
+                continue
+            tool_name = block.get("name", "")
+            tool_input = block.get("input") or {}
+            source = ""
+            evidence_source = ""
+            if tool_name == "Bash":
+                source = tool_input.get("command", "")
+                evidence_source = "executed command"
+            elif tool_name in {"Write", "Edit"}:
+                source = tool_input.get("content") or tool_input.get("new_string") or ""
+                evidence_source = "agent-authored test code"
+            elif isinstance(tool_input.get("object_count"), int):
+                source = json.dumps(tool_input)
+                evidence_source = tool_name
+            if not source:
+                continue
+            count_info = _object_count_mentions(source)
+            if not count_info["counts"] and not count_info["unresolved"]:
+                continue
+            mentions = _seed_mentions(source)
+            relevant_lines = [
+                line.strip()
+                for line in source.splitlines()
+                if re.search(r"object_count|for\s+\w+\s+in", line)
+            ]
+            count_events.append(
+                {
+                    "commit": event_commit,
+                    **count_info,
+                    "seeds": sorted(mentions),
+                    "source": evidence_source,
+                    "evidence": " | ".join(relevant_lines)[:800],
+                }
+            )
         for command in commands:
             mentions = _seed_mentions(command)
             if mentions:
@@ -836,6 +974,7 @@ def _stream_index(run: RunInfo) -> dict[str, Any]:
         "by_msg": by_msg,
         "effort_by_msg": effort_by_msg,
         "seed_events": seed_events,
+        "count_events": count_events,
     }
     _STREAM_CACHE[key] = {"mtime": mtime, "idx": idx}
     return idx
@@ -860,7 +999,9 @@ def _why(run: RunInfo, version: int) -> dict[str, Any]:
 def _training_seed_info(run: RunInfo) -> dict[str, Any]:
     """Summarize literal seeds the coding agent exercised during generation."""
     snapshots = _snapshots(run)
-    events = _stream_index(run)["seed_events"]
+    stream = _stream_index(run)
+    events = stream["seed_events"]
+    count_events = stream["count_events"]
     versions_by_message = {
         snapshot["message"]: snapshot["version"] for snapshot in snapshots
     }
@@ -897,6 +1038,8 @@ def _training_seed_info(run: RunInfo) -> dict[str, Any]:
                     "explicit_mentions": 0,
                     "versions": set(),
                     "evidence": [],
+                    "object_counts": set(),
+                    "object_count_unknown": False,
                 },
             )
             item["mentions"] += 1
@@ -904,6 +1047,30 @@ def _training_seed_info(run: RunInfo) -> dict[str, Any]:
             item["versions"].add(version)
             if event["evidence"] and event["evidence"] not in item["evidence"]:
                 item["evidence"].append(event["evidence"])
+
+    normalized_count_events = []
+    observed_counts: set[int] = set()
+    unresolved: set[str] = set()
+    for event in count_events:
+        version = version_for(event["commit"])
+        normalized = {**event, "version": version}
+        normalized_count_events.append(normalized)
+        observed_counts.update(event["counts"])
+        unresolved.update(event["unresolved"])
+        for seed in event["seeds"]:
+            if seed not in by_seed:
+                by_seed[seed] = {
+                    "seed": seed,
+                    "mentions": 1,
+                    "explicit_mentions": 1,
+                    "versions": {version},
+                    "evidence": [event["evidence"]] if event["evidence"] else [],
+                    "object_counts": set(),
+                    "object_count_unknown": False,
+                }
+                by_version.setdefault(version, set()).add(seed)
+            by_seed[seed]["object_counts"].update(event["counts"])
+            by_seed[seed]["object_count_unknown"] |= bool(event["unresolved"])
 
     seeds_out = []
     for item in by_seed.values():
@@ -915,17 +1082,48 @@ def _training_seed_info(run: RunInfo) -> dict[str, Any]:
                 "first_version": versions[0],
                 "last_version": versions[-1],
                 "evidence": item["evidence"][:4],
+                "object_counts": sorted(item["object_counts"]),
                 # Individually targeted seeds are more diagnostic than a seed
                 # that merely appeared once inside range(200).
                 "interest": item["explicit_mentions"] * 100 + item["mentions"],
             }
         )
     seeds_out.sort(key=lambda item: (-item["interest"], item["seed"]))
+    configured = _configured_object_counts(run)
+    design = set(configured["design"])
+    evaluation = set(configured["eval"])
+    held_out = evaluation - design
+    out_of_domain = observed_counts - design if design else set()
+    violations = {
+        count
+        for count in out_of_domain
+        if count in held_out or (design and count > max(design))
+    }
+    if not design and not evaluation:
+        status = "not_applicable"
+    elif violations:
+        status = "violation"
+    elif unresolved or not observed_counts:
+        status = "incomplete"
+    else:
+        status = "no_violation_observed"
     return {
         "seeds": seeds_out,
         "events": normalized_events,
+        "count_events": normalized_count_events,
         "by_version": {
             str(version): sorted(seeds) for version, seeds in sorted(by_version.items())
+        },
+        "object_count_audit": {
+            "status": status,
+            "design_counts": sorted(design),
+            "eval_counts": sorted(evaluation),
+            "held_out_counts": sorted(held_out),
+            "observed_counts": sorted(observed_counts),
+            "violation_counts": sorted(violations),
+            "other_out_of_domain_counts": sorted(out_of_domain - violations),
+            "unresolved_expressions": sorted(unresolved),
+            "evidence_complete": not unresolved and bool(observed_counts),
         },
     }
 
@@ -1547,6 +1745,11 @@ h1{font-size:20px;margin:2px 0 4px}h2{font-size:15px;margin:22px 0 9px;border-bo
 .seed-cell.unknown{color:var(--muted);border-style:dashed}.seed-cell.busy{color:var(--warn)}
 .seed-cell.tested{color:#fff;background:var(--accent);border-color:var(--accent)}
 .seed-label{white-space:nowrap;text-align:left}.seed-label .mono{font-size:10px}
+.count-audit{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:10px 0;background:var(--card)}
+.count-audit.violation{border-color:var(--no)}.count-audit.safe{border-color:var(--ok)}
+.count-audit.incomplete{border-color:var(--warn)}
+.count-audit .audit-title{font-weight:600;margin-bottom:5px}
+.count-audit .audit-grid{display:flex;gap:7px 16px;flex-wrap:wrap;font-size:11px}
 .seed-badge{font-size:9px;padding:1px 5px;border-radius:99px;border:1px solid var(--line);margin-left:4px;font-weight:500}
 .seed-badge.fixed{color:var(--ok);border-color:var(--ok)}.seed-badge.regression{color:var(--warn);border-color:var(--warn)}
 .seed-badge.persistent{color:var(--no);border-color:var(--no)}
@@ -1768,20 +1971,64 @@ function solveLinePlot(snaps,totalEpisodes){
 }
 
 function trainingSeedEvolution(snaps,training){
- if(!training.seeds.length)return null;
+ const audit=training.object_count_audit||{};
+ if(!training.seeds.length&&audit.status==="not_applicable")return null;
  const section=h("div",{},h("h2",{},"training-seed exploration"),
   h("div",{class:"muted"},
    `Recovered ${training.seeds.length} literal environment seeds from the agent's test commands. Filled cells show when a seed was exercised around that commit; they are training probes, not held-out eval episodes.`));
+ if(audit.status!=="not_applicable"){
+  const labels={
+   violation:["violation","HELD-OUT COUNT ACCESSED"],
+   no_violation_observed:["safe","no held-out count observed"],
+   incomplete:["incomplete","audit incomplete"]
+  };
+  const [cls,title]=labels[audit.status]||["incomplete","audit unavailable"];
+  const list=values=>values?.length?values.join(", "):"—";
+  const card=h("div",{class:`count-audit ${cls}`},
+   h("div",{class:"audit-title"},title),
+   h("div",{class:"audit-grid"},
+    h("span",{},`allowed during training: ${list(audit.design_counts)}`),
+    h("span",{},`held out: ${list(audit.held_out_counts)}`),
+    h("span",{},`observed attempts: ${list(audit.observed_counts)}`),
+    audit.violation_counts?.length?h("span",{style:"color:var(--no)"},
+     `held-out violations: ${list(audit.violation_counts)}`):"",
+    audit.other_out_of_domain_counts?.length?h("span",{style:"color:var(--warn)"},
+     `other out-of-domain: ${list(audit.other_out_of_domain_counts)}`):""));
+  const caveat=audit.status==="no_violation_observed"?
+   "Static audit found no out-of-domain object_count arguments. This verifies recorded tool calls and recoverable test code, not activity absent from the stream.":
+   audit.status==="incomplete"?
+   `Some object-count expressions could not be resolved (${list(audit.unresolved_expressions)}), or no explicit count was recorded.`:
+   "At least one explicit attempted object count was outside design_counts, so higher-count evaluation was not fully held out.";
+  card.append(h("div",{class:"muted",style:"font-size:10px;margin-top:6px"},caveat));
+  const relevant=(training.count_events||[]).filter(event=>
+   audit.status!=="violation"||event.counts.some(count=>audit.violation_counts.includes(count)));
+  if(relevant.length){
+   const details=h("details",{style:"margin-top:7px"},h("summary",{},
+    `${relevant.length} object-count evidence event${relevant.length===1?"":"s"}`));
+   relevant.forEach(event=>details.append(h("div",{class:"mono",style:"font-size:10px;margin-top:5px"},
+    `v${event.version} · counts ${list(event.counts)} · ${event.source}: ${event.evidence||"(structured tool input)"}`)));
+   card.append(details);
+  }
+  section.append(card);
+ }
+ if(!training.seeds.length)return section;
  const matrix=items=>{
   const table=h("table",{class:"seed-matrix"});
-  const head=h("tr",{},h("th",{},"training seed"));
+  const head=h("tr",{},h("th",{},"training seed / object count"));
   snaps.forEach((sn,i)=>head.append(h("th",{},`v${i}`)));head.append(h("th",{},"mentions"));table.append(head);
   items.forEach(item=>{
    const evidence=item.evidence.join("\n");
-   const row=h("tr",{},h("th",{class:"seed-label"},`seed ${item.seed}`));
-   snaps.forEach((sn,v)=>row.append(h("td",{},item.versions.includes(v)?
-    h("button",{class:"seed-cell tested",title:evidence},"tested"):
-    h("span",{class:"seed-cell muted",style:"display:inline-block;text-align:center"},"·"))));
+   const countLabel=item.object_counts.length?` · objects ${item.object_counts.join(",")}`:
+    (item.object_count_unknown?" · objects ?":" · design-auto");
+   const row=h("tr",{},h("th",{class:"seed-label"},`seed ${item.seed}${countLabel}`));
+   snaps.forEach((sn,v)=>{
+    const versionCounts=(training.count_events||[]).filter(event=>
+     event.version===v&&event.seeds.includes(item.seed)).flatMap(event=>event.counts);
+    const cellLabel=versionCounts.length?`c${[...new Set(versionCounts)].join(",")}`:"tested";
+    row.append(h("td",{},item.versions.includes(v)?
+    h("button",{class:"seed-cell tested",title:evidence},cellLabel):
+    h("span",{class:"seed-cell muted",style:"display:inline-block;text-align:center"},"·")));
+   });
    row.append(h("td",{class:"mono muted"},String(item.mentions)));table.append(row);
   });
   return h("div",{class:"matrix-scroll"},table);
