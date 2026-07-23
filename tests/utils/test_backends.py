@@ -19,8 +19,8 @@ from robocode.utils.backends import (
 )
 from robocode.utils.backends.claude import (
     _RATE_LIMIT_RE,
-    _tool_timing_category,
     ClaudeBackend,
+    _tool_timing_category,
 )
 from robocode.utils.backends.opencode import OpenCodeBackend
 from robocode.utils.sandbox import SandboxConfig
