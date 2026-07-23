@@ -632,6 +632,22 @@ class TestClaudeParseStreamMetrics:
         assert result.cli_duration_api_ms == 5000  # max (cumulative)
         assert result.stop_reason == "error_max_budget_usd"  # last subtype
         assert result.total_cost == pytest.approx(0.90)  # latest (cumulative)
+        assert result.error_text == "error_max_budget_usd"
+
+    def test_parse_uses_structured_errors_when_result_text_is_missing(self) -> None:
+        """Budget errors expose the CLI's useful message instead of Unknown error."""
+        event = {
+            "type": "result",
+            "subtype": "error_max_budget_usd",
+            "is_error": True,
+            "errors": ["Reached maximum budget ($20)"],
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.error_text == "Reached maximum budget ($20)"
+        assert result.stop_reason == "error_max_budget_usd"
 
     def test_parse_detects_output_token_limit_in_assistant_text(self) -> None:
         """The retry signal is detected from Claude's observed API error text."""

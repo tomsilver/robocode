@@ -177,6 +177,7 @@ def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) 
     host = tmp_path / "host_claude"
     host.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
 

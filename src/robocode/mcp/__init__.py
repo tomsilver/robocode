@@ -1,7 +1,6 @@
 """MCP server for robocode debugging tools."""
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +240,26 @@ def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(f"mcp__{MCP_SERVER_NAME}__{t}" for t in tool_names)
 
 
+# Env-config fields listing the object counts a run is configured for. The sandbox
+# copy of the config keeps a single count in each: the render server needs a
+# constructible env, and its tools pin the object count per call.
+_COUNT_RANGE_KEYS = ("design_counts", "eval_counts")
+_SANDBOX_COUNTS = [1]
+
+
+def _write_sandbox_env_config(source: Path, dest: Path) -> None:
+    """Write the env config the in-sandbox render server instantiates.
+
+    The sandbox copy is readable from inside the sandbox, so it carries only what the
+    server needs: the count-range fields are reduced to a single count.
+    """
+    config = json.loads(source.read_text(encoding="utf-8"))
+    for key in _COUNT_RANGE_KEYS:
+        if key in config:
+            config[key] = _SANDBOX_COUNTS
+    dest.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
 def setup_mcp_config(
     sandbox_dir: Path,
     tool_names: tuple[str, ...],
@@ -253,8 +272,8 @@ def setup_mcp_config(
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
-    In normal mode, copies ``env_config.json`` from *sandbox_dir*'s parent
-    into ``.mcp/`` so the server can instantiate the env locally. In blackbox
+    In normal mode, writes ``.mcp/env_config.json`` from the run's env config in
+    *sandbox_dir*'s parent so the server can instantiate the env locally. In blackbox
     mode the env source is absent from the container, so the server instead
     proxies render tools to the host env server using the connection info in
     ``env_spaces.json`` (written by the approach at the sandbox root).
@@ -293,7 +312,7 @@ def setup_mcp_config(
             f" 2>>{stderr_log_path}"
         )
     else:
-        shutil.copy2(
+        _write_sandbox_env_config(
             sandbox_dir.parent / "env_config.json",
             mcp_dir / "env_config.json",
         )
