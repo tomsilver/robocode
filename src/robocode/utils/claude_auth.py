@@ -141,20 +141,36 @@ def _valid_claude_credentials(path: Path) -> bool:
 
 def _persist_broker_credentials(source: Path) -> None:
     """Atomically retain a CLI's rotated credentials for the next process."""
-    if not source.is_file():
-        return
-    broker = _credential_broker_dir() / _CREDENTIALS
-    fd, pending_name = tempfile.mkstemp(
-        prefix=f"{_CREDENTIALS}.", suffix=".tmp", dir=broker.parent
-    )
-    os.close(fd)
-    pending = Path(pending_name)
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        shutil.copy2(source, pending)
-        pending.chmod(0o600)
-        pending.replace(broker)
-    finally:
-        pending.unlink(missing_ok=True)
+        source_fd = os.open(source, flags)
+    except OSError as err:
+        logger.warning(
+            "Not persisting unsafe Claude credentials at %s: %s", source, err
+        )
+        return
+
+    info = os.fstat(source_fd)
+    if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+        os.close(source_fd)
+        logger.warning("Not persisting unsafe Claude credentials at %s", source)
+        return
+
+    with os.fdopen(source_fd, "rb") as source_file:
+        broker = _credential_broker_dir() / _CREDENTIALS
+        pending_fd, pending_name = tempfile.mkstemp(
+            prefix=f"{_CREDENTIALS}.", suffix=".tmp", dir=broker.parent
+        )
+        pending = Path(pending_name)
+        try:
+            with os.fdopen(pending_fd, "wb") as pending_file:
+                shutil.copyfileobj(source_file, pending_file)
+                os.fchmod(pending_file.fileno(), 0o600)
+            pending.replace(broker)
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 @contextmanager

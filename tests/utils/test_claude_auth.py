@@ -134,6 +134,31 @@ def test_cleanup_handles_credentials_replaced_with_directory(
     )
 
 
+def test_persistence_rejects_credentials_replaced_with_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replaced credential cannot make the host broker follow an agent symlink."""
+    config_dir = _fake_host_config(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_text("must not enter broker", encoding="utf-8")
+
+    with sandbox_claude_config(sandbox) as agent_config:
+        copied = agent_config / ".credentials.json"
+        copied.unlink()
+        copied.symlink_to(unrelated)
+
+    assert not copied.exists()
+    assert unrelated.read_text(encoding="utf-8") == "must not enter broker"
+    with sandbox_claude_config(sandbox) as next_config:
+        assert (next_config / ".credentials.json").read_text(encoding="utf-8") == (
+            '{"token": "x"}'
+        )
+
+
 def test_missing_credentials_fails_loudly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
