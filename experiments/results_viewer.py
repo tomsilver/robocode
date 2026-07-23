@@ -769,7 +769,7 @@ def _variable_integer_values(text: str, variable: str) -> set[int]:
 
     # ``cases = [(seed, count), ...]; for seed, count in cases`` is common in
     # diagnostic scripts. Resolve the relevant tuple column.
-    for loop in re.finditer(rf"for\s+([\w\s,]+)\s+in\s+(\w+)", text):
+    for loop in re.finditer(r"for\s+([\w\s,]+)\s+in\s+(\w+)", text):
         variables = [item.strip() for item in loop[1].split(",")]
         if variable not in variables:
             continue
