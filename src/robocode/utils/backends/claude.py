@@ -402,7 +402,14 @@ class ClaudeBackend(AgentBackend):
                     cli_duration_api_ms or 0, msg.get("duration_api_ms") or 0
                 )
                 if is_error:
-                    error_text = str(msg.get("result") or "Unknown error")
+                    result_text = msg.get("result")
+                    errors = msg.get("errors")
+                    if result_text:
+                        error_text = str(result_text)
+                    elif isinstance(errors, list) and errors:
+                        error_text = "; ".join(str(error) for error in errors)
+                    else:
+                        error_text = str(stop_reason or "Unknown error")
                     if not rate_limit_reset:
                         m = _RATE_LIMIT_RE.search(error_text)
                         if m:

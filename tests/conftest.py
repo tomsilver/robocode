@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     # typing-only; safe across pytest versions
     from _pytest.config import Config
@@ -9,6 +11,12 @@ if TYPE_CHECKING:
 
 # Global variable that gets set with the command line --make-videos flag.
 MAKE_VIDEOS = False
+
+
+@pytest.fixture(autouse=True)
+def _isolate_claude_auth_broker(tmp_path, monkeypatch) -> None:
+    """Never let fake CLI credentials reach the operator's runtime broker."""
+    monkeypatch.setenv("ROBOCODE_CLAUDE_AUTH_DIR", str(tmp_path / "auth-broker"))
 
 
 def pytest_addoption(parser: "Parser") -> None:

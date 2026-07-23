@@ -236,6 +236,7 @@ def test_parallel_runs_resume_only_their_own_session(
     gate.mkdir()
     monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
     monkeypatch.setenv("FAKE_CLAUDE_PARALLEL_GATE", str(gate))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     monkeypatch.setattr(rate_limit.time, "sleep", lambda _s: None)
 
     configs = [
