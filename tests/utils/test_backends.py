@@ -108,6 +108,22 @@ class TestClaudeBackend:
         cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
         assert "--max-budget-usd" not in cmd
 
+    def test_build_cli_cmd_persists_session_by_default(self, tmp_path: Path) -> None:
+        """Sessions persist (resumable) and no --continue without a resume request."""
+        config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
+        assert "--no-session-persistence" not in cmd
+        assert "--continue" not in cmd
+
+    def test_build_cli_cmd_resume_adds_continue(self, tmp_path: Path) -> None:
+        """resume_previous_session appends --continue to reattach to the run."""
+        config = SandboxConfig(
+            sandbox_dir=tmp_path, prompt="hi", resume_previous_session=True
+        )
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
+        assert "--continue" in cmd
+        assert "--no-session-persistence" not in cmd
+
     def test_build_cli_cmd_includes_tools(self, tmp_path: Path) -> None:
         """All standard tools are listed in --tools."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
@@ -180,6 +196,13 @@ class TestClaudeBackend:
         m = _RATE_LIMIT_RE.search(msg)
         assert m is not None
         assert m.group(1) == "2pm"
+
+    def test_claude_rate_limit_regex_session_limit_with_minutes(self) -> None:
+        """Matches the current minute-bearing session-limit message."""
+        msg = "You've hit your session limit · resets 1:30pm (UTC)"
+        m = _RATE_LIMIT_RE.search(msg)
+        assert m is not None
+        assert m.group(1) == "1:30pm"
 
 
 # ---------------------------------------------------------------------------
@@ -524,13 +547,18 @@ class TestProviderUtils:
 class TestClaudeParseStreamMetrics:
     """ClaudeBackend.parse_stream captures generation metrics from the stream."""
 
-    def _make_mock_proc(self, stdout_lines: list[str]) -> subprocess.Popen:
+    def _make_mock_proc(
+        self,
+        stdout_lines: list[str],
+        stderr_output: str = "",
+        returncode: int = 0,
+    ) -> subprocess.Popen:
         proc = MagicMock(spec=subprocess.Popen)
         proc.stdout = iter(stdout_lines)
         proc.stderr = MagicMock()
-        proc.stderr.read.return_value = ""
-        proc.returncode = 0
-        proc.wait.return_value = 0
+        proc.stderr.read.return_value = stderr_output
+        proc.returncode = returncode
+        proc.wait.return_value = returncode
         return proc
 
     def test_parse_aggregates_across_cli_sessions(self) -> None:
@@ -661,6 +689,67 @@ class TestClaudeParseStreamMetrics:
         assert result.model_wait_time_s == pytest.approx(7.0)
         assert result.experiment_time_s == pytest.approx(5.0)
         assert result.other_tool_time_s == pytest.approx(3.0)
+
+    def test_parse_detects_output_token_limit_in_assistant_text(self) -> None:
+        """The retry signal is detected from Claude's observed API error text."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "API Error: Claude's response exceeded the 32768 "
+                                "output token maximum. To configure this behavior, "
+                                "set CLAUDE_CODE_MAX_OUTPUT_TOKENS."
+                            ),
+                        }
+                    ]
+                },
+            }
+        ]
+        proc = self._make_mock_proc([json.dumps(e) + "\n" for e in events])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.output_token_limit_hit
+        assert "output token maximum" in (result.error_text or "")
+
+    def test_parse_detects_output_token_limit_in_stderr(self) -> None:
+        """The retry signal is not lost when a result already marked an error."""
+        event = {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "result": "API request failed",
+            "total_cost_usd": 0.5,
+        }
+        proc = self._make_mock_proc(
+            [json.dumps(event) + "\n"],
+            stderr_output=("Claude's response exceeded the 32768 output token maximum"),
+            returncode=1,
+        )
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.output_token_limit_hit
+        assert result.total_cost == 0.5
+
+    def test_parse_detects_prompt_too_long_in_assistant_text(self) -> None:
+        """An oversized prompt is exposed for the compaction recovery path."""
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Prompt is too long"}]},
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.prompt_too_long_hit
 
 
 def test_tool_timing_category_identifies_environment_runs() -> None:

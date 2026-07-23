@@ -2,7 +2,14 @@
 
 from pathlib import Path
 
+import pytest
+
 from robocode.utils.backends.claude import _RATE_LIMIT_RE
+from robocode.utils.claude_auth import (
+    host_claude_config_dir,
+    sandbox_claude_config,
+    sandbox_claude_session_store,
+)
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -25,7 +32,11 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
         model_wait_time_s=8.0,
         experiment_time_s=3.0,
         other_tool_time_s=1.0,
+        output_token_limit_hit=True,
+        prompt_too_long_hit=True,
         rate_limit_retries=2,
+        output_token_retries=1,
+        prompt_too_long_retries=1,
         aborted_tokens=300,
         aborted_cost_usd=1.5,
     )
@@ -38,6 +49,10 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
     assert d["gen_other_tool_time_s"] == 1.0
     assert d["gen_total_tokens"] == 2160
     assert d["gen_rate_limit_retries"] == 2
+    assert d["gen_output_token_limit_hit"] is True
+    assert d["gen_output_token_retries"] == 1
+    assert d["gen_prompt_too_long_hit"] is True
+    assert d["gen_prompt_too_long_retries"] == 1
     assert d["gen_aborted_tokens"] == 300
     assert d["gen_aborted_cost_usd"] == 1.5
     assert all(k.startswith("gen_") for k in d)
@@ -73,6 +88,113 @@ def test_stream_result_carries_generation_metrics(tmp_path: Path) -> None:
     assert result.generation_metrics.experiment_time_s == 2.0
     assert result.generation_metrics.other_tool_time_s == 1.0
     assert result.generation_metrics.stop_reason == "end_turn"
+
+
+def test_output_token_limit_ignores_partial_output_for_retry(tmp_path: Path) -> None:
+    """An oversized response is resumed rather than evaluating partial code."""
+    (tmp_path / "approach.py").write_text("partial = True\n")
+    stream = _StreamParseResult(
+        is_error=True,
+        error_text="Claude response exceeded the output token maximum",
+        num_turns=1,
+        total_cost=0.5,
+        output_token_limit_hit=True,
+    )
+
+    result = _stream_result_to_sandbox_result(stream, tmp_path, "approach.py")
+
+    assert not result.success
+    assert result.output_file is None
+    assert result.output_token_limit_hit
+    assert result.generation_metrics is not None
+    assert result.generation_metrics.output_token_limit_hit
+
+
+def test_prompt_too_long_ignores_partial_output_for_compaction(tmp_path: Path) -> None:
+    """An oversized context is compacted rather than evaluating partial code."""
+    (tmp_path / "approach.py").write_text("partial = True\n")
+    stream = _StreamParseResult(
+        is_error=True,
+        error_text="Prompt is too long",
+        num_turns=1,
+        total_cost=0.5,
+        prompt_too_long_hit=True,
+    )
+
+    result = _stream_result_to_sandbox_result(stream, tmp_path, "approach.py")
+
+    assert not result.success
+    assert result.output_file is None
+    assert result.prompt_too_long_hit
+    assert result.generation_metrics is not None
+    assert result.generation_metrics.prompt_too_long_hit
+
+
+def test_sandbox_claude_config_copies_then_removes_creds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Host credentials cannot be modified and do not remain in run output."""
+    host = tmp_path / "host_claude"
+    host.mkdir()
+    (host / ".credentials.json").write_text("{}")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    with sandbox_claude_config(sandbox) as agent_home:
+        copied = agent_home / ".credentials.json"
+        assert copied.read_text() == "{}"
+        assert not copied.is_symlink()
+        copied.write_text('{"refreshed": true}')
+        (agent_home / "projects").mkdir()
+
+    assert (host / ".credentials.json").read_text() == "{}"
+    assert not copied.exists()
+    assert (agent_home / "projects").is_dir()
+
+
+def test_host_claude_config_dir_expands_user(monkeypatch) -> None:
+    """A literal tilde in CLAUDE_CONFIG_DIR resolves like a normal user path."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/custom-claude")
+    assert host_claude_config_dir() == Path.home() / "custom-claude"
+
+
+def test_sandbox_claude_config_rejects_symlink(tmp_path: Path) -> None:
+    """A prior agent cannot redirect credential operations outside its sandbox."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (sandbox / ".agent_home").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked Claude state"):
+        with sandbox_claude_config(sandbox):
+            pass
+
+
+def test_sandbox_claude_session_store_rejects_symlink(tmp_path: Path) -> None:
+    """Container session mounts cannot be redirected to an arbitrary host path."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (sandbox / ".agent_sessions").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="symlinked Claude state"):
+        sandbox_claude_session_store(sandbox)
+
+
+def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) -> None:
+    """No symlink when the host has no credentials file (token-env auth)."""
+    host = tmp_path / "host_claude"
+    host.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    with sandbox_claude_config(sandbox) as agent_home:
+        assert agent_home.is_dir()
+        assert not (agent_home / ".credentials.json").exists()
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:

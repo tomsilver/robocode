@@ -197,31 +197,44 @@ def test_build_cmd_auth_args_inserted(tmp_path: Path) -> None:
 def test_opencode_auth_passes_api_keys(monkeypatch) -> None:  # type: ignore
     """Provider API keys are forwarded via APPTAINERENV_ env vars, not argv."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-value")
-    args, env = _build_apptainer_auth_args("opencode")
-    assert env.get("APPTAINERENV_ANTHROPIC_API_KEY") == "sk-test-value"
-    # The secret must not appear on the command line.
-    assert not any("sk-test-value" in a for a in args)
+    with _build_apptainer_auth_args("opencode") as (args, env):
+        assert env.get("APPTAINERENV_ANTHROPIC_API_KEY") == "sk-test-value"
+        # The secret must not appear on the command line.
+        assert not any("sk-test-value" in a for a in args)
 
 
 def test_claude_auth_uses_env_token(monkeypatch) -> None:  # type: ignore
     """CLAUDE_CODE_OAUTH_TOKEN is forwarded via APPTAINERENV_, never on argv."""
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
-    args, env = _build_apptainer_auth_args("claude")
-    assert env.get("APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test"
-    # The token must not appear on the command line (visible via `ps`).
-    assert not any("sk-ant-oat01-test" in a for a in args)
-    assert not any("--bind" in a for a in args)
+    with _build_apptainer_auth_args("claude") as (args, env):
+        assert env.get("APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test"
+        # The token must not appear on the command line (visible via `ps`).
+        assert not any("sk-ant-oat01-test" in a for a in args)
+        assert not any("--bind" in a for a in args)
 
 
-def test_claude_auth_falls_back_to_bind(monkeypatch) -> None:  # type: ignore
-    """When no token is found, falls back to bind-mounting ~/.claude."""
+def test_claude_auth_binds_credentials_only(  # type: ignore
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The fallback mount is a throwaway credentials-only copy."""
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     # Force the resolver to report no token (avoid Keychain hit on dev macOS).
     monkeypatch.setattr(
         "robocode.utils.apptainer_sandbox._get_claude_oauth_token",
         lambda: None,
     )
-    args, env = _build_apptainer_auth_args("claude")
-    assert not env  # no env vars when bind is used
-    assert "--bind" in args
-    assert any(arg.endswith(":/home/node/.claude") for arg in args)
+    host = tmp_path / ".claude"
+    (host / "projects").mkdir(parents=True)
+    (host / "projects" / "past.jsonl").write_text("past")
+    (host / ".credentials.json").write_text("credentials")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+
+    with _build_apptainer_auth_args("claude") as (args, env):
+        assert not env
+        bind = next(arg for arg in args if arg.endswith(":/home/node/.claude"))
+        mounted = Path(bind.split(":", 1)[0])
+        assert mounted != host
+        assert [path.name for path in mounted.iterdir()] == [".credentials.json"]
+        copied = mounted
+
+    assert not copied.exists()
