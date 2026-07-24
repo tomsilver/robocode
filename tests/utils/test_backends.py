@@ -17,7 +17,11 @@ from robocode.utils.backends import (
     firewall_domains_for_provider,
     provider_from_model,
 )
-from robocode.utils.backends.claude import _RATE_LIMIT_RE, ClaudeBackend
+from robocode.utils.backends.claude import (
+    _RATE_LIMIT_RE,
+    ClaudeBackend,
+    _tool_timing_category,
+)
 from robocode.utils.backends.opencode import OpenCodeBackend
 from robocode.utils.sandbox import SandboxConfig
 
@@ -649,6 +653,59 @@ class TestClaudeParseStreamMetrics:
         assert result.error_text == "Reached maximum budget ($20)"
         assert result.stop_reason == "error_max_budget_usd"
 
+    def test_parse_records_model_experiment_and_other_tool_time(self) -> None:
+        """Matched tool results partition stream wall time by activity."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "id": "exp",
+                            "type": "tool_use",
+                            "name": "Bash",
+                            "input": {"command": "python test_approach.py"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "exp"}]},
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "id": "read",
+                            "type": "tool_use",
+                            "name": "Read",
+                            "input": {"file_path": "approach.py"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": "read"}]
+                },
+            },
+            {"type": "result", "is_error": False},
+        ]
+        proc = self._make_mock_proc([json.dumps(event) + "\n" for event in events])
+
+        with patch(
+            "robocode.utils.backends.claude.time.monotonic",
+            side_effect=[0.0, 1.0, 6.0, 8.0, 11.0, 15.0],
+        ):
+            result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.model_wait_time_s == pytest.approx(7.0)
+        assert result.experiment_time_s == pytest.approx(5.0)
+        assert result.other_tool_time_s == pytest.approx(3.0)
+
     def test_parse_detects_output_token_limit_in_assistant_text(self) -> None:
         """The retry signal is detected from Claude's observed API error text."""
         events = [
@@ -709,6 +766,28 @@ class TestClaudeParseStreamMetrics:
 
         assert result.is_error
         assert result.prompt_too_long_hit
+
+
+def test_tool_timing_category_identifies_environment_runs() -> None:
+    """Only policy/environment execution is classified as experiment time."""
+    assert (
+        _tool_timing_category(
+            {
+                "name": "Bash",
+                "input": {"command": "python test_approach.py"},
+            }
+        )
+        == "experiment"
+    )
+    assert (
+        _tool_timing_category(
+            {
+                "name": "Bash",
+                "input": {"command": "python -c 'import pkg; print(pkg.__file__)'"},
+            }
+        )
+        == "other"
+    )
 
 
 # ---------------------------------------------------------------------------
