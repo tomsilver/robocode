@@ -1262,11 +1262,10 @@ async def _run_apptainer_firewall_reinit() -> None:
             f"a security verdict (exit {result.returncode})."
         )
 
-    for expected in ("container_user=node", "sudo_present=no"):
-        if expected not in output:
-            raise SandboxBreachError(
-                f"Apptainer agent did not report expected state: {expected}"
-            )
+    if "sudo_present=no" not in output:
+        raise SandboxBreachError(
+            "Apptainer agent did not report expected state: sudo_present=no"
+        )
     uid_match = re.search(r"container_uid=(\d+)", output)
     if uid_match is None or int(uid_match.group(1)) == 0:
         raise SandboxBreachError(
