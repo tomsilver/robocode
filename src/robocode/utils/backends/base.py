@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TextIO
 
 from robocode.mcp import MCP_HTTP_PORT
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
@@ -65,5 +65,18 @@ class AgentBackend(Protocol):
         self,
         proc: subprocess.Popen[str],
         stream_log_path: Path | None = None,
+        stderr_file: TextIO | None = None,
     ) -> _StreamParseResult:
         """Parse the CLI's streaming output and return a unified result."""
+
+
+def read_stderr(
+    proc: subprocess.Popen[str],
+    stderr_file: TextIO | None = None,
+) -> str:
+    """Read stderr after process exit from a file-backed or legacy PIPE stream."""
+    if stderr_file is not None:
+        stderr_file.seek(0)
+        return stderr_file.read()
+    assert proc.stderr is not None
+    return proc.stderr.read()

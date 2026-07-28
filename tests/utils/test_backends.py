@@ -3,6 +3,8 @@
 import json
 import os
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -710,6 +712,29 @@ class TestClaudeParseStreamMetrics:
         assert result.is_error
         assert result.prompt_too_long_hit
 
+    def test_file_backed_stderr_cannot_deadlock(self) -> None:
+        """Large stderr output cannot fill a PIPE while stdout is being parsed."""
+        child = (
+            "import json, sys\n"
+            "sys.stderr.write('x' * 1_000_000)\n"
+            "sys.stderr.flush()\n"
+            "print(json.dumps({'type': 'result', 'subtype': 'success', "
+            "'is_error': False}))\n"
+        )
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", child],
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+            )
+            result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(
+                proc, stderr_file=stderr_file
+            )
+
+        assert not result.is_error
+        assert proc.returncode == 0
+
 
 # ---------------------------------------------------------------------------
 # OpenCode stream parser
@@ -862,6 +887,28 @@ class TestOpenCodeParseStream:
         assert result.is_error
         assert result.error_text is not None
         assert "exited with code 1" in result.error_text
+
+    def test_file_backed_stderr_cannot_deadlock(self) -> None:
+        """Large debug stderr cannot block OpenCode's JSON stdout stream."""
+        child = (
+            "import json, sys\n"
+            "sys.stderr.write('x' * 1_000_000)\n"
+            "sys.stderr.flush()\n"
+            "print(json.dumps({'type': 'text', 'part': {'text': 'done'}}))\n"
+        )
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", child],
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+            )
+            result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(
+                proc, stderr_file=stderr_file
+            )
+
+        assert not result.is_error
+        assert proc.returncode == 0
 
     def test_parse_multiple_steps_accumulate_cost(self) -> None:
         """Cost is summed across multiple step_finish events."""
