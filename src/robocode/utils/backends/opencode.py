@@ -21,12 +21,13 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import TextIO
 
 from omegaconf import DictConfig
 
 from robocode.mcp import MCP_HTTP_PORT, setup_mcp_config
 from robocode.utils.backends.agent_files import build_agents_md
-from robocode.utils.backends.base import AgentBackend
+from robocode.utils.backends.base import AgentBackend, read_stderr
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
@@ -212,6 +213,7 @@ class OpenCodeBackend(AgentBackend):
         self,
         proc: subprocess.Popen[str],
         stream_log_path: Path | None = None,
+        stderr_file: TextIO | None = None,
     ) -> _StreamParseResult:
         """Parse OpenCode's ``--format json`` output.
 
@@ -329,8 +331,7 @@ class OpenCodeBackend(AgentBackend):
 
         # Read stderr: contains --print-logs debug output and possibly
         # error JSON events. Write to a separate log file.
-        assert proc.stderr is not None
-        stderr_output = proc.stderr.read()
+        stderr_output = read_stderr(proc, stderr_file)
         if stderr_output.strip():
             # Write debug logs to a separate file (not stream.jsonl).
             if stream_log_path is not None:

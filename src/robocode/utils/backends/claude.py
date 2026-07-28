@@ -12,7 +12,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from omegaconf import DictConfig
 
@@ -24,7 +24,7 @@ from robocode.mcp import (
     setup_mcp_config,
 )
 from robocode.utils.backends.agent_files import build_claude_md
-from robocode.utils.backends.base import AgentBackend
+from robocode.utils.backends.base import AgentBackend, read_stderr
 from robocode.utils.backends.ollama_server import ensure_ollama
 from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
 
@@ -217,6 +217,7 @@ class ClaudeBackend(AgentBackend):
         self,
         proc: subprocess.Popen[str],
         stream_log_path: Path | None = None,
+        stderr_file: TextIO | None = None,
     ) -> _StreamParseResult:
         """Parse ``stream-json`` stdout from a Claude CLI process."""
         is_error = False
@@ -424,8 +425,7 @@ class ClaudeBackend(AgentBackend):
         if stream_log_fh is not None:
             stream_log_fh.close()
 
-        assert proc.stderr is not None
-        stderr_output = proc.stderr.read()
+        stderr_output = read_stderr(proc, stderr_file)
         if not rate_limit_reset and stderr_output:
             m = _RATE_LIMIT_RE.search(stderr_output)
             if m:

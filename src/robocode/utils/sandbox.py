@@ -24,6 +24,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -384,21 +385,23 @@ async def run_agent_in_sandbox(
         with claude_config as config_dir:
             if config_dir is not None:
                 env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-            proc = subprocess.Popen(  # pylint: disable=consider-using-with
-                cmd,
-                cwd=sandbox_abs,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-            )
+            with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+                proc = subprocess.Popen(  # pylint: disable=consider-using-with
+                    cmd,
+                    cwd=sandbox_abs,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_file,
+                    text=True,
+                    start_new_session=True,
+                )
 
-            stream = backend.parse_stream(
-                proc,
-                stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
-            )
+                stream = backend.parse_stream(
+                    proc,
+                    stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+                    stderr_file=stderr_file,
+                )
     finally:
         if server_proc is not None:
             server_proc.terminate()

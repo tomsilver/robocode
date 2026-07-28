@@ -43,7 +43,8 @@ RUN if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
 
 # ---------------------------------------------------------------------------
 # System packages
-#   - git, sudo, curl: basic dev tools
+#   - git, curl: basic dev tools
+#   - util-linux: setpriv for the root-to-node privilege transition
 #   - jq, dnsutils (dig), aggregate, iptables, ipset, iproute2: firewall
 #   - python3.11, python3.11-venv, python3.11-dev: Python runtime
 #   - libegl1, libegl-mesa0, libgl1, libgl1-mesa-dri, libgles2, libglvnd0,
@@ -53,8 +54,8 @@ RUN if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
-        sudo \
         curl \
+        util-linux \
         jq \
         iptables \
         ipset \
@@ -96,14 +97,11 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g opencode-ai@${OPENCODE_VERSION}
 
 # ---------------------------------------------------------------------------
-# Firewall script — node user gets passwordless sudo for this one script only
-# (mirrors the official devcontainer setup)
+# Firewall script — the root entrypoint runs this before permanently dropping
+# to the unprivileged node user.
 # ---------------------------------------------------------------------------
 COPY docker/init-firewall.sh /usr/local/bin/init-firewall.sh
-RUN chmod +x /usr/local/bin/init-firewall.sh \
-    && echo "node ALL=(root) NOPASSWD:SETENV: /usr/local/bin/init-firewall.sh" \
-       > /etc/sudoers.d/node-firewall \
-    && chmod 0440 /etc/sudoers.d/node-firewall
+RUN chmod 0755 /usr/local/bin/init-firewall.sh
 
 # ---------------------------------------------------------------------------
 # Config/data directories for the node user
@@ -141,7 +139,7 @@ RUN uv sync --frozen --python python3.11 \
 RUN chown -R node:node /robocode
 
 # ---------------------------------------------------------------------------
-# Entrypoint: init firewall → uv sync → exec claude
+# Entrypoint: uv sync → init firewall → drop privileges → exec agent
 # ---------------------------------------------------------------------------
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -153,7 +151,9 @@ ENV DEVCONTAINER=true
 ENV CLAUDE_CONFIG_DIR=/home/node/.claude
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 
-USER node
+# The entrypoint needs NET_ADMIN while it initializes iptables. It permanently
+# drops to node (including all capability sets) before executing agent code.
+USER root
 WORKDIR /sandbox
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

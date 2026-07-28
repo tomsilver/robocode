@@ -22,7 +22,7 @@ dependencies = [
    "types-shapely",
    "scipy-stubs",
    "imageio",
-   "mcp[cli]",
+   "mcp[cli]>=1.27,<2",
    "anthropic",
    "openai",
 ]

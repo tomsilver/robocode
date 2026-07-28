@@ -649,19 +649,21 @@ async def run_agent_in_docker_sandbox(
         logger.info("Prompt:\n%s", config.prompt)
 
         wall_start = time.monotonic()
-        proc = subprocess.Popen(  # pylint: disable=consider-using-with
-            docker_cmd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(  # pylint: disable=consider-using-with
+                docker_cmd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+            )
 
-        stream = backend.parse_stream(
-            proc,
-            stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
-        )
+            stream = backend.parse_stream(
+                proc,
+                stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+                stderr_file=stderr_file,
+            )
         wall_time_s = time.monotonic() - wall_start
 
         logger.info(
