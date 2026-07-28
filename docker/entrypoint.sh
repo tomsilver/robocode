@@ -30,13 +30,13 @@ if [ "$(id -u)" -eq 0 ]; then
     HOME=/home/node USER=node LOGNAME=node \
         "${run_as_node[@]}" uv sync --frozen --python python3.11 "${uv_extra_args[@]}"
 else
-    # Unprivileged Apptainer installations may not present fakeroot as UID 0.
+    # Unprivileged Apptainer runs preserve the host UID.
     uv sync --frozen --python python3.11 "${uv_extra_args[@]}"
 fi
 cd /sandbox
 
-# Skipped under apptainer (--fakeroot doesn't grant real CAP_NET_ADMIN for iptables),
-# in which case ROBOCODE_SKIP_FIREWALL=1 is set by apptainer_sandbox.py.
+# Skipped under unprivileged Apptainer, which cannot grant CAP_NET_ADMIN;
+# ROBOCODE_SKIP_FIREWALL=1 is set by apptainer_sandbox.py.
 if [ "${ROBOCODE_SKIP_FIREWALL:-0}" = "1" ]; then
     echo "entrypoint: ROBOCODE_SKIP_FIREWALL=1, skipping firewall init" >&2
 else
