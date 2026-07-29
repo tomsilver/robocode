@@ -149,6 +149,7 @@ def test_description_is_object_centric() -> None:
     assert "## Example Usage" in full
     assert "## Example Usage" not in blackbox
     assert full.startswith(blackbox)
+    assert 'bilevel_env_name="obstruction2d"' in full
 
 
 # Every 2D family. ``one_to_one`` marks families whose count-defining objects are named
