@@ -381,6 +381,11 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         )
         if not include_access:
             return description
+        bilevel_example_arg = (
+            f'    bilevel_env_name="{self.bilevel_env_name}",\n'
+            if self.bilevel_env_name is not None
+            else ""
+        )
         return description + (
             "## Example Usage\n\n"
             "```python\n"
@@ -390,6 +395,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             f'    constant_object_env_path="{self._env_path}",\n'
             f'    count_kwarg="{self._count_kwarg}",\n'
             f'    count_object_prefix="{self._count_object_prefix}",\n'
+            f"{bilevel_example_arg}"
             "    # Counts an unpinned reset draws from; use whichever you want to\n"
             "    # develop against.\n"
             "    design_counts=[1],\n"

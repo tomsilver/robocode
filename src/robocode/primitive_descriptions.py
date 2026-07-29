@@ -16,7 +16,12 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
     "check_action_collision": (
         "`check_action_collision(state, action) -> bool` returns True when "
         "taking `action` in `state` would cause a collision (i.e. the agent "
-        "stays in place)."
+        "stays in place). The callable is supplied in the `primitives` constructor "
+        "argument; it is not an `env.primitives` attribute. In a standalone test "
+        "script, recreate the injected callable with "
+        "`from functools import partial; from primitives.check_action_collision "
+        "import check_action_collision as raw_check; check_action_collision = "
+        "partial(raw_check, env)`."
     ),
     "csp": (
         "`csp` is a module providing a constraint satisfaction problem (CSP) "
@@ -64,7 +69,10 @@ PRIMITIVE_DESCRIPTIONS: dict[str, str] = {
         "`extend_fn(s1, s2) -> Iterable[state]` interpolates between states, "
         "`collision_fn(state) -> bool` returns True if state is in collision, "
         "`distance_fn(s1, s2) -> float` returns distance between states, "
-        "`rng` is a `np.random.Generator`."
+        "`rng` is a `np.random.Generator`. The class is supplied as "
+        "`primitives['BiRRT']`; it is not an `env.primitives` attribute. In a "
+        "standalone test script, import the same granted class with "
+        "`from primitives.motion_planning import BiRRT`."
     ),
     "bilevel_models": (
         "`primitives['bilevel_models']` gives you the `SesameModels` bundle for this "

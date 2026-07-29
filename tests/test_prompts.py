@@ -7,12 +7,23 @@ from robocode.mcp import (
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
 )
+from robocode.primitive_descriptions import PRIMITIVE_DESCRIPTIONS
 from robocode.utils.backends import CLAUDE_PROMPT_SUFFIX, OPENCODE_PROMPT_SUFFIX
 
 # ---------------------------------------------------------------------------
 # Composed intros: the shared blackbox-discovery clause is one fragment, not a
 # per-approach copy.
 # ---------------------------------------------------------------------------
+
+
+def test_injected_primitive_descriptions_explain_standalone_tests():
+    """Agents should not mistake missing env attributes for unavailable primitives."""
+    collision = PRIMITIVE_DESCRIPTIONS["check_action_collision"]
+    birrt = PRIMITIVE_DESCRIPTIONS["BiRRT"]
+    assert "not an `env.primitives` attribute" in collision
+    assert "from primitives.check_action_collision" in collision
+    assert "not an `env.primitives` attribute" in birrt
+    assert "from primitives.motion_planning import BiRRT" in birrt
 
 
 def test_blackbox_discovery_clause_shared_between_intros():
