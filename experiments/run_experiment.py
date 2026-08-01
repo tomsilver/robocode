@@ -107,7 +107,8 @@ def _main(cfg: DictConfig) -> float:
     )
     approach = approach_ctor(primitives=primitives)
 
-    task_rng = np.random.default_rng(cfg.seed)
+    eval_seed = cfg.seed if cfg.get("eval_seed") is None else cfg.eval_seed
+    task_rng = np.random.default_rng(eval_seed)
     num_eval = cfg.num_eval_tasks
     eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
 
@@ -261,6 +262,7 @@ def _main(cfg: DictConfig) -> float:
     gen_metrics = getattr(approach, "generation_metrics", None)
     if gen_metrics is not None:
         results.update(gen_metrics.to_dict())
+    results["eval_seed"] = eval_seed
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

@@ -4,6 +4,10 @@ defaults:
   - _self_
 
 seed: 42
+# Seed for the evaluation task suite. Unset, it follows `seed`, so every run is
+# scored on its own draw. Pinning it makes separately-trained policies face an
+# identical suite, which is what cross-evaluation between conditions requires.
+eval_seed: null
 max_steps: 1000
 num_eval_tasks: 100
 # Per-instance eval wall-clock budget (seconds), shared by every approach.

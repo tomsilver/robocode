@@ -140,15 +140,15 @@ def _find_repo_root() -> Path:
 def _copy_kindergarden_without_tests(
     kindergarden: Path, dest: Path, *, blackbox: bool = False
 ) -> None:
-    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``.
+    """Copy ``kindergarden`` to *dest*, skipping ``tests/``, ``docs/`` and ``demos/``.
 
-    With *blackbox*, also skips ``kinder/envs/`` (all environment dynamics,
-    rewards, and scene generation) and ``demos/`` (recorded solution
-    trajectories) so the agent cannot read them. The package skeleton
-    (pyproject.toml, ``kinder/core.py`` etc.) stays so the entrypoint's
+    ``demos/`` holds recorded solution trajectories, which the author must not
+    read in any mode. With *blackbox*, ``kinder/envs/`` (all environment
+    dynamics, rewards, and scene generation) is skipped too. The package
+    skeleton (pyproject.toml, ``kinder/core.py`` etc.) stays so the entrypoint's
     ``uv sync --frozen`` still succeeds.
     """
-    skip = ("tests", "docs", "envs", "demos") if blackbox else ("tests", "docs")
+    skip = ("tests", "docs", "demos") + (("envs",) if blackbox else ())
     shutil.copytree(
         kindergarden,
         dest,
