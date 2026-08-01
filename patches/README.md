@@ -1,20 +1,32 @@
 # Environment patches
 
-Reset-distribution variants of kinder environments, kept as patches because the
-`third-party/kindergarden` remotes are not writable from here. Each patch is a
-one-field change to a spawn range: the sampler code is untouched, so a run under a
-patch differs from a standard run only in where objects are placed.
+Reset-distribution variants of kinder environments. Each patch is a one-field change
+to a spawn range: the sampler code is untouched, so a run under a patch differs from
+a standard run only in where objects are placed.
 
-Apply and revert:
+| patch | branch | effect |
+| --- | --- | --- |
+| `kindergarden-stickbutton-reset-band.patch` | [`exp/sb-reset-a`](https://github.com/merlerm/kindergarden/tree/exp/sb-reset-a) | StickButton2D stick spawns in `[3.435, 3.450]` instead of `[0.0, 3.450]` |
+
+The branch is the canonical form; the patch is kept alongside it so the change is
+reproducible without adding a remote. The submodule pointer is deliberately **not**
+committed on the robocode side, so a plain checkout still resolves the submodule
+against its configured remote.
+
+Fetch the branch:
 
 ```bash
-git -C third-party/kindergarden am ../../patches/<name>.patch   # or: apply
-git -C third-party/kindergarden checkout <base-sha>             # to revert
+git -C third-party/kindergarden remote add fork https://github.com/merlerm/kindergarden
+git -C third-party/kindergarden fetch fork exp/sb-reset-a
+git -C third-party/kindergarden checkout exp/sb-reset-a
 ```
 
-| patch | effect |
-| --- | --- |
-| `kindergarden-stickbutton-reset-band.patch` | StickButton2D stick spawns in `[3.435, 3.450]` instead of `[0.0, 3.450]` |
+Or apply the patch to the current checkout, and revert by returning to the base sha:
+
+```bash
+git -C third-party/kindergarden am ../../patches/<name>.patch
+git -C third-party/kindergarden checkout <base-sha>
+```
 
 ## Why 3.435
 
