@@ -91,6 +91,7 @@ def run_episode(
     max_steps: int,
     render: bool = False,
     count: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
     """Run a single evaluation episode; return metrics, frames, final state.
 
@@ -124,6 +125,8 @@ def run_episode(
         approach.update(state, float(reward), terminated or truncated, info)
         if render:
             _capture()
+        if progress_callback is not None:
+            progress_callback(num_steps, max_steps)
         if terminated or truncated:
             break
 

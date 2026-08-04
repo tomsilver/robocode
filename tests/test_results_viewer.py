@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
+import threading
 from pathlib import Path
 
 from experiments import results_viewer as viewer
@@ -22,6 +24,7 @@ def _run(path: Path) -> viewer.RunInfo:
         path=path,
         approach="agentic",
         environment="motion2d_easy",
+        primitives="none",
         seed=7,
         budget=5.0,
         num_eval_tasks=3,
@@ -100,6 +103,57 @@ def test_snapshots_include_effort_and_replay_progress(tmp_path: Path) -> None:
     assert snapshots[1]["evaluation"]["failures"][0]["outcome"] == "crashed"
 
 
+def test_concurrent_snapshot_requests_share_git_work(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The two history requests made by a run page build snapshots only once."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    _git(sandbox, "init")
+    _git(sandbox, "config", "user.email", "test@example.com")
+    _git(sandbox, "config", "user.name", "Test")
+    (sandbox / "approach.py").write_text("x = 1\n")
+    _git(sandbox, "add", "approach.py")
+    _git(sandbox, "commit", "-m", "first idea")
+
+    calls = 0
+    original = viewer._git
+
+    def counted_git(path: Path, *args: str):
+        nonlocal calls
+        calls += 1
+        return original(path, *args)
+
+    monkeypatch.setattr(viewer, "_git", counted_git)
+    run = _run(tmp_path)
+    barrier = threading.Barrier(3)
+    results = []
+
+    def load() -> None:
+        barrier.wait()
+        results.append(viewer._snapshots(run))
+
+    threads = [threading.Thread(target=load) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert len(results) == 2
+    assert calls == 3  # log, cat-file, and numstat for one shared build
+
+
+def test_replay_uses_local_source_and_hydra_add_or_override(tmp_path: Path) -> None:
+    """Replays use this checkout and support configs without load/output fields."""
+    from robocode.utils.episode import run_episode
+
+    assert Path(inspect.getfile(run_episode)).is_relative_to(viewer.SRC_ROOT)
+    overrides = viewer._replay_overrides(_run(tmp_path), "/tmp/load", "/tmp/out")
+    assert "++approach.load_dir=/tmp/load" in overrides
+    assert "++approach.output_dir=/tmp/out" in overrides
+
+
 def test_run_detail_exposes_reproducible_episode_seeds(tmp_path: Path) -> None:
     """Run details reconstruct the exact deterministic evaluation seeds."""
     (tmp_path / "results.json").write_text(
@@ -117,7 +171,10 @@ def test_run_detail_exposes_reproducible_episode_seeds(tmp_path: Path) -> None:
     detail = viewer._run_detail(_run(tmp_path))
 
     assert len(detail["episodes"]) == 2
-    assert all(isinstance(e["seed"], int) for e in detail["episodes"])
+    # Seeds are strings: they run to 2**63 and a JSON number loses exactness
+    # past 2**53 once the browser parses it.
+    assert all(isinstance(e["seed"], str) for e in detail["episodes"])
+    assert all(int(e["seed"]) >= 0 for e in detail["episodes"])
     assert detail["episodes"][0]["seed"] != detail["episodes"][1]["seed"]
 
     final = viewer._final_evaluation(_run(tmp_path))

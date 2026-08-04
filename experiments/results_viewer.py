@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import queue
 import re
@@ -29,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +39,12 @@ from urllib.parse import parse_qs, urlparse
 
 # Repo root (this file lives in <repo>/experiments/).
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# The viewer is often launched with a virtualenv from the experiment checkout it
+# is inspecting. Prefer this checkout's implementation while reusing that env's
+# installed third-party dependencies.
+SRC_ROOT = REPO_ROOT / "src"
+if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 # --------------------------------------------------------------------------- #
 # Discovery
@@ -51,10 +59,23 @@ class RunInfo:
     path: Path
     approach: str
     environment: str
+    primitives: str  # coarse bucket: "none", "low level", or "bilevel"
     seed: Optional[int]
     budget: Optional[float]
     num_eval_tasks: int
     per_instance: bool
+    # Cells whose suite or policy is not the run's own synthesis record these in an
+    # env_variant.json marker next to results.json (see the reset-distribution
+    # campaigns, where band and standard cells record byte-identical env configs).
+    policy_source: Optional[str] = None  # scan-root-relative dir holding sandbox/
+    eval_seed: Optional[int] = None  # pinned eval-suite seed; None follows `seed`
+    explicit_seeds: bool = False  # per_episode records carry their own seeds
+    # The environment group whose sampler the policy saw during synthesis.
+    # `environment` names the evaluated suite; the two differ in cross-eval cells.
+    trained_environment: str = ""
+    # Conditioned instance slice this cell was scored on (e.g. "high-button
+    # mid-stick"); empty for the plain uniform suite. Display-only label.
+    slice: str = ""
 
 
 @dataclass
@@ -63,6 +84,7 @@ class _Scan:
 
     root: Path = REPO_ROOT
     exclude_dirs: set[str] = field(default_factory=set)  # extra dirs to prune
+    tag: str = ""  # "<root name>:<port>", identifies this instance in copied refs
 
 
 SCAN = _Scan()
@@ -123,6 +145,72 @@ def _primitives(hydra_dir: Path) -> str:
     return "[]"
 
 
+def _primitives_category(value: str) -> str:
+    """Group a primitives override value into the viewer's coarse filter buckets.
+
+    ``none`` for an empty set, ``bilevel`` when the bilevel planning primitive is
+    granted, and ``low level`` for any other geometric/controller primitive set.
+    """
+    names = [n for n in re.split(r"[\[\],\s]+", value) if n]
+    if not names:
+        return "none"
+    if any("bilevel" in n for n in names):
+        return "bilevel"
+    return "low level"
+
+
+def _variant_marker(run_dir: Path) -> dict[str, Any]:
+    """Optional env_variant.json next to results.json, labelling special cells.
+
+    Records the environment group whose sampler produced the recorded suite, the
+    run dir holding the evaluated policy for re-eval cells, and, for cells without
+    their own .hydra, enough (approach/primitives/eval_seed) to rebuild a replay.
+    """
+    f = run_dir / "env_variant.json"
+    if not f.exists():
+        return {}
+    try:
+        marker = json.loads(f.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return marker if isinstance(marker, dict) else {}
+
+
+def _policy_dir(run: RunInfo) -> Path:
+    """The run dir whose sandbox/ holds the policy this run evaluated."""
+    return SCAN.root / run.policy_source if run.policy_source else run.path
+
+
+def _environment_of_dir(run_dir: Path) -> Optional[str]:
+    """The environment group a run dir's own records name, marker first."""
+    marker = _variant_marker(run_dir)
+    if marker.get("environment"):
+        return str(marker["environment"])
+    hydra_dir = run_dir / ".hydra"
+    ov = _parse_overrides(hydra_dir)
+    return ov.get("environment") or _choice(hydra_dir, "environment")
+
+
+def _replay_primitives(run: RunInfo) -> str:
+    """The primitives override a replay must rebuild for this run's policy."""
+    marker = _variant_marker(run.path)
+    if isinstance(marker.get("primitives"), str):
+        return marker["primitives"]
+    if (run.path / ".hydra").is_dir():
+        return _primitives(run.path / ".hydra")
+    if run.policy_source:
+        return _primitives(_policy_dir(run) / ".hydra")
+    return "[]"
+
+
+# Environment pairs that sample the same task family from different spawn ranges;
+# an episode of one can be replayed under the other for a matched comparison.
+_ENV_COUNTERPART = {
+    "stickbutton2d_generalized": "stickbutton2d_generalized_a",
+    "stickbutton2d_generalized_a": "stickbutton2d_generalized",
+}
+
+
 def _configured_object_counts(run: RunInfo) -> dict[str, list[int]]:
     """Read variable-object-count train/eval domains from resolved Hydra YAML.
 
@@ -179,32 +267,59 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
     for results in _find_results(root):
         run_dir = results.parent
         hydra_dir = run_dir / ".hydra"
-        if not hydra_dir.is_dir():
+        marker = _variant_marker(run_dir)
+        if not hydra_dir.is_dir() and not marker:
             continue  # re-eval render dirs have results.json but no .hydra/
         ov = _parse_overrides(hydra_dir)
-        if "approach.load_dir" in ov:
-            continue  # a re-eval / render pass, not a real generation run
+        if "approach.load_dir" in ov and not marker:
+            continue  # an unlabelled re-eval / render pass, not a generation run
         run_id = str(run_dir.relative_to(root))
+        try:
+            r = json.loads(results.read_text())
+        except (OSError, json.JSONDecodeError):
+            r = {}
+        per = r.get("per_episode") or []
         budget = ov.get("approach.max_budget_usd")
         if budget is None:
             m = re.search(r"budget_(\d+)", run_id)
             budget = m.group(1) if m else None
         seed = ov.get("seed")
         m2 = re.search(r"[/_]s(\d+)", run_id)
-        approach = ov.get("approach") or _choice(hydra_dir, "approach") or "?"
+        approach = (
+            marker.get("approach")
+            or ov.get("approach")
+            or _choice(hydra_dir, "approach")
+            or "?"
+        )
         num_eval = 100
         cfg = hydra_dir / "config.yaml"
         if cfg.exists():
             mm = re.search(r"^num_eval_tasks:\s*(\d+)", cfg.read_text(), re.MULTILINE)
             if mm:
                 num_eval = int(mm.group(1))
+        elif per:
+            num_eval = len(per)
+        eval_seed = marker.get("eval_seed", r.get("eval_seed"))
+        primitives_value = (
+            marker["primitives"]
+            if isinstance(marker.get("primitives"), str)
+            else _primitives(hydra_dir)
+        )
+        environment = (
+            marker.get("environment")
+            or ov.get("environment")
+            or _choice(hydra_dir, "environment")
+            or "?"
+        )
+        trained = marker.get("trained_environment")
+        if not trained and marker.get("policy_source"):
+            trained = _environment_of_dir(root / marker["policy_source"])
         runs[run_id] = RunInfo(
             run_id=run_id,
             path=run_dir,
             approach=approach,
-            environment=ov.get("environment")
-            or _choice(hydra_dir, "environment")
-            or "?",
+            environment=environment,
+            primitives=_primitives_category(primitives_value),
             seed=(
                 int(seed)
                 if seed and seed.isdigit()
@@ -216,7 +331,18 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
                 else None
             ),
             num_eval_tasks=num_eval,
-            per_instance=("per_instance" in approach or "best_of_k" in approach),
+            # The bilevel planner is also evaluated independently per held-out
+            # seed (it has no train-once policy to replay).
+            per_instance=(
+                "per_instance" in approach
+                or "best_of_k" in approach
+                or "bilevel_planning" in approach
+            ),
+            policy_source=marker.get("policy_source"),
+            eval_seed=int(eval_seed) if eval_seed is not None else None,
+            explicit_seeds=bool(per and isinstance(per[0], dict) and "seed" in per[0]),
+            trained_environment=trained or environment,
+            slice=str(marker.get("slice", "")),
         )
     return runs
 
@@ -287,6 +413,7 @@ def _summary(run: RunInfo) -> dict[str, Any]:
         "run_id": run.run_id,
         "approach": run.approach,
         "environment": run.environment,
+        "primitives": run.primitives,
         "seed": run.seed,
         "budget": run.budget,
         "status": _status(run),
@@ -299,6 +426,10 @@ def _summary(run: RunInfo) -> dict[str, Any]:
         "num_crashed_episodes": r.get("num_crashed_episodes"),
         "largest_count_all_solved": r.get("largest_count_all_solved"),
         "num_eval_tasks": run.num_eval_tasks,
+        "policy_source": run.policy_source,
+        "trained_environment": run.trained_environment,
+        "slice": run.slice or None,
+        "environment_counterpart": _ENV_COUNTERPART.get(run.environment),
         "has_history": (run.path / "sandbox" / ".git").is_dir()
         and not run.per_instance,
     }
@@ -384,22 +515,41 @@ def _run_detail(run: RunInfo) -> dict[str, Any]:
     r = _results(run)
     per = r.get("per_episode", [])
     eval_seeds = _eval_seeds(run)
+    counterpart = _ENV_COUNTERPART.get(run.environment)
     episodes = []
     for i, e in enumerate(per):
+        gif_path = _eval_gif_path(run, i)
         episodes.append(
             {
                 "i": i,
-                "seed": eval_seeds[i] if i < len(eval_seeds) else None,
+                # Sent as a string: eval seeds run to 2**63, and JSON numbers
+                # lose exactness past 2**53 once the browser parses them.
+                "seed": str(eval_seeds[i]) if i < len(eval_seeds) else None,
                 "object_count": e.get("object_count"),
                 "num_steps": e.get("num_steps"),
                 "total_reward": e.get("total_reward"),
                 "outcome": _episode_outcome(e),
-                "has_gif": _eval_gif_path(run, i) is not None,
+                "has_gif": gif_path is not None,
+                "gif_path": str(gif_path) if gif_path is not None else None,
+                # Planner runs record these; an episode with no plan executed no
+                # action, so its GIF is a single frame and reads as a stuck render.
+                "plan_found": e.get("plan_found"),
+                "planning_time": e.get("planning_time"),
+                "gif_preview": (
+                    gif_path is not None
+                    and gif_path.with_suffix(gif_path.suffix + ".preview").exists()
+                ),
+                "xenv_has_gif": bool(
+                    counterpart
+                    and _eval_gif_path(run, i, environment=counterpart) is not None
+                ),
             }
         )
     env_desc = run.path / "env_description.md"
     logs = [
-        n for n in ("run_experiment.log", "env_config.json") if (run.path / n).exists()
+        n
+        for n in ("run_experiment.log", "env_config.json", "env_variant.json")
+        if (run.path / n).exists()
     ] + [
         f"sandbox/{n}"
         for n in ("agent_log.txt", "CLAUDE.md", "approach.py")
@@ -411,6 +561,8 @@ def _run_detail(run: RunInfo) -> dict[str, Any]:
         "metrics": metrics,
         "generation_time_breakdown": _generation_time_breakdown(r),
         "episodes": episodes,
+        "viewer": SCAN.tag,
+        "run_path": str(run.path),
         "env_description": env_desc.read_text() if env_desc.exists() else None,
         "logs": logs,
         "has_history": _summary(run)["has_history"],
@@ -427,8 +579,17 @@ def _campaign(run: RunInfo) -> Path:
     return run.path.parent.parent
 
 
-def _eval_gif_path(run: RunInfo, i: int) -> Optional[Path]:
-    """Locate an already-rendered eval GIF for episode i, else None."""
+def _eval_gif_path(
+    run: RunInfo, i: int, environment: Optional[str] = None
+) -> Optional[Path]:
+    """Locate an already-rendered eval GIF for episode i, else None.
+
+    With ``environment`` set to a group other than the run's own, look up the
+    cross-environment replay of the same episode seed instead.
+    """
+    if environment and environment != run.environment:
+        p = run.path / f"videos_env_{environment}" / f"episode_{i}.gif"
+        return p if p.exists() and p.stat().st_size > 0 else None
     cand = [run.path / "videos" / f"episode_{i}.gif"]
     if run.budget is not None and run.seed is not None:
         b = int(run.budget)
@@ -468,8 +629,17 @@ def _history_gif_path(run: RunInfo, version: int, i: int) -> Optional[Path]:
 
 
 def _eval_seeds(run: RunInfo) -> list[int]:
-    """Recreate the held-out episode seeds used by run_experiment.py."""
-    if run.seed is None:
+    """The held-out episode seeds of this run's recorded evaluation suite.
+
+    Prefer per-episode seeds recorded in results.json; otherwise recreate the
+    suite the way run_experiment.py draws it, from the pinned eval_seed when the
+    run recorded one and from the run seed otherwise.
+    """
+    if run.explicit_seeds:
+        per = _results(run).get("per_episode") or []
+        return [int(e["seed"]) for e in per if "seed" in e]
+    base = run.eval_seed if run.eval_seed is not None else run.seed
+    if base is None:
         return []
     # Keep numpy out of the read-only viewer path. PCG64 and Generator.integers
     # are used by the experiment, so use numpy when installed and degrade to no
@@ -477,7 +647,7 @@ def _eval_seeds(run: RunInfo) -> list[int]:
     try:
         import numpy as np  # pylint: disable=import-outside-toplevel
 
-        rng = np.random.default_rng(run.seed)
+        rng = np.random.default_rng(base)
         return [int(rng.integers(0, 2**63)) for _ in range(run.num_eval_tasks)]
     except ImportError:
         return []
@@ -488,6 +658,9 @@ def _eval_seeds(run: RunInfo) -> list[int]:
 # --------------------------------------------------------------------------- #
 
 _SEP = "\x1f"
+_SNAPSHOT_CACHE: dict[str, tuple[Hashable, list[dict[str, Any]]]] = {}
+_SNAPSHOT_LOCKS: dict[str, threading.Lock] = {}
+_SNAPSHOT_CACHE_LOCK = threading.Lock()  # guards both dictionaries
 
 
 def _git(sandbox: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -496,8 +669,47 @@ def _git(sandbox: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _snapshots(run: RunInfo) -> list[dict[str, Any]]:
-    """Version list from the sandbox git history (approach.py-bearing commits)."""
+def _path_stamp(path: Path) -> tuple[int, int]:
+    """Cheap file-change signature, including replacements with the same mtime."""
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return (0, 0)
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _snapshot_stamp(run: RunInfo) -> Hashable:
+    """Inputs that affect the history response.
+
+    ``renderHistory`` requests snapshots and training-seed data concurrently.
+    Both need the same expensive Git history. This stamp lets the second request
+    reuse it while keeping live runs and newly recorded replays fresh.
+    """
+    git_dir = run.path / "sandbox" / ".git"
+    history = run.path / "approach_history"
+    replay_files = []
+    if history.is_dir():
+        replay_files = sorted(
+            (
+                str(path.relative_to(history)),
+                *_path_stamp(path),
+            )
+            for pattern in ("v*/episodes.json", "v*/metrics.json")
+            for path in history.glob(pattern)
+        )
+    return (
+        _path_stamp(git_dir / "HEAD"),
+        _path_stamp(git_dir / "logs" / "HEAD"),
+        _path_stamp(git_dir / "packed-refs"),
+        _path_stamp(run.path / "stream.jsonl"),
+        _path_stamp(run.path / "results.json"),
+        _path_stamp(history),
+        tuple(replay_files),
+    )
+
+
+def _snapshots_uncached(run: RunInfo) -> list[dict[str, Any]]:
+    """Build the version list from approach.py-bearing Git commits."""
     sandbox = run.path / "sandbox"
     if not (sandbox / ".git").is_dir():
         return []
@@ -584,6 +796,24 @@ def _snapshots(run: RunInfo) -> list[dict[str, Any]]:
                 )
         snaps[-1]["evaluation"] = final_evaluation
     return snaps
+
+
+def _snapshots(run: RunInfo) -> list[dict[str, Any]]:
+    """Return history snapshots, sharing work across concurrent page requests."""
+    key = str(run.path.resolve())
+    with _SNAPSHOT_CACHE_LOCK:
+        run_lock = _SNAPSHOT_LOCKS.setdefault(key, threading.Lock())
+    # Only duplicate requests for this run wait; other run pages can load in parallel.
+    with run_lock:
+        stamp = _snapshot_stamp(run)
+        with _SNAPSHOT_CACHE_LOCK:
+            cached = _SNAPSHOT_CACHE.get(key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        snapshots = _snapshots_uncached(run)
+        with _SNAPSHOT_CACHE_LOCK:
+            _SNAPSHOT_CACHE[key] = (stamp, snapshots)
+        return snapshots
 
 
 def _commit_hash(run: RunInfo, version: int) -> Optional[str]:
@@ -723,9 +953,8 @@ def _seed_mentions(command: str) -> dict[int, set[str]]:
     """Extract literal environment seeds from an agent's Bash command.
 
     The coding agent usually embeds small Python test programs in heredocs. We
-    intentionally recognize only explicit seed assignments/lists/ranges, not
-    arbitrary numbers, to avoid confusing step counts and geometry constants
-    with seeds.
+    intentionally recognize only explicit seed assignments/lists/ranges, not arbitrary
+    numbers, to avoid confusing step counts and geometry constants with seeds.
     """
     mentions: dict[int, set[str]] = {}
 
@@ -827,7 +1056,7 @@ def _stream_index(run: RunInfo) -> dict[str, Any]:
             "seed_events": [],
             "count_events": [],
         }
-    key = run.run_id
+    key = str(run.path.resolve())
     mtime = f.stat().st_mtime
     cached = _STREAM_CACHE.get(key)
     if cached and cached["mtime"] == mtime:
@@ -1133,30 +1362,99 @@ def _training_seed_info(run: RunInfo) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+# A failed episode usually runs to its step limit, so a full replay is slow and
+# the GIF is long. A preview render stops after this many steps; the full replay
+# is rendered on demand.
+PREVIEW_STEPS = 100
+
+
 @dataclass
 class Job:
     """State of one background GIF-render job, polled by the client."""
 
     job_id: str
     state: str = "queued"  # queued | running | done | error
+    phase: str = "queued"
     message: str = ""
     gif_url: Optional[str] = None
+    gif_path: Optional[str] = None  # on-disk path, for copyable references
     current: int = 0
     total: int = 0
+    created_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
+    capped: bool = (
+        False  # the preview stopped at PREVIEW_STEPS before the episode ended
+    )
 
 
 JOBS: dict[str, Job] = {}
 _JOBS_LOCK = threading.Lock()
-_RENDER_Q: "queue.Queue[tuple[str, str, str, int]]" = queue.Queue()
+_RENDER_Q: "queue.Queue[tuple[str, str, str, int, bool, Optional[str]]]" = (
+    queue.Queue()
+)
 _JOB_SEQ = [0]
+# Bumped by the cancel endpoint. A running render captures the value at its start
+# and aborts at its next progress report once the two disagree.
+_CANCEL_EPOCH = [0]
 
 
-def _enqueue_render(run_id: str, target: str, episode_index: int) -> str:
+class _Cancelled(Exception):
+    """Raised inside a render to unwind it after the user cancels."""
+
+
+def _raise_if_cancelled(epoch: int) -> None:
+    """Abort the running render if a cancel arrived after it started."""
+    if _CANCEL_EPOCH[0] != epoch:
+        raise _Cancelled
+
+
+def _cancel_renders() -> dict[str, Any]:
+    """Drop every queued render and ask the running one to stop.
+
+    Queued jobs are discarded here; the running job cannot be interrupted mid-step,
+    so it unwinds at its next progress report.
+    """
+    dropped = []
+    while True:
+        try:
+            job_id, *_ = _RENDER_Q.get_nowait()
+        except queue.Empty:
+            break
+        dropped.append(job_id)
+        _RENDER_Q.task_done()
+    with _JOBS_LOCK:
+        _CANCEL_EPOCH[0] += 1
+        for job_id in dropped:
+            job = JOBS.get(job_id)
+            if job is not None:
+                job.state, job.phase = "cancelled", "cancelled"
+                job.message = "cancelled before starting"
+                job.finished_at = time.time()
+        running = sum(1 for j in JOBS.values() if j.state == "running")
+    return {"dropped": len(dropped), "running": running}
+
+
+def _enqueue_render(
+    run_id: str,
+    target: str,
+    episode_index: int,
+    full: bool = False,
+    environment: Optional[str] = None,
+) -> str:
     with _JOBS_LOCK:
         _JOB_SEQ[0] += 1
         job_id = f"job{_JOB_SEQ[0]}"
-        JOBS[job_id] = Job(job_id=job_id, message=f"queued: {target} ep{episode_index}")
-    _RENDER_Q.put((job_id, run_id, target, episode_index))
+        mode = "full render" if full else f"{PREVIEW_STEPS}-step preview"
+        if environment:
+            mode += f" in {environment}"
+        ahead = _RENDER_Q.qsize()
+        suffix = f" ({ahead} job{'s' if ahead != 1 else ''} ahead)" if ahead else ""
+        JOBS[job_id] = Job(
+            job_id=job_id,
+            message=f"queued {mode}{suffix}",
+        )
+    _RENDER_Q.put((job_id, run_id, target, episode_index, full, environment))
     return job_id
 
 
@@ -1166,7 +1464,7 @@ def _enqueue_history_evaluation(run_id: str) -> str:
         _JOB_SEQ[0] += 1
         job_id = f"job{_JOB_SEQ[0]}"
         JOBS[job_id] = Job(job_id=job_id, message="queued full history evaluation")
-    _RENDER_Q.put((job_id, run_id, "EVAL_HISTORY", -1))
+    _RENDER_Q.put((job_id, run_id, "EVAL_HISTORY", -1, True, None))
     return job_id
 
 
@@ -1187,6 +1485,21 @@ def _jsonable(value: Any) -> Any:
     if hasattr(value, "tolist"):
         return value.tolist()
     raise TypeError(f"not JSON serializable: {type(value)}")
+
+
+def _safe_json_value(value: Any) -> Any:
+    """Recursively replace non-finite metric values with JSON null."""
+    if hasattr(value, "item"):
+        return _safe_json_value(value.item())
+    if hasattr(value, "tolist"):
+        return _safe_json_value(value.tolist())
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _safe_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_json_value(item) for item in value]
+    return value
 
 
 def _record_history_episode(
@@ -1225,12 +1538,34 @@ def _record_history_episodes(
     tmp.replace(path)
 
 
-def _evaluate_history(run: RunInfo, job: Job) -> None:
+def _replay_overrides(
+    run: RunInfo, load_dir: str, output_dir: str, environment: Optional[str] = None
+) -> list[str]:
+    """Hydra overrides shared by current and historical replay jobs.
+
+    ``++`` supports both generated approaches, which declare these fields, and
+    planner configs, which accept them through ``**kwargs`` but do not declare them.
+    ``environment`` replays the policy under a different environment group; the
+    primitives always follow the policy, since a generated approach.py indexes the
+    exact primitives dict it was written against.
+    """
+    return [
+        f"approach={run.approach}",
+        f"++approach.load_dir={load_dir}",
+        f"++approach.output_dir={output_dir}",
+        f"primitives={_replay_primitives(run)}",
+        "mcp_tools=[]",
+        f"environment={environment or run.environment}",
+        f"seed={run.seed}",
+    ]
+
+
+def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
     """Evaluate every historical commit on the final run's full eval suite.
 
-    This intentionally records metrics only. Rendering hundreds of GIFs would
-    dominate runtime and disk; individual failures can still be rendered from
-    the matrix after the comparable solve-rate curve is available.
+    This intentionally records metrics only. Rendering hundreds of GIFs would dominate
+    runtime and disk; individual failures can still be rendered from the matrix after
+    the comparable solve-rate curve is available.
     """
     # pylint: disable=import-outside-toplevel
     from hydra import compose, initialize_config_dir
@@ -1273,15 +1608,7 @@ def _evaluate_history(run: RunInfo, job: Job) -> None:
                 with initialize_config_dir(version_base=None, config_dir=conf_dir):
                     cfg = compose(
                         config_name="config",
-                        overrides=[
-                            f"approach={run.approach}",
-                            f"approach.load_dir={tmp}",
-                            f"approach.output_dir={tmp}/out",
-                            f"primitives={_primitives(run.path / '.hydra')}",
-                            "mcp_tools=[]",
-                            f"environment={run.environment}",
-                            f"seed={run.seed}",
-                        ],
+                        overrides=_replay_overrides(run, tmp, f"{tmp}/out"),
                     )
                 env = instantiate(cfg.environment)
                 primitives = build_primitives(env, cfg.primitives)
@@ -1304,6 +1631,7 @@ def _evaluate_history(run: RunInfo, job: Job) -> None:
                 approach.train()
 
                 for i, final_record in enumerate(final_per_episode):
+                    _raise_if_cancelled(epoch)
                     count = final_record.get("object_count")
                     max_steps = (
                         env.max_steps_for_count(count)
@@ -1366,14 +1694,19 @@ def _render_worker() -> None:
     conf_dir = str(REPO_ROOT / "experiments" / "conf")
 
     while True:
-        job_id, run_id, target, i = _RENDER_Q.get()
+        job_id, run_id, target, i, full, env_override = _RENDER_Q.get()
         run = _run(run_id)
+        epoch = _CANCEL_EPOCH[0]
         history_version: Optional[int] = None
         replay_seed: Optional[int] = None
         replay_count: Optional[int] = None
+        completion_message = "rendered"
         with _JOBS_LOCK:
             job = JOBS[job_id]
-            job.state, job.message = "running", f"rendering {target} ep{i}"
+            job.state = "running"
+            job.phase = "preparing"
+            job.started_at = time.time()
+            job.message = "loading replay configuration"
         try:
             # Heavy deps are imported on the first render so the server and all
             # read-only browsing need nothing but the Python stdlib (useful for
@@ -1390,11 +1723,25 @@ def _render_worker() -> None:
             if target == "EVAL_HISTORY":
                 with _JOBS_LOCK:
                     job.message = "preparing full history evaluation"
-                _evaluate_history(run, job)
+                _evaluate_history(run, job, epoch)
                 with _JOBS_LOCK:
                     job.state = "done"
                     job.message = "full history evaluation complete"
                 continue
+            if env_override and env_override == run.environment:
+                env_override = None
+            if env_override:
+                if target != "HEAD":
+                    raise RuntimeError("environment override only replays HEAD")
+                if not re.fullmatch(r"[A-Za-z0-9_\-]+", env_override):
+                    raise RuntimeError(f"bad environment override {env_override!r}")
+            policy_dir = _policy_dir(run)
+            if not run.per_instance and not (
+                policy_dir / "sandbox" / "approach.py"
+            ).exists():
+                raise RuntimeError(
+                    f"policy sandbox not found locally: {policy_dir / 'sandbox'}"
+                )
             r = _results(run)
             per = r.get("per_episode", [])
             count = per[i].get("object_count") if i < len(per) else None
@@ -1407,14 +1754,15 @@ def _render_worker() -> None:
 
             with tempfile.TemporaryDirectory() as tmp:
                 if target == "HEAD":
-                    load_dir = str(run.path)
-                    out = run.path / "videos" / f"episode_{i}.gif"
+                    load_dir = str(policy_dir)
+                    videos = f"videos_env_{env_override}" if env_override else "videos"
+                    out = run.path / videos / f"episode_{i}.gif"
                 else:
                     version = int(target)
                     history_version = version
                     h = _commit_hash(run, version)
                     assert h is not None, f"no commit for version {version}"
-                    _export_snapshot(run.path / "sandbox", h, Path(tmp) / "sandbox")
+                    _export_snapshot(policy_dir / "sandbox", h, Path(tmp) / "sandbox")
                     load_dir = tmp
                     out = (
                         run.path
@@ -1424,18 +1772,14 @@ def _render_worker() -> None:
                     )
                 out.parent.mkdir(parents=True, exist_ok=True)
 
+                with _JOBS_LOCK:
+                    job.message = "building environment and approach"
                 with initialize_config_dir(version_base=None, config_dir=conf_dir):
                     cfg = compose(
                         config_name="config",
-                        overrides=[
-                            f"approach={run.approach}",
-                            f"approach.load_dir={load_dir}",
-                            f"approach.output_dir={tmp}/out",
-                            f"primitives={_primitives(run.path / '.hydra')}",
-                            "mcp_tools=[]",
-                            f"environment={run.environment}",
-                            f"seed={run.seed}",
-                        ],
+                        overrides=_replay_overrides(
+                            run, load_dir, f"{tmp}/out", environment=env_override
+                        ),
                     )
                 env = instantiate(cfg.environment)
                 primitives = build_primitives(env, cfg.primitives)
@@ -1446,7 +1790,7 @@ def _render_worker() -> None:
                     seed=cfg.seed,
                     env_description_path=None,
                     mcp_tools=(),
-                    env_name=run.environment,
+                    env_name=env_override or run.environment,
                     env=env,
                     env_cfg=json.dumps({}),
                     max_steps=cfg.max_steps,
@@ -1454,20 +1798,95 @@ def _render_worker() -> None:
                     _partial_=True,
                 )
                 _purge_sandbox_modules()
-                approach = approach_ctor(primitives=primitives)
-                approach.train()
-
                 if count is not None and hasattr(env, "max_steps_for_count"):
                     max_steps = env.max_steps_for_count(count)
                 else:
                     max_steps = int(cfg.max_steps)
-                metrics, frames, _ = run_episode(
-                    env, approach, eval_seeds[i], max_steps, render=True, count=count
-                )
+                render_steps = max_steps if full else min(max_steps, PREVIEW_STEPS)
+                approach = approach_ctor(primitives=primitives)
+                capped = False
+
+                def report_instance(phase: str, current: int, total: int) -> None:
+                    _raise_if_cancelled(epoch)
+                    with _JOBS_LOCK:
+                        job.phase = "rollout" if total else "preparing"
+                        job.message = phase
+                        job.current = current
+                        job.total = total
+
+                def report_rollout(current: int, total: int) -> None:
+                    _raise_if_cancelled(epoch)
+                    with _JOBS_LOCK:
+                        job.phase = "rollout"
+                        job.message = f"rendering step {current}/{total}"
+                        job.current = current
+                        job.total = total
+
+                if approach.per_instance:
+                    result = approach.solve_instance(
+                        env=env,
+                        seed=eval_seeds[i],
+                        budget_usd=float(cfg.approach.max_budget_usd),
+                        output_subdir=Path(tmp) / "out" / f"instance_{i}",
+                        render=True,
+                        count=count,
+                        max_steps=render_steps,
+                        progress_callback=report_instance,
+                    )
+                    metrics = {
+                        **result.extras,
+                        "solved": result.solved,
+                        "total_reward": result.total_reward,
+                        "num_steps": result.num_steps,
+                    }
+                    if metrics.get("plan_found") is False:
+                        completion_message = (
+                            "planner found no plan; rendered initial state"
+                        )
+                    frames = result.frames or []
+                    capped = (
+                        not full
+                        and render_steps < max_steps
+                        and result.num_steps is not None
+                        and result.num_steps >= render_steps
+                    )
+                    # Keep this defensive trim for custom per-instance approaches
+                    # that do not yet honor the replay horizon.
+                    if len(frames) > render_steps + 1:
+                        frames = frames[: render_steps + 1]
+                        capped = True
+                else:
+                    with _JOBS_LOCK:
+                        job.phase = "preparing"
+                        job.message = "loading generated policy"
+                    approach.train()
+                    metrics, frames, _ = run_episode(
+                        env,
+                        approach,
+                        eval_seeds[i],
+                        render_steps,
+                        render=True,
+                        count=count,
+                        progress_callback=report_rollout,
+                    )
+                    capped = (
+                        render_steps < max_steps
+                        and metrics["num_steps"] >= render_steps
+                    )
                 if not frames:
                     raise RuntimeError("no frames rendered")
+                with _JOBS_LOCK:
+                    job.phase = "encoding"
+                    job.message = f"encoding {len(frames)} frames as GIF"
                 save_video(frames, out)
-                if history_version is not None:
+                preview_marker = out.with_suffix(out.suffix + ".preview")
+                if capped:
+                    preview_marker.write_text(f"{len(frames)} frames\n")
+                else:
+                    preview_marker.unlink(missing_ok=True)
+                # A preview stops before the episode ends, so its metrics are not the
+                # episode's real outcome; only a full render updates the history record.
+                if full and history_version is not None:
                     _record_history_episode(
                         run,
                         history_version,
@@ -1482,20 +1901,37 @@ def _render_worker() -> None:
 
             with _JOBS_LOCK:
                 job.state = "done"
-                job.message = "rendered"
+                job.phase = "done"
+                job.capped = capped
+                job.finished_at = time.time()
+                job.message = (
+                    f"rendered first {PREVIEW_STEPS} steps"
+                    if capped
+                    else completion_message
+                )
                 kind = "eval" if target == "HEAD" else "history"
                 key = i if target == "HEAD" else target
+                envq = f"&env={env_override}" if env_override else ""
                 job.gif_url = (
                     f"/api/gif?run={run_id}&kind={kind}"
-                    f"&key={key}&i={i}&t={int(time.time())}"
+                    f"&key={key}&i={i}{envq}&t={int(time.time())}"
                 )
+                job.gif_path = str(out)
+        except _Cancelled:
+            with _JOBS_LOCK:
+                job.state = "cancelled"
+                job.phase = "cancelled"
+                job.finished_at = time.time()
+                job.message = "cancelled"
         except Exception as e:  # pylint: disable=broad-exception-caught
             # A render can fail many ways (bad approach, env error); surface it to
             # the UI job instead of killing the single worker thread.
             with _JOBS_LOCK:
                 job.state = "error"
+                job.phase = "error"
+                job.finished_at = time.time()
                 job.message = f"{type(e).__name__}: {e}"
-            if run is not None and history_version is not None:
+            if full and run is not None and history_version is not None:
                 _record_history_episode(
                     run,
                     history_version,
@@ -1521,6 +1957,7 @@ def _render_worker() -> None:
 _LOG_ALLOW = {
     "run_experiment.log",
     "env_config.json",
+    "env_variant.json",
     "env_description.md",
     "sandbox/agent_log.txt",
     "sandbox/CLAUDE.md",
@@ -1543,7 +1980,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, obj: Any, code: int = 200) -> None:
-        self._send(code, json.dumps(obj).encode(), "application/json")
+        body = json.dumps(_safe_json_value(obj), allow_nan=False).encode()
+        self._send(code, body, "application/json")
 
     def _err(self, code: int, msg: str) -> None:
         self._json({"error": msg}, code)
@@ -1601,7 +2039,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/gif":
             kind, key = q.get("kind", "eval"), q.get("key", "0")
             if kind == "eval":
-                p = _eval_gif_path(run, int(key))
+                p = _eval_gif_path(run, int(key), environment=q.get("env"))
             else:
                 p = _history_gif_path(run, int(key), int(q.get("i", "0")))
             if p is None:
@@ -1631,6 +2069,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         """Route POST requests (refresh, enqueue render job)."""
         u = urlparse(self.path)
+        if u.path == "/api/render/cancel":
+            return self._json(_cancel_renders())
         if u.path == "/api/refresh":
             refresh_runs()
             return self._json({"ok": True, "n": len(RUNS)})
@@ -1646,7 +2086,11 @@ class Handler(BaseHTTPRequestHandler):
             if run is None:
                 return self._err(404, "unknown run")
             job_id = _enqueue_render(
-                run.run_id, str(body.get("target", "HEAD")), int(body["episode_index"])
+                run.run_id,
+                str(body.get("target", "HEAD")),
+                int(body["episode_index"]),
+                bool(body.get("full", False)),
+                body.get("environment") or None,
             )
             return self._json({"job_id": job_id})
         return self._err(404, "no route")
@@ -1663,7 +2107,8 @@ INDEX_HTML = """<!doctype html>
 <link rel="stylesheet" href="/static/app.css">
 </head><body>
 <header><a href="#/index" class="brand">robocode results</a>
-  <button id="refresh">refresh</button></header>
+  <button id="refresh">refresh</button>
+  <button id="cancel-renders" title="Drop every queued render and stop the running one">cancel renders</button></header>
 <main id="app"></main>
 <script src="/static/app.js"></script>
 </body></html>
@@ -1712,9 +2157,26 @@ h1{font-size:20px;margin:2px 0 4px}h2{font-size:15px;margin:22px 0 9px;border-bo
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:20px}@media(max-width:800px){.cols{grid-template-columns:1fr}}
 .eph{display:flex;flex-wrap:wrap;gap:8px}
 .ep{width:132px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--card)}
+.ep.pair{width:272px}
+.pair2{display:flex;gap:2px}
+.pair2>div{flex:1;min-width:0}
+.pair2 .pl{font:9px ui-monospace,Menlo,monospace;color:var(--muted);text-align:center;padding:1px 0 0}
 .ep img{width:100%;display:block;aspect-ratio:1;object-fit:contain;background:#fff}
 .ep .cap{font:11px ui-monospace,Menlo,monospace;color:var(--muted);padding:5px 6px}
-.ep .ph{aspect-ratio:1;display:flex;align-items:center;justify-content:center}
+.hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+button.cp{font:10px ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:5px;margin-left:6px;
+  color:var(--muted);vertical-align:1px}
+button.cp:hover{color:var(--fg)}
+button.cp.ok{color:var(--ok);border-color:var(--ok)}
+.ep .ph{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.ep .ph.noplan{gap:3px;color:var(--muted);font-size:11px;text-align:center;
+  background:repeating-linear-gradient(45deg,transparent,transparent 6px,var(--bg) 6px,var(--bg) 12px)}
+.render-status{width:100%;padding:6px;font:10px/1.35 ui-monospace,Menlo,monospace;color:var(--muted)}
+.render-meter{height:4px;margin-top:5px;border-radius:3px;overflow:hidden;background:var(--line)}
+.render-meter>span{display:block;width:0;height:100%;background:var(--accent);transition:width .2s}
+.render-meter.indeterminate>span{width:35%;animation:render-wait 1.1s ease-in-out infinite}
+@keyframes render-wait{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+.fullbtn{font-size:10px;margin:4px 6px}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
 .bars{display:flex;flex-direction:column;gap:5px}
 .bar{display:flex;align-items:center;gap:8px;font-size:12px}
@@ -1727,8 +2189,11 @@ h1{font-size:20px;margin:2px 0 4px}h2{font-size:15px;margin:22px 0 9px;border-bo
 .step .m{font-size:12px;margin-top:3px}
 .history-overview{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
 .history-head{display:grid;grid-template-columns:minmax(280px,1fr) minmax(340px,430px);gap:18px;align-items:center}
+.history-plots{display:grid;gap:10px}
 .solve-lineplot{border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:var(--card)}
 .solve-lineplot svg{display:block;width:100%;height:auto}.solve-lineplot .title{font-size:11px;color:var(--muted);margin-bottom:3px}
+.chart-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:var(--muted);margin:2px 0 1px}
+.chart-key{display:inline-flex;align-items:center;gap:5px}.chart-key::before{content:"";width:12px;height:2px;border-radius:2px;background:var(--key)}
 @media(max-width:800px){.history-head{grid-template-columns:1fr}}
 .chart-scroll,.matrix-scroll{overflow-x:auto;padding-bottom:6px}
 .progress-chart{display:grid;gap:7px;min-width:max-content;align-items:end;margin-top:9px}
@@ -1772,6 +2237,30 @@ const $=(s,r=document)=>r.querySelector(s), h=(t,a={},...k)=>{const e=document.c
 const j=(u,o)=>fetch(u,o).then(r=>r.json());
 const num=(x,d=2)=>x==null?"-":(typeof x==="number"?(Math.abs(x)>=1000?x.toFixed(0):x.toFixed(d)):x);
 const enc=encodeURIComponent;
+// Identify what is on screen well enough to paste elsewhere: which viewer
+// instance, which run, and the on-disk gif. Set from the run payload.
+let VIEWER="";  // "<root name>:<port>"
+let RUNTAG="";  // "<env> <primitives> <approach>"
+
+function epRef(run,e){
+ return `[${VIEWER}] ${run} | ${RUNTAG} | ep${e.i}`
+  +(e.seed!=null?` seed${e.seed}`:"")
+  +` c${e.object_count} ${num(e.num_steps,0)}st ${e.outcome}`
+  +(e.plan_found===false?` | no plan found after ${num(e.planning_time,1)}s`:"")
+  +` | ${e.gif_path||"(gif not rendered)"}`;
+}
+
+function copyBtn(getText,label){
+ const b=h("button",{class:"cp",title:"copy reference"},label||"copy");
+ b.onclick=async ev=>{ev.preventDefault();ev.stopPropagation();
+  const t=getText();
+  try{await navigator.clipboard.writeText(t);}
+  catch(_){const ta=h("textarea",{});ta.value=t;document.body.append(ta);ta.select();
+   document.execCommand("copy");ta.remove();}
+  const old=b.textContent;b.textContent="copied";b.classList.add("ok");
+  setTimeout(()=>{b.textContent=old;b.classList.remove("ok");},1200);};
+ return b;
+}
 const duration=x=>x==null?"-":x<60?`${Math.round(x)}s`:x<3600?`${(x/60).toFixed(1)}m`:`${(x/3600).toFixed(1)}h`;
 const compact=x=>x==null?"-":x>=1e6?`${(x/1e6).toFixed(1)}m`:x>=1e3?`${(x/1e3).toFixed(1)}k`:String(x);
 
@@ -1792,12 +2281,18 @@ let ALL=[], FILTER={};
 async function loadRuns(){ALL=await j("/api/runs");}
 
 function facetBar(){
- const keys=["approach","environment","seed","budget"];
+ // environment = the evaluated suite; trained_environment = what the policy saw
+ // during synthesis. They differ only in cross-eval cells, so the "trained on"
+ // facet mostly mirrors "eval env" but separates e.g. band-trained policies
+ // re-scored on the standard suite.
+ const keys=[["approach","approach"],["environment","eval env"],
+  ["trained_environment","trained on"],["slice","slice"],
+  ["primitives","primitives"],["seed","seed"],["budget","budget"]];
  const bar=h("div",{class:"facets"});
- for(const k of keys){
+ for(const [k,lbl] of keys){
   const vals=[...new Set(ALL.map(r=>r[k]).filter(v=>v!=null))].sort();
   if(vals.length<2)continue;
-  const f=h("div",{class:"facet"},h("span",{class:"lbl"},k));
+  const f=h("div",{class:"facet"},h("span",{class:"lbl"},lbl));
   for(const v of vals){
    const on=(FILTER[k]||[]).includes(String(v));
    f.append(h("button",{class:"chip"+(on?" active":""),onclick:()=>{
@@ -1829,6 +2324,12 @@ function renderIndex(){
     r.seed!=null?h("span",{class:"pill"},"s"+r.seed):"",
     r.agent_cost_usd!=null?h("span",{class:"pill"},"$"+num(r.agent_cost_usd)):"",
     r.num_crashed_episodes?h("span",{class:"pill"},r.num_crashed_episodes+" crash"):"",
+    r.policy_source?h("span",{class:"pill",title:"policy from "+r.policy_source},"xeval"):"",
+    r.trained_environment&&r.trained_environment!==r.environment?
+     h("span",{class:"pill",style:"color:var(--warn);border-color:var(--warn)",
+      title:`evaluated on ${r.environment}`},"trained: "+r.trained_environment):"",
+    r.slice?h("span",{class:"pill",style:"color:var(--accent);border-color:var(--accent)",
+     title:"conditioned instance slice, not the uniform suite"},r.slice):"",
     r.has_history?h("span",{class:"pill"},"history"):"" )));
  }
  app.append(g);
@@ -1873,39 +2374,120 @@ function byCountBars(bc){
  return wrap;
 }
 
-function epCard(run,e){
+const envShort=n=>n&&n.endsWith("_a")?"pinned-spawn":"standard";
+let PAIRVIEW=false;  // run-page toggle: show both env variants' gifs per episode
+
+function epCard(run,e,s){
  const c=h("div",{class:"ep"});
+ if(e.num_steps!=null)c.dataset.steps=e.num_steps;
+ c._ep=e;  // recordGif updates e.gif_path here once a render lands
  const color=e.outcome==="success"?"var(--ok)":e.outcome==="failure"?"var(--no)":"var(--warn)";
  const cap=h("div",{class:"cap"},h("span",{class:"dot",style:`background:${color}`}),
-  `ep${e.i} c${e.object_count} ${num(e.num_steps,0)}st`);
- if(e.has_gif){c.append(gifImg(`/api/gif?run=${enc(run)}&kind=eval&key=${e.i}`));}
- else{const ph=h("div",{class:"ph"},h("button",{onclick:ev=>recordGif(ev,run,"HEAD",e.i,c)},"record gif"));c.append(ph);}
+  `ep${e.i} `,
+  e.seed!=null?h("span",{class:"mono muted",title:`held-out validation seed ${e.seed}`},`seed…${String(e.seed).slice(-8)} `):"",
+  `c${e.object_count} ${num(e.num_steps,0)}st`,copyBtn(()=>epRef(run,e)));
+ const xenvGrp=s&&s.environment_counterpart;
+ const xenvUrl=xenvGrp?`/api/gif?run=${enc(run)}&kind=eval&key=${e.i}&env=${enc(xenvGrp)}`:null;
+ // Pair view: the same episode seed under both spawn ranges, side by side. Only
+ // episodes with both gifs already recorded widen; the rest keep the single view.
+ if(PAIRVIEW&&xenvGrp&&e.has_gif&&e.xenv_has_gif&&e.plan_found!==false){
+  c.classList.add("pair");
+  c.append(h("div",{class:"pair2"},
+   h("div",{},h("div",{class:"pl"},envShort(s.environment)+" (eval)"),
+    gifImg(`/api/gif?run=${enc(run)}&kind=eval&key=${e.i}`)),
+   h("div",{},h("div",{class:"pl"},envShort(xenvGrp)),gifImg(xenvUrl))));
+  c.append(cap);return c;
+ }
+ if(e.plan_found===false){
+  // No plan means no action was executed, so any GIF here is one frame. Say so
+  // rather than showing a render that looks frozen.
+  c.append(h("div",{class:"ph noplan"},h("div",{},"no plan found"),
+   h("div",{class:"mono"},e.planning_time!=null?`${num(e.planning_time,1)}s search`:"")));}
+ else if(e.has_gif){c.append(gifImg(`/api/gif?run=${enc(run)}&kind=eval&key=${e.i}`));
+  if(e.gif_preview)c.append(h("button",{class:"fullbtn",onclick:ev=>recordGif(ev,run,"HEAD",e.i,c,true)},"render full"));}
+ else{const ph=h("div",{class:"ph"},h("button",{title:"Render at most the first 100 steps",
+  onclick:ev=>recordGif(ev,run,"HEAD",e.i,c)},"preview gif"));c.append(ph);}
+ // Replay the same policy and episode seed under the paired environment group
+ // (matched spawn-range comparison). Opens in the lightbox; the gif persists
+ // under videos_env_<group>/ in the run dir.
+ if(xenvGrp&&e.plan_found!==false){
+  // class "cp", not "fullbtn": recordGif's done handler removes the first
+  // .fullbtn to clear a stale "render full" button and must not take this one.
+  const xb=h("button",{class:"cp",
+   title:`replay this policy on this episode seed under ${xenvGrp}`
+    +(e.xenv_has_gif?" (shift-click to re-record)":""),
+   onclick:ev=>{if(c._ep.xenv_has_gif&&!ev.shiftKey){openLightbox(xenvUrl+`&t=${Date.now()}`);return;}
+    recordGif(ev,run,"HEAD",e.i,c,true,xenvGrp);}},
+   (e.xenv_has_gif?"view in ":"↷ ")+envShort(xenvGrp)+" env");
+  cap.append(xb);
+ }
  c.append(cap);return c;
 }
 
-async function recordGif(ev,run,target,i,cardEl){
- const btn=ev.target;btn.disabled=true;btn.textContent="rendering...";
+async function recordGif(ev,run,target,i,cardEl,full=false,env=null){
+ const btn=ev.currentTarget||ev.target;const origLabel=btn.textContent;
+ btn.disabled=true;btn.textContent=full?"full render":"preview";
+ const oldStatus=cardEl.querySelector(".render-status");if(oldStatus)oldStatus.remove();
+ const meter=h("div",{class:"render-meter indeterminate"},h("span",{}));
+ const status=h("div",{class:"render-status"},"requesting render…",meter);
+ btn.after(status);
+ const started=Date.now();
+ const body={run,target,episode_index:i,full};if(env)body.environment=env;
  const {job_id}=await j("/api/render",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({run,target,episode_index:i})});
- const poll=setInterval(async()=>{
+  body:JSON.stringify(body)});
+ const tick=async()=>{
   const s=await j("/api/job?job="+job_id);
+  const elapsed=Math.max(0,Math.round((Date.now()-started)/1000));
+  const detail=s.message||s.state;
+  status.firstChild.textContent=`${detail} · ${duration(elapsed)}`;
+  const determinate=s.phase==="rollout"&&s.total>0;
+  meter.classList.toggle("indeterminate",!determinate&&s.state!=="done");
+  if(determinate)meter.firstChild.style.width=`${Math.min(100,100*s.current/s.total)}%`;
   if(s.state==="done"){clearInterval(poll);
+   status.remove();
+   if(env){
+    // A cross-environment replay opens in the lightbox and leaves the card's
+    // own-suite gif untouched.
+    if(cardEl._ep)cardEl._ep.xenv_has_gif=true;
+    btn.disabled=false;btn.textContent=origLabel.replace("↷ ","view in ");
+    openLightbox(s.gif_url);return;}
+   if(cardEl._ep)cardEl._ep.gif_path=s.gif_path;
    const img=gifImg(s.gif_url);
-   const ph=cardEl.querySelector(".ph");if(ph)ph.replaceWith(img);else cardEl.prepend(img);}
+   const ph=cardEl.querySelector(".ph"),old=cardEl.querySelector("img");
+   if(ph)ph.replaceWith(img);else if(old)old.replaceWith(img);else cardEl.prepend(img);
+   const stale=cardEl.querySelector(".fullbtn");if(stale)stale.remove();
+   if(s.capped){const steps=cardEl.dataset.steps;
+    img.after(h("button",{class:"fullbtn",
+     onclick:ev2=>recordGif(ev2,run,target,i,cardEl,true)},
+     steps?`render full (${steps}st)`:"render full"));}}
   else if(s.state==="error"){clearInterval(poll);btn.disabled=false;btn.textContent="retry";
-   btn.after(h("div",{class:"mono",style:"color:var(--no);font-size:10px;padding:4px"},s.message));}
-  else{btn.textContent=s.state;}
- },1500);
+   status.style.color="var(--no)";}
+  else if(s.state==="cancelled"){clearInterval(poll);status.remove();btn.disabled=false;
+   btn.textContent=full?"render full":"preview gif";}
+  else{btn.textContent=s.phase==="queued"?"queued":full?"rendering full":"rendering preview";}
+ };
+ const poll=setInterval(tick,750);await tick();
 }
 
 async function renderRun(id){
  const app=$("#app");app.innerHTML="loading...";
  const d=await j("/api/run?run="+enc(id));
  const m=d.metrics,s=d.summary;app.innerHTML="";
- app.append(h("h1",{},id),
+ VIEWER=d.viewer||VIEWER;
+ RUNTAG=[s.environment,s.primitives,s.approach].filter(Boolean).join(" ");
+ const runRef=()=>`[${VIEWER}] ${id} | ${RUNTAG}`
+  +` | solve_rate=${num(m.solve_rate)} | ${d.run_path}`;
+ app.append(h("div",{class:"hrow"},h("h1",{},id),copyBtn(runRef,"copy run ref")),
   h("div",{class:"row"},h("span",{class:"pill "+s.status},s.status),
    s.budget!=null?h("span",{class:"pill"},"$"+s.budget):"",s.seed!=null?h("span",{class:"pill"},"s"+s.seed):"",
-   h("span",{class:"pill"},s.approach),h("span",{class:"pill"},s.environment)));
+   h("span",{class:"pill"},s.approach),h("span",{class:"pill",title:"evaluated suite"},"eval: "+s.environment),
+   s.trained_environment&&s.trained_environment!==s.environment?
+    h("span",{class:"pill",style:"color:var(--warn);border-color:var(--warn)"},
+     "trained: "+s.trained_environment):"",
+   s.slice?h("span",{class:"pill",style:"color:var(--accent);border-color:var(--accent)",
+    title:"conditioned instance slice, not the uniform suite"},"slice: "+s.slice):"",
+   s.policy_source?h("span",{class:"pill",title:s.policy_source},
+    "policy: "+s.policy_source.split("/").slice(-3).join("/")):""));
  // logs
  const logs=h("div",{class:"row",style:"margin-top:8px"});
  for(const l of d.logs)logs.append(h("a",{class:"pill",href:`/api/log?run=${enc(id)}&name=${enc(l)}`,target:"_blank"},l));
@@ -1927,12 +2509,22 @@ async function renderRun(id){
 
  // episodes
  const succ=d.episodes.filter(e=>e.outcome==="success"),fail=d.episodes.filter(e=>e.outcome!=="success");
- app.append(h("h2",{},`episodes (${succ.length} solved / ${fail.length} failed)`));
+ const epHdr=h("h2",{},`held-out validation episodes (${succ.length} solved / ${fail.length} failed)`);
+ if(s.environment_counterpart){
+  const paired=d.episodes.filter(e=>e.has_gif&&e.xenv_has_gif).length;
+  epHdr.append(h("button",{class:"cp"+(PAIRVIEW?" ok":""),style:"margin-left:10px",
+   title:"Episodes with both gifs recorded show this env and "+s.environment_counterpart+" side by side",
+   onclick:()=>{PAIRVIEW=!PAIRVIEW;renderRun(id);}},
+   PAIRVIEW?"single-env view":`pair both envs (${paired} ready)`));
+ }
+ app.append(epHdr);
+ app.append(h("div",{class:"muted",style:"margin:-6px 0 10px;font-size:12px"},
+  "epN is held-out validation episode N; its environment seed (shown per card) is drawn from the run seed and is unrelated to N."));
  const cols=h("div",{class:"cols"});
  const cS=h("div",{},h("div",{class:"muted",style:"margin-bottom:6px"},"Solved"),h("div",{class:"eph"}));
  const cF=h("div",{},h("div",{class:"muted",style:"margin-bottom:6px"},"Failed"),h("div",{class:"eph"}));
- for(const e of succ.slice(0,60))cS.querySelector(".eph").append(epCard(id,e));
- for(const e of fail.slice(0,60))cF.querySelector(".eph").append(epCard(id,e));
+ for(const e of succ.slice(0,60))cS.querySelector(".eph").append(epCard(id,e,s));
+ for(const e of fail.slice(0,60))cF.querySelector(".eph").append(epCard(id,e,s));
  cols.append(cS,cF);app.append(cols);
 
  if(d.has_history)await renderHistory(app,id,d.episodes);
@@ -1968,6 +2560,52 @@ function solveLinePlot(snaps,totalEpisodes){
  const labels=snaps.map((sn,i)=>`<text x="${x(i)}" y="${H-6}" text-anchor="middle" fill="var(--muted)" font-size="9">v${i}</text>`).join("");
  return h("div",{class:"solve-lineplot"},h("div",{class:"title"},`full-suite solve rate · ${totalEpisodes} identical seeds`),
   h("div",{html:`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="solve rate by commit">${grid}${paths}${dots}${labels}</svg>`}));
+}
+
+function pearson(xs,ys){
+ const n=xs.length;if(n<2)return null;
+ const mx=xs.reduce((a,b)=>a+b,0)/n,my=ys.reduce((a,b)=>a+b,0)/n;
+ let sxy=0,sxx=0,syy=0;
+ for(let i=0;i<n;i++){const dx=xs[i]-mx,dy=ys[i]-my;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy;}
+ return sxx===0||syy===0?null:sxy/Math.sqrt(sxx*syy);
+}
+
+// Does each commit take longer as the run goes on, and does that track the tokens
+// (accumulated context) fed to the agent? Overlays per-commit wall time and agent
+// tokens against commit index, each on its own scale, and reports the Pearson
+// correlations that quantify the "more context, slower generation" hypothesis.
+function genTimePlot(snaps){
+ const W=420,H=168,L=44,R=46,T=12,B=30,iw=W-L-R,ih=H-T-B,n=snaps.length;
+ const x=i=>L+(n===1?iw/2:i*iw/(n-1));
+ const times=snaps.map(s=>s.effort.elapsed_s),toks=snaps.map(s=>s.effort.tokens);
+ const maxTime=Math.max(1,...times.filter(v=>v!=null)),maxTok=Math.max(1,...toks.filter(v=>v!=null));
+ const yT=v=>T+(1-v/maxTime)*ih,yK=v=>T+(1-v/maxTok)*ih;
+ const line=(vals,yf,color)=>{
+  const segs=[];let cur=[];
+  vals.forEach((v,i)=>{if(v==null){if(cur.length){segs.push(cur);cur=[];}}else cur.push([i,v]);});
+  if(cur.length)segs.push(cur);
+  const polys=segs.map(s=>`<polyline points="${s.map(([i,v])=>`${x(i)},${yf(v)}`).join(" ")}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"/>`).join("");
+  const dots=vals.map((v,i)=>v==null?"":`<circle cx="${x(i)}" cy="${yf(v)}" r="3.2" fill="${color}"><title>v${i}: ${duration(times[i])} · ${compact(toks[i])} tok</title></circle>`).join("");
+  return polys+dots;
+ };
+ const grid=[0,.5,1].map(f=>`<line x1="${L}" y1="${T+f*ih}" x2="${W-R}" y2="${T+f*ih}" stroke="var(--line)"/>`).join("");
+ const leftAx=[0,.5,1].map(f=>`<text x="${L-5}" y="${T+(1-f)*ih+3}" text-anchor="end" fill="var(--accent)" font-size="9">${duration(maxTime*f)}</text>`).join("");
+ const rightAx=[0,.5,1].map(f=>`<text x="${W-R+5}" y="${T+(1-f)*ih+3}" text-anchor="start" fill="var(--warn)" font-size="9">${compact(Math.round(maxTok*f))}</text>`).join("");
+ const labelEvery=Math.max(1,Math.ceil(n/8));
+ const labels=snaps.map((sn,i)=>(i%labelEvery===0||i===n-1)?`<text x="${x(i)}" y="${H-8}" text-anchor="middle" fill="var(--muted)" font-size="9">v${i}</text>`:"").join("");
+ const svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="generation time and tokens by commit">${grid}${leftAx}${rightAx}${line(toks,yK,"var(--warn)")}${line(times,yT,"var(--accent)")}${labels}</svg>`;
+ const idx=[],tIdx=[],kBoth=[],tBoth=[];
+ snaps.forEach((s,i)=>{const e=s.effort;if(e.elapsed_s!=null){idx.push(i);tIdx.push(e.elapsed_s);
+  if(e.tokens!=null){kBoth.push(e.tokens);tBoth.push(e.elapsed_s);}}});
+ const fmt=r=>r==null?"n/a":(r>=0?"+":"")+r.toFixed(2);
+ return h("div",{class:"solve-lineplot"},
+  h("div",{class:"title"},"per-commit generation effort"),
+  h("div",{class:"chart-legend"},
+   h("span",{class:"chart-key",style:"--key:var(--accent)"},"wall time"),
+   h("span",{class:"chart-key",style:"--key:var(--warn)"},"agent tokens")),
+  h("div",{html:svg}),
+  h("div",{class:"muted",style:"font-size:10px;margin-top:3px"},
+   `correlation: time ↔ version ${fmt(pearson(idx,tIdx))} · time ↔ tokens ${fmt(pearson(kBoth,tBoth))}`));
 }
 
 function trainingSeedEvolution(snaps,training){
@@ -2075,11 +2713,14 @@ function historyOverview(id,snaps,episodes,pick,training){
     evaluate.textContent=state.message+progress;
     if(state.state==="done"){clearInterval(poll);renderRun(id);}
     if(state.state==="error"){clearInterval(poll);evaluate.disabled=false;evaluate.classList.add("fail");}
+    if(state.state==="cancelled"){clearInterval(poll);evaluate.disabled=false;
+     evaluate.textContent="cancelled, click to run again";}
    },1500);
   }},`evaluate all ${episodes.length} seeds × ${incomplete.length} commits (${rollouts} rollouts)`);
   legend.append(evaluate);
  }
- wrap.append(h("div",{class:"history-head"},legend,solveLinePlot(snaps,episodes.length)));
+ wrap.append(h("div",{class:"history-head"},legend,
+  h("div",{class:"history-plots"},solveLinePlot(snaps,episodes.length),genTimePlot(snaps))));
  const maxTok=Math.max(1,...snaps.map(s=>s.effort.tokens||0));
  const maxTime=Math.max(1,...snaps.map(s=>s.effort.elapsed_s||0));
  const chart=h("div",{class:"progress-chart",style:`grid-template-columns:repeat(${snaps.length},105px)`});
@@ -2142,8 +2783,9 @@ function historyOverview(id,snaps,episodes,pick,training){
 }
 
 async function replayOne(id,v,i,cell){
+ // The matrix cell records the definitive solved/failed outcome, so it renders in full.
  const {job_id}=await j("/api/render",{method:"POST",headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({run:id,target:String(v),episode_index:i})});
+  body:JSON.stringify({run:id,target:String(v),episode_index:i,full:true})});
  return new Promise(resolve=>{const poll=setInterval(async()=>{const s=await j("/api/job?job="+job_id);
   if(s.state==="running"){cell.textContent="running";}
   if(s.state==="done"||s.state==="error"){clearInterval(poll);cell.textContent=s.state;resolve(s);}},1500);});
@@ -2182,8 +2824,8 @@ async function showVersion(panel,id,snaps,v){
  ctl.append(bSrc,bDiff);
  // record for this version on a chosen episode
  const epIn=h("input",{type:"number",value:"0",min:"0",style:"width:70px;padding:5px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)"});
- const recBtn=h("button",{onclick:ev=>recordGif(ev,id,String(v),+epIn.value,gifBox)},"record gif");
- ctl.append(h("span",{class:"muted",style:"margin-left:10px"},"episode"),epIn,recBtn);
+ const recBtn=h("button",{onclick:ev=>recordGif(ev,id,String(v),+epIn.value,gifBox,true)},"record gif");
+ ctl.append(h("span",{class:"muted",style:"margin-left:10px"},"held-out episode"),epIn,recBtn);
  const gifBox=h("div",{class:"ep",style:"width:180px;margin-top:8px"},h("div",{class:"ph muted"},"no gif yet"));
  panel.append(ctl,gifBox,view);
  showDiff();
@@ -2197,6 +2839,11 @@ async function route(){
 }
 window.addEventListener("hashchange",route);
 $("#refresh").addEventListener("click",async()=>{await fetch("/api/refresh",{method:"POST"});await loadRuns();route();});
+$("#cancel-renders").addEventListener("click",async ev=>{
+ const b=ev.currentTarget;b.disabled=true;
+ const r=await j("/api/render/cancel",{method:"POST"});
+ b.textContent=`dropped ${r.dropped}`;
+ setTimeout(()=>{b.textContent="cancel renders";b.disabled=false;},1800);});
 // auto-refresh on the index when runs finish
 let lastStamp="";
 setInterval(async()=>{if(!location.hash.startsWith("#/run/")){const{stamp}=await j("/api/stamp");
@@ -2226,6 +2873,7 @@ def main() -> None:
 
     SCAN.root = Path(args.root).resolve()
     SCAN.exclude_dirs = set(args.exclude)
+    SCAN.tag = f"{SCAN.root.name}:{args.port}"
     refresh_runs()
     print(f"discovered {len(RUNS)} runs under {SCAN.root}")
 

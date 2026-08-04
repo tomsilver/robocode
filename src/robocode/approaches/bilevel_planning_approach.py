@@ -15,6 +15,7 @@ from the env's `bilevel_env_name` / `bilevel_env_model_kwargs` mapping (see
 """
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,8 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         output_subdir: Path,
         render: bool = False,
         count: int | None = None,
+        max_steps: int | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> InstanceResult:
         """Plan once for this seed, then execute the plan open-loop.
 
@@ -133,7 +136,23 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         if object_count is None and isinstance(env, VariableObjectCountEnv):
             object_count = env.current_count
 
+        frames: list[Any] = []
+
+        def _capture() -> None:
+            rendered = env.render()
+            # render() may return a single frame, a list, or None; keep only
+            # numpy RGB frames (matches run_episode and what save_video expects).
+            if isinstance(rendered, np.ndarray):
+                frames.append(rendered)
+
+        # Capture before planning: a timeout or unreachable goal still has a useful
+        # visualization of the instance the planner could not solve.
+        if render:
+            _capture()
+
         plan_start = time.perf_counter()
+        if progress_callback is not None:
+            progress_callback("planning", 0, 0)
         try:
             agent.reset(self._planner_obs(env, obs), info)
             plan_found = True
@@ -142,11 +161,14 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         planning_time = time.perf_counter() - plan_start
 
         if not plan_found:
+            if progress_callback is not None:
+                progress_callback("planning failed; saving initial state", 0, 0)
             return InstanceResult(
                 solved=False,
                 total_reward=None,
                 num_steps=None,
                 cost_usd=0.0,
+                frames=frames if render else None,
                 extras={
                     "planning_time": planning_time,
                     "plan_found": False,
@@ -159,18 +181,6 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
                 },
             )
 
-        frames: list[Any] = []
-
-        def _capture() -> None:
-            rendered = env.render()
-            # render() may return a single frame, a list, or None; keep only
-            # numpy RGB frames (matches run_episode and what save_video expects).
-            if isinstance(rendered, np.ndarray):
-                frames.append(rendered)
-
-        if render:
-            _capture()
-
         total_reward = 0.0
         num_steps = 0
         terminated = False
@@ -178,12 +188,14 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         env_step_time = 0.0
         # A variable-count instance gets a horizon that grows with its object count,
         # so a large instance is not cut off before its (longer) plan can execute.
-        max_steps = (
+        episode_max_steps = (
             env.max_steps_for_count(count)
             if count is not None and isinstance(env, VariableObjectCountEnv)
             else self._max_steps
         )
-        for _ in range(max_steps):
+        if max_steps is not None:
+            episode_max_steps = min(episode_max_steps, max_steps)
+        for _ in range(episode_max_steps):
             t0 = time.perf_counter()
             try:
                 action = agent.step()
@@ -197,6 +209,8 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             env_step_time += time.perf_counter() - t0
             total_reward += float(reward)
             num_steps += 1
+            if progress_callback is not None:
+                progress_callback("running episode", num_steps, episode_max_steps)
             t0 = time.perf_counter()
             agent.update(
                 self._planner_obs(env, obs),

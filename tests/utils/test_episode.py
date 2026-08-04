@@ -472,6 +472,24 @@ def test_run_episode_returns_final_state() -> None:
     assert final_state == np.array([3.0], dtype=np.float32)
 
 
+def test_run_episode_reports_step_progress() -> None:
+    """Replay callers can expose actual rollout progress after every step."""
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    updates: list[tuple[int, int]] = []
+
+    metrics, _, _ = run_episode(
+        env,
+        approach,
+        seed=0,
+        max_steps=10,
+        progress_callback=lambda current, total: updates.append((current, total)),
+    )
+
+    assert updates == [(1, 10), (2, 10), (3, 10)]
+    assert metrics["num_steps"] == updates[-1][0]
+
+
 def test_run_episode_with_timeout_solves_within_budget() -> None:
     """A fast policy finishes inside the forked worker and is scored normally."""
     env = _CountEnv()

@@ -9,6 +9,7 @@ budget that carries across seeds; this class solves one instance at a time.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,8 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         output_subdir: Path,
         render: bool = False,
         count: int | None = None,
+        max_steps: int | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> InstanceResult:
         """Run the agent on a single seed, then score the program it wrote.
 
@@ -54,6 +57,8 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         """
         sandbox_dir = output_subdir / "sandbox"
         sandbox_dir.mkdir(parents=True, exist_ok=True)
+        if progress_callback is not None:
+            progress_callback("generating specialized approach", 0, 0)
 
         # The local MCP render server reads env_config.json from the sandbox's
         # parent dir. Each per-instance sandbox needs its own copy (the runner
@@ -106,8 +111,14 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
             if count is not None and isinstance(env, VariableObjectCountEnv)
             else self._max_steps
         )
+        if max_steps is not None:
+            episode_max_steps = min(episode_max_steps, max_steps)
         try:
+            if progress_callback is not None:
+                progress_callback("loading generated approach", 0, 0)
             self._load_generated(result.output_file)
+            if progress_callback is not None:
+                progress_callback("running episode", 0, episode_max_steps)
             metrics, frames, _ = run_episode_with_timeout(
                 env,
                 self,
