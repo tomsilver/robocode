@@ -45,6 +45,11 @@ from robocode.utils.episode import (
 logger = logging.getLogger(__name__)
 
 
+def resolve_eval_seed(cfg: DictConfig) -> int:
+    """Eval-suite seed: ``eval_seed`` when set, else ``seed``."""
+    return int(cfg.seed if cfg.get("eval_seed") is None else cfg.eval_seed)
+
+
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
@@ -107,7 +112,8 @@ def _main(cfg: DictConfig) -> float:
     )
     approach = approach_ctor(primitives=primitives)
 
-    task_rng = np.random.default_rng(cfg.seed)
+    eval_seed = resolve_eval_seed(cfg)
+    task_rng = np.random.default_rng(eval_seed)
     num_eval = cfg.num_eval_tasks
     eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
 
@@ -261,6 +267,7 @@ def _main(cfg: DictConfig) -> float:
     gen_metrics = getattr(approach, "generation_metrics", None)
     if gen_metrics is not None:
         results.update(gen_metrics.to_dict())
+    results["eval_seed"] = eval_seed
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)
