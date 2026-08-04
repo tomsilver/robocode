@@ -1,0 +1,10 @@
+# StickButton2D generalized with the stick spawn range pinned to x in
+# [3.435, 3.450] (see robocode.environments.stickbutton2d_a). Count schedule
+# matches stickbutton2d_generalized.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: robocode.environments.stickbutton2d_a:StickButton2DEnv
+count_kwarg: num_buttons
+count_object_prefix: button
+design_counts: [1, 2, 3]
+eval_counts: [1, 2, 3, 5, 10]
+bilevel_env_name: stickbutton2d
