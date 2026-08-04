@@ -8,7 +8,7 @@ import multiprocessing as mp
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import imageio.v3 as iio
 import numpy as np
@@ -91,8 +91,10 @@ class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
         output_subdir: Path,
         render: bool = False,
         count: int | None = None,
+        max_steps: int | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> InstanceResult:
-        del env, output_subdir
+        del env, output_subdir, max_steps, progress_callback
         self.calls.append(
             {"seed": seed, "budget_usd": budget_usd, "render": render, "count": count}
         )
