@@ -1,0 +1,9 @@
+# Matched monotone ClutteredStorage2D task: the standard narrow shelf and three
+# blocks, with every block initially outside so no achieved goal must be undone.
+_target_: robocode.environments.empty_shelf_clutteredstorage2d_env.EmptyShelfVariableObjectCountEnv
+constant_object_env_path: robocode.environments.empty_shelf_clutteredstorage2d_env:EmptyShelfClutteredStorage2DEnv
+count_kwarg: num_blocks
+count_object_prefix: block
+design_counts: [3]
+eval_counts: [3]
+bilevel_env_name: clutteredstorage2d
