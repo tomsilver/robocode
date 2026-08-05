@@ -376,6 +376,11 @@ async def run_agent_in_sandbox(
         env.update(
             host_launch_env(sink_dir / SINK_FILENAME, run_dir.name, with_hook=True)
         )
+    else:
+        # Make the config flag authoritative: an inherited ROBOCODE_TELEMETRY must
+        # not enable telemetry for the agent when this run (or blackbox) did not.
+        env.pop("ROBOCODE_TELEMETRY", None)
+        env.pop("ROBOCODE_RUN_ID", None)
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)

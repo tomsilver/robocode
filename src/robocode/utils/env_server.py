@@ -262,6 +262,11 @@ def env_server_running(
         server_env.update(
             host_launch_env(sink_dir / SINK_FILENAME, parent.name, with_hook=False)
         )
+    else:
+        # Make the flag authoritative: an inherited ROBOCODE_TELEMETRY must not
+        # enable telemetry on the server when this run did not ask for it.
+        server_env.pop("ROBOCODE_TELEMETRY", None)
+        server_env.pop("ROBOCODE_RUN_ID", None)
 
     with open(log_path, "w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
