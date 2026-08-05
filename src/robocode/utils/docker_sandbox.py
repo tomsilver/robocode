@@ -511,7 +511,11 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
         f"('{MCP_HTTP_HOST}', {port}), 0.3).close()\""
     )
     script = (
-        f"bash {start_script} >>{server_log} 2>&1 & srv=$!; ok=0; "
+        # Keep telemetry off the render MCP server: it does its own env resets, so
+        # instrumenting it would pollute the agent's stream. The agent CLI ("$@")
+        # keeps the telemetry env.
+        f"env -u ROBOCODE_TELEMETRY bash {start_script} >>{server_log} 2>&1 & "
+        f"srv=$!; ok=0; "
         f"for _ in $(seq 1 200); do "
         f'kill -0 "$srv" 2>/dev/null || break; '
         f"{probe} 2>/dev/null && {{ ok=1; break; }}; sleep 0.1; "

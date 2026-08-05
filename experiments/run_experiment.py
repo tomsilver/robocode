@@ -60,9 +60,10 @@ def _main(cfg: DictConfig) -> float:
 
     env = hydra.utils.instantiate(cfg.environment)
 
-    # Telemetry runs must fail loud on an env class that has no instrumentation,
-    # rather than silently producing no data.
-    if cfg.approach.get("telemetry", False):
+    # Whitebox telemetry instruments specific registered env classes, so an
+    # unregistered env would silently log nothing -- fail loud instead. Blackbox
+    # instruments generically at the env server, so it needs no registration.
+    if cfg.approach.get("telemetry", False) and not cfg.approach.get("blackbox", False):
         require_registered(cfg.environment["_target_"])
 
     # If the environment provides a description (e.g. kinder envs), write it

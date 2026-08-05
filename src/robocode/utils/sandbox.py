@@ -74,9 +74,12 @@ def _start_local_http_mcp(
     The caller terminates the returned process when the agent run ends.
     """
     script = sandbox_dir / ".mcp" / MCP_START_SCRIPT
+    # Keep telemetry off the render MCP server: it does its own env resets, so
+    # instrumenting it would pollute the agent's stream.
+    mcp_env = {k: v for k, v in env.items() if k != "ROBOCODE_TELEMETRY"}
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         ["bash", str(script)],
-        env=env,
+        env=mcp_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

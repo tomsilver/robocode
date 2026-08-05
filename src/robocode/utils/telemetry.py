@@ -180,7 +180,7 @@ def instrument_env(env: Any, *, label: str | None = None) -> Any:
         @functools.wraps(orig_set_state)
         def set_state(*args: Any, **kwargs: Any) -> Any:
             result = orig_set_state(*args, **kwargs)
-            _guard(_emit_set_state, env, args, label)
+            _guard(_emit_set_state, env, args, kwargs, label)
             return result
 
         env.set_state = set_state
@@ -218,7 +218,7 @@ def instrument_class(cls: Any, *, label: str | None = None) -> Any:
         @functools.wraps(orig_set_state)
         def set_state(self: Any, *args: Any, **kwargs: Any) -> Any:
             result = orig_set_state(self, *args, **kwargs)
-            _guard(_emit_set_state, self, args, lbl)
+            _guard(_emit_set_state, self, args, kwargs, lbl)
             return result
 
         cls.set_state = set_state
@@ -245,10 +245,13 @@ def _emit_reset(env: Any, out: Any, kwargs: dict[str, Any], label: str | None) -
     )
 
 
-def _emit_set_state(env: Any, args: tuple[Any, ...], label: str | None) -> None:
+def _emit_set_state(
+    env: Any, args: tuple[Any, ...], kwargs: dict[str, Any], label: str | None
+) -> None:
     """Reset the counters and log a ``set_state`` event (run inside ``_guard``)."""
     _reset_episode(env)
-    log_event("set_state", label=label, state=fingerprint(args[0] if args else None))
+    state = args[0] if args else kwargs.get("state")
+    log_event("set_state", label=label, state=fingerprint(state))
 
 
 # --- Env registry: which envs get telemetry, and the launch-time guard. ---

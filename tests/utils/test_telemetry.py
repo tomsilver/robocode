@@ -293,3 +293,12 @@ def test_host_launch_env_hook_toggle(monkeypatch: pytest.MonkeyPatch) -> None:
     assert hooked["PYTHONPATH"].startswith(str(tel.hook_dir()))
     assert hooked["PYTHONPATH"].endswith("/existing")
     assert "PYTHONPATH" not in tel.host_launch_env(Path("/x"), "r", with_hook=False)
+
+
+def test_set_state_captures_keyword_state(sink: Callable[[], list[dict]]) -> None:
+    """set_state(state=...) keyword form fingerprints the state, not None."""
+    env = instrument_env(_ToyEnv())
+    env.reset(seed=0)
+    env.set_state(state=np.array([2.0], dtype=np.float32))
+    events = [e for e in sink() if e["kind"] == "set_state"]
+    assert len(events) == 1 and events[0]["state"] is not None
