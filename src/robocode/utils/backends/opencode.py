@@ -117,6 +117,15 @@ class OpenCodeBackend(AgentBackend):
             )
         return args
 
+    def stdin_text(self, config: SandboxConfig) -> str:
+        """Nothing: ``opencode run`` takes the prompt as a positional argument.
+
+        So an OpenCode run still exposes its prompt through ``/proc`` and can still
+        match it with its own ``pkill -f``, unlike the Claude backend.
+        """
+        del config
+        return ""
+
     def build_env(
         self,
         config: SandboxConfig,

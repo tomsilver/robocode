@@ -30,8 +30,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import nullcontext
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from typing import IO
 
 from robocode.mcp import MCP_START_SCRIPT
 from robocode.primitive_specs import (
@@ -140,8 +142,23 @@ agent_log.txt
 .mcp/
 .agent_sessions/
 .agent_home/
+.agent_prompts/
 mcp_renders/
 """
+
+
+@contextmanager
+def agent_stdin(backend: AgentBackend, config: SandboxConfig) -> Iterator[IO[str]]:
+    """Yield a file holding the CLI's stdin: its prompt, or empty.
+
+    A file rather than a pipe so a prompt larger than the pipe buffer cannot deadlock
+    against the CLI's stdout, and so the same fd works whether the CLI runs on the host
+    or inside a container.
+    """
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as handle:
+        handle.write(backend.stdin_text(config))
+        handle.seek(0)
+        yield handle
 
 
 # ---------------------------------------------------------------------------
@@ -417,12 +434,15 @@ async def run_agent_in_sandbox(
         with claude_config as config_dir:
             if config_dir is not None:
                 env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-            with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            with (
+                tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
+                agent_stdin(backend, config) as stdin_file,
+            ):
                 proc = subprocess.Popen(  # pylint: disable=consider-using-with
                     pid_isolate(cmd),
                     cwd=sandbox_abs,
                     env=env,
-                    stdin=subprocess.DEVNULL,
+                    stdin=stdin_file,
                     stdout=subprocess.PIPE,
                     stderr=stderr_file,
                     text=True,

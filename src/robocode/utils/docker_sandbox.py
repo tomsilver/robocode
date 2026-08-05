@@ -75,6 +75,7 @@ from robocode.utils.sandbox import (
     _initial_commit,
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
+    agent_stdin,
 )
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,9 @@ def _docker_run_prefix(
         "docker",
         "run",
         "--rm",
+        # Keep the container's stdin attached: the Claude CLI reads its prompt from
+        # there so it stays out of argv (see backends.claude.stdin_text).
+        "-i",
         "--name",
         container_name,
         "--cap-add=NET_ADMIN",
@@ -646,11 +650,14 @@ async def run_agent_in_docker_sandbox(
         logger.info("Prompt:\n%s", config.prompt)
 
         wall_start = time.monotonic()
-        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        with (
+            tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
+            agent_stdin(backend, config) as stdin_file,
+        ):
             proc = subprocess.Popen(  # pylint: disable=consider-using-with
                 docker_cmd,
                 env=env,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_file,
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 text=True,

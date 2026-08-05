@@ -190,8 +190,8 @@ def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) 
 def test_pid_isolate_wraps_command_on_linux(monkeypatch) -> None:  # type: ignore
     """The local backend's CLI runs in its own PID namespace on Linux.
 
-    Without this the agent's Bash tool can signal any host process by cmdline
-    match, including the harness supervising the run.
+    Without this the agent's Bash tool can signal any host process by cmdline match,
+    including the harness supervising the run.
     """
     monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "linux")
     cmd = pid_isolate(["claude", "-p"])
@@ -201,7 +201,7 @@ def test_pid_isolate_wraps_command_on_linux(monkeypatch) -> None:  # type: ignor
 
 
 def test_pid_isolate_is_a_noop_off_linux(monkeypatch) -> None:  # type: ignore
-    """macOS has no unprivileged equivalent, so the command is left alone."""
+    """On macOS there is no unprivileged equivalent, so the command is left alone."""
     monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "darwin")
     assert pid_isolate(["claude", "-p"]) == ["claude", "-p"]
 

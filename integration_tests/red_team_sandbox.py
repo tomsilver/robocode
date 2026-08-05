@@ -1369,8 +1369,8 @@ _MARKER_FILE = "sentinel_marker.txt"
 def _host_sentinel(marker: str) -> Iterator[subprocess.Popen[bytes]]:
     """Run a uniquely named host process for the duration of the block.
 
-    The process is in its own session, so the sandbox cannot reach it through a
-    shared process group, only by cmdline match. Always terminated on exit.
+    The process is in its own session, so the sandbox cannot reach it through a shared
+    process group, only by cmdline match. Always terminated on exit.
     """
     script = RED_TEAM_DIR / f"{marker}.sh"
     script.write_text(_SENTINEL_SCRIPT, encoding="utf-8")
