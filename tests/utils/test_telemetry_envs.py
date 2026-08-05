@@ -1,4 +1,4 @@
-"""Tests for the telemetry registry, installer, and the sandbox sitecustomize hook."""
+"""Tests for the telemetry env registry and the sandbox sitecustomize hook."""
 
 # pylint: disable=redefined-outer-name
 
@@ -16,14 +16,14 @@ import pytest
 from gymnasium import Env
 from gymnasium.spaces import Box
 
-from robocode.utils import telemetry_install as ti
+from robocode.utils import telemetry_envs as te
 from robocode.utils.telemetry import TelemetryNotInstrumentedError
 
 _HOOK = Path(__file__).resolve().parents[2] / "docker" / "telemetry_hook"
 
 
 class _DummyEnv(Env):
-    """Importable env used to exercise install() without a heavy real env."""
+    """Importable env used to exercise instrumentation without a heavy real env."""
 
     def __init__(self) -> None:
         self.observation_space = Box(0.0, 1.0, shape=(1,), dtype=np.float32)
@@ -54,49 +54,49 @@ def test_require_registered_noop_when_disabled(
 ) -> None:
     """With telemetry off, an unregistered env is not rejected."""
     monkeypatch.delenv("ROBOCODE_TELEMETRY", raising=False)
-    ti.require_registered("some.unregistered.Env")  # must not raise
+    te.require_registered("some.unregistered.Env")  # must not raise
 
 
 @pytest.mark.usefixtures("enabled")
 def test_require_registered_accepts_registered_forms() -> None:
     """The registered env passes in both colon and dotted target forms."""
-    target = ti.INSTRUMENTED_ENVS[0]
-    ti.require_registered(target)
-    ti.require_registered(target.replace(":", "."))
+    target = te.INSTRUMENTED_ENVS[0]
+    te.require_registered(target)
+    te.require_registered(target.replace(":", "."))
 
 
 @pytest.mark.usefixtures("enabled")
 def test_require_registered_rejects_unregistered() -> None:
     """An unregistered env fails loud when telemetry is on."""
     with pytest.raises(TelemetryNotInstrumentedError, match="not registered"):
-        ti.require_registered("robocode.environments.maze_env:MazeEnv")
+        te.require_registered("robocode.environments.maze_env:MazeEnv")
 
 
-def test_install_noop_when_disabled(
+def test_instrument_registered_envs_noop_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """install() does nothing (no instrumentation) when telemetry is off."""
+    """Nothing is instrumented when telemetry is off."""
     monkeypatch.delenv("ROBOCODE_TELEMETRY", raising=False)
     calls: list[Any] = []
-    monkeypatch.setattr(ti, "instrument_class", calls.append)
-    ti.install()
+    monkeypatch.setattr(te, "instrument_class", calls.append)
+    te.instrument_registered_envs()
     assert not calls
 
 
-def test_install_instruments_each_registered_env(
+def test_instrument_registered_envs_wraps_each(
     enabled: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """install() instruments every registered class and logs the install event."""
+    """Every registered class is instrumented and the ready event is logged."""
     calls: list[Any] = []
-    monkeypatch.setattr(ti, "instrument_class", calls.append)
-    monkeypatch.setattr(ti, "INSTRUMENTED_ENVS", (f"{__name__}:_DummyEnv",))
-    ti.install()
+    monkeypatch.setattr(te, "instrument_class", calls.append)
+    monkeypatch.setattr(te, "INSTRUMENTED_ENVS", (f"{__name__}:_DummyEnv",))
+    te.instrument_registered_envs()
     assert calls == [_DummyEnv]
     events = [json.loads(line) for line in enabled.read_text().splitlines()]
-    assert any(e["kind"] == "telemetry_install" for e in events)
+    assert any(e["kind"] == "telemetry_ready" for e in events)
 
 
-def test_sitecustomize_installs_when_enabled(tmp_path: Path) -> None:
+def test_sitecustomize_instruments_when_enabled(tmp_path: Path) -> None:
     """Running the real sitecustomize hook with telemetry on instruments + logs."""
     sink = tmp_path / "hook.jsonl"
     env = {
@@ -108,7 +108,7 @@ def test_sitecustomize_installs_when_enabled(tmp_path: Path) -> None:
         [sys.executable, str(_HOOK / "sitecustomize.py")], env=env, check=True
     )
     events = [json.loads(line) for line in sink.read_text().splitlines()]
-    assert any(e["kind"] == "telemetry_install" for e in events)
+    assert any(e["kind"] == "telemetry_ready" for e in events)
 
 
 def test_sitecustomize_noop_when_disabled(tmp_path: Path) -> None:

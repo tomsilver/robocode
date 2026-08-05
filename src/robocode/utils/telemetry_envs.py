@@ -1,4 +1,4 @@
-"""Registry of env classes wired for telemetry, plus the sandbox installer.
+"""Registry of env classes wired for telemetry, and how to apply it.
 
 Telemetry is opt-in and must never be silently missing. An env class is
 instrumented only if it is listed in :data:`INSTRUMENTED_ENVS`, and a telemetry
@@ -7,8 +7,10 @@ so a new env type forces a conscious one-line registration here instead of
 quietly producing no data after an experiment.
 
 The same registry drives both sides: the sandbox ``sitecustomize`` hook calls
-:func:`install` to instrument every listed class in-process (whitebox), and the
+:func:`instrument_registered_envs` to wrap every listed class in-process, and the
 run harness calls :func:`require_registered` on the configured env before launch.
+This is the project-specific layer over the generic mechanism in
+:mod:`robocode.utils.telemetry`, which knows nothing about robocode's env classes.
 """
 
 from __future__ import annotations
@@ -34,19 +36,19 @@ def _normalize(target: str) -> str:
     return target.replace(":", ".")
 
 
-def install() -> None:
-    """Instrument every registered env class; a no-op when telemetry is off.
+def instrument_registered_envs() -> None:
+    """Wrap every registered env class in this process; a no-op when telemetry is off.
 
-    Called by the sandbox ``sitecustomize`` hook. Import or instrumentation errors
-    propagate on purpose -- a broken telemetry install should fail loud, not run
-    an experiment blind.
+    Called by the sandbox ``sitecustomize`` hook and usable directly in local
+    runs. Import or instrumentation errors propagate on purpose -- a broken
+    telemetry setup should fail loud, not run an experiment blind.
     """
     if not enabled():
         return
     for target in INSTRUMENTED_ENVS:
         module_name, class_name = target.split(":")
         instrument_class(getattr(importlib.import_module(module_name), class_name))
-    log_event("telemetry_install", envs=list(INSTRUMENTED_ENVS))
+    log_event("telemetry_ready", envs=list(INSTRUMENTED_ENVS))
 
 
 def require_registered(env_target: str) -> None:
@@ -62,5 +64,5 @@ def require_registered(env_target: str) -> None:
         raise TelemetryNotInstrumentedError(
             f"Telemetry is on but env {env_target!r} is not registered for "
             "instrumentation; add it to INSTRUMENTED_ENVS in "
-            "robocode.utils.telemetry_install."
+            "robocode.utils.telemetry_envs."
         )
