@@ -76,6 +76,7 @@ from robocode.utils.sandbox import (
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
 )
+from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,23 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
+
+
+def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
+    """(extra volumes, env args) enabling telemetry for a whitebox docker run.
+
+    Empty when telemetry is off or for blackbox runs (the host env server is
+    instrumented instead). Creates the host sink dir so a swallowed write failure
+    can't leave telemetry silently empty.
+    """
+    if not config.telemetry or config.blackbox:
+        return [], []
+    sink_dir = config.sandbox_dir.resolve().parent / "telemetry"
+    sink_dir.mkdir(parents=True, exist_ok=True)
+    mounts, env = container_launch(sink_dir, config.sandbox_dir.name)
+    volumes = [f"{host}:{cont}{':ro' if ro else ''}" for host, cont, ro in mounts]
+    env_args = [tok for key, val in env.items() for tok in ("-e", f"{key}={val}")]
+    return volumes, env_args
 
 
 def _get_claude_oauth_token() -> str | None:
@@ -580,6 +598,7 @@ async def run_agent_in_docker_sandbox(
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
+        tel_volumes, tel_env_args = _telemetry_docker(config)
         docker_cmd = _docker_run_prefix(
             container_name,
             config.docker_image,
@@ -589,7 +608,7 @@ async def run_agent_in_docker_sandbox(
             filtered_kinder_baselines,
             auth_args,
             firewall_domains,
-            extra_volumes=session_volumes,
+            extra_volumes=session_volumes + tel_volumes,
             env_args=[
                 "-e",
                 f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
@@ -605,7 +624,8 @@ async def run_agent_in_docker_sandbox(
                 "MUJOCO_GL=osmesa",
                 "-e",
                 "PYOPENGL_PLATFORM=osmesa",
-            ],
+            ]
+            + tel_env_args,
             # Map the host gateway for blackbox (env server) and local model
             # runs (ollama/vLLM on the host), which both reach host loopback.
             map_host_gateway=config.blackbox or _is_local_model(config.model),
