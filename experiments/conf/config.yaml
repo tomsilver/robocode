@@ -4,6 +4,8 @@ defaults:
   - _self_
 
 seed: 42
+# Eval-suite seed; defaults to `seed`. Pin it to score different runs on one suite.
+eval_seed: null
 max_steps: 1000
 num_eval_tasks: 100
 # Per-instance eval wall-clock budget (seconds), shared by every approach.
