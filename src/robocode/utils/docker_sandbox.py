@@ -185,9 +185,10 @@ def _filtered_repo_mounts(
     baselines/`` to bind-mount.
 
     ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
-    *keep_primitives*); ``kindergarden`` without tests/docs. With *blackbox*,
-    environment source (``robocode/environments/``, ``kinder/envs/``, demos) is
-    also excluded. With *include_bilevel*, the two kinder-baselines subpackages
+    *keep_primitives*); ``kindergarden`` without tests/docs/demos (demos hold
+    recorded solution trajectories, excluded in every mode). With *blackbox*,
+    environment source (``robocode/environments/``, ``kinder/envs/``) is also
+    excluded. With *include_bilevel*, the two kinder-baselines subpackages
     are also copied (for the ``bilevel_models`` primitive); otherwise the third
     yielded value is ``None`` and no bilevel source reaches the sandbox. The
     copies live in a temp dir that is removed on exit.
