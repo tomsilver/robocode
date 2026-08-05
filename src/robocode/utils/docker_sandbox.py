@@ -140,15 +140,12 @@ def _find_repo_root() -> Path:
 def _copy_kindergarden_without_tests(
     kindergarden: Path, dest: Path, *, blackbox: bool = False
 ) -> None:
-    """Copy ``kindergarden`` to *dest*, skipping ``tests/`` and ``docs/``.
+    """Copy ``kindergarden`` to *dest*, skipping ``tests/``, ``docs/`` and ``demos/``.
 
-    With *blackbox*, also skips ``kinder/envs/`` (all environment dynamics,
-    rewards, and scene generation) and ``demos/`` (recorded solution
-    trajectories) so the agent cannot read them. The package skeleton
-    (pyproject.toml, ``kinder/core.py`` etc.) stays so the entrypoint's
-    ``uv sync --frozen`` still succeeds.
+    ``demos/`` holds recorded solutions. Blackbox also skips ``kinder/envs/``;
+    the installable skeleton stays so ``uv sync --frozen`` succeeds.
     """
-    skip = ("tests", "docs", "envs", "demos") if blackbox else ("tests", "docs")
+    skip = ("tests", "docs", "demos") + (("envs",) if blackbox else ())
     shutil.copytree(
         kindergarden,
         dest,
@@ -188,9 +185,10 @@ def _filtered_repo_mounts(
     baselines/`` to bind-mount.
 
     ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
-    *keep_primitives*); ``kindergarden`` without tests/docs. With *blackbox*,
-    environment source (``robocode/environments/``, ``kinder/envs/``, demos) is
-    also excluded. With *include_bilevel*, the two kinder-baselines subpackages
+    *keep_primitives*); ``kindergarden`` without tests/docs/demos (demos hold
+    recorded solution trajectories, excluded in every mode). With *blackbox*,
+    environment source (``robocode/environments/``, ``kinder/envs/``) is also
+    excluded. With *include_bilevel*, the two kinder-baselines subpackages
     are also copied (for the ``bilevel_models`` primitive); otherwise the third
     yielded value is ``None`` and no bilevel source reaches the sandbox. The
     copies live in a temp dir that is removed on exit.
