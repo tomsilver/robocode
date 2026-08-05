@@ -366,12 +366,12 @@ async def run_agent_in_sandbox(
 
     env = backend.build_env(config)
     if config.telemetry and not config.blackbox:
-        sink_dir = config.sandbox_dir.resolve().parent / "telemetry"
+        # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
+        run_dir = config.sandbox_dir.resolve().parent
+        sink_dir = run_dir / "telemetry"
         sink_dir.mkdir(parents=True, exist_ok=True)
         env.update(
-            host_launch_env(
-                sink_dir / SINK_FILENAME, config.sandbox_dir.name, with_hook=True
-            )
+            host_launch_env(sink_dir / SINK_FILENAME, run_dir.name, with_hook=True)
         )
     sandbox_abs = str(config.sandbox_dir.resolve())
 

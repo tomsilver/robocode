@@ -958,4 +958,6 @@ def test_telemetry_docker_args(tmp_path: Path) -> None:
     assert any("/robocode/telemetry_hook:ro" in v for v in vols)
     assert any(v.endswith(":/telemetry") for v in vols)
     assert "ROBOCODE_TELEMETRY=/telemetry/events.jsonl" in env_args
+    # run id is the run's output dir name, not the constant "sandbox".
+    assert "ROBOCODE_RUN_ID=run" in env_args
     assert (sb.parent / "telemetry").is_dir()

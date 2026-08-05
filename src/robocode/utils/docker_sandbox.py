@@ -96,9 +96,11 @@ def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
     """
     if not config.telemetry or config.blackbox:
         return [], []
-    sink_dir = config.sandbox_dir.resolve().parent / "telemetry"
+    # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
+    run_dir = config.sandbox_dir.resolve().parent
+    sink_dir = run_dir / "telemetry"
     sink_dir.mkdir(parents=True, exist_ok=True)
-    mounts, env = container_launch(sink_dir, config.sandbox_dir.name)
+    mounts, env = container_launch(sink_dir, run_dir.name)
     volumes = [f"{host}:{cont}{':ro' if ro else ''}" for host, cont, ro in mounts]
     env_args = [tok for key, val in env.items() for tok in ("-e", f"{key}={val}")]
     return volumes, env_args

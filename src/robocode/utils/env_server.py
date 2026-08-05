@@ -256,10 +256,11 @@ def env_server_running(
 
     server_env = dict(os.environ)
     if telemetry:
+        # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
         sink_dir = parent / "telemetry"
         sink_dir.mkdir(parents=True, exist_ok=True)
         server_env.update(
-            host_launch_env(sink_dir / SINK_FILENAME, sandbox_dir.name, with_hook=False)
+            host_launch_env(sink_dir / SINK_FILENAME, parent.name, with_hook=False)
         )
 
     with open(log_path, "w", encoding="utf-8") as log_file:

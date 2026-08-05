@@ -87,9 +87,11 @@ def _telemetry_apptainer(config: SandboxConfig) -> tuple[list[str], dict[str, st
     """
     if not config.telemetry or config.blackbox:
         return [], {}
-    sink_dir = config.sandbox_dir.resolve().parent / "telemetry"
+    # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
+    run_dir = config.sandbox_dir.resolve().parent
+    sink_dir = run_dir / "telemetry"
     sink_dir.mkdir(parents=True, exist_ok=True)
-    mounts, env = container_launch(sink_dir, config.sandbox_dir.name)
+    mounts, env = container_launch(sink_dir, run_dir.name)
     binds = [f"{host}:{cont}{':ro' if ro else ''}" for host, cont, ro in mounts]
     return binds, {f"APPTAINERENV_{key}": val for key, val in env.items()}
 
