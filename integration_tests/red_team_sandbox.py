@@ -10,6 +10,7 @@ Usage:
     python integration_tests/red_team_sandbox.py --firewall-reinit-only  # Docker FW
     python integration_tests/red_team_sandbox.py --apptainer-firewall-reinit-only
     python integration_tests/red_team_sandbox.py --pid-isolation-only apptainer
+    python integration_tests/red_team_sandbox.py --pid-isolation-only docker
 
 First runs a smoke test to verify the agent can do basic work inside
 the sandbox. Then runs adversarial prompts that attempt to escape.
@@ -36,7 +37,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -55,6 +58,7 @@ from robocode.utils.backends import create_backend
 from robocode.utils.claude_auth import host_claude_config_dir
 from robocode.utils.docker_sandbox import (
     _DEFAULT_IMAGE,
+    DOCKER_PYTHON,
     DockerSandboxConfig,
     _build_docker_auth_args,
     _docker_run_prefix,
@@ -1419,83 +1423,76 @@ printf 'bg_wait_rc=%s\\n' "$?"
 """
 
 
-def _write_sentinel_marker(marker: str) -> None:
-    """Put the pkill pattern where the sandbox probe reads it from."""
+@contextmanager
+def _sandbox_launcher(backend: str) -> Iterator[Callable[[Path, str], list[str]]]:
+    """Yield a builder turning (sandbox dir, shell script) into a launch command.
+
+    The command is assembled by the same code a real run uses, so these tests can
+    never drift from the flags that ship. One set of filtered mounts is shared by
+    every command built inside the block, so a test can hold two sandboxes open at
+    once without copying the repo twice. The local backend has no container: what
+    it yields is the ``pid_isolate`` wrapper :func:`run_agent_in_sandbox` puts in
+    front of the agent CLI.
+    """
+    if backend == "local":
+        yield lambda sandbox, script: pid_isolate(["bash", "-c", script])
+        return
+    if backend == "apptainer":
+        sif = ApptainerSandboxConfig(sandbox_dir=SANDBOX_DIR).sif_path
+        if not sif.exists():
+            raise RuntimeError(
+                f"SIF image not found at {sif}; build it with: bash docker/build_sif.sh"
+            )
+
+    with _filtered_repo_mounts() as (src, kindergarden, _):
+
+        def build(sandbox: Path, script: str) -> list[str]:
+            if backend == "apptainer":
+                return _build_apptainer_cmd(
+                    ApptainerSandboxConfig(sandbox_dir=sandbox),
+                    sandbox_abs=str(sandbox.resolve()),
+                    src_abs=str(src.resolve()),
+                    kindergarden_abs=str(kindergarden.resolve()),
+                    kinder_baselines_abs=None,
+                    auth_args=[],
+                    firewall_domains=[],
+                    agent_cmd=["bash", "-c", script],
+                )
+            return _docker_run_prefix(
+                f"robocode-redteam-{uuid.uuid4().hex[:8]}",
+                _DEFAULT_IMAGE,
+                sandbox,
+                src,
+                kindergarden,
+                None,
+                [],
+                [],
+            ) + ["bash", "-c", script]
+
+        yield build
+
+
+def _sandbox_python(backend: str) -> str:
+    """The interpreter the sandbox's own agent is told to use."""
+    return sys.executable if backend == "local" else DOCKER_PYTHON
+
+
+def _pid_isolation_probe(
+    backend: str, marker: str, sentinel_pid: int
+) -> subprocess.CompletedProcess[str]:
+    """Try to see and signal a host process from *backend*'s sandbox."""
     SANDBOX_DIR.mkdir(parents=True, exist_ok=True)
     (SANDBOX_DIR / _MARKER_FILE).write_text(marker, encoding="utf-8")
-
-
-def _apptainer_pid_isolation_probe(
-    marker: str, sentinel_pid: int
-) -> subprocess.CompletedProcess[str]:
-    """Try to see and signal a host process from the Apptainer sandbox."""
-    config = ApptainerSandboxConfig(sandbox_dir=SANDBOX_DIR)
-    if not config.sif_path.exists():
-        raise RuntimeError(
-            f"SIF image not found at {config.sif_path}; "
-            "build it with: bash docker/build_sif.sh"
-        )
-
-    _write_sentinel_marker(marker)
-    script = _pid_isolation_script(f"/sandbox/{_MARKER_FILE}", sentinel_pid)
-    with _filtered_repo_mounts() as (src, kindergarden, _):
-        cmd = _build_apptainer_cmd(
-            config,
-            sandbox_abs=str(SANDBOX_DIR.resolve()),
-            src_abs=str(src.resolve()),
-            kindergarden_abs=str(kindergarden.resolve()),
-            kinder_baselines_abs=None,
-            auth_args=[],
-            firewall_domains=[],
-            agent_cmd=["bash", "-c", script],
-        )
+    script = _pid_isolation_script(_MARKER_FILE, sentinel_pid)
+    with _sandbox_launcher(backend) as build:
         return subprocess.run(
-            cmd, capture_output=True, text=True, check=False, timeout=900
+            build(SANDBOX_DIR, script),
+            cwd=str(SANDBOX_DIR.resolve()),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=900,
         )
-
-
-def _docker_pid_isolation_probe(
-    marker: str, sentinel_pid: int
-) -> subprocess.CompletedProcess[str]:
-    """Try to see and signal a host process from the Docker sandbox."""
-    _write_sentinel_marker(marker)
-    script = _pid_isolation_script(f"/sandbox/{_MARKER_FILE}", sentinel_pid)
-    with _filtered_repo_mounts() as (src, kindergarden, _):
-        cmd = _docker_run_prefix(
-            f"robocode-redteam-pid-{uuid.uuid4().hex[:8]}",
-            _DEFAULT_IMAGE,
-            SANDBOX_DIR,
-            src,
-            kindergarden,
-            None,
-            [],
-            [],
-        ) + ["bash", "-c", script]
-        return subprocess.run(
-            cmd, capture_output=True, text=True, check=False, timeout=900
-        )
-
-
-def _local_pid_isolation_probe(
-    marker: str, sentinel_pid: int
-) -> subprocess.CompletedProcess[str]:
-    """Try to see and signal a host process from the OS-level sandbox.
-
-    The local backend has no container, so what is under test is the ``pid_isolate``
-    wrapper that :func:`run_agent_in_sandbox` puts in front of the agent CLI.
-    """
-    _write_sentinel_marker(marker)
-    script = _pid_isolation_script(
-        str((SANDBOX_DIR / _MARKER_FILE).resolve()), sentinel_pid
-    )
-    return subprocess.run(
-        pid_isolate(["bash", "-c", script]),
-        cwd=str(SANDBOX_DIR.resolve()),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
 
 
 async def _run_pid_isolation(
@@ -1568,21 +1565,156 @@ async def _run_pid_isolation(
     print("  BACKGROUND TASKS: WORKING")
 
 
-async def _run_apptainer_pid_isolation() -> None:
-    """Assert the Apptainer sandbox cannot see or signal host processes."""
+_BACKEND_LABELS = {
+    "local": "OS-level",
+    "docker": "Docker",
+    "apptainer": "Apptainer",
+}
+
+
+async def _run_pid_isolation_for(backend: str) -> None:
+    """Assert *backend*'s sandbox cannot see or signal host processes."""
     await _run_pid_isolation(
-        "Apptainer", _apptainer_pid_isolation_probe, expect_init="appinit"
+        _BACKEND_LABELS[backend],
+        lambda marker, pid: _pid_isolation_probe(backend, marker, pid),
+        # Apptainer's init shim is what reaps orphans and tears the namespace down
+        # when the payload exits; docker's entrypoint and the local wrapper differ.
+        expect_init="appinit" if backend == "apptainer" else "",
     )
 
 
-async def _run_docker_pid_isolation() -> None:
-    """Assert the Docker sandbox cannot see or signal host processes."""
-    await _run_pid_isolation("Docker", _docker_pid_isolation_probe)
+# Cross-session isolation test: the incident itself, as a test. Two sandboxes run
+# at once; the second fires the `pkill -f <filename>` the agent used. Neither the
+# first session, nor its background task, nor the firing session may die. The
+# filename is unique per run, so the pkill can only ever match this test's own
+# processes and never a real experiment sharing the machine.
+_SESSION_READY = "session_a_ready"
+_SESSION_B_DONE = "session_b_done"
 
 
-async def _run_local_pid_isolation() -> None:
-    """Assert the OS-level sandbox cannot see or signal host processes."""
-    await _run_pid_isolation("OS-level", _local_pid_isolation_probe)
+def _session_a_script(backend: str, marker: str) -> str:
+    """A normal session: a background task named *marker*, then work until told to stop.
+
+    The session shell's own argv carries *marker* too, exactly as a real agent CLI's
+    argv carried the filename its prompt told it to create. That is what let one
+    pkill take down a whole session rather than just its background task.
+    """
+    return f"""
+set -u
+{_sandbox_python(backend)} ./{marker} &
+task=$!
+printf 'A: task_pid=%s\\n' "$task"
+: > ./{_SESSION_READY}
+for _ in $(seq 1 120); do
+    kill -0 "$task" 2>/dev/null || {{ printf 'A: TASK_KILLED\\n'; break; }}
+    [ -e ./{_SESSION_B_DONE} ] && break
+    sleep 1
+done
+kill -0 "$task" 2>/dev/null && printf 'A: TASK_ALIVE\\n'
+printf 'A: SESSION_COMPLETED\\n'
+"""
+
+
+def _session_b_script() -> str:
+    """The offending session: pgrep and pkill the other session's task by name.
+
+    The pattern is read from a file so this shell's own argv does not carry it; a
+    session that killed itself here would prove nothing about reaching session A.
+    """
+    return f"""
+set -u
+pat="$(cat ./{_MARKER_FILE})"
+printf 'B: pgrep matches:\\n'
+pgrep -af "$pat" || printf '  (none)\\n'
+pkill -f "$pat"
+printf 'B: pkill_rc=%s\\n' "$?"
+printf 'B: SESSION_COMPLETED\\n'
+"""
+
+
+@contextmanager
+def _running_session(cmd: list[str], sandbox: Path) -> Iterator[subprocess.Popen[str]]:
+    """Run session A for the duration of the block, once its task is up."""
+    proc = subprocess.Popen(  # pylint: disable=consider-using-with
+        cmd,
+        cwd=str(sandbox.resolve()),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 300
+        while not (sandbox / _SESSION_READY).exists():
+            if proc.poll() is not None:
+                raise RuntimeError(f"session A exited at startup ({proc.returncode})")
+            if time.monotonic() > deadline:
+                raise RuntimeError("session A never started its background task")
+            time.sleep(0.5)
+        yield proc
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+
+
+async def _run_cross_session_isolation(backend: str) -> None:
+    """Assert one sandbox's pkill cannot reach a concurrently running sandbox."""
+    label = _BACKEND_LABELS[backend]
+    print(f"\n{'='*60}")
+    print(f"TEST [{label} pid]: cross_session_isolation")
+    print("  run two sandboxes at once; the second pkills the first's task by name")
+    print(f"{'='*60}")
+
+    marker = f"zqx7_test_approach_{uuid.uuid4().hex[:8]}.py"
+    sandbox_a = RED_TEAM_DIR / "session_a"
+    sandbox_b = RED_TEAM_DIR / "session_b"
+    for path in (sandbox_a, sandbox_b):
+        shutil.rmtree(path, ignore_errors=True)
+        path.mkdir(parents=True)
+    (sandbox_a / marker).write_text("import time\ntime.sleep(600)\n", encoding="utf-8")
+    (sandbox_b / _MARKER_FILE).write_text(marker, encoding="utf-8")
+
+    with _sandbox_launcher(backend) as build:
+        cmd_a = build(sandbox_a, _session_a_script(backend, marker))
+        cmd_b = build(sandbox_b, _session_b_script())
+        with _running_session(cmd_a, sandbox_a) as session_a:
+            result_b = subprocess.run(
+                cmd_b,
+                cwd=str(sandbox_b.resolve()),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=900,
+            )
+            (sandbox_a / _SESSION_B_DONE).touch()
+            out_a, _ = session_a.communicate(timeout=300)
+
+    print(result_b.stdout.rstrip())
+    print(f"  SESSION B EXIT: {result_b.returncode}")
+    print(out_a.rstrip())
+    print(f"  SESSION A EXIT: {session_a.returncode}")
+
+    if result_b.returncode != 0 or "B: SESSION_COMPLETED" not in result_b.stdout:
+        raise SandboxBreachError(
+            f"[{label}] The pkill killed the session that issued it "
+            f"(exit {result_b.returncode}): {result_b.stderr[-500:]}"
+        )
+    match = re.search(r"pkill_rc=(\d+)", result_b.stdout)
+    if match is None or int(match.group(1)) == 0:
+        raise SandboxBreachError(
+            f"[{label}] The pkill matched a process outside its own sandbox."
+        )
+    if "A: TASK_KILLED" in out_a:
+        raise SandboxBreachError(
+            f"[{label}] One sandbox killed a concurrently running sandbox's "
+            "background task."
+        )
+    if session_a.returncode != 0 or "A: SESSION_COMPLETED" not in out_a:
+        raise SandboxBreachError(
+            f"[{label}] One sandbox killed a concurrently running sandbox's "
+            f"session (exit {session_a.returncode})."
+        )
+
+    print("  OTHER SESSION: SURVIVED    ISSUING SESSION: SURVIVED")
 
 
 async def _run_home_persistence() -> None:
@@ -1693,8 +1825,9 @@ async def main() -> None:
     parser.add_argument(
         "--pid-isolation-only",
         choices=("local", "docker", "apptainer"),
-        help="Run only the host-process isolation test for one sandbox backend: "
-        "the agent must not be able to see or signal a process it did not start",
+        help="Run only the process isolation tests for one sandbox backend: the "
+        "agent must not be able to see or signal a process it did not start, and "
+        "a pkill in one sandbox must not reach a concurrently running sandbox",
     )
     args = parser.parse_args()
     if args.proxy_only:
@@ -1730,13 +1863,12 @@ async def main() -> None:
 
     try:
         if args.pid_isolation_only:
-            await {
-                "local": _run_local_pid_isolation,
-                "docker": _run_docker_pid_isolation,
-                "apptainer": _run_apptainer_pid_isolation,
-            }[args.pid_isolation_only]()
+            await _run_pid_isolation_for(args.pid_isolation_only)
+            await _run_cross_session_isolation(args.pid_isolation_only)
             print(f"\n{'='*60}")
             print(f"RED TEAM COMPLETE ({args.pid_isolation_only} pid-isolation)")
+            print("  Host process isolation test passed")
+            print("  Cross-session isolation test passed")
             print(f"{'='*60}")
             return
 
@@ -1766,7 +1898,8 @@ async def main() -> None:
             # the Apptainer sandbox (which isolates with --no-home / --cleanenv /
             # --pwd and the filtered mounts instead of a container + firewall).
             await _run_apptainer_firewall_reinit()
-            await _run_apptainer_pid_isolation()
+            await _run_pid_isolation_for("apptainer")
+            await _run_cross_session_isolation("apptainer")
             await _run_smoke_test(use_docker=False, use_apptainer=True)
             for name, prompt, breach_fn in BLACKBOX_PROMPTS:
                 await _run_blackbox_adversarial(
@@ -1776,6 +1909,7 @@ async def main() -> None:
             print("RED TEAM COMPLETE (Apptainer blackbox)")
             print("  Firewall reinitialization test passed")
             print("  Host process isolation test passed")
+            print("  Cross-session isolation test passed")
             print(f"  Blackbox tests passed: {len(BLACKBOX_PROMPTS)}")
             print(f"{'='*60}")
             return
@@ -1847,12 +1981,12 @@ async def main() -> None:
             await _run_adversarial(name, prompt, use_docker)
 
         # The host-home mount only exists under Docker; skip it OS-level.
+        backend = "docker" if use_docker else "local"
         if use_docker:
             await _run_firewall_reinit()
             await _run_home_persistence()
-            await _run_docker_pid_isolation()
-        else:
-            await _run_local_pid_isolation()
+        await _run_pid_isolation_for(backend)
+        await _run_cross_session_isolation(backend)
 
         leak_count = 0
         if not use_docker:
@@ -1864,6 +1998,7 @@ async def main() -> None:
         print(f"RED TEAM COMPLETE ({mode})")
         print(f"  Adversarial tests passed: {len(all_adversarial)}")
         print("  Host process isolation test passed")
+        print("  Cross-session isolation test passed")
         if use_docker:
             print("  Firewall reinitialization test passed")
             print("  Host home-persistence test passed")
