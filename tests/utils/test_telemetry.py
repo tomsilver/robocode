@@ -5,6 +5,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,8 +24,9 @@ from robocode.utils.telemetry import (
     instrument_class,
     instrument_env,
     log_event,
-    require_instrumented,
 )
+
+_HOOK = Path(__file__).resolve().parents[2] / "docker" / "telemetry_hook"
 
 
 class _ToyEnv(Env):
@@ -207,31 +211,69 @@ def test_instance_guard_skips_class_wrapped() -> None:
     assert env.reset == reset_before
 
 
-@pytest.mark.usefixtures("sink")
-def test_require_instrumented_raises_when_missing() -> None:
-    """With telemetry on, an uninstrumented env fails loud."""
-    with pytest.raises(TelemetryNotInstrumentedError, match="_ToyEnv"):
-        require_instrumented(_ToyEnv())
+def test_require_registered_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With telemetry off, an unregistered env is not rejected."""
+    monkeypatch.delenv("ROBOCODE_TELEMETRY", raising=False)
+    tel.require_registered("some.unregistered.Env")  # must not raise
 
 
 @pytest.mark.usefixtures("sink")
-def test_require_instrumented_passes_when_wrapped() -> None:
-    """An instrumented env satisfies the guard (instance and class paths)."""
-    require_instrumented(instrument_env(_ToyEnv()))
-
-    class _C(_ToyEnv):
-        pass
-
-    instrument_class(_C)
-    require_instrumented(_C())
+def test_require_registered_accepts_registered_forms() -> None:
+    """The registered env passes in both colon and dotted target forms."""
+    target = tel.INSTRUMENTED_ENVS[0]
+    tel.require_registered(target)
+    tel.require_registered(target.replace(":", "."))
 
 
-def test_require_instrumented_noop_when_disabled(
+@pytest.mark.usefixtures("sink")
+def test_require_registered_rejects_unregistered() -> None:
+    """An unregistered env fails loud when telemetry is on."""
+    with pytest.raises(TelemetryNotInstrumentedError, match="not registered"):
+        tel.require_registered("robocode.environments.maze_env:MazeEnv")
+
+
+def test_instrument_registered_envs_noop_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The guard never fires when telemetry is off."""
+    """Nothing is instrumented when telemetry is off."""
     monkeypatch.delenv("ROBOCODE_TELEMETRY", raising=False)
-    require_instrumented(_ToyEnv())  # must not raise
+    calls: list[Any] = []
+    monkeypatch.setattr(tel, "instrument_class", calls.append)
+    tel.instrument_registered_envs()
+    assert not calls
+
+
+def test_instrument_registered_envs_wraps_each(
+    sink: Callable[[], list[dict]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every registered class is instrumented and the ready event is logged."""
+    calls: list[Any] = []
+    monkeypatch.setattr(tel, "instrument_class", calls.append)
+    monkeypatch.setattr(tel, "INSTRUMENTED_ENVS", (f"{__name__}:_ToyEnv",))
+    tel.instrument_registered_envs()
+    assert calls == [_ToyEnv]
+    assert any(e["kind"] == "telemetry_ready" for e in sink())
+
+
+def test_sitecustomize_instruments_when_enabled(tmp_path: Path) -> None:
+    """Running the real sitecustomize hook with telemetry on instruments + logs."""
+    sink_path = tmp_path / "hook.jsonl"
+    env = {**os.environ, "ROBOCODE_TELEMETRY": str(sink_path), "ROBOCODE_RUN_ID": "h"}
+    subprocess.run(
+        [sys.executable, str(_HOOK / "sitecustomize.py")], env=env, check=True
+    )
+    events = [json.loads(line) for line in sink_path.read_text().splitlines()]
+    assert any(e["kind"] == "telemetry_ready" for e in events)
+
+
+def test_sitecustomize_noop_when_disabled(tmp_path: Path) -> None:
+    """With telemetry off the hook is a clean no-op and writes nothing."""
+    sink_path = tmp_path / "none.jsonl"
+    env = {k: v for k, v in os.environ.items() if k != "ROBOCODE_TELEMETRY"}
+    subprocess.run(
+        [sys.executable, str(_HOOK / "sitecustomize.py")], env=env, check=True
+    )
+    assert not sink_path.exists()
 
 
 @pytest.mark.usefixtures("sink")

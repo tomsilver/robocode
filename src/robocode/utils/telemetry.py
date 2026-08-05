@@ -22,6 +22,7 @@ Episode boundaries, not individual steps, are logged.
 from __future__ import annotations
 
 import functools
+import importlib
 import itertools
 import json
 import os
@@ -43,32 +44,14 @@ _EPISODE: WeakKeyDictionary[Any, dict[str, Any]] = WeakKeyDictionary()
 class TelemetryNotInstrumentedError(RuntimeError):
     """Telemetry is on but an env class has no instrumentation wired up.
 
-    Raised by :func:`require_instrumented` so a new env type never silently
-    produces no telemetry: a run either records collection events or fails loud.
+    Raised by :func:`require_registered` so a new env type never silently produces
+    no telemetry: a run either records collection events or fails loud.
     """
 
 
 def enabled() -> bool:
     """True when a telemetry sink is configured."""
     return bool(os.environ.get(_SINK_ENV))
-
-
-def require_instrumented(env: Any) -> None:
-    """Fail loud if telemetry is on but ``env`` is not instrumented.
-
-    A no-op when telemetry is off. Otherwise raises
-    :class:`TelemetryNotInstrumentedError` unless the env's ``reset`` carries the
-    instrumentation marker -- so wiring the hook to a new env class is a
-    conscious step, caught at construction rather than discovered as missing data
-    after an experiment.
-    """
-    if not enabled():
-        return
-    if not getattr(getattr(env, "reset", None), _MARK, False):
-        raise TelemetryNotInstrumentedError(
-            f"Telemetry is on but {type(env).__name__} has no instrumentation; "
-            "register it in the telemetry hook (instrument_env/instrument_class)."
-        )
 
 
 def log_event(kind: str, **fields: Any) -> None:
@@ -264,3 +247,43 @@ def _emit_set_state(env: Any, args: tuple[Any, ...], label: str | None) -> None:
     """Reset the episode counters and log a ``set_state`` event."""
     _guard(_reset_episode, env)
     log_event("set_state", label=label, state=fingerprint(args[0] if args else None))
+
+
+# --- Env registry: which envs get telemetry, and the launch-time guard. ---
+
+# "module:ClassName" for every env class instrumented for telemetry. Add a line
+# when a new env type enters a telemetry experiment.
+INSTRUMENTED_ENVS: tuple[str, ...] = (
+    "robocode.environments.variable_object_count_env:VariableObjectCountEnv",
+)
+
+
+def instrument_registered_envs() -> None:
+    """Wrap every registered env class in this process; a no-op when telemetry is off.
+
+    Called by the sandbox ``sitecustomize`` hook and usable directly in local runs.
+    Import/instrumentation errors propagate on purpose -- a broken telemetry setup
+    should fail loud, not run an experiment blind.
+    """
+    if not enabled():
+        return
+    for target in INSTRUMENTED_ENVS:
+        module_name, class_name = target.split(":")
+        instrument_class(getattr(importlib.import_module(module_name), class_name))
+    log_event("telemetry_ready", envs=list(INSTRUMENTED_ENVS))
+
+
+def require_registered(env_target: str) -> None:
+    """Fail loud if telemetry is on but ``env_target`` is not a registered env.
+
+    A no-op when telemetry is off. ``env_target`` is a hydra ``_target_`` in
+    ``module:Class`` or ``module.Class`` form.
+    """
+    if not enabled():
+        return
+    registered = {t.replace(":", ".") for t in INSTRUMENTED_ENVS}
+    if env_target.replace(":", ".") not in registered:
+        raise TelemetryNotInstrumentedError(
+            f"Telemetry is on but env {env_target!r} is not registered for "
+            "instrumentation; add it to INSTRUMENTED_ENVS in robocode.utils.telemetry."
+        )

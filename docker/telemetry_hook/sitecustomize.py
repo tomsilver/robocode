@@ -18,7 +18,7 @@ def _install() -> None:
         return
     try:
         # pylint: disable=import-outside-toplevel
-        from robocode.utils.telemetry_envs import instrument_registered_envs
+        from robocode.utils.telemetry import instrument_registered_envs
     except ImportError:
         return  # no robocode here; nothing to instrument
     instrument_registered_envs()  # errors propagate on purpose
