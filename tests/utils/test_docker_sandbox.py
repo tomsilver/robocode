@@ -183,6 +183,19 @@ def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
         assert (kindergarden / "src" / "kinder" / "core.py").exists()
 
 
+def test_filtered_repo_mounts_default_excludes_demos() -> None:
+    """demos/ holds recorded solution trajectories; no mode may mount it."""
+    with _filtered_repo_mounts() as (_, kindergarden, _tmp):
+        assert not (kindergarden / "demos").exists()
+
+
+def test_filtered_repo_mounts_default_keeps_package_skeleton() -> None:
+    """The demos exclusion must not take the installable skeleton with it."""
+    with _filtered_repo_mounts() as (_, kindergarden, _tmp):
+        assert (kindergarden / "pyproject.toml").exists()
+        assert (kindergarden / "src" / "kinder" / "envs").exists()
+
+
 def test_filtered_repo_mounts_default_keeps_env_source() -> None:
     """Non-blackbox mounts keep the environment source."""
     with _filtered_repo_mounts() as (src, kindergarden, _):
