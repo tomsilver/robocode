@@ -211,13 +211,6 @@ def test_instance_guard_skips_class_wrapped() -> None:
     assert env.reset == reset_before
 
 
-def test_require_registered_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With telemetry off, an unregistered env is not rejected."""
-    monkeypatch.delenv("ROBOCODE_TELEMETRY", raising=False)
-    tel.require_registered("some.unregistered.Env")  # must not raise
-
-
-@pytest.mark.usefixtures("sink")
 def test_require_registered_accepts_registered_forms() -> None:
     """The registered env passes in both colon and dotted target forms."""
     target = tel.INSTRUMENTED_ENVS[0]
@@ -225,9 +218,8 @@ def test_require_registered_accepts_registered_forms() -> None:
     tel.require_registered(target.replace(":", "."))
 
 
-@pytest.mark.usefixtures("sink")
 def test_require_registered_rejects_unregistered() -> None:
-    """An unregistered env fails loud when telemetry is on."""
+    """An unregistered env fails loud (the caller gates on the run's telemetry flag)."""
     with pytest.raises(TelemetryNotInstrumentedError, match="not registered"):
         tel.require_registered("robocode.environments.maze_env:MazeEnv")
 

@@ -35,6 +35,7 @@ from omegaconf import DictConfig, OmegaConf
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
+from robocode.utils.telemetry import require_registered
 from robocode.utils.episode import (
     run_episode_with_timeout,
     run_per_instance_eval,
@@ -58,6 +59,11 @@ def _main(cfg: DictConfig) -> float:
         )
 
     env = hydra.utils.instantiate(cfg.environment)
+
+    # Telemetry runs must fail loud on an env class that has no instrumentation,
+    # rather than silently producing no data.
+    if cfg.approach.get("telemetry", False):
+        require_registered(cfg.environment["_target_"])
 
     # If the environment provides a description (e.g. kinder envs), write it
     # to a file so the agentic approach can read it in its sandbox. In blackbox

@@ -260,6 +260,7 @@ def _emit_set_state(env: Any, args: tuple[Any, ...], label: str | None) -> None:
 # when a new env type enters a telemetry experiment.
 INSTRUMENTED_ENVS: tuple[str, ...] = (
     "robocode.environments.variable_object_count_env:VariableObjectCountEnv",
+    "robocode.environments.kinder_geom2d_env:KinderGeom2DEnv",
 )
 
 
@@ -279,13 +280,13 @@ def instrument_registered_envs() -> None:
 
 
 def require_registered(env_target: str) -> None:
-    """Fail loud if telemetry is on but ``env_target`` is not a registered env.
+    """Fail loud if ``env_target`` is not a registered instrumented env.
 
-    A no-op when telemetry is off. ``env_target`` is a hydra ``_target_`` in
-    ``module:Class`` or ``module.Class`` form.
+    Call this when launching a telemetry run (the caller gates on the run's
+    telemetry flag, which is the host-side "on" signal -- the sandbox env var is
+    not set here). ``env_target`` is a hydra ``_target_`` in ``module:Class`` or
+    ``module.Class`` form.
     """
-    if not enabled():
-        return
     registered = {t.replace(":", ".") for t in INSTRUMENTED_ENVS}
     if env_target.replace(":", ".") not in registered:
         raise TelemetryNotInstrumentedError(
