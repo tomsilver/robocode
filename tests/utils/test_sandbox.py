@@ -253,7 +253,7 @@ def test_userns_available_false_and_warns_when_blocked(  # type: ignore
     )
     with caplog.at_level(logging.WARNING):
         assert _userns_available() is False
-    assert any("host PID namespace" in r.message for r in caplog.records)
+    assert "host PID namespace" in caplog.text
 
 
 def test_userns_available_false_when_unshare_missing(  # type: ignore
@@ -267,7 +267,7 @@ def test_userns_available_false_when_unshare_missing(  # type: ignore
     monkeypatch.setattr("robocode.utils.sandbox.subprocess.run", _raise)
     with caplog.at_level(logging.WARNING):
         assert _userns_available() is False
-    assert any("host PID namespace" in r.message for r in caplog.records)
+    assert "host PID namespace" in caplog.text
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:
