@@ -15,6 +15,7 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _is_path_within_sandbox,
     _stream_result_to_sandbox_result,
+    pid_isolate,
 )
 from robocode.utils.sandbox_types import GenerationMetrics, _StreamParseResult
 
@@ -184,6 +185,25 @@ def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) 
     with sandbox_claude_config(sandbox) as agent_home:
         assert agent_home.is_dir()
         assert not (agent_home / ".credentials.json").exists()
+
+
+def test_pid_isolate_wraps_command_on_linux(monkeypatch) -> None:  # type: ignore
+    """The local backend's CLI runs in its own PID namespace on Linux.
+
+    Without this the agent's Bash tool can signal any host process by cmdline
+    match, including the harness supervising the run.
+    """
+    monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "linux")
+    cmd = pid_isolate(["claude", "-p"])
+    assert cmd[0] == "unshare"
+    assert "--pid" in cmd
+    assert cmd[-2:] == ["claude", "-p"]
+
+
+def test_pid_isolate_is_a_noop_off_linux(monkeypatch) -> None:  # type: ignore
+    """macOS has no unprivileged equivalent, so the command is left alone."""
+    monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "darwin")
+    assert pid_isolate(["claude", "-p"]) == ["claude", "-p"]
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:

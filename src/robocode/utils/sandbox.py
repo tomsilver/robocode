@@ -13,6 +13,10 @@ directory, but allows *reads* of the entire filesystem. Bash commands like
 ``cat /etc/passwd`` or ``python -c "open('/etc/hosts').read()"`` will succeed.
 Use container sandboxing (``container_backend: docker``) for full isolation.
 
+Processes are isolated on Linux via :func:`pid_isolate`, so the agent cannot
+signal anything it did not start. Elsewhere (macOS) it can signal any process
+the operator owns; that is another reason to prefer a container backend.
+
 Set ROBOCODE_CLAUDE_CMD or ROBOCODE_OPENCODE_CMD environment variables
 to override the default binary paths.
 """
@@ -47,6 +51,34 @@ from robocode.utils.sandbox_types import (
 logger = logging.getLogger(__name__)
 
 _PRIMITIVES_SRC: Path = Path(__file__).parent.parent / "primitives"
+
+
+# Docker and apptainer give the agent its own PID namespace; the local backend runs
+# the CLI as an ordinary host process, so without this a `pkill -f <pattern>` from the
+# agent's Bash tool reaches every process the operator owns: the harness supervising
+# the run, concurrent runs, and the agent's own CLI. unshare puts the CLI in its own
+# PID namespace with its own /proc, so it can only see and signal what it started.
+# --user is what makes this available unprivileged; --map-current-user keeps the uid
+# unchanged so the CLI reads the same config and writes files with the same ownership.
+_PID_ISOLATE_PREFIX = (
+    "unshare",
+    "--user",
+    "--map-current-user",
+    "--pid",
+    "--fork",
+    "--mount-proc",
+)
+
+
+def pid_isolate(cmd: list[str]) -> list[str]:
+    """Return *cmd* prefixed so it runs in its own PID namespace.
+
+    Linux only: macOS has no unprivileged equivalent, so there the local backend
+    keeps the agent in the host process namespace (see the module docstring).
+    """
+    if sys.platform != "linux":
+        return cmd
+    return [*_PID_ISOLATE_PREFIX, *cmd]
 
 
 def _free_port() -> int:
@@ -387,7 +419,7 @@ async def run_agent_in_sandbox(
                 env["CLAUDE_CONFIG_DIR"] = str(config_dir)
             with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
                 proc = subprocess.Popen(  # pylint: disable=consider-using-with
-                    cmd,
+                    pid_isolate(cmd),
                     cwd=sandbox_abs,
                     env=env,
                     stdin=subprocess.DEVNULL,

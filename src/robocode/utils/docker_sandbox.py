@@ -478,8 +478,7 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
     anyway (which would silently reintroduce the first-turn tool race). The CLI
     argv is passed positionally (``"$@"``) so it needs no quoting. Shared by
     docker and apptainer (same in-container python path and ``/sandbox`` bind);
-    the explicit kill matters for apptainer, which shares the host pid namespace
-    (no container teardown to reap the server).
+    the explicit kill keeps the server from outliving the agent in either.
     """
     start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
     server_log = "/sandbox/.mcp/mcp_server.boot.log"
