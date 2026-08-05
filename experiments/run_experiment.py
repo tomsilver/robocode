@@ -35,13 +35,13 @@ from omegaconf import DictConfig, OmegaConf
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
-from robocode.utils.telemetry import require_registered
 from robocode.utils.episode import (
     run_episode_with_timeout,
     run_per_instance_eval,
     save_video,
     summarize_by_count,
 )
+from robocode.utils.telemetry import require_registered
 
 logger = logging.getLogger(__name__)
 
