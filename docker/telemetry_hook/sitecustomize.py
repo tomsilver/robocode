@@ -1,27 +1,16 @@
 """Sandbox telemetry hook (whitebox), auto-imported by Python's ``site`` machinery.
 
-Mounted read-only on the sandbox ``PYTHONPATH`` so it runs at the start of every
-in-container ``python`` invocation. When ``ROBOCODE_TELEMETRY`` is set it
-instruments the registered experiment-env classes, so the agent's own reset /
-set_state calls are logged without any cooperation from its scripts.
+Mounted read-only on the sandbox ``PYTHONPATH`` -- only when telemetry is enabled
+-- so it runs at the start of every in-container ``python`` and instruments the
+registered experiment-env classes. The agent's own reset/set_state calls are then
+logged with no cooperation from its scripts.
 
-A python invocation without robocode installed (not an experiment process) is a
-no-op; but once robocode is importable, a broken install is allowed to fail loud
-rather than let a telemetry run proceed with no data.
+``instrument_registered_envs`` is a no-op unless ``ROBOCODE_TELEMETRY`` is set, so
+this is cheap when telemetry is off. robocode is always importable where this hook
+runs, so a broken import is a real fault and is left to fail loud rather than
+silently disabling telemetry.
 """
 
-import os
+from robocode.utils.telemetry import instrument_registered_envs
 
-
-def _install() -> None:
-    if not os.environ.get("ROBOCODE_TELEMETRY"):
-        return
-    try:
-        # pylint: disable=import-outside-toplevel
-        from robocode.utils.telemetry import instrument_registered_envs
-    except ImportError:
-        return  # no robocode here; nothing to instrument
-    instrument_registered_envs()  # errors propagate on purpose
-
-
-_install()
+instrument_registered_envs()

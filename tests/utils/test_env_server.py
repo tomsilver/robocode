@@ -711,3 +711,32 @@ def test_blackbox_primitive_manifest_remote_module() -> None:
         "kind": "remote_module",
         "module": "crv_motion_planning_grasp",
     }
+
+
+def test_log_agent_op_records_only_dispatched_ops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blackbox dispatch logging records agent reset/step/set_state only.
+
+    Server-internal ops (the init reset, render save/restore) never reach this
+    function, so they cannot pollute the stream; the episode latch dedups.
+    """
+    sink = tmp_path / "events.jsonl"
+    monkeypatch.setenv("ROBOCODE_TELEMETRY", str(sink))
+    log = env_server_runtime._log_agent_op  # pylint: disable=protected-access
+    state = {"steps": 0, "ended": False}
+    log(
+        {"cmd": "reset", "seed": 3, "options": {"object_count": 2}},
+        {"obs": [1.0]},
+        state,
+    )
+    log({"cmd": "step"}, {"terminated": False, "truncated": False}, state)
+    log({"cmd": "step"}, {"terminated": True, "truncated": False}, state)
+    log({"cmd": "step"}, {"terminated": True}, state)  # past terminal -> no duplicate
+    log({"cmd": "set_state", "state": [2.0]}, {"ok": True}, state)
+    log({"cmd": "render_state"}, {"path": "x.png"}, state)  # server op -> ignored
+
+    events = [json.loads(line) for line in sink.read_text().splitlines()]
+    assert [e["kind"] for e in events] == ["reset", "episode_end", "set_state"]
+    assert events[0]["seed"] == 3 and events[0]["options"] == {"object_count": 2}
+    assert events[1]["num_steps"] == 2

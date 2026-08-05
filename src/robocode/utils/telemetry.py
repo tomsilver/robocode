@@ -98,7 +98,7 @@ def fingerprint(state: Any) -> str | None:
         else:
             raw = repr(state).encode()
         return sha1(raw).hexdigest()[:12]
-    except Exception:  # pylint: disable=broad-exception-caught
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
@@ -137,10 +137,7 @@ def _on_step(env: Any, step_out: Any, label: str | None) -> None:
     state["steps"] += 1
     if state["ended"]:
         return
-    try:
-        terminated, truncated = bool(step_out[2]), bool(step_out[3])
-    except Exception:  # pylint: disable=broad-exception-caught
-        terminated = truncated = False
+    terminated, truncated = bool(step_out[2]), bool(step_out[3])
     if not (terminated or truncated):
         return
     state["ended"] = True
@@ -167,7 +164,7 @@ def instrument_env(env: Any, *, label: str | None = None) -> Any:
     @functools.wraps(orig_reset)
     def reset(*args: Any, **kwargs: Any) -> Any:
         out = orig_reset(*args, **kwargs)
-        _emit_reset(env, out, kwargs, label)
+        _guard(_emit_reset, env, out, kwargs, label)
         return out
 
     @functools.wraps(orig_step)
@@ -183,7 +180,7 @@ def instrument_env(env: Any, *, label: str | None = None) -> Any:
         @functools.wraps(orig_set_state)
         def set_state(*args: Any, **kwargs: Any) -> Any:
             result = orig_set_state(*args, **kwargs)
-            _emit_set_state(env, args, label)
+            _guard(_emit_set_state, env, args, label)
             return result
 
         env.set_state = set_state
@@ -205,7 +202,7 @@ def instrument_class(cls: Any, *, label: str | None = None) -> Any:
     @functools.wraps(orig_reset)
     def reset(self: Any, *args: Any, **kwargs: Any) -> Any:
         out = orig_reset(self, *args, **kwargs)
-        _emit_reset(self, out, kwargs, lbl)
+        _guard(_emit_reset, self, out, kwargs, lbl)
         return out
 
     @functools.wraps(orig_step)
@@ -221,7 +218,7 @@ def instrument_class(cls: Any, *, label: str | None = None) -> Any:
         @functools.wraps(orig_set_state)
         def set_state(self: Any, *args: Any, **kwargs: Any) -> Any:
             result = orig_set_state(self, *args, **kwargs)
-            _emit_set_state(self, args, lbl)
+            _guard(_emit_set_state, self, args, lbl)
             return result
 
         cls.set_state = set_state
@@ -237,8 +234,8 @@ def _guard(fn: Callable[..., None], *args: Any) -> None:
 
 
 def _emit_reset(env: Any, out: Any, kwargs: dict[str, Any], label: str | None) -> None:
-    """Reset the episode counters and log a ``reset`` event."""
-    _guard(_reset_episode, env)
+    """Reset the episode counters and log a ``reset`` event (run inside ``_guard``)."""
+    _reset_episode(env)
     log_event(
         "reset",
         label=label,
@@ -249,8 +246,8 @@ def _emit_reset(env: Any, out: Any, kwargs: dict[str, Any], label: str | None) -
 
 
 def _emit_set_state(env: Any, args: tuple[Any, ...], label: str | None) -> None:
-    """Reset the episode counters and log a ``set_state`` event."""
-    _guard(_reset_episode, env)
+    """Reset the counters and log a ``set_state`` event (run inside ``_guard``)."""
+    _reset_episode(env)
     log_event("set_state", label=label, state=fingerprint(args[0] if args else None))
 
 

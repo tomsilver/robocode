@@ -52,7 +52,7 @@ from robocode.utils.env_server import (
     serialize_space,
 )
 from robocode.utils.render_paths import safe_label, unique_path
-from robocode.utils.telemetry import instrument_env
+from robocode.utils.telemetry import fingerprint, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -281,16 +281,16 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         logger.info("New connection from %s", self.client_address)
         env = instantiate(OmegaConf.create(self.server.env_config))
-        # Blackbox reset/step/set_state run here on the host, so instrument the
-        # env here (a no-op when telemetry is off). The sink is host-side and not
-        # mounted into the sandbox, so the agent cannot read its own history.
-        env = instrument_env(env)
         # Reset once so get_state/set_state/render work before the client
         # issues its own reset (mirrors the MCP server's env setup).
         env.reset(seed=0)
         # Per-connection handle table backing the remote-object proxy (used only
         # by the devectorize/vectorize/getattr/call commands).
         registry = _HandleRegistry()
+        # Blackbox telemetry is recorded at the dispatch boundary (only agent
+        # reset/step/set_state), so this init reset and the render/collision
+        # save-restore bookkeeping never enter the stream. Host-side sink.
+        telemetry_state = {"steps": 0, "ended": False}
         try:
             for line in self.rfile:
                 request = json.loads(line)
@@ -316,11 +316,51 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
                         "Request %s failed:\n%s", request, traceback.format_exc()
                     )
                     payload = {"error": f"{type(exc).__name__}: {exc}"}
+                else:
+                    _log_agent_op(request, payload, telemetry_state)
                 self.wfile.write(json.dumps(payload).encode("utf-8") + b"\n")
         finally:
             registry.clear()
             env.close()
             logger.info("Connection from %s closed", self.client_address)
+
+
+def _log_agent_op(
+    request: dict[str, Any], payload: dict[str, Any], state: dict[str, Any]
+) -> None:
+    """Record an agent-dispatched env op for blackbox telemetry (no-op when off).
+
+    Only reset/set_state/step commands are logged -- keyed on the request cmd, not
+    the env method -- so the server's init reset and the render/collision
+    save-restore never enter the stream. ``state`` holds this connection's episode
+    counters; guarded so telemetry can never break the connection.
+    """
+    try:
+        cmd = request.get("cmd")
+        if cmd == "reset":
+            state["steps"], state["ended"] = 0, False
+            log_event(
+                "reset",
+                seed=request.get("seed"),
+                options=request.get("options"),
+                state=fingerprint(payload.get("obs")),
+            )
+        elif cmd == "set_state":
+            state["steps"], state["ended"] = 0, False
+            log_event("set_state", state=fingerprint(request.get("state")))
+        elif cmd == "step":
+            state["steps"] += 1
+            terminal = bool(payload.get("terminated") or payload.get("truncated"))
+            if terminal and not state["ended"]:
+                state["ended"] = True
+                log_event(
+                    "episode_end",
+                    terminated=bool(payload.get("terminated")),
+                    truncated=bool(payload.get("truncated")),
+                    num_steps=state["steps"],
+                )
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass  # telemetry must never break the connection
 
 
 def _dispatch(
