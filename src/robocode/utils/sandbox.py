@@ -112,6 +112,13 @@ def _userns_available() -> bool:
     return False
 
 
+# macOS support: there is no unprivileged PID namespace (one global PID space, no
+# /proc), so no drop-in exists. The "can only signal what it started" guarantee would
+# instead need either running the CLI under a dedicated throwaway UID (a non-root
+# `pkill` can only reach processes of the same UID) or a `sandbox-exec` seatbelt
+# profile that denies the `signal` operation to non-descendants (deprecated API, and
+# it would not hide processes from `pgrep`). The container backend already gives full
+# isolation on macOS via its Linux VM, so that is the path to prefer.
 def pid_isolate(cmd: list[str]) -> list[str]:
     """Return *cmd* prefixed so it runs in its own PID namespace, when it can be.
 
