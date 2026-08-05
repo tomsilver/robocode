@@ -3,8 +3,8 @@
 Opt-in via ``ROBOCODE_TELEMETRY`` (a sink file path); when it is unset every call
 here is a no-op, so importing and logging is always safe. One JSON object per
 line, each carrying reserved fields (``kind``, ``seq``, ``ts_ns``, ``pid``,
-``run``, ``schema``) that a caller's payload can never shadow -- they are written
-last. ``seq`` is per-process, so across the many short-lived processes an agent
+``run``) that a caller's payload can never shadow -- they are written last.
+``seq`` is per-process, so across the many short-lived processes an agent
 spawns events are only PARTIALLY ordered: order by ``ts_ns`` and disambiguate
 with ``pid``/``seq``; do not assume a total order. ``run`` (from
 ``ROBOCODE_RUN_ID``) groups a run's processes.
@@ -28,12 +28,12 @@ import json
 import os
 import time
 from hashlib import sha1
+from pathlib import Path
 from typing import Any, Callable
 from weakref import WeakKeyDictionary
 
 _SINK_ENV = "ROBOCODE_TELEMETRY"
 _RUN_ENV = "ROBOCODE_RUN_ID"
-_SCHEMA = 1
 _MARK = "_robocode_telemetry"  # sentinel attribute on instrumented reset wrappers
 _seq = itertools.count()
 # Per-instance episode counters, weak-keyed so instrumentation leaves nothing on
@@ -68,10 +68,15 @@ def log_event(kind: str, **fields: Any) -> None:
             "ts_ns": time.time_ns(),
             "pid": os.getpid(),
             "run": os.environ.get(_RUN_ENV),
-            "schema": _SCHEMA,
         }
-        with open(path, "a", encoding="utf-8") as sink:
-            sink.write(json.dumps(record, default=str) + "\n")
+        line = (json.dumps(record, default=str) + "\n").encode("utf-8")
+        # A single O_APPEND write is atomic across the many processes an agent
+        # spawns, so their lines never interleave.
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
     except Exception:  # pylint: disable=broad-exception-caught
         pass  # telemetry must never break the instrumented run
 
@@ -287,3 +292,55 @@ def require_registered(env_target: str) -> None:
             f"Telemetry is on but env {env_target!r} is not registered for "
             "instrumentation; add it to INSTRUMENTED_ENVS in robocode.utils.telemetry."
         )
+
+
+# --- Sandbox launch wiring: deliver the hook + sink to a sandboxed agent. ---
+
+_HOOK_MOUNT = "/robocode/telemetry_hook"  # hook dir bind target inside a container
+_SINK_MOUNT = "/telemetry"  # sink dir bind target inside a container
+SINK_FILENAME = "events.jsonl"
+
+
+def hook_dir() -> Path:
+    """Host path of the ``sitecustomize`` hook directory."""
+    return Path(__file__).resolve().parents[3] / "docker" / "telemetry_hook"
+
+
+def _with_hook_pythonpath(hook: str) -> str:
+    """Prepend the hook dir to any existing PYTHONPATH rather than clobbering it."""
+    existing = os.environ.get("PYTHONPATH", "")
+    return hook + (os.pathsep + existing if existing else "")
+
+
+def container_launch(
+    host_sink_dir: Path, run_id: str
+) -> tuple[list[tuple[str, str, bool]], dict[str, str]]:
+    """(mounts, env) enabling the whitebox sandbox hook in docker/apptainer.
+
+    ``mounts`` are ``(host, container, read_only)`` tuples the caller renders as
+    ``-v`` / ``--bind``. Not used for blackbox runs: their sandbox has no env
+    source to instrument -- instrument the host env server there instead.
+    """
+    mounts = [
+        (str(hook_dir()), _HOOK_MOUNT, True),
+        (str(host_sink_dir), _SINK_MOUNT, False),
+    ]
+    env = {
+        "PYTHONPATH": _HOOK_MOUNT,
+        _SINK_ENV: f"{_SINK_MOUNT}/{SINK_FILENAME}",
+        _RUN_ENV: run_id,
+    }
+    return mounts, env
+
+
+def host_launch_env(sink_file: Path, run_id: str, *, with_hook: bool) -> dict[str, str]:
+    """Env vars enabling telemetry for a host process (local agent or env server).
+
+    ``with_hook`` prepends the hook dir to ``PYTHONPATH`` so a local agent's
+    spawned python picks up ``sitecustomize``; the env server instruments its env
+    in code and does not need the hook.
+    """
+    env = {_SINK_ENV: str(sink_file), _RUN_ENV: run_id}
+    if with_hook:
+        env["PYTHONPATH"] = _with_hook_pythonpath(str(hook_dir()))
+    return env

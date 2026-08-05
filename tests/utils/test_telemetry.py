@@ -96,7 +96,7 @@ def test_log_event_shape_and_run_id(sink: Callable[[], list[dict]]) -> None:
     log_event("custom", foo=1)
     (event,) = sink()
     assert event["kind"] == "custom" and event["foo"] == 1
-    assert event["run"] == "test-run" and event["schema"] == 1
+    assert event["run"] == "test-run"
     assert {"seq", "ts_ns", "pid"} <= event.keys()
 
 
@@ -282,3 +282,22 @@ def test_wraps_preserves_method_name() -> None:
     env = instrument_env(_ToyEnv())
     assert env.reset.__name__ == "reset" and env.step.__name__ == "step"
     assert getattr(env.reset, tel._MARK) is True  # pylint: disable=protected-access
+
+
+def test_container_launch_mounts_and_env() -> None:
+    """container_launch binds the hook + sink and sets container-path env vars."""
+    mounts, env = tel.container_launch(Path("/run/telemetry"), "run-9")
+    targets = {container for _, container, _ in mounts}
+    assert "/robocode/telemetry_hook" in targets and "/telemetry" in targets
+    assert env["ROBOCODE_TELEMETRY"] == "/telemetry/events.jsonl"
+    assert env["ROBOCODE_RUN_ID"] == "run-9"
+    assert env["PYTHONPATH"] == "/robocode/telemetry_hook"
+
+
+def test_host_launch_env_hook_toggle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """with_hook prepends PYTHONPATH (preserving existing); without it, none is set."""
+    monkeypatch.setenv("PYTHONPATH", "/existing")
+    hooked = tel.host_launch_env(Path("/run/t.jsonl"), "r", with_hook=True)
+    assert hooked["PYTHONPATH"].startswith(str(tel.hook_dir()))
+    assert hooked["PYTHONPATH"].endswith("/existing")
+    assert "PYTHONPATH" not in tel.host_launch_env(Path("/x"), "r", with_hook=False)
