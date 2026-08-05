@@ -74,6 +74,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         autocompact_pct: int = 80,
         env_name: str | None = None,
         blackbox: bool = False,
+        telemetry: bool = False,
         env_cfg: str | None = None,
         max_steps: int | None = None,
         eval_timeout: float = 30.0,
@@ -107,6 +108,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         self._autocompact_pct = autocompact_pct
         self._env_name = env_name
         self._blackbox = blackbox
+        self._telemetry = telemetry
         self._env_cfg = env_cfg
         self._max_steps = max_steps
         self._eval_timeout = eval_timeout
@@ -234,6 +236,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
+                telemetry=self._telemetry,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         elif self._container_backend == "apptainer":
@@ -251,6 +254,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
+                telemetry=self._telemetry,
             )
             sandbox_logger = logging.getLogger("robocode.utils.apptainer_sandbox")
         else:
@@ -267,6 +271,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
+                telemetry=self._telemetry,
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
@@ -281,7 +286,9 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
                 if self._blackbox:
                     assert self._env_cfg is not None  # validated in __init__
                     port, token = stack.enter_context(
-                        env_server_running(self._env_cfg, sandbox_dir)
+                        env_server_running(
+                            self._env_cfg, sandbox_dir, telemetry=self._telemetry
+                        )
                     )
                     write_env_spaces(
                         sandbox_dir,

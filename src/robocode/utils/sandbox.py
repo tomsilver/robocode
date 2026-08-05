@@ -43,6 +43,7 @@ from robocode.utils.sandbox_types import (
     SandboxResult,
     _StreamParseResult,
 )
+from robocode.utils.telemetry import SINK_FILENAME, host_launch_env
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +365,14 @@ async def run_agent_in_sandbox(
     _initial_commit(config.sandbox_dir)
 
     env = backend.build_env(config)
+    if config.telemetry and not config.blackbox:
+        sink_dir = config.sandbox_dir.resolve().parent / "telemetry"
+        sink_dir.mkdir(parents=True, exist_ok=True)
+        env.update(
+            host_launch_env(
+                sink_dir / SINK_FILENAME, config.sandbox_dir.name, with_hook=True
+            )
+        )
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)

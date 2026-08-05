@@ -67,6 +67,7 @@ from robocode.utils.sandbox import (
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
 )
+from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,22 @@ APPTAINER_PYTHON: str = DOCKER_PYTHON
 
 # Default SIF path: <repo_root>/robocode-sandbox.sif.
 _DEFAULT_SIF: Path = _find_repo_root() / "robocode-sandbox.sif"
+
+
+def _telemetry_apptainer(config: SandboxConfig) -> tuple[list[str], dict[str, str]]:
+    """(extra binds, ``APPTAINERENV_`` vars) enabling telemetry for a whitebox run.
+
+    Empty when telemetry is off or for blackbox runs (the host env server is
+    instrumented instead). The env is passed with Apptainer's ``APPTAINERENV_``
+    prefix so it lands inside the container.
+    """
+    if not config.telemetry or config.blackbox:
+        return [], {}
+    sink_dir = config.sandbox_dir.resolve().parent / "telemetry"
+    sink_dir.mkdir(parents=True, exist_ok=True)
+    mounts, env = container_launch(sink_dir, config.sandbox_dir.name)
+    binds = [f"{host}:{cont}{':ro' if ro else ''}" for host, cont, ro in mounts]
+    return binds, {f"APPTAINERENV_{key}": val for key, val in env.items()}
 
 
 @dataclass(frozen=True)
@@ -294,6 +311,7 @@ async def run_agent_in_apptainer_sandbox(
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_binds = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
+        tel_binds, tel_env = _telemetry_apptainer(config)
         apptainer_cmd = _build_apptainer_cmd(
             config,
             sandbox_abs=sandbox_abs,
@@ -307,7 +325,7 @@ async def run_agent_in_apptainer_sandbox(
             auth_args=auth_args,
             firewall_domains=firewall_domains,
             agent_cmd=agent_cmd,
-            extra_binds=session_binds,
+            extra_binds=session_binds + tel_binds,
         )
 
         backend.setup_sandbox_files(
@@ -318,6 +336,7 @@ async def run_agent_in_apptainer_sandbox(
         _initial_commit(config.sandbox_dir)
 
         env = backend.build_env(config, auth_env if auth_env else None)
+        env.update(tel_env)
 
         logger.info(
             "Starting Apptainer sandbox: run_id=%s sif=%s sandbox=%s",

@@ -52,6 +52,7 @@ from robocode.utils.env_server import (
     serialize_space,
 )
 from robocode.utils.render_paths import safe_label, unique_path
+from robocode.utils.telemetry import instrument_env
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,10 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         logger.info("New connection from %s", self.client_address)
         env = instantiate(OmegaConf.create(self.server.env_config))
+        # Blackbox reset/step/set_state run here on the host, so instrument the
+        # env here (a no-op when telemetry is off). The sink is host-side and not
+        # mounted into the sandbox, so the agent cannot read its own history.
+        env = instrument_env(env)
         # Reset once so get_state/set_state/render work before the client
         # issues its own reset (mirrors the MCP server's env setup).
         env.reset(seed=0)

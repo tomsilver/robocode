@@ -91,8 +91,8 @@ def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
     """(extra volumes, env args) enabling telemetry for a whitebox docker run.
 
     Empty when telemetry is off or for blackbox runs (the host env server is
-    instrumented instead). Creates the host sink dir so a swallowed write failure
-    can't leave telemetry silently empty.
+    instrumented instead). Creates the host sink dir so a swallowed write failure can't
+    leave telemetry silently empty.
     """
     if not config.telemetry or config.blackbox:
         return [], []
