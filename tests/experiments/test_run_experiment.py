@@ -2,7 +2,7 @@
 
 experiments/ is a scripts directory, not an installed package, so the module is
 loaded from its path. Covers eval-suite seed resolution: `eval_seed` pins the
-suite independently of `seed`, and unset it follows `seed`.
+suite independently of `seed`; when unset, it follows `seed`.
 """
 
 import importlib.util
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 from omegaconf import OmegaConf
 
 _MODULE_PATH = Path(__file__).resolve().parents[2] / "experiments" / "run_experiment.py"
@@ -26,7 +27,7 @@ def _suite(seed: int, num_eval: int = 5) -> list[int]:
 
 
 def test_eval_seed_defaults_to_seed() -> None:
-    """Unset eval_seed follows seed."""
+    """When unset, eval_seed follows seed."""
     cfg = OmegaConf.create({"seed": 42, "eval_seed": None})
     assert run_experiment.resolve_eval_seed(cfg) == 42
 
@@ -52,10 +53,16 @@ def test_pinned_eval_seed_yields_identical_suite_across_training_seeds() -> None
     assert suite_a == suite_b
 
 
-def test_unpinned_suites_differ_across_training_seeds() -> None:
-    """Without a pin, each training seed draws its own eval suite."""
+def test_non_integer_eval_seed_rejected() -> None:
+    """A fractional seed raises instead of silently truncating."""
+    cfg = OmegaConf.create({"seed": 42, "eval_seed": 42.5})
+    with pytest.raises(ValueError, match="integer"):
+        run_experiment.resolve_eval_seed(cfg)
+
+
+def test_unpinned_eval_seed_tracks_training_seed() -> None:
+    """Without a pin, the eval seed is the training seed, so runs differ."""
     cfg_a = OmegaConf.create({"seed": 24, "eval_seed": None})
     cfg_b = OmegaConf.create({"seed": 424, "eval_seed": None})
-    suite_a = _suite(run_experiment.resolve_eval_seed(cfg_a))
-    suite_b = _suite(run_experiment.resolve_eval_seed(cfg_b))
-    assert suite_a != suite_b
+    assert run_experiment.resolve_eval_seed(cfg_a) == 24
+    assert run_experiment.resolve_eval_seed(cfg_b) == 424

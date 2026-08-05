@@ -47,7 +47,10 @@ logger = logging.getLogger(__name__)
 
 def resolve_eval_seed(cfg: DictConfig) -> int:
     """Eval-suite seed: ``eval_seed`` when set, else ``seed``."""
-    return int(cfg.seed if cfg.get("eval_seed") is None else cfg.eval_seed)
+    value = cfg.seed if cfg.get("eval_seed") is None else cfg.eval_seed
+    if value != int(value):
+        raise ValueError(f"eval_seed must be an integer, got {value!r}")
+    return int(value)
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
