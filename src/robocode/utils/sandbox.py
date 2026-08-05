@@ -13,9 +13,11 @@ directory, but allows *reads* of the entire filesystem. Bash commands like
 ``cat /etc/passwd`` or ``python -c "open('/etc/hosts').read()"`` will succeed.
 Use container sandboxing (``container_backend: docker``) for full isolation.
 
-Processes are isolated on Linux via :func:`pid_isolate`, so the agent cannot
-signal anything it did not start. Elsewhere (macOS) it can signal any process
-the operator owns; that is another reason to prefer a container backend.
+Where the kernel allows an unprivileged user namespace, :func:`pid_isolate`
+gives the agent its own PID namespace so it cannot signal anything it did not
+start. Where it does not (macOS, and Linux hosts that forbid unprivileged user
+namespaces such as CI runners), the agent can signal any process the operator
+owns; that is another reason to prefer a container backend.
 
 Set ROBOCODE_CLAUDE_CMD or ROBOCODE_OPENCODE_CMD environment variables
 to override the default binary paths.
@@ -23,6 +25,7 @@ to override the default binary paths.
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
 import socket
@@ -72,13 +75,52 @@ _PID_ISOLATE_PREFIX = (
 )
 
 
-def pid_isolate(cmd: list[str]) -> list[str]:
-    """Return *cmd* prefixed so it runs in its own PID namespace.
+@functools.cache
+def _userns_available() -> bool:
+    """Whether an unprivileged process can create a user+PID namespace here.
 
-    Linux only: macOS has no unprivileged equivalent, so there the local backend
-    keeps the agent in the host process namespace (see the module docstring).
+    :func:`pid_isolate` calls this only on Linux. Some Linux hosts still forbid
+    the unprivileged user namespace the PID namespace rides on: CI runners and
+    hardened kernels (e.g. Ubuntu's ``apparmor_restrict_unprivileged_userns``)
+    make the ``uid_map`` write return EPERM; ``unshare`` may also be missing.
+    Probe by running the real prefix on ``true`` rather than reading one
+    distro-specific sysctl, since the block has several sources. Cached to avoid
+    re-probing (and re-warning) on every launch in a batch run; a probe that
+    later succeeds intermittently is not worth chasing here.
     """
-    if sys.platform != "linux":
+    reason: str
+    try:
+        probe = subprocess.run(
+            [*_PID_ISOLATE_PREFIX, "true"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        reason = str(exc) or exc.__class__.__name__
+    else:
+        if probe.returncode == 0:
+            return True
+        reason = probe.stderr.decode(errors="replace").strip() or "unshare failed"
+    logger.warning(
+        "Unprivileged user namespaces are unavailable (%s); the local backend "
+        "will run the agent CLI in the host PID namespace, so a `pkill` from the "
+        "agent's Bash tool can reach other processes the operator owns. Use a "
+        "container backend (docker/apptainer) for process isolation.",
+        reason,
+    )
+    return False
+
+
+def pid_isolate(cmd: list[str]) -> list[str]:
+    """Return *cmd* prefixed so it runs in its own PID namespace, when it can be.
+
+    Requires an unprivileged user namespace, so it is a no-op on macOS (no
+    equivalent) and on Linux hosts that forbid them (see :func:`_userns_available`);
+    there the local backend keeps the agent in the host process namespace, which is
+    one more reason to prefer a container backend (see the module docstring).
+    """
+    if sys.platform != "linux" or not _userns_available():
         return cmd
     return [*_PID_ISOLATE_PREFIX, *cmd]
 
