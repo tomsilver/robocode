@@ -41,6 +41,7 @@ from robocode.utils.episode import (
     save_video,
     summarize_by_count,
 )
+from robocode.utils.live_approach_history import live_commit_eval
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +158,21 @@ def _main(cfg: DictConfig) -> float:
         mean_steps = results["mean_eval_steps"]
         solve_rate = results["solve_rate"]
     else:
-        approach.train()
+        # The sandbox git repo the agent commits into.
+        load_dir = cfg.approach.get("load_dir", None)
+        sandbox_dir = Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
+        # Score each commit in the background as it's made (no-op unless enabled).
+        with live_commit_eval(
+            enabled=cfg.get("live_approach_history", False),
+            sandbox_dir=sandbox_dir,
+            output_dir=output_dir,
+            task_overrides=list(HydraConfig.get().overrides.task),
+            eval_seed=eval_seed,
+        ):
+            approach.train()
 
-        # Record approach history: replay every sandbox snapshot.
+        # Record approach history: replay every sandbox snapshot (post-run).
         if cfg.record_approach_history:
-            load_dir = cfg.approach.get("load_dir", None)
-            sandbox_dir = (
-                Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
-            )
             snapshots = get_snapshots(sandbox_dir)
             record_episodes(
                 snapshots,
