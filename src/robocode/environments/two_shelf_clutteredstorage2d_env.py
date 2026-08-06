@@ -51,12 +51,16 @@ POST_HEIGHT = 0.10
 SHELF_HEIGHT = FRONT_HEIGHT + POST_HEIGHT
 SHELF_Y = WORLD_MAX_Y - SHELF_HEIGHT
 
-# Per-block shapes (width, height) by pocket_levels.
+# Per-block shapes (width, height) by pocket_levels. In the two-level unit the
+# two smaller blocks together exceed the front width (0.19 + 0.14 > 0.32), so
+# neither can wait in the front area while the other transits: solving forces
+# both stored atoms false at once.
 BLOCK_SHAPES = ((0.28, 0.04), (0.14, 0.04), (0.28, 0.04))
-BLOCK_SHAPES_TWO_LEVELS = ((0.28, 0.04), (0.14, 0.04), (0.08, 0.04))
+BLOCK_SHAPES_TWO_LEVELS = ((0.28, 0.04), (0.19, 0.04), (0.14, 0.04))
 
 # Pocket levels as (channel_width, height), bottom-up, by pocket_levels.
-POCKET_LEVELS = {1: ((0.18, 0.10),), 2: ((0.18, 0.06), (0.10, 0.06))}
+# Each level's diagonal is below the next-larger block's length.
+POCKET_LEVELS = {1: ((0.18, 0.10),), 2: ((0.23, 0.06), (0.16, 0.06))}
 
 # In-shelf initialization jitter for pre-stored blocks.
 STORED_BLOCK_X_JITTER = 0.01
