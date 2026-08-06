@@ -47,14 +47,20 @@ def _isolate(cmd: list[str], protect_dir: Path) -> list[str]:
     A concurrent eval runs the untrusted policy on the host; without this it could
     write held-out rewards/seeds into the live training sandbox, which is bind-mounted
     into the still-running agent. The mount namespace makes that directory read-only
-    for the eval, and the dropped CAP_SYS_ADMIN stops the policy remounting it. Needs
-    an unprivileged user namespace (see :func:`_isolation_available`).
+    for the eval, and the dropped CAP_SYS_ADMIN stops the policy remounting it. ``--pid
+    --fork --kill-child`` also give the eval its own PID namespace, so on timeout the
+    kernel reaps the whole process tree (a subprocess it spawned cannot outlive it).
+    Needs an unprivileged user namespace (see :func:`_isolation_available`).
     """
     return [
         "unshare",
         "--user",
         "--map-root-user",
         "--mount",
+        "--pid",
+        "--fork",
+        "--mount-proc",
+        "--kill-child",
         "bash",
         "-c",
         _ISOLATE_SETUP,

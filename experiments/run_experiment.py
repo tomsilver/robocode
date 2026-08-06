@@ -161,6 +161,15 @@ def _main(cfg: DictConfig) -> float:
         # The sandbox git repo the agent commits into.
         load_dir = cfg.approach.get("load_dir", None)
         sandbox_dir = Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
+        if (
+            cfg.get("live_approach_history", False)
+            and cfg.approach.get("container_backend") == "local"
+        ):
+            raise ValueError(
+                "live_approach_history is not supported with container_backend=local: "
+                "the local agent shares the host filesystem with the evaluator, so "
+                "held-out eval data cannot be isolated from it. Use docker or apptainer."
+            )
         # Score each commit in the background as it's made (no-op unless enabled).
         with live_commit_eval(
             enabled=cfg.get("live_approach_history", False),
