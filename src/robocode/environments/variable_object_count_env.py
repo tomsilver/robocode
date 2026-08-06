@@ -396,12 +396,9 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             f'    count_kwarg="{self._count_kwarg}",\n'
             f'    count_object_prefix="{self._count_object_prefix}",\n'
             f"{bilevel_example_arg}"
-            "    # Example values. These args only choose which counts an unpinned\n"
-            "    # reset draws from while you develop; they are NOT the counts used\n"
-            "    # at evaluation, which are not disclosed. Your program must handle\n"
-            "    # any object count.\n"
-            "    design_counts=[1],\n"
-            "    eval_counts=[1],\n"
+            "    # Any counts you like; the evaluation counts are not disclosed.\n"
+            "    design_counts=[<count list>],\n"
+            "    eval_counts=[<count list>],\n"
             ")\n\n"
             "# Pin a count to build an instance of that size, for any count:\n"
             "state, info = env.reset(seed=0, options={'object_count': 3})\n"
