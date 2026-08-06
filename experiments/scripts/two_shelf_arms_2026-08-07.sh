@@ -39,6 +39,20 @@ fi
 [[ $(git -C "$TWIN_ROOT" branch --show-current) == two-shelf-twin ]] \
   || { echo "twin worktree is not on two-shelf-twin" >&2; exit 1; }
 
+# Preflight: each checkout's env module must carry its own arm's default
+# pattern, the sif must resolve, and the submodule must be checked out.
+ENV_REL=src/robocode/environments/two_shelf_clutteredstorage2d_env.py
+grep -q "target_pattern: tuple\[int, \.\.\.\] = (0, 0, 1)" "$STRICT_ROOT/$ENV_REL" \
+  || { echo "strict checkout does not carry the strict pattern" >&2; exit 1; }
+grep -q "target_pattern: tuple\[int, \.\.\.\] = (1, 0, 0)" "$TWIN_ROOT/$ENV_REL" \
+  || { echo "twin checkout does not carry the twin pattern" >&2; exit 1; }
+for root in "$STRICT_ROOT" "$TWIN_ROOT"; do
+  [[ -e "$root/robocode-sandbox.sif" ]] \
+    || { echo "missing sif in $root" >&2; exit 1; }
+  [[ -f "$root/third-party/kindergarden/src/kinder/core.py" ]] \
+    || { echo "kindergarden submodule not checked out in $root" >&2; exit 1; }
+done
+
 COMMON=(--config-name noprims
   approach=agentic approach/backend=claude_opus5
   approach.container_backend=apptainer approach.blackbox=false
@@ -64,22 +78,33 @@ mkdir -p "$STRICT_ROOT/outputs"
 
 SMOKE_DIR="outputs/two_shelf_smoke_${STAMP}/noprims/two_shelf_clutteredstorage2d/s7"
 if [[ -f "$STRICT_ROOT/$SMOKE_DIR/results.json" ]]; then
-  echo "=== smoke already passed, skipping ==="
+  echo "[$(date -Is)] === smoke already passed, skipping ==="
 else
-  echo "=== smoke (strict, capped) ==="
+  echo "[$(date -Is)] === smoke (strict, capped) ==="
   (cd "$STRICT_ROOT" && python experiments/run_experiment.py "${COMMON[@]}" \
     seed=7 approach.max_budget_usd=2.0 num_eval_tasks=10 \
     hydra.run.dir="$SMOKE_DIR")
-  test -f "$STRICT_ROOT/$SMOKE_DIR/results.json"
-  echo "=== smoke passed, launching arms ==="
 fi
+# Automated smoke gate: right env, right model, non-runnable count example.
+S="$STRICT_ROOT/$SMOKE_DIR"
+test -f "$S/results.json" || { echo "smoke: no results.json" >&2; exit 1; }
+grep -q "environment=two_shelf_clutteredstorage2d" "$S/.hydra/overrides.yaml" \
+  || { echo "smoke: wrong environment override" >&2; exit 1; }
+grep -q "claude-opus-5" "$S/.hydra/config.yaml" \
+  || { echo "smoke: model is not claude-opus-5" >&2; exit 1; }
+grep -q 'design_counts=\[<count list>\]' "$S/env_description.md" \
+  || { echo "smoke: env card count example is not the placeholder" >&2; exit 1; }
+test -s "$S/stream.jsonl" || { echo "smoke: empty stream.jsonl" >&2; exit 1; }
+echo "[$(date -Is)] === smoke gate passed, launching arms ==="
 
 fail=0
 for seed in "${SEEDS[@]}"; do
+  echo "[$(date -Is)] === pair s$seed starting ==="
   run "$STRICT_ROOT" strict "$seed" "$BUDGET" & p_strict=$!
   run "$TWIN_ROOT" twin "$seed" "$BUDGET" & p_twin=$!
-  wait "$p_strict" || { echo "!! strict s$seed failed"; fail=1; }
-  wait "$p_twin" || { echo "!! twin s$seed failed"; fail=1; }
+  wait "$p_strict" || { echo "[$(date -Is)] !! strict s$seed failed"; fail=1; }
+  wait "$p_twin" || { echo "[$(date -Is)] !! twin s$seed failed"; fail=1; }
+  echo "[$(date -Is)] === pair s$seed done ==="
 done
-echo "=== all arms done (fail=$fail) ==="
+echo "[$(date -Is)] === all arms done (fail=$fail) ==="
 exit "$fail"
