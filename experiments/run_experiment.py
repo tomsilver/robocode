@@ -134,10 +134,10 @@ def _main(cfg: DictConfig) -> float:
     # global agent budget seed by seed (no single train() step); generalized
     # approaches train once and are then rolled out for free over every seed.
     if approach.per_instance:
-        if cfg.record_approach_history:
+        if cfg.record_approach_history or cfg.get("live_approach_history", False):
             raise ValueError(
-                "record_approach_history is not supported for per-instance "
-                "approaches (it replays a single sandbox's git history; "
+                "record_approach_history / live_approach_history are not supported for "
+                "per-instance approaches (they replay a single sandbox's git history; "
                 "per-instance approaches use a separate sandbox per seed)"
             )
         results: dict[str, Any] = run_per_instance_eval(
@@ -168,6 +168,8 @@ def _main(cfg: DictConfig) -> float:
             output_dir=output_dir,
             task_overrides=list(HydraConfig.get().overrides.task),
             eval_seed=eval_seed,
+            num_eval_tasks=num_eval,
+            eval_timeout=cfg.eval_timeout,
         ):
             approach.train()
 

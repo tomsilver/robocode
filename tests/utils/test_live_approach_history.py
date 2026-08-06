@@ -1,6 +1,8 @@
 """Tests for the background per-commit evaluation watcher."""
 
+import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +11,8 @@ import pytest
 from robocode.utils.live_approach_history import (
     _child_env,
     _CommitEvalWatcher,
+    _isolate,
+    _isolation_available,
     _run_eval_subprocess,
     live_commit_eval,
 )
@@ -34,15 +38,21 @@ def _commit_approach(sandbox: Path, body: str, message: str) -> None:
 
 
 def _eval_recorder(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Intercept the child eval seam; real git/tar (get_snapshots, export) still run."""
+    """Intercept the child eval seam; real git/tar (get_snapshots, export) still run.
+
+    Also forces isolation-available so the orchestration tests run on any host.
+    """
     calls: list[list[str]] = []
 
-    def fake_eval(cmd, _env):
+    def fake_eval(cmd, _env, _timeout):
         calls.append([str(part) for part in cmd])
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(
         "robocode.utils.live_approach_history._run_eval_subprocess", fake_eval
+    )
+    monkeypatch.setattr(
+        "robocode.utils.live_approach_history._isolation_available", lambda: True
     )
     return calls
 
@@ -56,6 +66,8 @@ def test_disabled_is_a_noop(tmp_path: Path, monkeypatch) -> None:
         output_dir=tmp_path / "out",
         task_overrides=_OVERRIDES,
         eval_seed=42,
+        num_eval_tasks=3,
+        eval_timeout=10,
     ):
         pass
     assert not calls
@@ -70,7 +82,9 @@ def test_scan_evaluates_each_new_commit_once(tmp_path: Path, monkeypatch) -> Non
     _commit_approach(sandbox, "v0", "first")
     output_dir = tmp_path / "out"
 
-    watcher = _CommitEvalWatcher(sandbox, output_dir, _OVERRIDES, eval_seed=7)
+    watcher = _CommitEvalWatcher(
+        sandbox, output_dir, _OVERRIDES, eval_seed=7, num_eval_tasks=3, eval_timeout=10
+    )
     watcher._scan_and_eval()  # pylint: disable=protected-access
     assert len(calls) == 1
     watcher._scan_and_eval()  # nothing new  # pylint: disable=protected-access
@@ -109,6 +123,8 @@ def test_drain_on_exit_scores_all_commits(tmp_path: Path, monkeypatch) -> None:
         output_dir=output_dir,
         task_overrides=_OVERRIDES,
         eval_seed=42,
+        num_eval_tasks=3,
+        eval_timeout=10,
     ):
         pass  # stop() drains: every commit present at exit is scored
 
@@ -119,7 +135,12 @@ def test_missing_repo_is_tolerated(tmp_path: Path, monkeypatch) -> None:
     """A scan before the sandbox git repo exists does nothing, without raising."""
     calls = _eval_recorder(monkeypatch)
     watcher = _CommitEvalWatcher(
-        tmp_path / "sandbox", tmp_path / "out", _OVERRIDES, eval_seed=42
+        tmp_path / "sandbox",
+        tmp_path / "out",
+        _OVERRIDES,
+        eval_seed=42,
+        num_eval_tasks=3,
+        eval_timeout=10,
     )
     watcher._scan_and_eval()  # pylint: disable=protected-access
     assert not calls
@@ -142,5 +163,91 @@ def test_eval_subprocess_timeout_is_reported_not_raised(monkeypatch) -> None:
         raise subprocess.TimeoutExpired(cmd, timeout=1)
 
     monkeypatch.setattr(subprocess, "run", _timeout)
-    result = _run_eval_subprocess(["run_experiment.py"], {})
+    result = _run_eval_subprocess(["run_experiment.py"], {}, timeout=1.0)
     assert result.returncode != 0
+
+
+def test_disabled_when_isolation_unavailable(tmp_path: Path, monkeypatch) -> None:
+    """Fail closed: with no sandbox isolation, live eval must not run."""
+    calls = _eval_recorder(monkeypatch)
+    monkeypatch.setattr(
+        "robocode.utils.live_approach_history._isolation_available", lambda: False
+    )
+    sandbox = tmp_path / "sandbox"
+    _init_sandbox(sandbox)
+    _commit_approach(sandbox, "v0", "first")
+    with live_commit_eval(
+        enabled=True,
+        sandbox_dir=sandbox,
+        output_dir=tmp_path / "out",
+        task_overrides=_OVERRIDES,
+        eval_seed=42,
+        num_eval_tasks=3,
+        eval_timeout=10,
+    ):
+        pass
+    assert not calls
+
+
+def test_failed_eval_writes_a_failure_record(tmp_path: Path, monkeypatch) -> None:
+    """A commit whose eval fails still gets a timeline entry, with the error."""
+    monkeypatch.setattr(
+        "robocode.utils.live_approach_history._run_eval_subprocess",
+        lambda cmd, env, timeout: SimpleNamespace(
+            returncode=1, stdout="", stderr="boom"
+        ),
+    )
+    sandbox = tmp_path / "sandbox"
+    _init_sandbox(sandbox)
+    _commit_approach(sandbox, "v0", "first")
+    output_dir = tmp_path / "out"
+    watcher = _CommitEvalWatcher(
+        sandbox, output_dir, _OVERRIDES, eval_seed=1, num_eval_tasks=1, eval_timeout=1
+    )
+    watcher._scan_and_eval()  # pylint: disable=protected-access
+    record = json.loads(
+        (output_dir / "approach_history" / "v000" / "results.json").read_text()
+    )
+    assert record["solve_rate"] is None
+    assert record["error"] == "boom"
+
+
+def test_isolation_blocks_write_into_the_training_sandbox(tmp_path: Path) -> None:
+    """Red team: a policy cannot exfiltrate held-out data into the live sandbox."""
+    if not _isolation_available():
+        pytest.skip("unprivileged user namespaces unavailable")
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    (sandbox / "canary.txt").write_text("held-out", encoding="utf-8")
+    leak = sandbox / "leak.txt"
+    attack = f"open({str(leak)!r}, 'w').write('seed')"
+    result = subprocess.run(
+        _isolate([sys.executable, "-c", attack], sandbox),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert not leak.exists()  # the write was blocked
+    assert result.returncode != 0  # and the policy saw the failure
+    assert (sandbox / "canary.txt").read_text(encoding="utf-8") == "held-out"
+
+
+def test_isolation_blocks_remount_escape(tmp_path: Path) -> None:
+    """Red team: the policy cannot remount the sandbox writable to bypass isolation."""
+    if not _isolation_available():
+        pytest.skip("unprivileged user namespaces unavailable")
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    leak = sandbox / "leak.txt"
+    attack = (
+        "import subprocess;"
+        f"subprocess.run(['mount', '-o', 'remount,rw,bind', {str(sandbox)!r}]);"
+        f"open({str(leak)!r}, 'w').write('seed')"
+    )
+    subprocess.run(
+        _isolate([sys.executable, "-c", attack], sandbox),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert not leak.exists()

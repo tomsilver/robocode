@@ -9,11 +9,14 @@ one eval at a time, drained before the primary evaluation. The sandbox is read-o
 
 from __future__ import annotations
 
+import functools
+import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -24,11 +27,63 @@ from robocode.utils.approach_history import Snapshot, _export_snapshot, get_snap
 logger = logging.getLogger(__name__)
 
 _POLL_SECONDS = 5.0
-# Ceiling for one background eval: a full suite finishes well within this; the point
-# is only to kill a revision that hangs before the per-episode timeout can fire.
-_EVAL_TIMEOUT_SECONDS = 3600.0
+# Head-room over the suite's own budget (num_eval_tasks * eval_timeout), to absorb
+# startup/import before a revision that hangs there is killed.
+_EVAL_STARTUP_MARGIN_SECONDS = 600.0
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # src/robocode/utils/... -> repo root
 _RUNNER = "experiments/run_experiment.py"
+
+# Protect $1 read-only in a mount namespace, then drop the mount capability before
+# exec'ing $2.. so the untrusted eval cannot undo it. See _isolate.
+_ISOLATE_SETUP = (
+    'mount --bind "$1" "$1" && mount -o remount,ro,bind "$1" && shift && '
+    'exec setpriv --bounding-set=-all --no-new-privs -- "$@"'
+)
+
+
+def _isolate(cmd: list[str], protect_dir: Path) -> list[str]:
+    """Wrap *cmd* so *protect_dir* is read-only and cannot be made writable again.
+
+    A concurrent eval runs the untrusted policy on the host; without this it could
+    write held-out rewards/seeds into the live training sandbox, which is bind-mounted
+    into the still-running agent. The mount namespace makes that directory read-only
+    for the eval, and the dropped CAP_SYS_ADMIN stops the policy remounting it. Needs
+    an unprivileged user namespace (see :func:`_isolation_available`).
+    """
+    return [
+        "unshare",
+        "--user",
+        "--map-root-user",
+        "--mount",
+        "bash",
+        "-c",
+        _ISOLATE_SETUP,
+        "_",
+        str(protect_dir),
+        *cmd,
+    ]
+
+
+@functools.cache
+def _isolation_available() -> bool:
+    """Whether the isolation wrapper actually works here (probes the real prefix).
+
+    Unprivileged user namespaces are blocked on CI runners and hardened kernels;
+    there live eval must stay off rather than run an unisolated policy beside the agent.
+    """
+    if sys.platform != "linux":
+        return False
+    with tempfile.TemporaryDirectory() as probe_dir:
+        try:
+            result = subprocess.run(
+                _isolate(["true"], Path(probe_dir)),
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return result.returncode == 0
 
 
 def _child_env() -> dict[str, str]:
@@ -62,7 +117,7 @@ def _eval_command(
 
 
 def _run_eval_subprocess(
-    cmd: list[str], env: dict[str, str]
+    cmd: list[str], env: dict[str, str], timeout: float
 ) -> subprocess.CompletedProcess[str]:
     """Run one commit's standalone eval. A named seam so tests can intercept it.
 
@@ -77,15 +132,12 @@ def _run_eval_subprocess(
             env=env,
             capture_output=True,
             text=True,
-            timeout=_EVAL_TIMEOUT_SECONDS,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            cmd,
-            returncode=-1,
-            stdout="",
-            stderr=f"killed: exceeded {_EVAL_TIMEOUT_SECONDS}s",
+            cmd, returncode=-1, stdout="", stderr=f"killed: exceeded {timeout}s"
         )
 
 
@@ -98,11 +150,16 @@ class _CommitEvalWatcher:
         output_dir: Path,
         task_overrides: list[str],
         eval_seed: int,
+        num_eval_tasks: int,
+        eval_timeout: float,
     ) -> None:
         self._sandbox_dir = sandbox_dir
         self._history_dir = output_dir / "approach_history"
         self._task_overrides = task_overrides
         self._eval_seed = eval_seed
+        # Ceiling per eval: the suite's own budget plus start-up head-room. A full
+        # suite finishes within this; a revision hanging before its episodes do not.
+        self._timeout = num_eval_tasks * eval_timeout + _EVAL_STARTUP_MARGIN_SECONDS
         # commit hash -> version id, assigned once in discovery order so a rewritten
         # history (amend/reset) never reuses a prior commit's vNNN directory.
         self._versions: dict[str, int] = {}
@@ -152,9 +209,9 @@ class _CommitEvalWatcher:
             snap.commit_hash[:8],
             snap.message,
         )
+        cmd = _eval_command(version_dir, self._task_overrides, self._eval_seed)
         result = _run_eval_subprocess(
-            _eval_command(version_dir, self._task_overrides, self._eval_seed),
-            _child_env(),
+            _isolate(cmd, self._sandbox_dir), _child_env(), self._timeout
         )
         if result.returncode != 0:
             logger.warning(
@@ -163,6 +220,26 @@ class _CommitEvalWatcher:
                 result.returncode,
                 result.stderr[-800:],
             )
+            self._write_failure(snap, version_dir, result.stderr)
+
+    def _write_failure(self, snap: Snapshot, version_dir: Path, stderr: str) -> None:
+        """Record a failed eval so the timeline has an entry for a broken commit.
+
+        The child exits before writing results.json when approach.py fails to load, so
+        without this a bad intermediate commit (expected during training) leaves a gap.
+        """
+        results = version_dir / "results.json"
+        if results.exists():
+            return  # the child wrote its own results; do not clobber them
+        version_dir.mkdir(parents=True, exist_ok=True)
+        record = {
+            "commit_hash": snap.commit_hash,
+            "timestamp": snap.timestamp,
+            "message": snap.message,
+            "solve_rate": None,
+            "error": stderr[-800:],
+        }
+        results.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
 @contextmanager
@@ -173,16 +250,29 @@ def live_commit_eval(
     output_dir: Path,
     task_overrides: list[str],
     eval_seed: int,
+    num_eval_tasks: int,
+    eval_timeout: float,
 ) -> Iterator[None]:
     """Score every new sandbox commit in the background for the duration of the block.
 
-    A no-op when *enabled* is false. Leaves a per-commit timeline under
-    output_dir/approach_history/.
+    A no-op when *enabled* is false. Fails closed when the sandbox cannot be isolated
+    from the eval, since an unisolated concurrent eval could leak held-out data to the
+    agent. Leaves a per-commit timeline under output_dir/approach_history/.
     """
     if not enabled:
         yield
         return
-    watcher = _CommitEvalWatcher(sandbox_dir, output_dir, task_overrides, eval_seed)
+    if not _isolation_available():
+        logger.warning(
+            "live_approach_history is on but the training sandbox cannot be isolated "
+            "(unprivileged user namespaces unavailable); disabling it rather than run "
+            "an unisolated eval beside the agent, which could leak held-out data."
+        )
+        yield
+        return
+    watcher = _CommitEvalWatcher(
+        sandbox_dir, output_dir, task_overrides, eval_seed, num_eval_tasks, eval_timeout
+    )
     watcher.start()
     try:
         yield
