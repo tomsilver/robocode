@@ -1,10 +1,16 @@
 """ClutteredStorage2D variant with two shelves and per-block target shelves.
 
-Each shelf is a fixed unit at the top of the world: a 0.32-wide opening whose
-upper region is narrowed by two posts, leaving a 0.32 x 0.06 front area and a
-0.18 x 0.10 pocket above it. Every block carries a ``target_shelf`` feature
-(0 or 1) and the task terminates when each block is fully inside its target
-shelf's opening.
+Each shelf is a fixed unit at the top of the world: a 0.32-wide opening with a
+front area and, above it, one or two pocket levels formed by static posts.
+Every block carries a ``target_shelf`` feature (0 or 1) and the task
+terminates when each block is fully inside its target shelf's opening.
+
+Geometry knobs (per instance):
+- ``front_height``: height of the front area below the pockets.
+- ``pocket_levels``: 1 (single 0.18 x 0.10 pocket) or 2 (0.18 and 0.10 wide
+  levels stacked, with a matching third block size).
+- ``stored_at_top``: pre-store the long block flush with the top of the front
+  area rather than centered in it.
 """
 
 import numpy as np
@@ -33,20 +39,26 @@ Kinematic2DRobotEnvTypeFeatures[StorageBlockType] = list(
     Kinematic2DRobotEnvTypeFeatures[RectangleType]
 ) + ["target_shelf"]
 
-# Shelf unit geometry (world is 5.0 x 3.0; shelves sit flush with the top wall).
+# Shared geometry (world is 5.0 x 3.0; shelves sit flush with the top wall).
 SHELF_OUTER_WIDTH = 1.0
 SHELF_INNER_WIDTH = 0.32
-SHELF_HEIGHT = 0.16
-SHELF_Y = 3.0 - SHELF_HEIGHT
 SHELF_INNER_CENTERS_X = (1.4, 3.6)
-POST_WIDTH = 0.07
+WORLD_MAX_Y = 3.0
+
+# Defaults for the single-pocket configuration (kept for existing scripts).
+FRONT_HEIGHT = 0.06
 POST_HEIGHT = 0.10
-FRONT_HEIGHT = SHELF_HEIGHT - POST_HEIGHT
+SHELF_HEIGHT = FRONT_HEIGHT + POST_HEIGHT
+SHELF_Y = WORLD_MAX_Y - SHELF_HEIGHT
 
-# Per-block shapes (width, height): block1 fits the pocket, blocks 0 and 2 do not.
+# Per-block shapes (width, height) by pocket_levels.
 BLOCK_SHAPES = ((0.28, 0.04), (0.14, 0.04), (0.28, 0.04))
+BLOCK_SHAPES_TWO_LEVELS = ((0.28, 0.04), (0.14, 0.04), (0.08, 0.04))
 
-# In-shelf initialization jitter for the pre-stored block.
+# Pocket levels as (channel_width, height), bottom-up, by pocket_levels.
+POCKET_LEVELS = {1: ((0.18, 0.10),), 2: ((0.18, 0.06), (0.10, 0.06))}
+
+# In-shelf initialization jitter for pre-stored blocks.
 STORED_BLOCK_X_JITTER = 0.01
 STORED_BLOCK_THETA_JITTER = 0.02
 
@@ -55,7 +67,7 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
     """Object-centric two-shelf variant.
 
     ``target_pattern`` assigns a target shelf to each block relative to the
-    shelf that holds the pre-stored block: entry 0 means that same shelf,
+    shelf holding the pre-stored long block: entry 0 means that same shelf,
     entry 1 means the other one.
     """
 
@@ -63,36 +75,72 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
         self,
         num_blocks: int = 3,
         target_pattern: tuple[int, int, int] = (0, 0, 1),
+        front_height: float = FRONT_HEIGHT,
+        pocket_levels: int = 1,
+        stored_at_top: bool = False,
         **kwargs,
     ) -> None:
-        assert num_blocks == len(BLOCK_SHAPES) == len(target_pattern)
+        assert pocket_levels in POCKET_LEVELS
+        self._levels = POCKET_LEVELS[pocket_levels]
+        self._block_shapes = (
+            BLOCK_SHAPES if pocket_levels == 1 else BLOCK_SHAPES_TWO_LEVELS
+        )
+        assert num_blocks == len(self._block_shapes) == len(target_pattern)
         super().__init__(num_blocks=num_blocks, **kwargs)
         self._target_pattern = tuple(target_pattern)
+        self._front_height = front_height
+        self._stored_at_top = stored_at_top
+        # Blocks 0..(pocket_levels-1) start stored: block0 in the front area
+        # and, with two levels, block1 in the lower pocket.
+        self._num_stored = pocket_levels
+        self._shelf_height = front_height + sum(h for _, h in self._levels)
+        self._shelf_y = WORLD_MAX_Y - self._shelf_height
+
+    def _stored_poses(self, stored_shelf: int) -> list[SE2Pose]:
+        cx = SHELF_INNER_CENTERS_X[stored_shelf]
+        poses = []
+        h0 = self._block_shapes[0][1]
+        if self._stored_at_top:
+            y0 = self._shelf_y + self._front_height - h0 / 2 - 0.005
+            th0 = 0.0
+        else:
+            y0 = self._shelf_y + self._front_height / 2
+            th0 = self.np_random.uniform(
+                -STORED_BLOCK_THETA_JITTER, STORED_BLOCK_THETA_JITTER
+            )
+        poses.append(
+            SE2Pose(
+                cx + self.np_random.uniform(-STORED_BLOCK_X_JITTER, STORED_BLOCK_X_JITTER),
+                y0,
+                th0,
+            )
+        )
+        if self._num_stored > 1:
+            level_y = self._shelf_y + self._front_height + self._levels[0][1] / 2
+            poses.append(
+                SE2Pose(cx + self.np_random.uniform(-0.005, 0.005), level_y, 0.0)
+            )
+        return poses
 
     def _sample_initial_state(self) -> ObjectCentricState:
         static_objects = set(self.initial_constant_state)
         robot_pose = sample_se2_pose(self.config.robot_init_pose_bounds, self.np_random)
         stored_shelf = int(self.np_random.integers(2))
         targets = tuple(stored_shelf ^ p for p in self._target_pattern)
-        stored_pose = SE2Pose(
-            SHELF_INNER_CENTERS_X[stored_shelf]
-            + self.np_random.uniform(-STORED_BLOCK_X_JITTER, STORED_BLOCK_X_JITTER),
-            SHELF_Y + FRONT_HEIGHT / 2,
-            self.np_random.uniform(
-                -STORED_BLOCK_THETA_JITTER, STORED_BLOCK_THETA_JITTER
-            ),
-        )
+        stored_poses = self._stored_poses(stored_shelf)
         outside_poses: list[SE2Pose] = []
-        for _ in range(len(BLOCK_SHAPES) - 1):
+        num_outside = len(self._block_shapes) - self._num_stored
+        for _ in range(num_outside):
             for _ in range(self.config.max_init_sampling_attempts):
                 pose = sample_se2_pose(
                     self.config.target_block_out_of_shelf_pose_bounds, self.np_random
                 )
                 state = self._create_two_shelf_state(
-                    robot_pose, stored_pose, outside_poses + [pose], targets
+                    robot_pose, stored_poses, outside_poses + [pose], targets
                 )
                 obj_name_to_obj = {o.name: o for o in state}
-                new_block = obj_name_to_obj[f"block{len(outside_poses) + 1}"]
+                new_idx = self._num_stored + len(outside_poses)
+                new_block = obj_name_to_obj[f"block{new_idx}"]
                 full_state = state.copy()
                 full_state.data.update(self.initial_constant_state.data)
                 if not state_2d_has_collision(
@@ -103,7 +151,7 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
                 raise RuntimeError("Failed to sample block pose.")
             outside_poses.append(pose)
         state = self._create_two_shelf_state(
-            robot_pose, stored_pose, outside_poses, targets
+            robot_pose, stored_poses, outside_poses, targets
         )
         robot = state.get_objects(CRVRobotType)[0]
         full_state = state.copy()
@@ -114,7 +162,7 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
     def _create_two_shelf_state(
         self,
         robot_pose: SE2Pose,
-        stored_pose: SE2Pose,
+        stored_poses: list[SE2Pose],
         outside_poses: list[SE2Pose],
         targets: tuple[int, ...],
     ) -> ObjectCentricState:
@@ -133,62 +181,68 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
             "gripper_width": self.config.robot_gripper_width,
         }
 
+        post_num = 0
         for shelf_idx, inner_center_x in enumerate(SHELF_INNER_CENTERS_X):
             shelf = Object(f"shelf{shelf_idx}", ShelfType)
             init_state_dict[shelf] = {
                 "x1": inner_center_x - SHELF_INNER_WIDTH / 2,
-                "y1": SHELF_Y,
+                "y1": self._shelf_y,
                 "theta1": 0.0,
                 "width1": SHELF_INNER_WIDTH,
-                "height1": SHELF_HEIGHT,
+                "height1": self._shelf_height,
                 "static": True,
                 "color_r1": PURPLE[0],
                 "color_g1": PURPLE[1],
                 "color_b1": PURPLE[2],
                 "z_order1": ZOrder.NONE.value,
                 "x": inner_center_x - SHELF_OUTER_WIDTH / 2,
-                "y": SHELF_Y,
+                "y": self._shelf_y,
                 "theta": 0.0,
                 "width": SHELF_OUTER_WIDTH,
-                "height": SHELF_HEIGHT,
+                "height": self._shelf_height,
                 "color_r": BLACK[0],
                 "color_g": BLACK[1],
                 "color_b": BLACK[2],
                 "z_order": ZOrder.ALL.value,
             }
-            for side_idx, post_x in enumerate(
-                (
-                    inner_center_x - SHELF_INNER_WIDTH / 2,
-                    inner_center_x + SHELF_INNER_WIDTH / 2 - POST_WIDTH,
-                )
-            ):
-                post = Object(f"post{2 * shelf_idx + side_idx}", RectangleType)
-                init_state_dict[post] = {
-                    "x": post_x,
-                    "y": SHELF_Y + FRONT_HEIGHT,
-                    "theta": 0.0,
-                    "width": POST_WIDTH,
-                    "height": POST_HEIGHT,
-                    "static": True,
-                    "color_r": 0.35,
-                    "color_g": 0.35,
-                    "color_b": 0.35,
-                    "z_order": ZOrder.ALL.value,
-                }
+            level_bottom = self._shelf_y + self._front_height
+            prev_width = SHELF_INNER_WIDTH
+            for channel_width, level_height in self._levels:
+                post_width = (prev_width - channel_width) / 2
+                for post_x in (
+                    inner_center_x - prev_width / 2,
+                    inner_center_x + prev_width / 2 - post_width,
+                ):
+                    post = Object(f"post{post_num}", RectangleType)
+                    post_num += 1
+                    init_state_dict[post] = {
+                        "x": post_x,
+                        "y": level_bottom,
+                        "theta": 0.0,
+                        "width": post_width,
+                        "height": level_height,
+                        "static": True,
+                        "color_r": 0.35,
+                        "color_g": 0.35,
+                        "color_b": 0.35,
+                        "z_order": ZOrder.ALL.value,
+                    }
+                level_bottom += level_height
+                prev_width = channel_width
 
-        stored_rect = Rectangle.from_center(
-            stored_pose.x,
-            stored_pose.y,
-            BLOCK_SHAPES[0][0],
-            BLOCK_SHAPES[0][1],
-            stored_pose.theta,
-        )
-        block_poses = [
-            SE2Pose(stored_rect.x, stored_rect.y, stored_rect.theta)
-        ] + list(outside_poses)
+        block_poses = []
+        for pose, shape in zip(stored_poses, self._block_shapes, strict=False):
+            rect = Rectangle.from_center(pose.x, pose.y, shape[0], shape[1], pose.theta)
+            block_poses.append(SE2Pose(rect.x, rect.y, rect.theta))
+        block_poses += list(outside_poses)
         num_present = len(block_poses)
         for block_idx, (pose, shape, target) in enumerate(
-            zip(block_poses, BLOCK_SHAPES[:num_present], targets[:num_present], strict=True)
+            zip(
+                block_poses,
+                self._block_shapes[:num_present],
+                targets[:num_present],
+                strict=True,
+            )
         ):
             block = Object(f"block{block_idx}", StorageBlockType)
             init_state_dict[block] = {
@@ -255,7 +309,7 @@ The robot has a movable circular base and a retractable arm with a rectangular v
         return "Variants differ in how target shelves are assigned to blocks."
 
     def _create_variant_specific_description(self) -> str:
-        return "This variant has 3 blocks; one block starts inside a shelf."
+        return "This variant has 3 blocks; at least one block starts inside a shelf."
 
     def _create_reward_markdown_description(self) -> str:
         return "A penalty of -1.0 is given at every time step until termination, which occurs when every block is inside its target shelf.\n"  # pylint: disable=line-too-long
