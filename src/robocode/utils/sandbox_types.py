@@ -10,6 +10,10 @@ from typing import Any
 
 CONTAINER_BACKENDS = ("docker", "apptainer", "local")
 
+# Sandbox-relative directory holding prompt text the CLI reads from disk instead of
+# argv. Gitignored in the sandbox repo so it does not show up in the agent's diffs.
+AGENT_PROMPT_DIR = ".agent_prompts"
+
 
 def resolve_container_backend(container_backend: str | None, use_docker: bool) -> str:
     """Resolve and validate an approach's sandbox backend selection.
