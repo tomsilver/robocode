@@ -1,16 +1,7 @@
 """ClutteredStorage2D variant with two shelves and per-block target shelves.
 
-Each shelf is a fixed unit at the top of the world: a 0.32-wide opening with a
-front area and, above it, one or two pocket levels formed by static posts.
-Every block carries a ``target_shelf`` feature (0 or 1) and the task
-terminates when each block is fully inside its target shelf's opening.
-
-Geometry knobs (per instance):
-- ``front_height``: height of the front area below the pockets.
-- ``pocket_levels``: 1 (single 0.18 x 0.10 pocket) or 2 (0.18 and 0.10 wide
-  levels stacked, with a matching third block size).
-- ``stored_at_top``: pre-store the long block flush with the top of the front
-  area rather than centered in it.
+Every block carries a ``target_shelf`` feature (0 or 1); the task terminates
+when each block is fully inside its target shelf's opening.
 """
 
 import numpy as np
@@ -39,30 +30,26 @@ Kinematic2DRobotEnvTypeFeatures[StorageBlockType] = list(
     Kinematic2DRobotEnvTypeFeatures[RectangleType]
 ) + ["target_shelf"]
 
-# Shared geometry (world is 5.0 x 3.0; shelves sit flush with the top wall).
+# Shelf unit geometry (world is 5.0 x 3.0; shelves sit flush with the top wall).
 SHELF_OUTER_WIDTH = 1.0
 SHELF_INNER_WIDTH = 0.32
 SHELF_INNER_CENTERS_X = (1.4, 3.6)
 WORLD_MAX_Y = 3.0
 
-# Defaults for the single-pocket configuration (kept for existing scripts).
+# Defaults for the single-level configuration.
 FRONT_HEIGHT = 0.06
 POST_HEIGHT = 0.10
 SHELF_HEIGHT = FRONT_HEIGHT + POST_HEIGHT
 SHELF_Y = WORLD_MAX_Y - SHELF_HEIGHT
 
-# Per-block shapes (width, height) by pocket_levels. In the two-level unit the
-# two smaller blocks together exceed the front width (0.19 + 0.14 > 0.32), so
-# neither can wait in the front area while the other transits: solving forces
-# both stored atoms false at once.
+# Per-block shapes (width, height).
 BLOCK_SHAPES = ((0.28, 0.04), (0.14, 0.04), (0.28, 0.04))
 BLOCK_SHAPES_TWO_LEVELS = ((0.28, 0.04), (0.19, 0.04), (0.14, 0.04))
 
-# Pocket levels as (channel_width, height), bottom-up, by pocket_levels.
-# Each level's diagonal is below the next-larger block's length.
-POCKET_LEVELS = {1: ((0.18, 0.10),), 2: ((0.23, 0.06), (0.16, 0.06))}
+# Level openings as (width, height), bottom-up.
+LEVEL_SPECS = {1: ((0.18, 0.10),), 2: ((0.23, 0.06), (0.16, 0.06))}
 
-# In-shelf initialization jitter for pre-stored blocks.
+# Initialization jitter for pre-stored blocks.
 STORED_BLOCK_X_JITTER = 0.01
 STORED_BLOCK_THETA_JITTER = 0.02
 
@@ -70,9 +57,8 @@ STORED_BLOCK_THETA_JITTER = 0.02
 class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2DEnv):
     """Object-centric two-shelf variant.
 
-    ``target_pattern`` assigns a target shelf to each block relative to the
-    shelf holding the pre-stored long block: entry 0 means that same shelf,
-    entry 1 means the other one.
+    ``target_pattern`` assigns a target shelf to each block, relative to the
+    shelf holding block0 at reset (0 = same shelf, 1 = the other one).
     """
 
     def __init__(
@@ -80,45 +66,38 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
         num_blocks: int = 3,
         target_pattern: tuple[int, int, int] = (0, 0, 1),
         front_height: float = FRONT_HEIGHT,
-        pocket_levels: int = 1,
-        stored_at_top: bool = False,
+        shelf_levels: int = 1,
+        stored_y_frac: float = 0.5,
         **kwargs,
     ) -> None:
-        assert pocket_levels in POCKET_LEVELS
-        self._levels = POCKET_LEVELS[pocket_levels]
+        assert shelf_levels in LEVEL_SPECS
+        self._levels = LEVEL_SPECS[shelf_levels]
         self._block_shapes = (
-            BLOCK_SHAPES if pocket_levels == 1 else BLOCK_SHAPES_TWO_LEVELS
+            BLOCK_SHAPES if shelf_levels == 1 else BLOCK_SHAPES_TWO_LEVELS
         )
         assert num_blocks == len(self._block_shapes) == len(target_pattern)
         super().__init__(num_blocks=num_blocks, **kwargs)
         self._target_pattern = tuple(target_pattern)
         self._front_height = front_height
-        self._stored_at_top = stored_at_top
-        # Blocks 0..(pocket_levels-1) start stored: block0 in the front area
-        # and, with two levels, block1 in the lower pocket.
-        self._num_stored = pocket_levels
+        self._stored_y_frac = stored_y_frac
+        self._num_stored = shelf_levels
         self._shelf_height = front_height + sum(h for _, h in self._levels)
         self._shelf_y = WORLD_MAX_Y - self._shelf_height
 
     def _stored_poses(self, stored_shelf: int) -> list[SE2Pose]:
         cx = SHELF_INNER_CENTERS_X[stored_shelf]
-        poses = []
-        h0 = self._block_shapes[0][1]
-        if self._stored_at_top:
-            y0 = self._shelf_y + self._front_height - h0 / 2 - 0.005
-            th0 = 0.0
-        else:
-            y0 = self._shelf_y + self._front_height / 2
-            th0 = self.np_random.uniform(
-                -STORED_BLOCK_THETA_JITTER, STORED_BLOCK_THETA_JITTER
-            )
-        poses.append(
+        poses = [
             SE2Pose(
-                cx + self.np_random.uniform(-STORED_BLOCK_X_JITTER, STORED_BLOCK_X_JITTER),
-                y0,
-                th0,
+                cx
+                + self.np_random.uniform(
+                    -STORED_BLOCK_X_JITTER, STORED_BLOCK_X_JITTER
+                ),
+                self._shelf_y + self._front_height * self._stored_y_frac,
+                self.np_random.uniform(
+                    -STORED_BLOCK_THETA_JITTER, STORED_BLOCK_THETA_JITTER
+                ),
             )
-        )
+        ]
         if self._num_stored > 1:
             level_y = self._shelf_y + self._front_height + self._levels[0][1] / 2
             poses.append(
@@ -158,9 +137,15 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
             robot_pose, stored_poses, outside_poses, targets
         )
         robot = state.get_objects(CRVRobotType)[0]
+        stored_blocks = {
+            o for o in state if o.name in {f"block{i}" for i in range(self._num_stored)}
+        }
         full_state = state.copy()
         full_state.data.update(self.initial_constant_state.data)
         assert not state_2d_has_collision(full_state, {robot}, static_objects, {})
+        assert not state_2d_has_collision(
+            full_state, stored_blocks, set(full_state) - stored_blocks, {}
+        )
         return state
 
     def _create_two_shelf_state(
@@ -310,10 +295,10 @@ The robot has a movable circular base and a retractable arm with a rectangular v
 """
 
     def _create_variant_markdown_description(self) -> str:
-        return "Variants differ in how target shelves are assigned to blocks."
+        return "The assignment of target shelves to blocks differs between environment variants."  # pylint: disable=line-too-long
 
     def _create_variant_specific_description(self) -> str:
-        return "This variant has 3 blocks; at least one block starts inside a shelf."
+        return "This variant has 3 blocks."
 
     def _create_reward_markdown_description(self) -> str:
         return "A penalty of -1.0 is given at every time step until termination, which occurs when every block is inside its target shelf.\n"  # pylint: disable=line-too-long
