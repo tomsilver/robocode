@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from robocode.utils.live_approach_history import (
     _child_env,
     _CommitEvalWatcher,
@@ -31,7 +33,7 @@ def _commit_approach(sandbox: Path, body: str, message: str) -> None:
     _git(sandbox, "commit", "-m", message)
 
 
-def _eval_recorder(monkeypatch):
+def _eval_recorder(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Intercept the child eval seam; real git/tar (get_snapshots, export) still run."""
     calls: list[list[str]] = []
 
