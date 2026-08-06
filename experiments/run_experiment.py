@@ -176,6 +176,19 @@ def _main(cfg: DictConfig) -> float:
                 "local agent shares the host filesystem with the evaluator, so held-out "
                 "eval data cannot be isolated from it. Use docker or apptainer."
             )
+        if cfg.get("live_approach_history", False) and blackbox:
+            # The eval shares the host network with the training env server, so an
+            # evaluated policy can drive that server (e.g. a render_state whose label
+            # carries the eval seed) to write the held-out seed into the sandbox the
+            # agent reads. Closing this needs the eval in its own network namespace
+            # (unshare --net + loopback, its own eval server inside it) so it cannot
+            # reach the training server; until then, refuse the combination.
+            raise ValueError(
+                "live_approach_history is not yet supported with blackbox=true: the "
+                "evaluated policy can reach the training env server over the shared "
+                "host network and leak the held-out seed through it. Use a whitebox "
+                "run, or add network isolation to the evaluator first."
+            )
         # Score each commit in the background as it's made (no-op unless enabled).
         with live_commit_eval(
             enabled=cfg.get("live_approach_history", False),
