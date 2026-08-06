@@ -8,12 +8,18 @@ set -euo pipefail
 # retention; edge-suite (band) scoring happens post-hoc with the
 # results-viewer slice harness, never on the demo seeds.
 #
-# Run from the repair-probe checkout with the project environment active:
+# Run from the repair-probe checkout with the project environment active.
+# Agent seeds come from the arguments (default: 42); add seeds in later
+# invocations as earlier ones finish:
 #
-#   bash experiments/scripts/repair_probe_2026-08-07.sh
+#   bash experiments/scripts/repair_probe_2026-08-07.sh       # seed 42
+#   bash experiments/scripts/repair_probe_2026-08-07.sh 24    # later
 
 python -c "import hydra" 2>/dev/null \
   || { echo "activate the project environment first" >&2; exit 1; }
+
+SEEDS=("$@")
+[[ ${#SEEDS[@]} -eq 0 ]] && SEEDS=(42)
 
 ROOT=$(git rev-parse --show-toplevel)
 PROBE="$ROOT/experiments/repair_probe"
@@ -32,11 +38,11 @@ mkdir -p "$ROOT/outputs"
   echo "repair probe $STAMP"
   echo "branch: $(git -C "$ROOT" branch --show-current) @ $(git -C "$ROOT" rev-parse HEAD)"
   echo "seed program: repair_probe/runB_approach.py (opus5 stickbutton s424, 08-05)"
-  echo "conditions: none / mid / band; agent seeds: 42 24; budget: $BUDGET"
+  echo "conditions: none / mid / band; agent seeds: ${SEEDS[*]}; budget: $BUDGET"
 } | tee "$ROOT/outputs/repair_probe_${STAMP}_manifest.txt"
 
 fail=0
-for seed in 42 24; do
+for seed in "${SEEDS[@]}"; do
   for cond in none mid band; do
     extra=()
     case "$cond" in
