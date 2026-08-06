@@ -1,0 +1,9 @@
+# Two-shelf ClutteredStorage at a fixed count of 3 blocks. Arm parameters
+# (target pattern, shelf profile) are the env module's defaults on the
+# launching branch, so the source the agent reads matches the sampler.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: robocode.environments.two_shelf_clutteredstorage2d_env:TwoShelfClutteredStorage2DEnv
+count_kwarg: num_blocks
+count_object_prefix: block
+design_counts: [3]
+eval_counts: [3]
