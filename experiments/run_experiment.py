@@ -42,6 +42,7 @@ from robocode.utils.episode import (
     summarize_by_count,
 )
 from robocode.utils.live_approach_history import live_commit_eval
+from robocode.utils.sandbox_types import resolve_container_backend
 
 logger = logging.getLogger(__name__)
 
@@ -161,14 +162,19 @@ def _main(cfg: DictConfig) -> float:
         # The sandbox git repo the agent commits into.
         load_dir = cfg.approach.get("load_dir", None)
         sandbox_dir = Path(load_dir) / "sandbox" if load_dir else output_dir / "sandbox"
-        if (
-            cfg.get("live_approach_history", False)
-            and cfg.approach.get("container_backend") == "local"
+        # Resolve the backend the way the approach does (null -> local), so the guard
+        # cannot be bypassed by leaving container_backend unset.
+        if cfg.get("live_approach_history", False) and (
+            resolve_container_backend(
+                cfg.approach.get("container_backend"),
+                cfg.approach.get("use_docker", False),
+            )
+            == "local"
         ):
             raise ValueError(
-                "live_approach_history is not supported with container_backend=local: "
-                "the local agent shares the host filesystem with the evaluator, so "
-                "held-out eval data cannot be isolated from it. Use docker or apptainer."
+                "live_approach_history is not supported with the local backend: the "
+                "local agent shares the host filesystem with the evaluator, so held-out "
+                "eval data cannot be isolated from it. Use docker or apptainer."
             )
         # Score each commit in the background as it's made (no-op unless enabled).
         with live_commit_eval(
