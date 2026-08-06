@@ -68,6 +68,8 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         max_turns: int = 0,
         output_dir: str = ".",
         load_dir: str | None = None,
+        seed_program: str | None = None,
+        seed_instances: str | None = None,
         use_docker: bool = False,
         container_backend: str | None = None,
         geometry_prompt: bool = False,
@@ -96,6 +98,12 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
         self._load_dir = Path(load_dir) if load_dir is not None else None
+        # Optional sandbox seeding: an existing program the agent starts from, and
+        # a JSON list of (seed, object_count) instances placed alongside it.
+        self._seed_program = Path(seed_program) if seed_program is not None else None
+        self._seed_instances = (
+            Path(seed_instances) if seed_instances is not None else None
+        )
         self._container_backend = resolve_container_backend(
             container_backend, use_docker
         )
@@ -200,6 +208,19 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         init_files: dict[str, Path] = {}
         if self._blackbox:
             init_files["env_client.py"] = ENV_CLIENT_SRC
+        if self._seed_program is not None:
+            init_files["approach.py"] = self._seed_program
+            prompt += (
+                "\n\nAn `approach.py` already exists in your working directory. "
+                "Use it as your starting point and improve it."
+            )
+        if self._seed_instances is not None:
+            init_files["instances.json"] = self._seed_instances
+            prompt += (
+                "\n\nThe file `instances.json` in your working directory lists "
+                "environment instances as (seed, object_count) pairs. Consider "
+                "them while you work."
+            )
         return prompt, system_prompt, init_files
 
     def _run_sandbox(

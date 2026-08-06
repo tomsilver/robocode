@@ -6,6 +6,8 @@ max_budget_usd: 5.0
 max_turns: 0
 output_dir: ${hydra:runtime.output_dir}
 load_dir: null
+seed_program: null
+seed_instances: null
 container_backend: docker  # docker | apptainer | local
 geometry_prompt: false
 modular_code_prompt: false

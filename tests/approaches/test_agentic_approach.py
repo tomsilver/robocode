@@ -278,3 +278,26 @@ def test_load_dir_missing_file_raises(tmp_path):
     )
     with pytest.raises(FileNotFoundError):
         approach.train()
+
+
+def test_agentic_approach_seeded_sandbox(tmp_path):
+    """seed_program/seed_instances land in init_files and are named in the prompt."""
+    program = tmp_path / "frozen.py"
+    program.write_text("class GeneratedApproach: ...\n")
+    instances = tmp_path / "inst.json"
+    instances.write_text('[{"seed": 3, "object_count": 3}]\n')
+    env = MazeEnv(5, 8, 5, 8)
+    approach = AgenticApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=123,
+        primitives={},
+        backend=DEFAULT_BACKEND_CFG,
+        seed_program=str(program),
+        seed_instances=str(instances),
+    )
+    prompt, _, init_files = approach._build_agentic_prompts()  # pylint: disable=protected-access
+    assert init_files["approach.py"] == program
+    assert init_files["instances.json"] == instances
+    assert "starting point" in prompt
+    assert "instances.json" in prompt
