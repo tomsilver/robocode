@@ -170,9 +170,9 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
                     "width": POST_WIDTH,
                     "height": POST_HEIGHT,
                     "static": True,
-                    "color_r": BLACK[0],
-                    "color_g": BLACK[1],
-                    "color_b": BLACK[2],
+                    "color_r": 0.35,
+                    "color_g": 0.35,
+                    "color_b": 0.35,
                     "z_order": ZOrder.ALL.value,
                 }
 
