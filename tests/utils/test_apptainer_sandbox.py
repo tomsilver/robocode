@@ -57,6 +57,9 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
 
     assert cmd[0] == "apptainer"
     assert cmd[1] == "exec"
+    # Own PID namespace: apptainer shares the host's by default, so without this a
+    # `pkill -f` inside the sandbox reaches the harness and concurrent runs.
+    assert "--pid" in cmd
     assert "--writable-tmpfs" in cmd
     assert "--fakeroot" not in cmd
     assert "--no-home" in cmd
@@ -143,6 +146,9 @@ def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
     )
     assert "--containall" in blackbox_cmd
     assert "--containall" not in default_cmd
+    # --containall implies --pid, but the default command must be contained too.
+    assert "--pid" in blackbox_cmd
+    assert "--pid" in default_cmd
 
 
 def test_build_cmd_firewall_domains(tmp_path: Path) -> None:

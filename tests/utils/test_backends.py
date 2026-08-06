@@ -22,6 +22,7 @@ from robocode.utils.backends import (
 from robocode.utils.backends.claude import _RATE_LIMIT_RE, ClaudeBackend
 from robocode.utils.backends.opencode import OpenCodeBackend
 from robocode.utils.sandbox import SandboxConfig
+from robocode.utils.sandbox_types import AGENT_PROMPT_DIR
 
 # ---------------------------------------------------------------------------
 # create_backend factory
@@ -83,22 +84,40 @@ class TestClaudeBackend:
         cmd = backend.build_cli_cmd(config)
         assert cmd[0] == "claude" or cmd[0].endswith("/claude")
         assert "-p" in cmd
-        assert "hello" in cmd
         assert "--model" in cmd
         assert "sonnet" in cmd
         assert "--dangerously-skip-permissions" in cmd
         assert "--output-format" in cmd
         assert "stream-json" in cmd
-        assert "--system-prompt" in cmd
-        assert "be helpful" in cmd
         assert "--max-budget-usd" in cmd
         assert "3.0" in cmd
 
+    def test_build_cli_cmd_keeps_prompts_out_of_argv(self, tmp_path: Path) -> None:
+        """Neither prompt reaches argv: it is world-readable and pkill-matchable.
+
+        /proc/<pid>/cmdline is readable by every user on a shared machine, and an
+        agent that runs `pkill -f <something from its own instructions>` kills its
+        own CLI when the instructions are sitting in that CLI's argv.
+        """
+        config = SandboxConfig(
+            sandbox_dir=tmp_path,
+            prompt="write test_approach.py",
+            system_prompt="be helpful",
+        )
+        backend = ClaudeBackend(DEFAULT_BACKEND_CFG)
+        cmd = backend.build_cli_cmd(config)
+        assert not any("test_approach.py" in arg for arg in cmd)
+        assert not any("be helpful" in arg for arg in cmd)
+        assert backend.stdin_text(config) == "write test_approach.py"
+        spec = f"{AGENT_PROMPT_DIR}/system_prompt.md"
+        assert cmd[cmd.index("--system-prompt-file") + 1] == spec
+        assert (tmp_path / spec).read_text(encoding="utf-8") == "be helpful"
+
     def test_build_cli_cmd_no_system_prompt(self, tmp_path: Path) -> None:
-        """No --system-prompt flag when system_prompt is empty."""
+        """No --system-prompt-file flag when system_prompt is empty."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
         cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
-        assert "--system-prompt" not in cmd
+        assert "--system-prompt-file" not in cmd
 
     def test_build_cli_cmd_no_budget_when_zero(self, tmp_path: Path) -> None:
         """No --max-budget-usd flag when budget is zero."""

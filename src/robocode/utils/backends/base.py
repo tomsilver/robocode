@@ -35,6 +35,14 @@ class AgentBackend(Protocol):
     ) -> list[str]:
         """Return the full CLI command (binary + args) to run the agent."""
 
+    def stdin_text(self, config: SandboxConfig) -> str:
+        """Return the text to feed the CLI on stdin, empty for none.
+
+        Backends that can take the prompt on stdin return it here so it stays out
+        of argv, which any user on the machine can read via ``/proc``, and which
+        the agent's own ``pkill -f`` patterns match.
+        """
+
     def build_env(
         self,
         config: SandboxConfig,

@@ -16,6 +16,14 @@ only differences are at the host invocation layer:
   ``/robocode/.venv`` (the SIF rootfs is read-only)
 * ``--no-home`` so the host home doesn't shadow ``/home/node``
 * ``--cleanenv`` so the host env doesn't leak in
+* ``--pid`` so the container gets its own PID namespace (Docker does this by
+  default; apptainer shares the host's unless asked)
+
+Namespaces: the filesystem, PID, and (with ``--containall``) IPC namespaces are
+the container's own. The NETWORK namespace is still the host's: ``--net`` needs
+privileges the unprivileged cluster install does not have, which is also why the
+firewall is skipped. So host loopback services stay reachable from the sandbox,
+and the render http server must pick a free host port (see ``_free_port``).
 
 ``init-firewall.sh`` is skipped via ``ROBOCODE_SKIP_FIREWALL=1``: the
 unprivileged apptainer install on the target cluster can't grant real
@@ -66,6 +74,7 @@ from robocode.utils.sandbox import (
     _initial_commit,
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
+    agent_stdin,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +178,15 @@ def _build_apptainer_cmd(
         # mounts below, so the stripped env source is the only source present.
         cmd.append("--containall")
     cmd += [
+        # Apptainer shares the host PID namespace by default, so a `pkill -f`
+        # inside the container matches host cmdlines and kills the harness, other
+        # concurrent runs, and unrelated user processes. --pid gives the container
+        # its own PID namespace and its own /proc, so only its own processes are
+        # visible or signalable. Apptainer starts its `appinit` shim as PID 1 (use
+        # --no-init to disable), which reaps orphans and tears the namespace down
+        # when the payload exits, so no extra init flag is needed. --containall
+        # already implies --pid; passing it explicitly covers non-blackbox runs too.
+        "--pid",
         "--writable-tmpfs",
         "--no-home",
         "--cleanenv",
@@ -268,8 +286,8 @@ async def run_agent_in_apptainer_sandbox(
                 provider_from_model(config.model)
             )
 
-        # Apptainer shares the host network namespace (even with --containall),
-        # so use a free loopback port for the render http server to avoid
+        # Apptainer shares the host network namespace (even with --containall and
+        # --pid), so use a free loopback port for the render http server to avoid
         # colliding with the host or a concurrent run.
         mcp_port = _free_port()
         agent_cmd = backend.build_cli_cmd(
@@ -329,11 +347,14 @@ async def run_agent_in_apptainer_sandbox(
         logger.info("Prompt:\n%s", config.prompt)
 
         wall_start = time.monotonic()
-        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        with (
+            tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
+            agent_stdin(backend, config) as stdin_file,
+        ):
             proc = subprocess.Popen(  # pylint: disable=consider-using-with
                 apptainer_cmd,
                 env=env,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_file,
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 text=True,
@@ -420,6 +441,8 @@ def run_genplan_in_apptainer(
         apptainer_cmd = [
             "apptainer",
             "exec",
+            # Own PID namespace, as in _build_apptainer_cmd.
+            "--pid",
             "--writable-tmpfs",
             "--no-home",
             "--cleanenv",
