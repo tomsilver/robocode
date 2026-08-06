@@ -76,6 +76,9 @@ class RunInfo:
     # Conditioned instance slice this cell was scored on (e.g. "high-button
     # mid-stick"); empty for the plain uniform suite. Display-only label.
     slice: str = ""
+    # Short label for the synthesis model (e.g. "opus-5"); None when the run has
+    # no LLM backend.
+    model: Optional[str] = None
 
 
 @dataclass
@@ -203,6 +206,33 @@ def _replay_primitives(run: RunInfo) -> str:
     return "[]"
 
 
+# Short labels for approach.backend.model values. Bare names are CLI aliases;
+# the pinned sandbox image resolves them to these versions.
+_MODEL_LABELS = {
+    "claude-opus-5": "opus-5",
+    "claude-sonnet-5": "sonnet-5",
+    "opus": "opus-4.8",
+    "sonnet": "sonnet-4.6",
+}
+
+
+def _backend_model(hydra_dir: Path) -> Optional[str]:
+    """Short label for approach.backend.model from the resolved config.
+
+    ``model:`` only occurs under ``approach.backend`` in the resolved config, so a
+    flat scan is safe; runs without an LLM backend (e.g. bilevel planning) have no
+    such line and return None.
+    """
+    cfg = hydra_dir / "config.yaml"
+    if not cfg.exists():
+        return None
+    m = re.search(r"^\s+model:\s*(\S+)\s*$", cfg.read_text(), re.MULTILINE)
+    if m is None:
+        return None
+    raw = m.group(1).strip("'\"")
+    return _MODEL_LABELS.get(raw, raw.removeprefix("claude-"))
+
+
 # Environment pairs that sample the same task family from different spawn ranges;
 # an episode of one can be replayed under the other for a matched comparison.
 _ENV_COUNTERPART = {
@@ -314,6 +344,10 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
         trained = marker.get("trained_environment")
         if not trained and marker.get("policy_source"):
             trained = _environment_of_dir(root / marker["policy_source"])
+        model = _backend_model(hydra_dir)
+        if model is None and marker.get("policy_source"):
+            # A cross-eval cell replays a policy synthesized elsewhere.
+            model = _backend_model(root / marker["policy_source"] / ".hydra")
         runs[run_id] = RunInfo(
             run_id=run_id,
             path=run_dir,
@@ -343,6 +377,7 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
             explicit_seeds=bool(per and isinstance(per[0], dict) and "seed" in per[0]),
             trained_environment=trained or environment,
             slice=str(marker.get("slice", "")),
+            model=model,
         )
     return runs
 
@@ -416,6 +451,7 @@ def _summary(run: RunInfo) -> dict[str, Any]:
         "primitives": run.primitives,
         "seed": run.seed,
         "budget": run.budget,
+        "model": run.model,
         "status": _status(run),
         "solve_rate": r.get("solve_rate"),
         "mean_eval_reward": r.get("mean_eval_reward"),
@@ -2280,12 +2316,21 @@ function openLightbox(src){
 let ALL=[], FILTER={};
 async function loadRuns(){ALL=await j("/api/runs");}
 
+// Stable per-model colors so a run's model is readable at a glance across the
+// grid; unknown models get a hue hashed from the name.
+const MODEL_COLORS={"opus-5":"#8a63d2","sonnet-5":"#3f8cc9","sonnet-4.6":"#8a8f88","opus-4.8":"#b8860b"};
+function modelColor(m){if(!m)return null;if(MODEL_COLORS[m])return MODEL_COLORS[m];
+ let x=0;for(const c of m)x=(x*31+c.charCodeAt(0))>>>0;return`hsl(${x%360} 45% 50%)`;}
+function modelDot(m){return h("span",{class:"dot",style:`background:${modelColor(m)}`});}
+function modelPill(m){return m?h("span",{class:"pill",
+ style:`color:${modelColor(m)};border-color:${modelColor(m)}`},m):"";}
+
 function facetBar(){
  // environment = the evaluated suite; trained_environment = what the policy saw
  // during synthesis. They differ only in cross-eval cells, so the "trained on"
  // facet mostly mirrors "eval env" but separates e.g. band-trained policies
  // re-scored on the standard suite.
- const keys=[["approach","approach"],["environment","eval env"],
+ const keys=[["model","model"],["approach","approach"],["environment","eval env"],
   ["trained_environment","trained on"],["slice","slice"],
   ["primitives","primitives"],["seed","seed"],["budget","budget"]];
  const bar=h("div",{class:"facets"});
@@ -2298,7 +2343,8 @@ function facetBar(){
    f.append(h("button",{class:"chip"+(on?" active":""),onclick:()=>{
     FILTER[k]=FILTER[k]||[];const i=FILTER[k].indexOf(String(v));
     if(i<0)FILTER[k].push(String(v));else FILTER[k].splice(i,1);
-    if(!FILTER[k].length)delete FILTER[k];location.hash="#/index";renderIndex();}},String(v)));
+    if(!FILTER[k].length)delete FILTER[k];location.hash="#/index";renderIndex();}},
+    k==="model"?[modelDot(String(v)),String(v)]:String(v)));
   }
   bar.append(f);
  }
@@ -2315,11 +2361,13 @@ function renderIndex(){
  app.append(h("div",{class:"muted",style:"margin-bottom:8px"},`${runs.length} run(s)`));
  const g=h("div",{class:"grid"});
  for(const r of runs){
-  g.append(h("a",{class:"card",href:"#/run/"+enc(r.run_id)},
+  g.append(h("a",{class:"card",href:"#/run/"+enc(r.run_id),
+   style:r.model?`border-left:4px solid ${modelColor(r.model)}`:""},
    h("div",{class:"sr",style:`color:${srColor(r.solve_rate)}`},r.solve_rate==null?"-":r.solve_rate.toFixed(2)),
    h("div",{class:"id"},r.run_id),
    h("div",{class:"row"},
     h("span",{class:"pill "+r.status},r.status),
+    modelPill(r.model),
     r.budget!=null?h("span",{class:"pill"},"$"+r.budget):"",
     r.seed!=null?h("span",{class:"pill"},"s"+r.seed):"",
     r.agent_cost_usd!=null?h("span",{class:"pill"},"$"+num(r.agent_cost_usd)):"",
@@ -2474,11 +2522,12 @@ async function renderRun(id){
  const d=await j("/api/run?run="+enc(id));
  const m=d.metrics,s=d.summary;app.innerHTML="";
  VIEWER=d.viewer||VIEWER;
- RUNTAG=[s.environment,s.primitives,s.approach].filter(Boolean).join(" ");
+ RUNTAG=[s.model,s.environment,s.primitives,s.approach].filter(Boolean).join(" ");
  const runRef=()=>`[${VIEWER}] ${id} | ${RUNTAG}`
   +` | solve_rate=${num(m.solve_rate)} | ${d.run_path}`;
  app.append(h("div",{class:"hrow"},h("h1",{},id),copyBtn(runRef,"copy run ref")),
   h("div",{class:"row"},h("span",{class:"pill "+s.status},s.status),
+   modelPill(s.model),
    s.budget!=null?h("span",{class:"pill"},"$"+s.budget):"",s.seed!=null?h("span",{class:"pill"},"s"+s.seed):"",
    h("span",{class:"pill"},s.approach),h("span",{class:"pill",title:"evaluated suite"},"eval: "+s.environment),
    s.trained_environment&&s.trained_environment!==s.environment?

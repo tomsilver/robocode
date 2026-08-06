@@ -314,3 +314,27 @@ def test_generation_time_breakdown_uses_api_wait_and_wall_time() -> None:
     assert instrumented["instrumented"]
     assert instrumented["experiments_tools_fraction"] == 0.25
     assert instrumented["other_s"] == 15.0  # includes uninstrumented startup
+
+
+def test_discovery_labels_backend_model(tmp_path: Path) -> None:
+    """Runs carry a short model label from approach.backend.model, if any."""
+
+    def make_run(name: str, backend_block: str) -> None:
+        hydra = tmp_path / name / ".hydra"
+        hydra.mkdir(parents=True)
+        (hydra / "config.yaml").write_text(
+            f"approach:\n{backend_block}"
+            "  _target_: robocode.approaches.agentic_approach.AgenticApproach\n"
+            "seed: 42\nnum_eval_tasks: 3\n"
+        )
+        (hydra / "overrides.yaml").write_text("- seed=42\n")
+        (tmp_path / name / "results.json").write_text("{}")
+
+    make_run("pinned", "  backend:\n    backend: claude\n    model: claude-opus-5\n")
+    make_run("alias", "  backend:\n    backend: claude\n    model: sonnet\n")
+    make_run("no_llm", "  backend: null\n")
+
+    runs = viewer._discover_runs(tmp_path)
+    assert runs["pinned"].model == "opus-5"
+    assert runs["alias"].model == "sonnet-4.6"
+    assert runs["no_llm"].model is None
