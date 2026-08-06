@@ -396,7 +396,6 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             f'    count_kwarg="{self._count_kwarg}",\n'
             f'    count_object_prefix="{self._count_object_prefix}",\n'
             f"{bilevel_example_arg}"
-            "    # Any counts you like; the evaluation counts are not disclosed.\n"
             "    design_counts=[<count list>],\n"
             "    eval_counts=[<count list>],\n"
             ")\n\n"
