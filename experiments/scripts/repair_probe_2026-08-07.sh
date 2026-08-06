@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Retained-repair assay on the frozen 08-05 opus5 stickbutton s424 program.
-# Three conditions x two agent seeds, identical config except the instance
-# list handed to the agent: none / four mid-distribution instances / four
+# Three conditions per agent seed given (default: 42), identical config except
+# the instance list handed to the agent: none / four mid-distribution / four
 # wall-band instances. The standard-suite eval built into each run measures
 # retention; edge-suite (band) scoring happens post-hoc with the
 # results-viewer slice harness, never on the demo seeds.
