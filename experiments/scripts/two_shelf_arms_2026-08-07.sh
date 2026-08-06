@@ -4,16 +4,20 @@ set -euo pipefail
 # Two-shelf strict-vs-twin synthesis campaign.
 #
 # Run from the strict checkout (branch two-shelf-clutteredstorage) with the
-# project environment active:
+# project environment active. Seeds come from the arguments (default: 42);
+# add seeds in later invocations as earlier ones finish:
 #
-#   bash experiments/scripts/two_shelf_arms_2026-08-07.sh
+#   bash experiments/scripts/two_shelf_arms_2026-08-07.sh          # seed 42
+#   bash experiments/scripts/two_shelf_arms_2026-08-07.sh 24 424   # later
 #
 # The twin arm launches from a sibling worktree on branch two-shelf-twin
 # (created here if absent), so each agent reads source whose defaults match
 # the sampler it observes. A cheap capped smoke run validates plumbing before
-# the paid arms; arms run as strict/twin pairs on matched seeds.
+# the paid arms (skipped if its results already exist); arms run as
+# strict/twin pairs on matched seeds.
 
-SEEDS=(42 24 424)
+SEEDS=("$@")
+[[ ${#SEEDS[@]} -eq 0 ]] && SEEDS=(42)
 BUDGET=20.0
 STAMP=2026-08-07
 
@@ -58,12 +62,17 @@ mkdir -p "$STRICT_ROOT/outputs"
   echo "smoke: strict seed 7, budget 2.0, num_eval_tasks 10"
 } | tee "$STRICT_ROOT/outputs/two_shelf_${STAMP}_manifest.txt"
 
-echo "=== smoke (strict, capped) ==="
-(cd "$STRICT_ROOT" && python experiments/run_experiment.py "${COMMON[@]}" \
-  seed=7 approach.max_budget_usd=2.0 num_eval_tasks=10 \
-  hydra.run.dir="outputs/two_shelf_smoke_${STAMP}/noprims/two_shelf_clutteredstorage2d/s7")
-test -f "$STRICT_ROOT/outputs/two_shelf_smoke_${STAMP}/noprims/two_shelf_clutteredstorage2d/s7/results.json"
-echo "=== smoke passed, launching arms ==="
+SMOKE_DIR="outputs/two_shelf_smoke_${STAMP}/noprims/two_shelf_clutteredstorage2d/s7"
+if [[ -f "$STRICT_ROOT/$SMOKE_DIR/results.json" ]]; then
+  echo "=== smoke already passed, skipping ==="
+else
+  echo "=== smoke (strict, capped) ==="
+  (cd "$STRICT_ROOT" && python experiments/run_experiment.py "${COMMON[@]}" \
+    seed=7 approach.max_budget_usd=2.0 num_eval_tasks=10 \
+    hydra.run.dir="$SMOKE_DIR")
+  test -f "$STRICT_ROOT/$SMOKE_DIR/results.json"
+  echo "=== smoke passed, launching arms ==="
+fi
 
 fail=0
 for seed in "${SEEDS[@]}"; do
