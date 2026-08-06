@@ -396,8 +396,10 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             f'    count_kwarg="{self._count_kwarg}",\n'
             f'    count_object_prefix="{self._count_object_prefix}",\n'
             f"{bilevel_example_arg}"
-            "    # Counts an unpinned reset draws from; use whichever you want to\n"
-            "    # develop against.\n"
+            "    # Example values. These args only choose which counts an unpinned\n"
+            "    # reset draws from while you develop; they are NOT the counts used\n"
+            "    # at evaluation, which are not disclosed. Your program must handle\n"
+            "    # any object count.\n"
             "    design_counts=[1],\n"
             "    eval_counts=[1],\n"
             ")\n\n"
