@@ -43,7 +43,7 @@ class TwoShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2D
     def __init__(
         self,
         num_blocks: int = 3,
-        target_pattern: tuple[int, ...] = (0, 0, 1),
+        target_pattern: tuple[int, ...] = (1, 0, 0),
         shelf_profile: tuple[tuple[float, float], ...] = ((0.32, 0.06), (0.18, 0.10)),
         block_shapes: tuple[tuple[float, float], ...] = (
             (0.28, 0.04),
