@@ -71,7 +71,7 @@ cwd = pathlib.Path.cwd()
 counter = cwd / "fake_counter.txt"
 n = (int(counter.read_text()) if counter.exists() else 0) + 1
 counter.write_text(str(n))
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "resume_marker.txt"
 
 
@@ -121,7 +121,7 @@ counter = pathlib.Path.cwd() / "fake_counter.txt"
 n = (int(counter.read_text()) if counter.exists() else 0) + 1
 counter.write_text(str(n))
 marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "output_limit_marker.txt"
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 
 if n == 1:
     marker.write_text("interrupted")
@@ -160,7 +160,7 @@ counter = pathlib.Path.cwd() / "fake_counter.txt"
 n = (int(counter.read_text()) if counter.exists() else 0) + 1
 counter.write_text(str(n))
 marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "context_marker.txt"
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 
 if n == 1:
     marker.write_text("oversized")
