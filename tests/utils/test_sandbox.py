@@ -1,6 +1,8 @@
 """Tests for sandbox.py."""
 
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +17,8 @@ from robocode.utils.sandbox import (
     SandboxResult,
     _is_path_within_sandbox,
     _stream_result_to_sandbox_result,
+    _userns_available,
+    pid_isolate,
 )
 from robocode.utils.sandbox_types import GenerationMetrics, _StreamParseResult
 
@@ -189,12 +193,93 @@ def test_redirect_claude_config_without_creds_file(tmp_path: Path, monkeypatch) 
     host = tmp_path / "host_claude"
     host.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
 
     with sandbox_claude_config(sandbox) as agent_home:
         assert agent_home.is_dir()
         assert not (agent_home / ".credentials.json").exists()
+
+
+def test_pid_isolate_wraps_command_on_linux(monkeypatch) -> None:  # type: ignore
+    """The local backend's CLI runs in its own PID namespace where the kernel allows.
+
+    Without this the agent's Bash tool can signal any host process by cmdline match,
+    including the harness supervising the run.
+    """
+    monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "linux")
+    monkeypatch.setattr("robocode.utils.sandbox._userns_available", lambda: True)
+    cmd = pid_isolate(["claude", "-p"])
+    assert cmd[0] == "unshare"
+    assert "--pid" in cmd
+    assert cmd[-2:] == ["claude", "-p"]
+
+
+def test_pid_isolate_falls_back_without_userns(monkeypatch) -> None:  # type: ignore
+    """Linux hosts that forbid unprivileged user namespaces (CI, hardened kernels).
+
+    The uid_map write returns EPERM there, so the command must run unwrapped rather
+    than fail to launch; the local backend is documented as not fully isolated, and
+    a container backend is the answer where process isolation is required.
+    """
+    monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "linux")
+    monkeypatch.setattr("robocode.utils.sandbox._userns_available", lambda: False)
+    assert pid_isolate(["claude", "-p"]) == ["claude", "-p"]
+
+
+def test_pid_isolate_is_a_noop_off_linux(monkeypatch) -> None:  # type: ignore
+    """On macOS there is no unprivileged equivalent, so the command is left alone."""
+    monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "darwin")
+    assert pid_isolate(["claude", "-p"]) == ["claude", "-p"]
+
+
+@pytest.fixture
+def _clear_userns_cache():  # type: ignore
+    """Isolate the cached probe: other tests must not see a mocked result."""
+    _userns_available.cache_clear()
+    yield
+    _userns_available.cache_clear()
+
+
+def test_userns_available_true_when_probe_succeeds(  # type: ignore
+    monkeypatch, _clear_userns_cache
+) -> None:
+    """A zero-exit `unshare ... true` means the namespace can be created."""
+    monkeypatch.setattr(
+        "robocode.utils.sandbox.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stderr=b""),
+    )
+    assert _userns_available() is True
+
+
+def test_userns_available_false_and_warns_when_blocked(  # type: ignore
+    monkeypatch, caplog, _clear_userns_cache
+) -> None:
+    """A nonzero exit (EPERM on the uid_map write) falls back and warns once."""
+    monkeypatch.setattr(
+        "robocode.utils.sandbox.subprocess.run",
+        lambda *a, **k: SimpleNamespace(
+            returncode=1, stderr=b"unshare: write failed /proc/self/uid_map"
+        ),
+    )
+    with caplog.at_level(logging.WARNING):
+        assert _userns_available() is False
+    assert "host PID namespace" in caplog.text
+
+
+def test_userns_available_false_when_unshare_missing(  # type: ignore
+    monkeypatch, caplog, _clear_userns_cache
+) -> None:
+    """A missing `unshare` binary degrades to no isolation rather than crashing."""
+
+    def _raise(*_a, **_k):
+        raise FileNotFoundError("unshare")
+
+    monkeypatch.setattr("robocode.utils.sandbox.subprocess.run", _raise)
+    with caplog.at_level(logging.WARNING):
+        assert _userns_available() is False
+    assert "host PID namespace" in caplog.text
 
 
 def test_path_within_sandbox(tmp_path: Path) -> None:

@@ -77,6 +77,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
         blackbox: bool = False,
+        telemetry: bool = False,
         env_cfg: str | None = None,
         max_steps: int | None = None,
         eval_timeout: float = 30.0,
@@ -106,6 +107,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._blackbox = blackbox
+        self._telemetry = telemetry
         # A variable-count env hands the program an ObjectCentricState (not a vector);
         # the prompt then documents the object-centric API instead of vector/devectorize.
         self._object_centric = isinstance(observation_space, ObjectCentricStateSpace)
@@ -237,6 +239,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
+                telemetry=self._telemetry,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         elif self._container_backend == "apptainer":
@@ -254,6 +257,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
+                telemetry=self._telemetry,
             )
             sandbox_logger = logging.getLogger("robocode.utils.apptainer_sandbox")
         else:
@@ -270,6 +274,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 max_output_tokens=self._max_output_tokens,
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
+                telemetry=self._telemetry,
             )
             sandbox_logger = logging.getLogger("robocode.utils.sandbox")
 
@@ -285,7 +290,9 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 if self._blackbox:
                     assert self._env_cfg is not None  # validated in __init__
                     port, token = stack.enter_context(
-                        env_server_running(self._env_cfg, sandbox_dir)
+                        env_server_running(
+                            self._env_cfg, sandbox_dir, telemetry=self._telemetry
+                        )
                     )
                     write_env_spaces(
                         sandbox_dir,

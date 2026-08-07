@@ -4,7 +4,6 @@
 *.sif
 multirun
 outputs
-uv.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -171,4 +170,4 @@ CLAUDE.md
 unit_test_artifacts
 
 # Curated collection of runs to browse with experiments/results_viewer.py
-viewer_runs/
+viewer_runs*/

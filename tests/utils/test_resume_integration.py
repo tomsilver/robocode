@@ -71,7 +71,7 @@ cwd = pathlib.Path.cwd()
 counter = cwd / "fake_counter.txt"
 n = (int(counter.read_text()) if counter.exists() else 0) + 1
 counter.write_text(str(n))
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "resume_marker.txt"
 
 
@@ -121,7 +121,7 @@ counter = pathlib.Path.cwd() / "fake_counter.txt"
 n = (int(counter.read_text()) if counter.exists() else 0) + 1
 counter.write_text(str(n))
 marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "output_limit_marker.txt"
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 
 if n == 1:
     marker.write_text("interrupted")
@@ -160,7 +160,7 @@ counter = pathlib.Path.cwd() / "fake_counter.txt"
 n = (int(counter.read_text()) if counter.exists() else 0) + 1
 counter.write_text(str(n))
 marker = pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"]) / "context_marker.txt"
-prompt = sys.argv[sys.argv.index("-p") + 1]
+prompt = sys.stdin.read()
 
 if n == 1:
     marker.write_text("oversized")
@@ -202,6 +202,7 @@ def test_end_to_end_resume_with_fake_cli(tmp_path: Path, monkeypatch) -> None:
     fake.chmod(0o755)
     counter = tmp_path / "counter.txt"
     monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     monkeypatch.setenv("FAKE_CLAUDE_COUNTER", str(counter))
     monkeypatch.setattr(rate_limit.time, "sleep", lambda _s: None)
 
@@ -236,6 +237,7 @@ def test_parallel_runs_resume_only_their_own_session(
     gate.mkdir()
     monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
     monkeypatch.setenv("FAKE_CLAUDE_PARALLEL_GATE", str(gate))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     monkeypatch.setattr(rate_limit.time, "sleep", lambda _s: None)
 
     configs = [
@@ -275,6 +277,7 @@ def test_end_to_end_resume_after_output_token_limit(
     fake.write_text(_OUTPUT_LIMIT_FAKE_CLAUDE)
     fake.chmod(0o755)
     monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     config = SandboxConfig(
         sandbox_dir=tmp_path / "sandbox-output-limit",
         prompt="solve it",
@@ -303,6 +306,7 @@ def test_end_to_end_compact_then_resume_after_prompt_too_long(
     fake.write_text(_PROMPT_TOO_LONG_FAKE_CLAUDE)
     fake.chmod(0o755)
     monkeypatch.setenv("ROBOCODE_CLAUDE_CMD", str(fake))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-stable-token")
     config = SandboxConfig(
         sandbox_dir=tmp_path / "sandbox-prompt-too-long",
         prompt="solve it",

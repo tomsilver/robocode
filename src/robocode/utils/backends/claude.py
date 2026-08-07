@@ -13,7 +13,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from omegaconf import DictConfig
 
@@ -25,9 +25,13 @@ from robocode.mcp import (
     setup_mcp_config,
 )
 from robocode.utils.backends.agent_files import build_claude_md
-from robocode.utils.backends.base import AgentBackend
+from robocode.utils.backends.base import AgentBackend, read_stderr
 from robocode.utils.backends.ollama_server import ensure_ollama
-from robocode.utils.sandbox_types import SandboxConfig, _StreamParseResult
+from robocode.utils.sandbox_types import (
+    AGENT_PROMPT_DIR,
+    SandboxConfig,
+    _StreamParseResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +173,14 @@ class ClaudeBackend(AgentBackend):
         if config.mcp_tools:
             tools += "," + ",".join(mcp_tool_cli_names(config.mcp_tools))
         logger.info("Enabled tools: %s", tools)
+        # The prompt is fed on stdin (see stdin_text) and the system prompt read from
+        # a file, so neither lands in argv: /proc/<pid>/cmdline is world-readable on
+        # a shared machine, and a `pkill -f <pattern>` by the agent matches its own
+        # CLI process whenever the pattern comes from its own instructions (an agent
+        # ran `pkill -f test_approach.py`, a filename the prompt told it to create).
         args = [
             claude_cmd,
             "-p",
-            config.prompt,
             "--output-format",
             "stream-json",
             "--verbose",
@@ -191,7 +199,16 @@ class ClaudeBackend(AgentBackend):
         if config.resume_previous_session:
             args.append("--continue")
         if config.system_prompt:
-            args += ["--system-prompt", config.system_prompt]
+            # Relative to the CLI's working directory, which is the sandbox dir in
+            # all three backends (--pwd /sandbox, -w /sandbox, cwd=sandbox_dir), so
+            # one path works whether or not the run is containerized.
+            prompt_file = config.sandbox_dir / AGENT_PROMPT_DIR / "system_prompt.md"
+            prompt_file.parent.mkdir(parents=True, exist_ok=True)
+            prompt_file.write_text(config.system_prompt, encoding="utf-8")
+            args += [
+                "--system-prompt-file",
+                f"{AGENT_PROMPT_DIR}/system_prompt.md",
+            ]
         if config.max_budget_usd > 0:
             args += ["--max-budget-usd", str(config.max_budget_usd)]
         if config.mcp_tools:
@@ -211,6 +228,10 @@ class ClaudeBackend(AgentBackend):
             cli_path = mcp_config_cli_path or str(config_path.resolve())
             args += ["--mcp-config", cli_path, "--strict-mcp-config"]
         return args
+
+    def stdin_text(self, config: SandboxConfig) -> str:
+        """The task prompt, which ``claude -p`` reads from stdin when argv has none."""
+        return config.prompt
 
     def build_env(
         self,
@@ -256,6 +277,7 @@ class ClaudeBackend(AgentBackend):
         self,
         proc: subprocess.Popen[str],
         stream_log_path: Path | None = None,
+        stderr_file: TextIO | None = None,
     ) -> _StreamParseResult:
         """Parse ``stream-json`` stdout from a Claude CLI process."""
         is_error = False
@@ -465,7 +487,14 @@ class ClaudeBackend(AgentBackend):
                     cli_duration_api_ms or 0, msg.get("duration_api_ms") or 0
                 )
                 if is_error:
-                    error_text = str(msg.get("result") or "Unknown error")
+                    result_text = msg.get("result")
+                    errors = msg.get("errors")
+                    if result_text:
+                        error_text = str(result_text)
+                    elif isinstance(errors, list) and errors:
+                        error_text = "; ".join(str(error) for error in errors)
+                    else:
+                        error_text = str(stop_reason or "Unknown error")
                     if not rate_limit_reset:
                         m = _RATE_LIMIT_RE.search(error_text)
                         if m:
@@ -480,8 +509,7 @@ class ClaudeBackend(AgentBackend):
         if stream_log_fh is not None:
             stream_log_fh.close()
 
-        assert proc.stderr is not None
-        stderr_output = proc.stderr.read()
+        stderr_output = read_stderr(proc, stderr_file)
         if not rate_limit_reset and stderr_output:
             m = _RATE_LIMIT_RE.search(stderr_output)
             if m:

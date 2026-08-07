@@ -46,6 +46,7 @@ from robocode.utils.docker_sandbox import (
     _find_repo_root,
     _is_local_model,
     _setup_sandbox_dir,
+    _telemetry_docker,
 )
 from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
@@ -180,6 +181,19 @@ def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
         assert (src / "robocode" / "__init__.py").exists()
         assert (kindergarden / "pyproject.toml").exists()
         assert (kindergarden / "src" / "kinder" / "core.py").exists()
+
+
+def test_filtered_repo_mounts_default_excludes_demos() -> None:
+    """demos/ holds recorded solution trajectories; no mode may mount it."""
+    with _filtered_repo_mounts() as (_, kindergarden, _tmp):
+        assert not (kindergarden / "demos").exists()
+
+
+def test_filtered_repo_mounts_default_keeps_package_skeleton() -> None:
+    """The demos exclusion must not take the installable skeleton with it."""
+    with _filtered_repo_mounts() as (_, kindergarden, _tmp):
+        assert (kindergarden / "pyproject.toml").exists()
+        assert (kindergarden / "src" / "kinder" / "envs").exists()
 
 
 def test_filtered_repo_mounts_default_keeps_env_source() -> None:
@@ -941,3 +955,22 @@ def test_container_files_persist_on_host(tmp_path: Path) -> None:
     assert "print(42)" in (sandbox_dir / "approach.py").read_text()
     assert "X = 1" in (sandbox_dir / "helper.py").read_text()
     assert "Y = 2" in (sandbox_dir / "utils" / "lib.py").read_text()
+
+
+def test_telemetry_docker_args(tmp_path: Path) -> None:
+    """Off/blackbox add nothing; whitebox binds the hook + sink and sets env vars."""
+    sb = tmp_path / "run" / "sandbox"
+    sb.mkdir(parents=True)
+    assert _telemetry_docker(DockerSandboxConfig(sandbox_dir=sb)) == ([], [])
+    assert _telemetry_docker(
+        DockerSandboxConfig(sandbox_dir=sb, telemetry=True, blackbox=True)
+    ) == ([], [])
+    vols, env_args = _telemetry_docker(
+        DockerSandboxConfig(sandbox_dir=sb, telemetry=True)
+    )
+    assert any("/robocode/telemetry_hook:ro" in v for v in vols)
+    assert any(v.endswith(":/telemetry") for v in vols)
+    assert "ROBOCODE_TELEMETRY=/telemetry/events.jsonl" in env_args
+    # run id is the run's output dir name, not the constant "sandbox".
+    assert "ROBOCODE_RUN_ID=run" in env_args
+    assert (sb.parent / "telemetry").is_dir()

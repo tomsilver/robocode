@@ -7,6 +7,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import sys
 import time
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -387,6 +388,112 @@ def test_anti_cheat_not_enforced_without_bilevel_models(tmp_path: Path) -> None:
     )
     approach = load_generated_approach(path, action_space, obs_space, {})
     assert hasattr(approach, "get_action")
+
+
+def test_anti_cheat_rejects_set_state(tmp_path: Path) -> None:
+    """A policy that calls set_state to teleport the scored env is rejected at load."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(tmp_path, extra="_ = 'env.set_state(goal)'")
+    with pytest.raises(ValueError, match="set_state"):
+        load_generated_approach(path, action_space, obs_space, {})
+
+
+def test_anti_cheat_rejects_sample_next_state(tmp_path: Path) -> None:
+    """sample_next_state also mutates the real env, so it is rejected too."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(tmp_path, extra="_ = 'env.sample_next_state(s, a, rng)'")
+    with pytest.raises(ValueError, match="sample_next_state"):
+        load_generated_approach(path, action_space, obs_space, {})
+
+
+def test_anti_cheat_allows_state_reads(tmp_path: Path) -> None:
+    """get_state, reset_state, and longer set_state* names do not false-positive."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(
+        tmp_path,
+        extra=(
+            "_ = 'env.get_state(); self.reset_state();"
+            " env.set_stateful(); env.set_state_from_bytes()'"
+        ),
+    )
+    approach = load_generated_approach(path, action_space, obs_space, {})
+    assert hasattr(approach, "get_action")
+
+
+class _StatefulGoalEnv(Env):
+    """Toy env with get_state/set_state; step terminates once position reaches 5.0.
+
+    Honest play needs ~50 steps of +0.1; a teleport to the goal state solves in one.
+    """
+
+    def __init__(self) -> None:
+        self.observation_space = Box(0.0, 10.0, shape=(1,), dtype=np.float32)
+        self.action_space = Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
+        self._pos = 0.0
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+        self._pos = 0.0
+        return np.array([self._pos], dtype=np.float32), {}
+
+    def step(self, action):
+        del action
+        self._pos = min(10.0, self._pos + 0.1)
+        obs = np.array([self._pos], dtype=np.float32)
+        return obs, 0.0, self._pos >= 5.0, False, {}
+
+    def get_state(self):
+        """Snapshot the current position."""
+        return np.array([self._pos], dtype=np.float32)
+
+    def set_state(self, state):
+        """Restore the position from a snapshot."""
+        self._pos = float(state[0])
+
+    def goal_state(self):
+        """A state sitting at the goal position (5.0)."""
+        return np.array([5.0], dtype=np.float32)
+
+    def render(self):
+        return None
+
+
+def test_set_state_teleport_fabricates_a_solve() -> None:
+    """Red-team: teleporting into the goal state fakes a one-step solve."""
+    env: Any = _StatefulGoalEnv()
+    env.reset(seed=0)
+    env.set_state(env.goal_state())
+    _, _, terminated, _, _ = env.step(env.action_space.sample())
+    assert terminated  # a policy that could set_state would score solved doing nothing
+
+
+def test_generated_policy_cannot_teleport_via_primitive_closure(tmp_path: Path) -> None:
+    """Red-team: an env-bound primitive exposes the env; the loader refuses it."""
+    env = _StatefulGoalEnv()
+    # Mirrors build_primitives' partial(check_action_collision, env): the bound env is
+    # reachable from a generated policy as primitives["peek"].args[0].
+    prims = {"peek": partial(lambda e, s: None, env)}
+    assert prims["peek"].args[0] is env  # the teleport channel is real
+    teleport = tmp_path / "approach.py"
+    teleport.write_text(
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "        self._primitives = primitives\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        env = self._primitives['peek'].args[0]\n"
+        "        env.set_state(env.goal_state())  # teleport into the goal\n"
+        "        return self._action_space.sample()\n"
+    )
+    with pytest.raises(ValueError, match="set_state"):
+        load_generated_approach(
+            teleport, env.action_space, env.observation_space, prims
+        )
 
 
 class _CountEnv(Env):

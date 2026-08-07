@@ -3,6 +3,8 @@
 import json
 import os
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +26,7 @@ from robocode.utils.backends.claude import (
 )
 from robocode.utils.backends.opencode import OpenCodeBackend
 from robocode.utils.sandbox import SandboxConfig
+from robocode.utils.sandbox_types import AGENT_PROMPT_DIR
 
 # ---------------------------------------------------------------------------
 # create_backend factory
@@ -85,22 +88,40 @@ class TestClaudeBackend:
         cmd = backend.build_cli_cmd(config)
         assert cmd[0] == "claude" or cmd[0].endswith("/claude")
         assert "-p" in cmd
-        assert "hello" in cmd
         assert "--model" in cmd
         assert "sonnet" in cmd
         assert "--dangerously-skip-permissions" in cmd
         assert "--output-format" in cmd
         assert "stream-json" in cmd
-        assert "--system-prompt" in cmd
-        assert "be helpful" in cmd
         assert "--max-budget-usd" in cmd
         assert "3.0" in cmd
 
+    def test_build_cli_cmd_keeps_prompts_out_of_argv(self, tmp_path: Path) -> None:
+        """Neither prompt reaches argv: it is world-readable and pkill-matchable.
+
+        /proc/<pid>/cmdline is readable by every user on a shared machine, and an
+        agent that runs `pkill -f <something from its own instructions>` kills its
+        own CLI when the instructions are sitting in that CLI's argv.
+        """
+        config = SandboxConfig(
+            sandbox_dir=tmp_path,
+            prompt="write test_approach.py",
+            system_prompt="be helpful",
+        )
+        backend = ClaudeBackend(DEFAULT_BACKEND_CFG)
+        cmd = backend.build_cli_cmd(config)
+        assert not any("test_approach.py" in arg for arg in cmd)
+        assert not any("be helpful" in arg for arg in cmd)
+        assert backend.stdin_text(config) == "write test_approach.py"
+        spec = f"{AGENT_PROMPT_DIR}/system_prompt.md"
+        assert cmd[cmd.index("--system-prompt-file") + 1] == spec
+        assert (tmp_path / spec).read_text(encoding="utf-8") == "be helpful"
+
     def test_build_cli_cmd_no_system_prompt(self, tmp_path: Path) -> None:
-        """No --system-prompt flag when system_prompt is empty."""
+        """No --system-prompt-file flag when system_prompt is empty."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
         cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
-        assert "--system-prompt" not in cmd
+        assert "--system-prompt-file" not in cmd
 
     def test_build_cli_cmd_no_budget_when_zero(self, tmp_path: Path) -> None:
         """No --max-budget-usd flag when budget is zero."""
@@ -636,6 +657,22 @@ class TestClaudeParseStreamMetrics:
         assert result.cli_duration_api_ms == 5000  # max (cumulative)
         assert result.stop_reason == "error_max_budget_usd"  # last subtype
         assert result.total_cost == pytest.approx(0.90)  # latest (cumulative)
+        assert result.error_text == "error_max_budget_usd"
+
+    def test_parse_uses_structured_errors_when_result_text_is_missing(self) -> None:
+        """Budget errors expose the CLI's useful message instead of Unknown error."""
+        event = {
+            "type": "result",
+            "subtype": "error_max_budget_usd",
+            "is_error": True,
+            "errors": ["Reached maximum budget ($20)"],
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.error_text == "Reached maximum budget ($20)"
+        assert result.stop_reason == "error_max_budget_usd"
 
     def test_parse_records_model_experiment_and_other_tool_time(self) -> None:
         """Matched tool results partition stream wall time by activity."""
@@ -750,6 +787,29 @@ class TestClaudeParseStreamMetrics:
 
         assert result.is_error
         assert result.prompt_too_long_hit
+
+    def test_file_backed_stderr_cannot_deadlock(self) -> None:
+        """Large stderr output cannot fill a PIPE while stdout is being parsed."""
+        child = (
+            "import json, sys\n"
+            "sys.stderr.write('x' * 1_000_000)\n"
+            "sys.stderr.flush()\n"
+            "print(json.dumps({'type': 'result', 'subtype': 'success', "
+            "'is_error': False}))\n"
+        )
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", child],
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+            )
+            result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(
+                proc, stderr_file=stderr_file
+            )
+
+        assert not result.is_error
+        assert proc.returncode == 0
 
 
 def test_tool_timing_category_identifies_environment_runs() -> None:
@@ -925,6 +985,28 @@ class TestOpenCodeParseStream:
         assert result.is_error
         assert result.error_text is not None
         assert "exited with code 1" in result.error_text
+
+    def test_file_backed_stderr_cannot_deadlock(self) -> None:
+        """Large debug stderr cannot block OpenCode's JSON stdout stream."""
+        child = (
+            "import json, sys\n"
+            "sys.stderr.write('x' * 1_000_000)\n"
+            "sys.stderr.flush()\n"
+            "print(json.dumps({'type': 'text', 'part': {'text': 'done'}}))\n"
+        )
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", child],
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+            )
+            result = OpenCodeBackend(DEFAULT_OPENCODE_CFG).parse_stream(
+                proc, stderr_file=stderr_file
+            )
+
+        assert not result.is_error
+        assert proc.returncode == 0
 
     def test_parse_multiple_steps_accumulate_cost(self) -> None:
         """Cost is summed across multiple step_finish events."""
