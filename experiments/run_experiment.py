@@ -41,6 +41,7 @@ from robocode.utils.episode import (
     save_video,
     summarize_by_count,
 )
+from robocode.utils.telemetry import require_registered
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,12 @@ def _main(cfg: DictConfig) -> float:
         )
 
     env = hydra.utils.instantiate(cfg.environment)
+
+    # Whitebox telemetry instruments specific registered env classes, so an
+    # unregistered env would silently log nothing -- fail loud instead. Blackbox
+    # instruments generically at the env server, so it needs no registration.
+    if cfg.approach.get("telemetry", False) and not cfg.approach.get("blackbox", False):
+        require_registered(cfg.environment["_target_"])
 
     # If the environment provides a description (e.g. kinder envs), write it
     # to a file so the agentic approach can read it in its sandbox. In blackbox

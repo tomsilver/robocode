@@ -52,6 +52,7 @@ from robocode.utils.sandbox_types import (
     SandboxResult,
     _StreamParseResult,
 )
+from robocode.utils.telemetry import SINK_FILENAME, host_launch_env
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +150,12 @@ def _start_local_http_mcp(
     The caller terminates the returned process when the agent run ends.
     """
     script = sandbox_dir / ".mcp" / MCP_START_SCRIPT
+    # Keep telemetry off the render MCP server: it does its own env resets, so
+    # instrumenting it would pollute the agent's stream.
+    mcp_env = {k: v for k, v in env.items() if k != "ROBOCODE_TELEMETRY"}
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         ["bash", str(script)],
-        env=env,
+        env=mcp_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -455,6 +459,19 @@ async def run_agent_in_sandbox(
     _initial_commit(config.sandbox_dir)
 
     env = backend.build_env(config)
+    if config.telemetry and not config.blackbox:
+        # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
+        run_dir = config.sandbox_dir.resolve().parent
+        sink_dir = run_dir / "telemetry"
+        sink_dir.mkdir(parents=True, exist_ok=True)
+        env.update(
+            host_launch_env(sink_dir / SINK_FILENAME, run_dir.name, with_hook=True)
+        )
+    else:
+        # Make the config flag authoritative: an inherited ROBOCODE_TELEMETRY must
+        # not enable telemetry for the agent when this run (or blackbox) did not.
+        env.pop("ROBOCODE_TELEMETRY", None)
+        env.pop("ROBOCODE_RUN_ID", None)
     sandbox_abs = str(config.sandbox_dir.resolve())
 
     logger.info("Running: %s (cwd=%s)", " ".join(cmd[:6]) + " ...", sandbox_abs)

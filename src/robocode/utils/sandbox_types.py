@@ -62,6 +62,10 @@ class SandboxConfig:
     # overhead can still differ from an uninterrupted run and is exposed by the
     # retry metrics below.
     resume_previous_session: bool = False
+    # Log the agent's env reset/set_state calls to a JSONL sink (opt-in). Whitebox
+    # runs get the in-sandbox sitecustomize hook; blackbox runs are instrumented
+    # host-side in the env server. Off by default.
+    telemetry: bool = False
 
 
 @dataclass(frozen=True)
