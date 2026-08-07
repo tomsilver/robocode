@@ -75,6 +75,7 @@ from robocode.utils.sandbox import (
     _initial_commit,
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
+    agent_stdin,
 )
 from robocode.utils.telemetry import container_launch
 
@@ -283,6 +284,9 @@ def _docker_run_prefix(
         "docker",
         "run",
         "--rm",
+        # Keep the container's stdin attached: the Claude CLI reads its prompt from
+        # there so it stays out of argv (see backends.claude.stdin_text).
+        "-i",
         "--name",
         container_name,
         "--cap-add=NET_ADMIN",
@@ -498,8 +502,7 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
     anyway (which would silently reintroduce the first-turn tool race). The CLI
     argv is passed positionally (``"$@"``) so it needs no quoting. Shared by
     docker and apptainer (same in-container python path and ``/sandbox`` bind);
-    the explicit kill matters for apptainer, which shares the host pid namespace
-    (no container teardown to reap the server).
+    the explicit kill keeps the server from outliving the agent in either.
     """
     start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
     server_log = "/sandbox/.mcp/mcp_server.boot.log"
@@ -673,11 +676,14 @@ async def run_agent_in_docker_sandbox(
         logger.info("Prompt:\n%s", config.prompt)
 
         wall_start = time.monotonic()
-        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        with (
+            tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
+            agent_stdin(backend, config) as stdin_file,
+        ):
             proc = subprocess.Popen(  # pylint: disable=consider-using-with
                 docker_cmd,
                 env=env,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_file,
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 text=True,

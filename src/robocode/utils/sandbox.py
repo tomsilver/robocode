@@ -13,12 +13,19 @@ directory, but allows *reads* of the entire filesystem. Bash commands like
 ``cat /etc/passwd`` or ``python -c "open('/etc/hosts').read()"`` will succeed.
 Use container sandboxing (``container_backend: docker``) for full isolation.
 
+Where the kernel allows an unprivileged user namespace, :func:`pid_isolate`
+gives the agent its own PID namespace so it cannot signal anything it did not
+start. Where it does not (macOS, and Linux hosts that forbid unprivileged user
+namespaces such as CI runners), the agent can signal any process the operator
+owns; that is another reason to prefer a container backend.
+
 Set ROBOCODE_CLAUDE_CMD or ROBOCODE_OPENCODE_CMD environment variables
 to override the default binary paths.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
 import socket
@@ -26,8 +33,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import nullcontext
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from typing import IO
 
 from robocode.mcp import MCP_START_SCRIPT
 from robocode.primitive_specs import (
@@ -48,6 +57,73 @@ from robocode.utils.telemetry import SINK_FILENAME, host_launch_env
 logger = logging.getLogger(__name__)
 
 _PRIMITIVES_SRC: Path = Path(__file__).parent.parent / "primitives"
+
+
+# Docker and apptainer give the agent its own PID namespace; the local backend runs
+# the CLI as an ordinary host process, so without this a `pkill -f <pattern>` from the
+# agent's Bash tool reaches every process the operator owns: the harness supervising
+# the run, concurrent runs, and the agent's own CLI. unshare puts the CLI in its own
+# PID namespace with its own /proc, so it can only see and signal what it started.
+# --user is what makes this available unprivileged; --map-current-user keeps the uid
+# unchanged so the CLI reads the same config and writes files with the same ownership.
+_PID_ISOLATE_PREFIX = (
+    "unshare",
+    "--user",
+    "--map-current-user",
+    "--pid",
+    "--fork",
+    "--mount-proc",
+)
+
+
+@functools.cache
+def _userns_available() -> bool:
+    """Whether an unprivileged process can create a user+PID namespace here.
+
+    :func:`pid_isolate` calls this only on Linux. Some Linux hosts still forbid
+    the unprivileged user namespace the PID namespace rides on: CI runners and
+    hardened kernels (e.g. Ubuntu's ``apparmor_restrict_unprivileged_userns``)
+    make the ``uid_map`` write return EPERM; ``unshare`` may also be missing.
+    Probe by running the real prefix on ``true`` rather than reading one
+    distro-specific sysctl, since the block has several sources. Cached to avoid
+    re-probing (and re-warning) on every launch in a batch run; a probe that
+    later succeeds intermittently is not worth chasing here.
+    """
+    reason: str
+    try:
+        probe = subprocess.run(
+            [*_PID_ISOLATE_PREFIX, "true"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        reason = str(exc) or exc.__class__.__name__
+    else:
+        if probe.returncode == 0:
+            return True
+        reason = probe.stderr.decode(errors="replace").strip() or "unshare failed"
+    logger.warning(
+        "Unprivileged user namespaces are unavailable (%s); the local backend "
+        "will run the agent CLI in the host PID namespace, so a `pkill` from the "
+        "agent's Bash tool can reach other processes the operator owns. Use a "
+        "container backend (docker/apptainer) for process isolation.",
+        reason,
+    )
+    return False
+
+
+def pid_isolate(cmd: list[str]) -> list[str]:
+    """Return *cmd* prefixed so it runs in its own PID namespace, when it can be.
+
+    Requires an unprivileged user namespace, so it is a no-op on macOS (no
+    equivalent) and on Linux hosts that forbid them (see :func:`_userns_available`);
+    there the local backend keeps the agent in the host process namespace, which is
+    one more reason to prefer a container backend (see the module docstring).
+    """
+    if sys.platform != "linux" or not _userns_available():
+        return cmd
+    return [*_PID_ISOLATE_PREFIX, *cmd]
 
 
 def _free_port() -> int:
@@ -112,8 +188,23 @@ agent_log.txt
 .mcp/
 .agent_sessions/
 .agent_home/
+.agent_prompts/
 mcp_renders/
 """
+
+
+@contextmanager
+def agent_stdin(backend: AgentBackend, config: SandboxConfig) -> Iterator[IO[str]]:
+    """Yield a file holding the CLI's stdin: its prompt, or empty.
+
+    A file rather than a pipe so a prompt larger than the pipe buffer cannot deadlock
+    against the CLI's stdout, and so the same fd works whether the CLI runs on the host
+    or inside a container.
+    """
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as handle:
+        handle.write(backend.stdin_text(config))
+        handle.seek(0)
+        yield handle
 
 
 # ---------------------------------------------------------------------------
@@ -402,12 +493,15 @@ async def run_agent_in_sandbox(
         with claude_config as config_dir:
             if config_dir is not None:
                 env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-            with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+            with (
+                tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
+                agent_stdin(backend, config) as stdin_file,
+            ):
                 proc = subprocess.Popen(  # pylint: disable=consider-using-with
-                    cmd,
+                    pid_isolate(cmd),
                     cwd=sandbox_abs,
                     env=env,
-                    stdin=subprocess.DEVNULL,
+                    stdin=stdin_file,
                     stdout=subprocess.PIPE,
                     stderr=stderr_file,
                     text=True,
