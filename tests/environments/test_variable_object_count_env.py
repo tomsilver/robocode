@@ -263,6 +263,23 @@ def test_card_hides_the_configured_counts(
     other.close()
 
 
+def test_usage_example_names_no_concrete_count() -> None:
+    """The usage example must not put a runnable count list in the count arguments.
+
+    A concrete literal there reads as the configured value even when it is not:
+    agents took `eval_counts=[1]` from this snippet as the evaluation size and
+    developed programs that only handled one object. The neighbouring
+    count-hiding test does not catch it, since a hard-coded literal differs from
+    whatever counts the env was built with.
+    """
+    env = VariableObjectCountEnv(**OBSTRUCTION2D)
+    usage = _section(env.env_description, "## Example Usage")
+    for key in ("design_counts=", "eval_counts="):
+        arg = usage.split(key, 1)[1].split("\n", 1)[0]
+        assert not any(ch.isdigit() for ch in arg), f"{key}{arg}"
+    env.close()
+
+
 def test_family_prose_drops_count_specific_claims() -> None:
     """StickButton2D's family description states the instance's button count ("there are
     always 3 buttons").
