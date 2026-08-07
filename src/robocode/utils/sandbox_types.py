@@ -10,6 +10,10 @@ from typing import Any
 
 CONTAINER_BACKENDS = ("docker", "apptainer", "local")
 
+# Sandbox-relative directory holding prompt text the CLI reads from disk instead of
+# argv. Gitignored in the sandbox repo so it does not show up in the agent's diffs.
+AGENT_PROMPT_DIR = ".agent_prompts"
+
 
 def resolve_container_backend(container_backend: str | None, use_docker: bool) -> str:
     """Resolve and validate an approach's sandbox backend selection.
@@ -58,6 +62,10 @@ class SandboxConfig:
     # overhead can still differ from an uninterrupted run and is exposed by the
     # retry metrics below.
     resume_previous_session: bool = False
+    # Log the agent's env reset/set_state calls to a JSONL sink (opt-in). Whitebox
+    # runs get the in-sandbox sitecustomize hook; blackbox runs are instrumented
+    # host-side in the env server. Off by default.
+    telemetry: bool = False
 
 
 @dataclass(frozen=True)

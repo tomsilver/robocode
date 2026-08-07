@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import subprocess
 import sys
@@ -50,6 +51,8 @@ from typing import Any
 import numpy as np
 from gymnasium.spaces import Box, Space
 from relational_structs.spaces import ObjectCentricStateSpace
+
+from robocode.utils.telemetry import SINK_FILENAME, host_launch_env
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +237,7 @@ def write_env_spaces(
 
 @contextmanager
 def env_server_running(
-    env_cfg_json: str, sandbox_dir: Path
+    env_cfg_json: str, sandbox_dir: Path, *, telemetry: bool = False
 ) -> Iterator[tuple[int, str]]:
     """Run the env server subprocess for the duration of a sandbox run.
 
@@ -250,6 +253,20 @@ def env_server_running(
     port_file.unlink(missing_ok=True)
     log_path = parent / "env_server.log"
     token = secrets.token_hex(16)
+
+    server_env = dict(os.environ)
+    if telemetry:
+        # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
+        sink_dir = parent / "telemetry"
+        sink_dir.mkdir(parents=True, exist_ok=True)
+        server_env.update(
+            host_launch_env(sink_dir / SINK_FILENAME, parent.name, with_hook=False)
+        )
+    else:
+        # Make the flag authoritative: an inherited ROBOCODE_TELEMETRY must not
+        # enable telemetry on the server when this run did not ask for it.
+        server_env.pop("ROBOCODE_TELEMETRY", None)
+        server_env.pop("ROBOCODE_RUN_ID", None)
 
     with open(log_path, "w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
@@ -268,6 +285,7 @@ def env_server_running(
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            env=server_env,
         )
     try:
         deadline = time.monotonic() + 60

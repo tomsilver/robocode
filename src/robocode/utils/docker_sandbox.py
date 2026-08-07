@@ -75,7 +75,9 @@ from robocode.utils.sandbox import (
     _initial_commit,
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
+    agent_stdin,
 )
+from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,25 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
+
+
+def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
+    """(extra volumes, env args) enabling telemetry for a whitebox docker run.
+
+    Empty when telemetry is off or for blackbox runs (the host env server is
+    instrumented instead). Creates the host sink dir so a swallowed write failure can't
+    leave telemetry silently empty.
+    """
+    if not config.telemetry or config.blackbox:
+        return [], []
+    # Run id = the run's output dir name (sandbox_dir is always ".../sandbox").
+    run_dir = config.sandbox_dir.resolve().parent
+    sink_dir = run_dir / "telemetry"
+    sink_dir.mkdir(parents=True, exist_ok=True)
+    mounts, env = container_launch(sink_dir, run_dir.name)
+    volumes = [f"{host}:{cont}{':ro' if ro else ''}" for host, cont, ro in mounts]
+    env_args = [tok for key, val in env.items() for tok in ("-e", f"{key}={val}")]
+    return volumes, env_args
 
 
 def _get_claude_oauth_token() -> str | None:
@@ -263,6 +284,9 @@ def _docker_run_prefix(
         "docker",
         "run",
         "--rm",
+        # Keep the container's stdin attached: the Claude CLI reads its prompt from
+        # there so it stays out of argv (see backends.claude.stdin_text).
+        "-i",
         "--name",
         container_name,
         "--cap-add=NET_ADMIN",
@@ -478,8 +502,7 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
     anyway (which would silently reintroduce the first-turn tool race). The CLI
     argv is passed positionally (``"$@"``) so it needs no quoting. Shared by
     docker and apptainer (same in-container python path and ``/sandbox`` bind);
-    the explicit kill matters for apptainer, which shares the host pid namespace
-    (no container teardown to reap the server).
+    the explicit kill keeps the server from outliving the agent in either.
     """
     start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
     server_log = "/sandbox/.mcp/mcp_server.boot.log"
@@ -489,7 +512,11 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
         f"('{MCP_HTTP_HOST}', {port}), 0.3).close()\""
     )
     script = (
-        f"bash {start_script} >>{server_log} 2>&1 & srv=$!; ok=0; "
+        # Keep telemetry off the render MCP server: it does its own env resets, so
+        # instrumenting it would pollute the agent's stream. The agent CLI ("$@")
+        # keeps the telemetry env.
+        f"env -u ROBOCODE_TELEMETRY bash {start_script} >>{server_log} 2>&1 & "
+        f"srv=$!; ok=0; "
         f"for _ in $(seq 1 200); do "
         f'kill -0 "$srv" 2>/dev/null || break; '
         f"{probe} 2>/dev/null && {{ ok=1; break; }}; sleep 0.1; "
@@ -578,6 +605,7 @@ async def run_agent_in_docker_sandbox(
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
+        tel_volumes, tel_env_args = _telemetry_docker(config)
         docker_cmd = _docker_run_prefix(
             container_name,
             config.docker_image,
@@ -587,7 +615,7 @@ async def run_agent_in_docker_sandbox(
             filtered_kinder_baselines,
             auth_args,
             firewall_domains,
-            extra_volumes=session_volumes,
+            extra_volumes=session_volumes + tel_volumes,
             env_args=[
                 "-e",
                 f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
@@ -603,7 +631,8 @@ async def run_agent_in_docker_sandbox(
                 "MUJOCO_GL=osmesa",
                 "-e",
                 "PYOPENGL_PLATFORM=osmesa",
-            ],
+            ]
+            + tel_env_args,
             # Map the host gateway for blackbox (env server) and local model
             # runs (ollama/vLLM on the host), which both reach host loopback.
             map_host_gateway=config.blackbox or _is_local_model(config.model),
@@ -647,11 +676,14 @@ async def run_agent_in_docker_sandbox(
         logger.info("Prompt:\n%s", config.prompt)
 
         wall_start = time.monotonic()
-        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        with (
+            tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
+            agent_stdin(backend, config) as stdin_file,
+        ):
             proc = subprocess.Popen(  # pylint: disable=consider-using-with
                 docker_cmd,
                 env=env,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin_file,
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 text=True,

@@ -11,3 +11,4 @@ geometry_prompt: false
 max_output_tokens: 32000
 autocompact_pct: 80
 blackbox: false  # hide env source; interact via host-side env server
+telemetry: false  # log the agent's env reset/set_state calls to a JSONL sink
