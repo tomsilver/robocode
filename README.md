@@ -282,7 +282,7 @@ python experiments/run_experiment.py approach=agentic approach/backend=opencode_
 python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro
 ```
 
-Available backend presets: `claude_sonnet` (default), `claude_opus`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
+Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`. Every Claude preset pins a full model id: the bare `opus` / `sonnet` aliases resolve to the previous generation in the sandbox image.
 
 To use the legacy OS-level sandbox instead:
 ```bash
