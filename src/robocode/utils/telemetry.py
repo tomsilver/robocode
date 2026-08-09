@@ -261,6 +261,7 @@ def _emit_set_state(
 INSTRUMENTED_ENVS: tuple[str, ...] = (
     "robocode.environments.variable_object_count_env:VariableObjectCountEnv",
     "robocode.environments.kinder_geom2d_env:KinderGeom2DEnv",
+    "robocode.environments.kinder_geom3d_env:KinderGeom3DEnv",
 )
 
 

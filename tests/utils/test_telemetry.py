@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -302,3 +303,16 @@ def test_set_state_captures_keyword_state(sink: Callable[[], list[dict]]) -> Non
     env.set_state(state=np.array([2.0], dtype=np.float32))
     events = [e for e in sink() if e["kind"] == "set_state"]
     assert len(events) == 1 and events[0]["state"] is not None
+
+
+def test_registered_envs_resolve_and_expose_wrapped_methods() -> None:
+    """Every INSTRUMENTED_ENVS entry names a real class with the wrapped methods.
+
+    instrument_registered_envs() imports these by name, so a typo or a renamed class
+    would only surface when a telemetry run reaches the sandbox hook.
+    """
+    for target in tel.INSTRUMENTED_ENVS:
+        module_name, class_name = target.split(":")
+        cls = getattr(importlib.import_module(module_name), class_name)
+        for method in ("reset", "step", "set_state"):
+            assert callable(getattr(cls, method, None)), f"{target} lacks {method}"
