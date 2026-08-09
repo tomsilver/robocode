@@ -1,5 +1,5 @@
 defaults:
-  - backend: claude_sonnet
+  - backend: claude_opus5
 
 _target_: robocode.approaches.agentic_per_instance_approach.AgenticPerInstanceApproach
 max_budget_usd: 5.0  # GLOBAL budget shared across all eval seeds

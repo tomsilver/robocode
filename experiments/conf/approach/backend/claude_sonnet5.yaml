@@ -1,0 +1,5 @@
+backend: claude
+# Pinned rather than the `sonnet` alias: the Claude CLI shipped in the sandbox image
+# resolves that alias to claude-sonnet-4-6, so a run labelled "sonnet" would silently
+# be the previous generation.
+model: claude-sonnet-5
