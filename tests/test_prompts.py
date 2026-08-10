@@ -259,6 +259,10 @@ def test_interface_spec_shared_wrapper_across_approaches():
     for spec in (agentic, cdl):
         assert "Write the best approach you can" in spec
         assert "Write test scripts that use the real environment" in spec
+        assert (
+            "Once you have a strong candidate, search for instances it does not yet "
+            "solve, then use those failures to improve it."
+        ) in spec
     # Structural slots still differ.
     assert "test_behavior_[behavior_name].py" in cdl
     assert "test_behavior_[behavior_name].py" not in agentic
