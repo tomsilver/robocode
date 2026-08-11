@@ -11,6 +11,8 @@ import subprocess
 import threading
 from pathlib import Path
 
+import pytest
+
 from experiments import results_viewer as viewer
 
 
@@ -49,6 +51,20 @@ def _assistant(subject: str, tokens: tuple[int, int]) -> dict:
             ],
         },
     }
+
+
+def test_preview_step_limit_accepts_custom_positive_integers() -> None:
+    """A render request may override the viewer's 100-step preview default."""
+    assert viewer._preview_step_limit(None) == viewer.PREVIEW_STEPS
+    assert viewer._preview_step_limit(1) == 1
+    assert viewer._preview_step_limit("250") == 250
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1.5", "many"])
+def test_preview_step_limit_rejects_non_positive_or_fractional_values(value) -> None:
+    """Invalid custom horizons are rejected before a render is queued."""
+    with pytest.raises(ValueError, match="positive integer"):
+        viewer._preview_step_limit(value)
 
 
 def test_snapshots_include_effort_and_replay_progress(tmp_path: Path) -> None:

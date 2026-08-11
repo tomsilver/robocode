@@ -1404,6 +1404,25 @@ def _training_seed_info(run: RunInfo) -> dict[str, Any]:
 PREVIEW_STEPS = 100
 
 
+def _preview_step_limit(value: Any) -> int:
+    """Return a validated per-render preview horizon from an API value."""
+    if value is None:
+        return PREVIEW_STEPS
+    if isinstance(value, bool):
+        raise ValueError("preview_steps must be a positive integer")
+    try:
+        steps = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("preview_steps must be a positive integer") from error
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("preview_steps must be a positive integer")
+    if isinstance(value, str) and str(steps) != value.strip():
+        raise ValueError("preview_steps must be a positive integer")
+    if steps < 1:
+        raise ValueError("preview_steps must be a positive integer")
+    return steps
+
+
 @dataclass
 class Job:
     """State of one background GIF-render job, polled by the client."""
@@ -1420,13 +1439,13 @@ class Job:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     capped: bool = (
-        False  # the preview stopped at PREVIEW_STEPS before the episode ended
+        False  # the requested preview horizon stopped before the episode ended
     )
 
 
 JOBS: dict[str, Job] = {}
 _JOBS_LOCK = threading.Lock()
-_RENDER_Q: "queue.Queue[tuple[str, str, str, int, bool, Optional[str]]]" = (
+_RENDER_Q: "queue.Queue[tuple[str, str, str, int, bool, Optional[str], int]]" = (
     queue.Queue()
 )
 _JOB_SEQ = [0]
@@ -1477,11 +1496,12 @@ def _enqueue_render(
     episode_index: int,
     full: bool = False,
     environment: Optional[str] = None,
+    preview_steps: int = PREVIEW_STEPS,
 ) -> str:
     with _JOBS_LOCK:
         _JOB_SEQ[0] += 1
         job_id = f"job{_JOB_SEQ[0]}"
-        mode = "full render" if full else f"{PREVIEW_STEPS}-step preview"
+        mode = "full render" if full else f"{preview_steps}-step preview"
         if environment:
             mode += f" in {environment}"
         ahead = _RENDER_Q.qsize()
@@ -1490,7 +1510,9 @@ def _enqueue_render(
             job_id=job_id,
             message=f"queued {mode}{suffix}",
         )
-    _RENDER_Q.put((job_id, run_id, target, episode_index, full, environment))
+    _RENDER_Q.put(
+        (job_id, run_id, target, episode_index, full, environment, preview_steps)
+    )
     return job_id
 
 
@@ -1500,7 +1522,7 @@ def _enqueue_history_evaluation(run_id: str) -> str:
         _JOB_SEQ[0] += 1
         job_id = f"job{_JOB_SEQ[0]}"
         JOBS[job_id] = Job(job_id=job_id, message="queued full history evaluation")
-    _RENDER_Q.put((job_id, run_id, "EVAL_HISTORY", -1, True, None))
+    _RENDER_Q.put((job_id, run_id, "EVAL_HISTORY", -1, True, None, PREVIEW_STEPS))
     return job_id
 
 
@@ -1730,7 +1752,15 @@ def _render_worker() -> None:
     conf_dir = str(REPO_ROOT / "experiments" / "conf")
 
     while True:
-        job_id, run_id, target, i, full, env_override = _RENDER_Q.get()
+        (
+            job_id,
+            run_id,
+            target,
+            i,
+            full,
+            env_override,
+            preview_steps,
+        ) = _RENDER_Q.get()
         run = _run(run_id)
         epoch = _CANCEL_EPOCH[0]
         history_version: Optional[int] = None
@@ -1838,7 +1868,7 @@ def _render_worker() -> None:
                     max_steps = env.max_steps_for_count(count)
                 else:
                     max_steps = int(cfg.max_steps)
-                render_steps = max_steps if full else min(max_steps, PREVIEW_STEPS)
+                render_steps = max_steps if full else min(max_steps, preview_steps)
                 approach = approach_ctor(primitives=primitives)
                 capped = False
 
@@ -1941,7 +1971,7 @@ def _render_worker() -> None:
                 job.capped = capped
                 job.finished_at = time.time()
                 job.message = (
-                    f"rendered first {PREVIEW_STEPS} steps"
+                    f"rendered first {preview_steps} steps"
                     if capped
                     else completion_message
                 )
@@ -2121,12 +2151,17 @@ class Handler(BaseHTTPRequestHandler):
             run = _run(body.get("run", ""))
             if run is None:
                 return self._err(404, "unknown run")
+            try:
+                preview_steps = _preview_step_limit(body.get("preview_steps"))
+            except ValueError as error:
+                return self._err(400, str(error))
             job_id = _enqueue_render(
                 run.run_id,
                 str(body.get("target", "HEAD")),
                 int(body["episode_index"]),
                 bool(body.get("full", False)),
                 body.get("environment") or None,
+                preview_steps,
             )
             return self._json({"job_id": job_id})
         return self._err(404, "no route")
@@ -2213,6 +2248,9 @@ button.cp.ok{color:var(--ok);border-color:var(--ok)}
 .render-meter.indeterminate>span{width:35%;animation:render-wait 1.1s ease-in-out infinite}
 @keyframes render-wait{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
 .fullbtn{font-size:10px;margin:4px 6px}
+.previewctl{display:flex;align-items:center;gap:4px;padding:4px 6px}
+.previewctl input{width:52px;min-width:0;padding:3px 4px;font:10px ui-monospace,Menlo,monospace}
+.previewctl button{font-size:10px;padding:3px 5px;white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
 .bars{display:flex;flex-direction:column;gap:5px}
 .bar{display:flex;align-items:center;gap:8px;font-size:12px}
@@ -2425,6 +2463,20 @@ function byCountBars(bc){
 const envShort=n=>n&&n.endsWith("_a")?"pinned-spawn":"standard";
 let PAIRVIEW=false;  // run-page toggle: show both env variants' gifs per episode
 
+function previewControls(run,e,cardEl,label="preview gif"){
+ const input=h("input",{type:"number",min:"1",step:"1",value:cardEl.dataset.previewSteps||"100",
+  title:"Maximum preview steps","aria-label":"Preview steps"});
+ const btn=h("button",{title:"Render up to the selected number of steps",onclick:ev=>{
+  if(!input.reportValidity())return;
+  const steps=Number(input.value);
+  if(!Number.isInteger(steps)||steps<1){input.setCustomValidity("Enter a positive whole number");input.reportValidity();return;}
+  input.setCustomValidity("");
+  recordGif(ev,run,"HEAD",e.i,cardEl,false,null,steps);
+ }},label);
+ input.addEventListener("input",()=>input.setCustomValidity(""));
+ return h("div",{class:"previewctl"},input,btn);
+}
+
 function epCard(run,e,s){
  const c=h("div",{class:"ep"});
  if(e.num_steps!=null)c.dataset.steps=e.num_steps;
@@ -2452,9 +2504,9 @@ function epCard(run,e,s){
   c.append(h("div",{class:"ph noplan"},h("div",{},"no plan found"),
    h("div",{class:"mono"},e.planning_time!=null?`${num(e.planning_time,1)}s search`:"")));}
  else if(e.has_gif){c.append(gifImg(`/api/gif?run=${enc(run)}&kind=eval&key=${e.i}`));
-  if(e.gif_preview)c.append(h("button",{class:"fullbtn",onclick:ev=>recordGif(ev,run,"HEAD",e.i,c,true)},"render full"));}
- else{const ph=h("div",{class:"ph"},h("button",{title:"Render at most the first 100 steps",
-  onclick:ev=>recordGif(ev,run,"HEAD",e.i,c)},"preview gif"));c.append(ph);}
+  if(e.gif_preview)c.append(previewControls(run,e,c,"re-preview"),
+   h("button",{class:"fullbtn",onclick:ev=>recordGif(ev,run,"HEAD",e.i,c,true)},"render full"));}
+ else{const ph=h("div",{class:"ph"},previewControls(run,e,c));c.append(ph);}
  // Replay the same policy and episode seed under the paired environment group
  // (matched spawn-range comparison). Opens in the lightbox; the gif persists
  // under videos_env_<group>/ in the run dir.
@@ -2472,7 +2524,7 @@ function epCard(run,e,s){
  c.append(cap);return c;
 }
 
-async function recordGif(ev,run,target,i,cardEl,full=false,env=null){
+async function recordGif(ev,run,target,i,cardEl,full=false,env=null,previewSteps=100){
  const btn=ev.currentTarget||ev.target;const origLabel=btn.textContent;
  btn.disabled=true;btn.textContent=full?"full render":"preview";
  const oldStatus=cardEl.querySelector(".render-status");if(oldStatus)oldStatus.remove();
@@ -2481,6 +2533,7 @@ async function recordGif(ev,run,target,i,cardEl,full=false,env=null){
  btn.after(status);
  const started=Date.now();
  const body={run,target,episode_index:i,full};if(env)body.environment=env;
+ if(!full){body.preview_steps=previewSteps;cardEl.dataset.previewSteps=previewSteps;}
  const {job_id}=await j("/api/render",{method:"POST",headers:{"Content-Type":"application/json"},
   body:JSON.stringify(body)});
  const tick=async()=>{
@@ -2504,7 +2557,10 @@ async function recordGif(ev,run,target,i,cardEl,full=false,env=null){
    const ph=cardEl.querySelector(".ph"),old=cardEl.querySelector("img");
    if(ph)ph.replaceWith(img);else if(old)old.replaceWith(img);else cardEl.prepend(img);
    const stale=cardEl.querySelector(".fullbtn");if(stale)stale.remove();
+   const oldPreviewCtl=cardEl.querySelector(".previewctl");
+   if(!s.capped&&oldPreviewCtl)oldPreviewCtl.remove();
    if(s.capped){const steps=cardEl.dataset.steps;
+    if(!oldPreviewCtl)img.after(previewControls(run,cardEl._ep||{i},cardEl,"re-preview"));
     img.after(h("button",{class:"fullbtn",
      onclick:ev2=>recordGif(ev2,run,target,i,cardEl,true)},
      steps?`render full (${steps}st)`:"render full"));}}
