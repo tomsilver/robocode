@@ -73,7 +73,6 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         bilevel_env_name: str | None = None,
         base_steps: int = 300,
         steps_per_object: int = 150,
-        render_dpi: int | None = None,
     ) -> None:
         # Lock the GL backend before building any backend env so rendering works;
         # driving the kinder classes directly needs no gym registry.
@@ -92,10 +91,6 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         # scored as failed merely for running out of steps before it could finish.
         self._base_steps = base_steps
         self._steps_per_object = steps_per_object
-        # Optional render-resolution override applied to every backend. Unset, each
-        # family keeps its own default DPI; lowering it (e.g. for gif capture) shrinks
-        # each frame so long, high-object-count rollouts fit in memory.
-        self._render_dpi = render_dpi
         self._design_counts = [int(c) for c in design_counts]
         self._eval_counts = [int(c) for c in eval_counts]
         if not self._design_counts:
@@ -110,17 +105,20 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         self._current_backend: ConstantObjectKinDEREnv | None = None
         self._current_count: int | None = None
         self._current_ocs: ObjectCentricState | None = None
+        self._configured_counts = sorted(
+            set(self._design_counts) | set(self._eval_counts)
+        )
         # prefixed-object-count -> constructor-kwarg value, so a bare state (set_state,
-        # init_state) can be routed to the right backend. Built for every configured
-        # count up front so inference never hits an un-built backend.
+        # init_state) can be routed to the right backend.
         self._prefixed_count_to_kwarg: dict[int, int] = {}
+        self._metadata_by_count: dict[int, dict[str, Any]] = {}
         try:
-            for count in sorted(set(self._design_counts) | set(self._eval_counts)):
-                self._backend_for(count)
-        except BaseException:
-            # In particular, do not leak already-created PyBullet clients when a
-            # later configured 3D count is infeasible or otherwise fails to build.
-            self.close()
+            self._backend_for(max(self._design_counts))
+        except BaseException as exc:
+            try:
+                self.close()
+            except Exception as cleanup_exc:  # pylint: disable=broad-exception-caught
+                exc.add_note(f"Backend cleanup also failed: {cleanup_exc}")
             raise
 
         # Largest design count: a count-0 exemplar omits the count-defining type row.
@@ -146,9 +144,13 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
     @staticmethod
     def _close_backend(backend: ConstantObjectKinDEREnv) -> None:
         """Close one kinder backend and its currently unmanaged PyBullet client."""
-        backend.close()
         inner = backend._object_centric_env
-        inner.close()
+        errors: list[Exception] = []
+        for close_fn in (backend.close, inner.close):
+            try:
+                close_fn()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                errors.append(exc)
         physics_client_id = getattr(inner, "physics_client_id", None)
         if physics_client_id is not None:
             # kinder currently has no kinematic3d close() implementation, so its
@@ -156,8 +158,13 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             # PyBullet only for backends that actually own a client.
             import pybullet as p  # pylint: disable=import-outside-toplevel
 
-            if p.isConnected(physics_client_id):
-                p.disconnect(physicsClientId=physics_client_id)
+            try:
+                if p.isConnected(physics_client_id):
+                    p.disconnect(physicsClientId=physics_client_id)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("Failed to close Kinder backend", errors)
 
     def _backend_for(self, count: int) -> ConstantObjectKinDEREnv:
         """Return (building + caching on first use) the backend for a given count."""
@@ -180,19 +187,10 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
                     f"feasible object count. Lower the configured counts."
                 ) from exc
             try:
-                if self._render_dpi is not None:
-                    # The kinematic env's config is a frozen dataclass; set the field
-                    # through object.__setattr__ (render() reads config.render_dpi
-                    # fresh).
-                    object.__setattr__(
-                        backend._object_centric_env.config,
-                        "render_dpi",
-                        self._render_dpi,
-                    )
                 exemplar, _ = backend._object_centric_env.reset(seed=0)
                 prefixed_count = self._count_prefixed(exemplar)
-                if prefixed_count in self._prefixed_count_to_kwarg:
-                    other = self._prefixed_count_to_kwarg[prefixed_count]
+                other = self._prefixed_count_to_kwarg.get(prefixed_count)
+                if other is not None and other != count:
                     raise ValueError(
                         f"Cannot infer {self._count_kwarg} from prefix "
                         f"{self._count_object_prefix!r}: constructor values {other} "
@@ -203,6 +201,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
                 raise
             self._backends[count] = backend
             self._prefixed_count_to_kwarg[prefixed_count] = count
+            self._metadata_by_count[count] = dict(backend.metadata)
         return backend
 
     def _count_prefixed(self, state: ObjectCentricState) -> int:
@@ -211,6 +210,11 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
 
     def _infer_count(self, state: ObjectCentricState) -> int:
         prefixed = self._count_prefixed(state)
+        for count in self._configured_counts:
+            if prefixed in self._prefixed_count_to_kwarg:
+                break
+            if count not in self._prefixed_count_to_kwarg.values():
+                self._backend_for(count)
         try:
             return self._prefixed_count_to_kwarg[prefixed]
         except KeyError as exc:
@@ -317,9 +321,9 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             count = self._infer_count(state)
             backend = self._backend_for(count)
             state = self._coerce_state_for_backend(state, backend)
-            backend._object_centric_env.set_state(state)
-            ocs = backend._object_centric_env.get_state()
-            info = {}
+            ocs, info = backend._object_centric_env.reset(
+                seed=seed, options={"init_state": state}
+            )
         else:
             count = self._count_for_seed(seed)
             backend = self._backend_for(count)
@@ -371,12 +375,18 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
 
     def close(self) -> None:
         """Close every cached backend, including kinematic3d PyBullet clients."""
-        for backend in self._backends.values():
-            self._close_backend(backend)
+        errors: list[Exception] = []
+        for backend in tuple(self._backends.values()):
+            try:
+                self._close_backend(backend)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                errors.append(exc)
         self._backends.clear()
         self._current_backend = None
         self._current_count = None
         self._current_ocs = None
+        if errors:
+            raise ExceptionGroup("Failed to close variable-count backends", errors)
 
     # -- per-count Box view for the bilevel planner -------------------------
 
@@ -471,9 +481,12 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         and each wrapper writes it for its own fixed count, so a paragraph that differs
         between counts does not describe this env.
         """
+        for count in self._configured_counts:
+            if count not in self._metadata_by_count:
+                self._backend_for(count)
         per_count = [
-            self._backends[count].metadata[metadata_key].split("\n\n")
-            for count in sorted(self._backends)
+            self._metadata_by_count[count][metadata_key].split("\n\n")
+            for count in self._configured_counts
         ]
         first, *others = per_count
         return "\n\n".join(p for p in first if all(p in other for other in others))

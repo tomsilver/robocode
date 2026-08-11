@@ -8,6 +8,7 @@ import pybullet as p
 import pytest
 from relational_structs import ObjectCentricState
 
+from robocode.environments.constrained_cupboard3d import ConstrainedCupboard3DEnv
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.object_centric_codec import (
     decode_object_centric_state,
@@ -81,10 +82,7 @@ def test_kinematic3d_family_supports_variable_count_roundtrip(
         eval_counts=[1, 2],
         constant_object_env_kwargs={"realistic_bg": False, **fixed_kwargs},
     )
-    physics_client_ids = [
-        getattr(getattr(backend, "_object_centric_env"), "physics_client_id")
-        for backend in env._backends.values()  # pylint: disable=protected-access
-    ]
+    physics_client_ids = []
     try:
         state, info = env.reset(seed=2, options={"object_count": 2})
         assert info["object_count"] == 2
@@ -104,10 +102,8 @@ def test_kinematic3d_family_supports_variable_count_roundtrip(
         if exact_roundtrip:
             assert restored.allclose(state)
         else:
-            # The pending fix/packing3d-geometry-validity-stacked branch must make
-            # triangle poses and randomized part geometry round-trip exactly. Until
-            # then, test the shared routing/rehydration path without claiming that
-            # the upstream simulator restored the same physical state.
+            # The pinned Kinder revision does not preserve Packing3D's randomized
+            # part geometry during restoration, so this checks only shared routing.
             assert restored.get_object_names() == state.get_object_names()
 
         next_state, _, _, _, step_info = env.step(env.action_space.sample())
@@ -126,6 +122,10 @@ def test_kinematic3d_family_supports_variable_count_roundtrip(
         assert "constant_object_env_kwargs=" in card
         assert "state.get(obj, 'x')" not in card  # invalid for most 3D types
     finally:
+        physics_client_ids.extend(
+            getattr(getattr(backend, "_object_centric_env"), "physics_client_id")
+            for backend in env._backends.values()  # pylint: disable=protected-access
+        )
         env.close()
 
     # The wrapper owns all per-count PyBullet clients and must release them.
@@ -171,7 +171,7 @@ def test_constrainedcupboard3d_uses_registered_object_counts() -> None:
             "robocode.environments.constrained_cupboard3d:ConstrainedCupboard3DEnv"
         ),
         count_kwarg="num_objects",
-        count_object_prefix="cuboid",
+        count_object_prefix="cuboid_",
         design_counts=[1, 2],
         eval_counts=[1, 2, 6],
         constant_object_env_kwargs={"scene_bg": False},
@@ -180,7 +180,9 @@ def test_constrainedcupboard3d_uses_registered_object_counts() -> None:
         for count in env.eval_counts:
             state, info = env.reset(seed=0, options={"object_count": count})
             assert info["object_count"] == count
-            assert _num_prefixed(state, "cuboid") == count
+            assert _num_prefixed(state, "cuboid_") == count
+
+        assert "`cuboid_0`, `cuboid_1`, ..." in env.env_description
 
         decoded = decode_object_centric_state(encode_object_centric_state(state))
         env.set_state(decoded)
@@ -188,3 +190,23 @@ def test_constrainedcupboard3d_uses_registered_object_counts() -> None:
         assert env.get_state().allclose(state)
     finally:
         env.close()
+
+
+def test_constrainedcupboard3d_adapter_kwargs() -> None:
+    """The adapter owns its task path while allowing a camera override."""
+    with pytest.raises(ValueError, match="selects task_config_path"):
+        ConstrainedCupboard3DEnv(
+            num_objects=1,
+            task_config_path="ignored.json",
+        )
+
+    env = ConstrainedCupboard3DEnv(
+        num_objects=1,
+        scene_bg=False,
+        scene_render_camera="task_view",
+    )
+    try:
+        env.reset(seed=0)
+    finally:
+        env.close()
+        getattr(env, "_object_centric_env").close()

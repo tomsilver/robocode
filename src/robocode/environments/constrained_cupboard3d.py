@@ -18,6 +18,11 @@ class ConstrainedCupboard3DEnv(TidyBot3DEnv):
                 f"ConstrainedCupboard3D supports counts "
                 f"{sorted(self.supported_counts)}, got {num_objects}"
             )
+        if "task_config_path" in kwargs:
+            raise ValueError(
+                "ConstrainedCupboard3D selects task_config_path from num_objects"
+            )
+        kwargs.setdefault("scene_render_camera", "task_view")
         tasks_dir = Path(dynamic3d_envs.__file__).parent / "tasks"
         task_path = (
             tasks_dir
@@ -27,6 +32,5 @@ class ConstrainedCupboard3DEnv(TidyBot3DEnv):
         super().__init__(
             num_objects=num_objects,
             task_config_path=str(task_path),
-            scene_render_camera="task_view",
             **kwargs,
         )

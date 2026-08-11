@@ -35,9 +35,12 @@ def _annotate(
     total: int,
     seed: int,
     count: int,
+    render_width: int,
 ) -> NDArray[np.uint8]:
     rgb = frame[..., :3]
     image = Image.fromarray(rgb)
+    render_height = round(image.height * render_width / image.width)
+    image = image.resize((render_width, render_height), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(image)
     label = (
         f"{env_name} | {phase} {index:03d}/{total:03d} | "
@@ -56,10 +59,17 @@ def _render_config(
     num_eval_seeds: int,
     eval_seed: int,
     fps: int,
-    render_dpi: int,
+    render_width: int,
 ) -> dict[str, Any]:
+    if num_train_seeds < 0 or num_eval_seeds < 0:
+        raise ValueError("Seed counts must be non-negative")
+    if num_train_seeds + num_eval_seeds == 0:
+        raise ValueError("At least one train or eval seed is required")
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+    if render_width <= 0:
+        raise ValueError("render_width must be positive")
     config = OmegaConf.load(_CONFIG_DIR / f"{env_name}.yaml")
-    config.render_dpi = render_dpi
     env = instantiate(config)
     frames: list[NDArray[np.uint8]] = []
     phase_counts: dict[str, Counter[int]] = {
@@ -96,7 +106,16 @@ def _render_config(
                         f"{env_name}.render() returned {type(frame).__name__}"
                     )
                 frames.append(
-                    _annotate(frame, env_name, phase, index, total, seed, count)
+                    _annotate(
+                        frame,
+                        env_name,
+                        phase,
+                        index,
+                        total,
+                        seed,
+                        count,
+                        render_width,
+                    )
                 )
                 if index % 10 == 0 or index == total:
                     print(f"{env_name} {phase}: rendered {index}/{total}", flush=True)
@@ -129,7 +148,7 @@ def main() -> None:
     parser.add_argument("--num-eval-seeds", type=int, default=100)
     parser.add_argument("--eval-seed", type=int, default=42)
     parser.add_argument("--fps", type=int, default=5)
-    parser.add_argument("--render-dpi", type=int, default=60)
+    parser.add_argument("--render-width", type=int, default=480)
     parser.add_argument("--configs", nargs="*", default=_DEFAULT_CONFIGS)
     args = parser.parse_args()
 
@@ -142,7 +161,7 @@ def main() -> None:
             args.num_eval_seeds,
             args.eval_seed,
             args.fps,
-            args.render_dpi,
+            args.render_width,
         )
         for env_name in args.configs
     }

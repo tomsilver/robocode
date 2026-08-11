@@ -113,11 +113,15 @@ def test_sample_next_state_with_object_centric_state() -> None:
 
 
 def test_infeasible_count_raises_clearly() -> None:
-    """A configured count the scene cannot fit fails with an informative error."""
-    with pytest.raises(ValueError, match="feasible object count|could not build"):
-        VariableObjectCountEnv(
-            **{**OBSTRUCTION2D, "design_counts": [0], "eval_counts": [0, 8]}
-        )
+    """A requested count the scene cannot fit fails with an informative error."""
+    env = VariableObjectCountEnv(
+        **{**OBSTRUCTION2D, "design_counts": [0], "eval_counts": [0, 8]}
+    )
+    try:
+        with pytest.raises(ValueError, match="feasible object count|could not build"):
+            env.reset(seed=0, options={"object_count": 8})
+    finally:
+        env.close()
 
 
 def test_fixed_constructor_kwargs_cannot_override_count_kwarg() -> None:
@@ -131,15 +135,74 @@ def test_fixed_constructor_kwargs_cannot_override_count_kwarg() -> None:
 
 def test_ambiguous_count_prefix_is_rejected() -> None:
     """Two count values may not map to the same number of prefixed objects."""
-    with pytest.raises(ValueError, match="Cannot infer.*constructor values"):
-        VariableObjectCountEnv(
-            **{
-                **OBSTRUCTION2D,
-                "count_object_prefix": "robot",  # always exactly one
-                "design_counts": [0, 1],
-                "eval_counts": [0, 1],
-            }
-        )
+    env = VariableObjectCountEnv(
+        **{
+            **OBSTRUCTION2D,
+            "count_object_prefix": "robot",  # always exactly one
+            "design_counts": [0, 1],
+            "eval_counts": [0, 1],
+        }
+    )
+    try:
+        with pytest.raises(ValueError, match="Cannot infer.*constructor values"):
+            env.reset(seed=0, options={"object_count": 0})
+    finally:
+        env.close()
+
+
+def test_backends_are_built_lazily() -> None:
+    """Construction opens only the design-reference backend."""
+    env = VariableObjectCountEnv(**OBSTRUCTION2D)
+    backends = getattr(env, "_backends")
+    assert set(backends) == {max(env.design_counts)}
+    env.reset(seed=0, options={"object_count": 4})
+    assert set(backends) == {max(env.design_counts), 4}
+    env.close()
+
+
+def test_init_state_reset_preserves_seed() -> None:
+    """Restoring an initial state still reseeds the selected Kinder backend."""
+    env = VariableObjectCountEnv(**OBSTRUCTION2D)
+    state, _ = env.reset(seed=0, options={"object_count": 1})
+    env.reset(seed=99, options={"object_count": 1})
+    env.reset(seed=7, options={"init_state": state})
+    backend = getattr(env, "_current_backend")
+    inner = getattr(backend, "_object_centric_env")
+    actual = int(inner.np_random.integers(2**31))
+    expected = int(np.random.default_rng(7).integers(2**31))
+    assert actual == expected
+    env.close()
+
+
+def test_close_allows_reuse_and_description() -> None:
+    """Closing releases backends without corrupting routing or metadata."""
+    env = VariableObjectCountEnv(**OBSTRUCTION2D)
+    description = env.env_description
+    env.close()
+    assert env.env_description == description
+    state, info = env.reset(seed=0, options={"object_count": 1})
+    assert info["object_count"] == 1
+    assert env.infer_count(state) == 1
+    env.close()
+
+
+def test_close_attempts_every_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing backend close does not prevent cleanup of the others."""
+    env = VariableObjectCountEnv(**OBSTRUCTION2D)
+    env.reset(seed=0, options={"object_count": 0})
+    backends = list(getattr(env, "_backends").values())
+    attempted: list[Any] = []
+
+    def _close(backend: Any) -> None:
+        attempted.append(backend)
+        if backend is backends[0]:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(env, "_close_backend", _close)
+    with pytest.raises(ExceptionGroup, match="Failed to close"):
+        env.close()
+    assert attempted == backends
+    assert not getattr(env, "_backends")
 
 
 def test_description_is_object_centric() -> None:
