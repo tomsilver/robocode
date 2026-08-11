@@ -1,6 +1,7 @@
 """Tests for campaign expansion and preservation-safe tracker upserts."""
 
 import importlib
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,31 @@ def test_sample_campaign_expansion_and_constraint() -> None:
     assert excluded[0][1] == "bilevel_models unavailable under blackbox"
     assert all(row["Seeds"] == "[42, 24]" for row in rows)
     assert all("seed=42,24" in row["Command"] for row in rows)
+
+
+def test_generated_command_propagates_id_to_hydra_and_output_path() -> None:
+    """The Sheet ID is also runtime metadata and the artifact parent directory."""
+    config = generate.ExperimentConfig(
+        "campaign_a",
+        {
+            "environment": "motion2d_easy",
+            "approach": "agentic",
+            "primitive_level": "none",
+            "approach.blackbox": False,
+            "approach/backend": "claude_opus5",
+        },
+        (42, 24),
+    )
+    row = generate.tracker_row(config)
+    condition_id = row["Experiment ID"]
+    command = shlex.split(row["Command"])
+
+    assert f"experiment_id={condition_id}" in command
+    assert "seed=42,24" in command
+    assert (
+        f"hydra.sweep.dir=multirun/{condition_id}/" "${now:%Y-%m-%d_%H-%M-%S}"
+    ) in command
+    assert "hydra.sweep.subdir=seed_${seed}" in command
 
 
 def test_experiment_id_is_independent_of_seeds_and_mapping_order() -> None:

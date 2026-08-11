@@ -7,6 +7,9 @@ defaults:
 # Replicate identifier and seed for randomness we control locally (for example,
 # action-space sampling). It does not seed remote language-model generation.
 replicate_seed: 42
+# Stable condition identifier supplied by the campaign generator. Manual runs may
+# leave this unset; tracker-generated commands always set it.
+experiment_id: null
 # Experimenter-only seed used to derive the fixed evaluation episode suite.
 # Final-run commands must set the private team value explicitly.
 eval_seed: null

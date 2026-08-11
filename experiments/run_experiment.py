@@ -27,6 +27,7 @@ Parallel sweep with joblib launcher:
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,21 @@ from robocode.utils.episode import (
 from robocode.utils.telemetry import require_registered
 
 logger = logging.getLogger(__name__)
+
+_EXPERIMENT_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_]*(?:__[a-z0-9_]+)*__[0-9a-f]{8}")
+
+
+def resolve_experiment_id(cfg: DictConfig) -> str | None:
+    """Return a tracker-generated condition ID and reject unsafe identifiers."""
+    value = cfg.get("experiment_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or _EXPERIMENT_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            "experiment_id must be null or a tracker-generated identifier, "
+            f"got {value!r}"
+        )
+    return value
 
 
 def resolve_eval_seed(cfg: DictConfig) -> int:
@@ -90,9 +106,11 @@ def _main(cfg: DictConfig) -> float:
     validate_eval_seed_isolation(cfg)
     replicate_seed = cfg.replicate_seed
     eval_seed = resolve_eval_seed(cfg)
-
+    condition_id = resolve_experiment_id(cfg)
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if condition_id is not None:
+        logger.info("Experiment ID: %s", condition_id)
 
     if cfg.eval_timeout is None:
         raise ValueError(
@@ -321,6 +339,7 @@ def _main(cfg: DictConfig) -> float:
         results.update(gen_metrics.to_dict())
     results["eval_seed"] = eval_seed
     results["replicate_seed"] = replicate_seed
+    results["experiment_id"] = condition_id
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

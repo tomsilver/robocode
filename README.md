@@ -339,6 +339,10 @@ python experiments/tracker/generate.py \
 ```
 
 Each condition becomes one row with a Hydra multirun command containing every seed.
+The generated Experiment ID is passed into Hydra, recorded in every `results.json`,
+and used as the exact parent directory under `multirun/`. Each invocation creates a
+timestamped run beneath that parent with one `seed_<seed>` directory per replicate, so
+the condition folder can be uploaded to Drive without renaming it.
 The named `primitive_level=none|low_level|bilevel` config group resolves to the
 primitive list consumed by `build_primitives()`. Explicit constraints exclude invalid
 cells such as `primitive_level=bilevel` with `approach.blackbox=true`, and Hydra

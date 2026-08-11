@@ -104,11 +104,15 @@ def hydra_overrides(config: ExperimentConfig) -> list[str]:
 
 def validate_with_hydra(config: ExperimentConfig) -> None:
     """Compose a condition so missing config choices fail during generation."""
+    overrides = [
+        *hydra_overrides(config),
+        f"experiment_id={experiment_id(config)}",
+    ]
     try:
         with initialize_config_dir(config_dir=str(_CONF_DIR), version_base=None):
-            compose(config_name="config", overrides=hydra_overrides(config))
+            compose(config_name="config", overrides=overrides)
     except Exception as error:
-        condition = ", ".join(hydra_overrides(config))
+        condition = ", ".join(overrides)
         raise ValueError(f"Hydra could not compose {condition}: {error}") from error
 
 
@@ -133,15 +137,22 @@ def experiment_id(config: ExperimentConfig) -> str:
     return "__".join([*(labels or ["condition"]), digest])
 
 
-def hydra_command(config: ExperimentConfig) -> str:
+def hydra_command(config: ExperimentConfig, condition_id: str) -> str:
     """Create one copyable Hydra multirun command for all required seeds."""
-    overrides = [*hydra_overrides(config), f"seed={','.join(map(str, config.seeds))}"]
+    overrides = [
+        *hydra_overrides(config),
+        f"experiment_id={condition_id}",
+        f"seed={','.join(map(str, config.seeds))}",
+        (f"hydra.sweep.dir=multirun/{condition_id}/" "${now:%Y-%m-%d_%H-%M-%S}"),
+        "hydra.sweep.subdir=seed_${seed}",
+    ]
     quoted = " ".join(shlex.quote(override) for override in overrides)
     return f"python experiments/run_experiment.py -m {quoted}"
 
 
 def tracker_row(config: ExperimentConfig) -> dict[str, str]:
     """Convert a valid condition to the shared tracker schema."""
+    condition_id = experiment_id(config)
     blackbox = config.values.get("approach.blackbox")
     access = ""
     if isinstance(blackbox, bool):
@@ -149,7 +160,7 @@ def tracker_row(config: ExperimentConfig) -> dict[str, str]:
     row = {column: "" for column in ALL_COLUMNS}
     row.update(
         {
-            "Experiment ID": experiment_id(config),
+            "Experiment ID": condition_id,
             "Campaign": config.campaign,
             "Environment": str(config.values.get("environment", "")),
             "Method": str(config.values.get("approach", "")),
@@ -157,7 +168,7 @@ def tracker_row(config: ExperimentConfig) -> dict[str, str]:
             "Access": access,
             "Model / Backend": str(config.values.get("approach/backend", "")),
             "Seeds": json.dumps(config.seeds),
-            "Command": hydra_command(config),
+            "Command": hydra_command(config, condition_id),
             "Active": "TRUE",
             "Status": "Todo",
             "Progress": f"0/{len(config.seeds)}",
