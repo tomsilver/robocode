@@ -4,6 +4,7 @@
 *.sif
 multirun
 outputs
+experiments/generated/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

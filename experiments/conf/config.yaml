@@ -1,4 +1,5 @@
 defaults:
+  - primitive_level: low_level
   - approach: random
   - environment: small_maze
   - _self_
@@ -15,9 +16,6 @@ num_eval_tasks: 100
 eval_timeout: 30
 render_videos: false
 record_approach_history: false
-primitives:
-  - check_action_collision
-  - BiRRT
 mcp_tools:
   - render_state
   - render_policy

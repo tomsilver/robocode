@@ -318,12 +318,50 @@ python experiments/run_experiment.py -m \
     approach.container_backend=docker \
     replicate_seed=42,24,424,444,222 \
     eval_seed="$EVAL_SEED" \
-    'primitives=[]' \
+    primitive_level=none \
     environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
     'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
     'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
     hydra/launcher=joblib hydra.launcher.n_jobs=4
 ```
+
+### Experiment tracker
+
+Hydra defines executable choices, while small campaign files under
+`experiments/campaigns/` select the conditions intended for one study. Generate a
+local CSV without running experiments:
+
+```bash
+python experiments/tracker/generate.py \
+    experiments/campaigns/tracker_smoke_test.yaml --dry-run
+python experiments/tracker/generate.py \
+    experiments/campaigns/tracker_smoke_test.yaml
+```
+
+Each condition becomes one row with a Hydra multirun command containing every seed.
+The named `primitive_level=none|low_level|bilevel` config group resolves to the
+primitive list consumed by `build_primitives()`. Explicit constraints exclude invalid
+cells such as `primitive_level=bilevel` with `approach.blackbox=true`, and Hydra
+composition catches missing config choices.
+
+Install the optional Google client and synchronize the generated CSV:
+
+```bash
+uv sync --extra tracker
+python experiments/tracker/sync_google_sheet.py \
+    experiments/generated/tracker_smoke_test.csv --sheet-id SPREADSHEET_ID
+```
+
+The sync uses Experiment ID as its key. It updates generated columns, appends new
+conditions, marks removed conditions from the synchronized campaign inactive, and
+never writes existing Owner, Status, Progress, Priority, Notes, Results, or Git SHA
+cells. New Sheets receive a native table with People, file, and dropdown column types.
+
+Authentication uses gspread's desktop OAuth flow. By default it reads
+`~/.config/gspread/credentials.json` and stores the authorized-user token outside the
+repository. Override those paths with `--credentials` / `--authorized-user` or the
+`GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_AUTHORIZED_USER` environment variables. Never
+commit either credential file.
 
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
 

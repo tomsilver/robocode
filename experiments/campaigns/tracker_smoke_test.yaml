@@ -1,0 +1,20 @@
+name: tracker_smoke_test
+
+matrix:
+  environment:
+    - motion2d_easy
+  approach:
+    - agentic
+  primitive_level:
+    - none
+    - low_level
+    - bilevel
+  approach.blackbox:
+    - false
+    - true
+  approach/backend:
+    - claude_opus5
+
+seeds:
+  - 42
+  - 24
