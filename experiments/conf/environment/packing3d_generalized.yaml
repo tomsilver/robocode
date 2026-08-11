@@ -1,0 +1,6 @@
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.kinematic3d.packing3d:Packing3DEnv
+count_kwarg: num_parts
+count_object_prefix: part
+design_counts: [1, 2]
+eval_counts: [1, 2, 3]

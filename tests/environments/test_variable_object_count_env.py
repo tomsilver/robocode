@@ -120,6 +120,28 @@ def test_infeasible_count_raises_clearly() -> None:
         )
 
 
+def test_fixed_constructor_kwargs_cannot_override_count_kwarg() -> None:
+    """The varying constructor argument has one unambiguous source."""
+    with pytest.raises(ValueError, match="must not contain count_kwarg"):
+        VariableObjectCountEnv(
+            **OBSTRUCTION2D,
+            constant_object_env_kwargs={"num_obstructions": 3},
+        )
+
+
+def test_ambiguous_count_prefix_is_rejected() -> None:
+    """Two count values may not map to the same number of prefixed objects."""
+    with pytest.raises(ValueError, match="Cannot infer.*constructor values"):
+        VariableObjectCountEnv(
+            **{
+                **OBSTRUCTION2D,
+                "count_object_prefix": "robot",  # always exactly one
+                "design_counts": [0, 1],
+                "eval_counts": [0, 1],
+            }
+        )
+
+
 def test_description_is_object_centric() -> None:
     """The env card describes an object-centric, variable-count observation."""
     env = VariableObjectCountEnv(**OBSTRUCTION2D)

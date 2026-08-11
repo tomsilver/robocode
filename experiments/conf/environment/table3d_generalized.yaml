@@ -1,0 +1,6 @@
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.kinematic3d.table3d:Table3DEnv
+count_kwarg: num_cubes
+count_object_prefix: cube
+design_counts: [1, 2, 3, 4]
+eval_counts: [1, 2, 3, 4, 6, 8, 10]
