@@ -212,42 +212,20 @@ def test_blank_categorical_column_remains_text() -> None:
     assert model["columnType"] == "TEXT"
 
 
-def test_semantic_formats_follow_column_names_and_do_not_duplicate() -> None:
-    """Color rules follow reordered columns and preserve an existing match."""
-    priority_index = schema.ALL_COLUMNS.index("Priority")
-    existing = {
-        "ranges": [
-            {
-                "sheetId": 123,
-                "startRowIndex": 1,
-                "endRowIndex": 100,
-                "startColumnIndex": priority_index,
-                "endColumnIndex": priority_index + 1,
-            }
-        ],
-        "booleanRule": {
-            "condition": {
-                "type": "TEXT_EQ",
-                "values": [{"userEnteredValue": "High"}],
-            }
-        },
-    }
+def test_table_column_signature_ignores_omitted_zero_index() -> None:
+    """An unchanged schema does not rewrite native dropdown chip styling."""
+    row = _generated_row("first")
+    table_values = [
+        list(schema.ALL_COLUMNS),
+        [row[column] for column in schema.ALL_COLUMNS],
+    ]
+    desired = [
+        sync.build_table_column(column, index, table_values)
+        for index, column in enumerate(schema.ALL_COLUMNS)
+    ]
+    current = [dict(column) for column in desired]
+    current[0].pop("columnIndex")
 
-    requests = sync.build_semantic_format_requests(
-        123, schema.ALL_COLUMNS, 100, [existing]
+    assert sync._table_column_signature(current) == sync._table_column_signature(
+        desired
     )
-
-    rules = [request["addConditionalFormatRule"]["rule"] for request in requests]
-    assert not any(
-        rule["booleanRule"]["condition"]["values"] == [{"userEnteredValue": "High"}]
-        and rule["ranges"][0]["startColumnIndex"] == priority_index
-        for rule in rules
-    )
-    medium = next(
-        rule
-        for rule in rules
-        if rule["booleanRule"]["condition"]["values"]
-        == [{"userEnteredValue": "Medium"}]
-        and rule["ranges"][0]["startColumnIndex"] == priority_index
-    )
-    assert medium["ranges"][0]["endRowIndex"] == 100

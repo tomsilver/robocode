@@ -359,8 +359,9 @@ cells. New Sheets receive a native table with People, file, and dropdown column 
 Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
 Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
 rows in the tracker, including inactive experiments from older campaigns. Priority is
-placed immediately after Seeds, and semantic conditional colors make Method, Primitive
-Level, Access, Model / Backend, Priority, Active, and Status easier to scan.
+placed immediately after Seeds. Dropdown-chip colors can be customized directly in the
+Google Sheets UI without changing the cells' backgrounds; an unchanged sync preserves
+that native chip styling.
 
 Authentication uses gspread's desktop OAuth flow. By default it reads
 `~/.config/gspread/credentials.json` and stores the authorized-user token outside the

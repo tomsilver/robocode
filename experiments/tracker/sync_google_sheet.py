@@ -14,7 +14,6 @@ from schema import (
     GENERATED_COLUMNS,
     HUMAN_COLUMNS,
     PRIORITY_OPTIONS,
-    SEMANTIC_COLORS,
     STATUS_OPTIONS,
 )
 
@@ -214,82 +213,24 @@ def build_table_column(
     return result
 
 
-def _rgb_color(hex_color: str) -> dict[str, float]:
-    """Convert a six-digit hex color to the Sheets API RGB shape."""
-    return {
-        channel: int(hex_color[offset : offset + 2], 16) / 255
-        for channel, offset in (("red", 0), ("green", 2), ("blue", 4))
-    }
-
-
-def _conditional_rule_key(rule: dict[str, Any]) -> tuple[int, str] | None:
-    """Return the column/value key for a simple text-equality format rule."""
-    ranges = rule.get("ranges", [])
-    condition = rule.get("booleanRule", {}).get("condition", {})
-    values = condition.get("values", [])
-    if (
-        len(ranges) != 1
-        or condition.get("type") != "TEXT_EQ"
-        or len(values) != 1
-        or "userEnteredValue" not in values[0]
-    ):
-        return None
-    grid_range = ranges[0]
-    start = grid_range.get("startColumnIndex")
-    end = grid_range.get("endColumnIndex")
-    if not isinstance(start, int) or end != start + 1:
-        return None
-    return start, values[0]["userEnteredValue"]
-
-
-def build_semantic_format_requests(
-    sheet_id: int,
-    header: tuple[str, ...],
-    row_count: int,
-    existing_rules: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Add missing semantic colors while preserving user-created rules."""
-    existing_keys = {
-        key for rule in existing_rules if (key := _conditional_rule_key(rule))
-    }
-    requests: list[dict[str, Any]] = []
-    next_index = len(existing_rules)
-    for column, value_colors in SEMANTIC_COLORS.items():
-        column_index = header.index(column)
-        for value, hex_color in value_colors.items():
-            if (column_index, value) in existing_keys:
-                continue
-            requests.append(
-                {
-                    "addConditionalFormatRule": {
-                        "rule": {
-                            "ranges": [
-                                {
-                                    "sheetId": sheet_id,
-                                    "startRowIndex": 1,
-                                    "endRowIndex": row_count,
-                                    "startColumnIndex": column_index,
-                                    "endColumnIndex": column_index + 1,
-                                }
-                            ],
-                            "booleanRule": {
-                                "condition": {
-                                    "type": "TEXT_EQ",
-                                    "values": [{"userEnteredValue": value}],
-                                },
-                                "format": {
-                                    "backgroundColorStyle": {
-                                        "rgbColor": _rgb_color(hex_color)
-                                    }
-                                },
-                            },
-                        },
-                        "index": next_index,
-                    }
-                }
+def _table_column_signature(
+    properties: list[dict[str, Any]],
+) -> tuple[tuple[int, str, str, tuple[str, ...]], ...]:
+    """Compare table schemas without touching UI-only dropdown styling."""
+    result = []
+    for fallback_index, column in enumerate(properties):
+        values = (
+            column.get("dataValidationRule", {}).get("condition", {}).get("values", [])
+        )
+        result.append(
+            (
+                column.get("columnIndex", fallback_index),
+                column["columnName"],
+                column.get("columnType", "TEXT"),
+                tuple(value["userEnteredValue"] for value in values),
             )
-            next_index += 1
-    return requests
+        )
+    return tuple(result)
 
 
 def ensure_tracker_table(
@@ -321,9 +262,7 @@ def ensure_tracker_table(
     rows_properties = {
         "headerColorStyle": {"rgbColor": {"red": 0.12, "green": 0.31, "blue": 0.55}},
         "firstBandColorStyle": {"rgbColor": {"red": 1, "green": 1, "blue": 1}},
-        "secondBandColorStyle": {
-            "rgbColor": {"red": 0.97, "green": 0.97, "blue": 0.97}
-        },
+        "secondBandColorStyle": {"rgbColor": {"red": 1, "green": 1, "blue": 1}},
     }
     column_properties = [
         build_table_column(column, index, table_values)
@@ -332,16 +271,23 @@ def ensure_tracker_table(
     if matching_tables:
         if len(matching_tables) != 1:
             raise ValueError("Tracker worksheet has multiple tables starting at A1")
+        current_table = matching_tables[0]
+        table_update = {
+            "tableId": current_table["tableId"],
+            "range": table_range,
+            "rowsProperties": rows_properties,
+        }
+        fields = ["range", "rowsProperties"]
+        if _table_column_signature(
+            current_table.get("columnProperties", [])
+        ) != _table_column_signature(column_properties):
+            table_update["columnProperties"] = column_properties
+            fields.append("columnProperties")
         requests.append(
             {
                 "updateTable": {
-                    "table": {
-                        "tableId": matching_tables[0]["tableId"],
-                        "range": table_range,
-                        "rowsProperties": rows_properties,
-                        "columnProperties": column_properties,
-                    },
-                    "fields": "range,rowsProperties,columnProperties",
+                    "table": table_update,
+                    "fields": ",".join(fields),
                 }
             }
         )
@@ -459,15 +405,6 @@ def ensure_tracker_table(
                 "fields": "userEnteredFormat.textFormat",
             }
         }
-    )
-    row_count = sheet["properties"]["gridProperties"]["rowCount"]
-    requests.extend(
-        build_semantic_format_requests(
-            worksheet.id,
-            header,
-            row_count,
-            sheet.get("conditionalFormats", []),
-        )
     )
     spreadsheet.batch_update({"requests": requests})
 
