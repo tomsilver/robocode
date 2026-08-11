@@ -82,7 +82,7 @@ def test_kinematic3d_family_supports_variable_count_roundtrip(
         eval_counts=[1, 2],
         constant_object_env_kwargs={"realistic_bg": False, **fixed_kwargs},
     )
-    physics_client_ids = []
+    physics_client_ids: list[int] = []
     try:
         state, info = env.reset(seed=2, options={"object_count": 2})
         assert info["object_count"] == 2
