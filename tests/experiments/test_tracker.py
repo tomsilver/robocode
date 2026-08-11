@@ -17,6 +17,12 @@ sync: Any = importlib.import_module("sync_google_sheet")
 sys.path.pop(0)
 
 
+def test_priority_is_immediately_after_seeds() -> None:
+    """The main scheduling signal stays visible before the long command field."""
+    assert schema.ALL_COLUMNS.index("Priority") == schema.ALL_COLUMNS.index("Seeds") + 1
+    assert "Priority" in schema.HUMAN_COLUMNS
+
+
 def _generated_row(
     condition_id: str, campaign: str = "campaign_a", command: str = "old command"
 ) -> dict[str, str]:
@@ -204,3 +210,44 @@ def test_blank_categorical_column_remains_text() -> None:
     ]
     model = sync.build_table_column("Model / Backend", 6, table_values)
     assert model["columnType"] == "TEXT"
+
+
+def test_semantic_formats_follow_column_names_and_do_not_duplicate() -> None:
+    """Color rules follow reordered columns and preserve an existing match."""
+    priority_index = schema.ALL_COLUMNS.index("Priority")
+    existing = {
+        "ranges": [
+            {
+                "sheetId": 123,
+                "startRowIndex": 1,
+                "endRowIndex": 100,
+                "startColumnIndex": priority_index,
+                "endColumnIndex": priority_index + 1,
+            }
+        ],
+        "booleanRule": {
+            "condition": {
+                "type": "TEXT_EQ",
+                "values": [{"userEnteredValue": "High"}],
+            }
+        },
+    }
+
+    requests = sync.build_semantic_format_requests(
+        123, schema.ALL_COLUMNS, 100, [existing]
+    )
+
+    rules = [request["addConditionalFormatRule"]["rule"] for request in requests]
+    assert not any(
+        rule["booleanRule"]["condition"]["values"] == [{"userEnteredValue": "High"}]
+        and rule["ranges"][0]["startColumnIndex"] == priority_index
+        for rule in rules
+    )
+    medium = next(
+        rule
+        for rule in rules
+        if rule["booleanRule"]["condition"]["values"]
+        == [{"userEnteredValue": "Medium"}]
+        and rule["ranges"][0]["startColumnIndex"] == priority_index
+    )
+    assert medium["ranges"][0]["endRowIndex"] == 100

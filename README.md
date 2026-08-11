@@ -358,7 +358,9 @@ never writes existing Owner, Status, Progress, Priority, Notes, Results, or Git 
 cells. New Sheets receive a native table with People, file, and dropdown column types.
 Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
 Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
-rows in the tracker, including inactive experiments from older campaigns.
+rows in the tracker, including inactive experiments from older campaigns. Priority is
+placed immediately after Seeds, and semantic conditional colors make Method, Primitive
+Level, Access, Model / Backend, Priority, Active, and Status easier to scan.
 
 Authentication uses gspread's desktop OAuth flow. By default it reads
 `~/.config/gspread/credentials.json` and stores the authorized-user token outside the

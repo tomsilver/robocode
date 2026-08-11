@@ -14,6 +14,7 @@ from schema import (
     GENERATED_COLUMNS,
     HUMAN_COLUMNS,
     PRIORITY_OPTIONS,
+    SEMANTIC_COLORS,
     STATUS_OPTIONS,
 )
 
@@ -213,6 +214,84 @@ def build_table_column(
     return result
 
 
+def _rgb_color(hex_color: str) -> dict[str, float]:
+    """Convert a six-digit hex color to the Sheets API RGB shape."""
+    return {
+        channel: int(hex_color[offset : offset + 2], 16) / 255
+        for channel, offset in (("red", 0), ("green", 2), ("blue", 4))
+    }
+
+
+def _conditional_rule_key(rule: dict[str, Any]) -> tuple[int, str] | None:
+    """Return the column/value key for a simple text-equality format rule."""
+    ranges = rule.get("ranges", [])
+    condition = rule.get("booleanRule", {}).get("condition", {})
+    values = condition.get("values", [])
+    if (
+        len(ranges) != 1
+        or condition.get("type") != "TEXT_EQ"
+        or len(values) != 1
+        or "userEnteredValue" not in values[0]
+    ):
+        return None
+    grid_range = ranges[0]
+    start = grid_range.get("startColumnIndex")
+    end = grid_range.get("endColumnIndex")
+    if not isinstance(start, int) or end != start + 1:
+        return None
+    return start, values[0]["userEnteredValue"]
+
+
+def build_semantic_format_requests(
+    sheet_id: int,
+    header: tuple[str, ...],
+    row_count: int,
+    existing_rules: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Add missing semantic colors while preserving user-created rules."""
+    existing_keys = {
+        key for rule in existing_rules if (key := _conditional_rule_key(rule))
+    }
+    requests: list[dict[str, Any]] = []
+    next_index = len(existing_rules)
+    for column, value_colors in SEMANTIC_COLORS.items():
+        column_index = header.index(column)
+        for value, hex_color in value_colors.items():
+            if (column_index, value) in existing_keys:
+                continue
+            requests.append(
+                {
+                    "addConditionalFormatRule": {
+                        "rule": {
+                            "ranges": [
+                                {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 1,
+                                    "endRowIndex": row_count,
+                                    "startColumnIndex": column_index,
+                                    "endColumnIndex": column_index + 1,
+                                }
+                            ],
+                            "booleanRule": {
+                                "condition": {
+                                    "type": "TEXT_EQ",
+                                    "values": [{"userEnteredValue": value}],
+                                },
+                                "format": {
+                                    "backgroundColorStyle": {
+                                        "rgbColor": _rgb_color(hex_color)
+                                    }
+                                },
+                            },
+                        },
+                        "index": next_index,
+                    }
+                }
+            )
+            next_index += 1
+    return requests
+
+
 def ensure_tracker_table(
     spreadsheet: Any, worksheet: Any, table_values: list[list[str]]
 ) -> None:
@@ -380,6 +459,15 @@ def ensure_tracker_table(
                 "fields": "userEnteredFormat.textFormat",
             }
         }
+    )
+    row_count = sheet["properties"]["gridProperties"]["rowCount"]
+    requests.extend(
+        build_semantic_format_requests(
+            worksheet.id,
+            header,
+            row_count,
+            sheet.get("conditionalFormats", []),
+        )
     )
     spreadsheet.batch_update({"requests": requests})
 
