@@ -82,7 +82,7 @@ def test_kinematic3d_family_supports_variable_count_roundtrip(
         constant_object_env_kwargs={"realistic_bg": False, **fixed_kwargs},
     )
     physics_client_ids = [
-        backend._object_centric_env.physics_client_id  # pylint: disable=protected-access
+        getattr(backend._object_centric_env, "physics_client_id")
         for backend in env._backends.values()  # pylint: disable=protected-access
     ]
     try:
