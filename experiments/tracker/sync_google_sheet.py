@@ -10,6 +10,7 @@ from typing import Any
 
 from schema import (
     ALL_COLUMNS,
+    CATEGORICAL_COLUMNS,
     GENERATED_COLUMNS,
     HUMAN_COLUMNS,
     PRIORITY_OPTIONS,
@@ -162,7 +163,28 @@ def apply_upsert(worksheet: Any, plan: UpsertPlan) -> None:
         )
 
 
-def _table_column(column: str, index: int) -> dict[str, Any]:
+def _dropdown_options(column: str, table_values: list[list[str]]) -> tuple[str, ...]:
+    if column == "Status":
+        return STATUS_OPTIONS
+    if column == "Priority":
+        return PRIORITY_OPTIONS
+    if column == "Active":
+        return ("TRUE", "FALSE")
+    header = table_values[0]
+    column_index = header.index(column)
+    options: list[str] = []
+    for raw_row in table_values[1:]:
+        row = _padded(raw_row, len(header))
+        value = row[column_index]
+        if value and value not in options:
+            options.append(value)
+    return tuple(options)
+
+
+def build_table_column(
+    column: str, index: int, table_values: list[list[str]]
+) -> dict[str, Any]:
+    """Describe one native table column and its allowed values."""
     result: dict[str, Any] = {
         "columnIndex": index,
         "columnName": column,
@@ -172,26 +194,31 @@ def _table_column(column: str, index: int) -> dict[str, Any]:
         result["columnType"] = "PEOPLE_CHIP"
     elif column == "Results":
         result["columnType"] = "FILES_CHIP"
-    elif column in {"Status", "Priority"}:
-        options = STATUS_OPTIONS if column == "Status" else PRIORITY_OPTIONS
-        result.update(
-            {
-                "columnType": "DROPDOWN",
-                "dataValidationRule": {
-                    "condition": {
-                        "type": "ONE_OF_LIST",
-                        "values": [{"userEnteredValue": option} for option in options],
-                    }
-                },
-            }
-        )
+    elif column in CATEGORICAL_COLUMNS:
+        options = _dropdown_options(column, table_values)
+        if options:
+            result.update(
+                {
+                    "columnType": "DROPDOWN",
+                    "dataValidationRule": {
+                        "condition": {
+                            "type": "ONE_OF_LIST",
+                            "values": [
+                                {"userEnteredValue": option} for option in options
+                            ],
+                        }
+                    },
+                }
+            )
     return result
 
 
 def ensure_tracker_table(
-    spreadsheet: Any, worksheet: Any, header: tuple[str, ...], used_rows: int
+    spreadsheet: Any, worksheet: Any, table_values: list[list[str]]
 ) -> None:
-    """Create or extend the native table without restyling existing tables."""
+    """Create or refresh the native table and its categorical columns."""
+    header = tuple(table_values[0])
+    used_rows = len(table_values)
     metadata = spreadsheet.fetch_sheet_metadata()
     sheet = next(
         item
@@ -212,6 +239,17 @@ def ensure_tracker_table(
         "endColumnIndex": len(header),
     }
     requests: list[dict[str, Any]] = []
+    rows_properties = {
+        "headerColorStyle": {"rgbColor": {"red": 0.12, "green": 0.31, "blue": 0.55}},
+        "firstBandColorStyle": {"rgbColor": {"red": 1, "green": 1, "blue": 1}},
+        "secondBandColorStyle": {
+            "rgbColor": {"red": 0.97, "green": 0.97, "blue": 0.97}
+        },
+    }
+    column_properties = [
+        build_table_column(column, index, table_values)
+        for index, column in enumerate(header)
+    ]
     if matching_tables:
         if len(matching_tables) != 1:
             raise ValueError("Tracker worksheet has multiple tables starting at A1")
@@ -221,8 +259,10 @@ def ensure_tracker_table(
                     "table": {
                         "tableId": matching_tables[0]["tableId"],
                         "range": table_range,
+                        "rowsProperties": rows_properties,
+                        "columnProperties": column_properties,
                     },
-                    "fields": "range",
+                    "fields": "range,rowsProperties,columnProperties",
                 }
             }
         )
@@ -234,29 +274,8 @@ def ensure_tracker_table(
                         "table": {
                             "name": f"RobocodeExperimentTracker_{worksheet.id}",
                             "range": table_range,
-                            "rowsProperties": {
-                                "headerColorStyle": {
-                                    "rgbColor": {
-                                        "red": 0.92,
-                                        "green": 0.92,
-                                        "blue": 0.92,
-                                    }
-                                },
-                                "firstBandColorStyle": {
-                                    "rgbColor": {"red": 1, "green": 1, "blue": 1}
-                                },
-                                "secondBandColorStyle": {
-                                    "rgbColor": {
-                                        "red": 0.98,
-                                        "green": 0.98,
-                                        "blue": 0.98,
-                                    }
-                                },
-                            },
-                            "columnProperties": [
-                                _table_column(column, index)
-                                for index, column in enumerate(header)
-                            ],
+                            "rowsProperties": rows_properties,
+                            "columnProperties": column_properties,
                         }
                     }
                 },
@@ -338,6 +357,30 @@ def ensure_tracker_table(
                 }
             }
         )
+    requests.append(
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": len(header),
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "bold": True,
+                            "foregroundColorStyle": {
+                                "rgbColor": {"red": 1, "green": 1, "blue": 1}
+                            },
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.textFormat",
+            }
+        }
+    )
     spreadsheet.batch_update({"requests": requests})
 
 
@@ -393,8 +436,8 @@ def main() -> None:
     if args.dry_run:
         return
     apply_upsert(worksheet, plan)
-    used_rows = max(len(existing), 1) + len(plan.new_rows)
-    ensure_tracker_table(spreadsheet, worksheet, plan.header, used_rows)
+    table_values = worksheet.get_all_values()
+    ensure_tracker_table(spreadsheet, worksheet, table_values)
     print(f"Synchronized https://docs.google.com/spreadsheets/d/{args.sheet_id}")
 
 

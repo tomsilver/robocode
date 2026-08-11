@@ -159,3 +159,48 @@ def test_new_rows_receive_initial_human_defaults() -> None:
     assert appended["Status"] == "Todo"
     assert appended["Progress"] == "0/2"
     assert appended["Owner"] == ""
+
+
+def test_categorical_table_columns_use_live_dropdown_options() -> None:
+    """Categorical chips include every value already present in the table."""
+    first = _generated_row("first", campaign="older_campaign")
+    second = _generated_row("second", campaign="new_campaign")
+    second["Primitive Level"] = "bilevel"
+    table_values = [
+        list(schema.ALL_COLUMNS),
+        [first[column] for column in schema.ALL_COLUMNS],
+        [second[column] for column in schema.ALL_COLUMNS],
+    ]
+
+    campaign = sync.build_table_column("Campaign", 1, table_values)
+    primitive_level = sync.build_table_column("Primitive Level", 4, table_values)
+    active = sync.build_table_column("Active", 9, table_values)
+
+    assert campaign["columnType"] == "DROPDOWN"
+    campaign_values = campaign["dataValidationRule"]["condition"]["values"]
+    assert campaign_values == [
+        {"userEnteredValue": "older_campaign"},
+        {"userEnteredValue": "new_campaign"},
+    ]
+    primitive_values = primitive_level["dataValidationRule"]["condition"]["values"]
+    assert primitive_values == [
+        {"userEnteredValue": "none"},
+        {"userEnteredValue": "bilevel"},
+    ]
+    active_values = active["dataValidationRule"]["condition"]["values"]
+    assert active_values == [
+        {"userEnteredValue": "TRUE"},
+        {"userEnteredValue": "FALSE"},
+    ]
+
+
+def test_blank_categorical_column_remains_text() -> None:
+    """A category with no current choices does not create an empty dropdown."""
+    row = _generated_row("first")
+    row["Model / Backend"] = ""
+    table_values = [
+        list(schema.ALL_COLUMNS),
+        [row[column] for column in schema.ALL_COLUMNS],
+    ]
+    model = sync.build_table_column("Model / Backend", 6, table_values)
+    assert model["columnType"] == "TEXT"

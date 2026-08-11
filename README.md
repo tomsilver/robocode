@@ -356,6 +356,9 @@ The sync uses Experiment ID as its key. It updates generated columns, appends ne
 conditions, marks removed conditions from the synchronized campaign inactive, and
 never writes existing Owner, Status, Progress, Priority, Notes, Results, or Git SHA
 cells. New Sheets receive a native table with People, file, and dropdown column types.
+Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
+Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
+rows in the tracker, including inactive experiments from older campaigns.
 
 Authentication uses gspread's desktop OAuth flow. By default it reads
 `~/.config/gspread/credentials.json` and stores the authorized-user token outside the

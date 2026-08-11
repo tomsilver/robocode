@@ -36,3 +36,15 @@ STATUS_OPTIONS = (
 )
 
 PRIORITY_OPTIONS = ("Low", "Medium", "High")
+
+CATEGORICAL_COLUMNS = (
+    "Campaign",
+    "Environment",
+    "Method",
+    "Primitive Level",
+    "Access",
+    "Model / Backend",
+    "Active",
+    "Status",
+    "Priority",
+)
