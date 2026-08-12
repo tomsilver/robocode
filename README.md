@@ -134,7 +134,6 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 
 | Config | Kinder ID | Difficulty |
 |---|---|---|
-| `motion3d` | `kinder/Motion3D-v0` | Single variant |
 | `obstruction3d_easy` | `kinder/Obstruction3D-o0-v0` | Easy (0 obstructions) |
 | `obstruction3d_medium` | `kinder/Obstruction3D-o2-v0` | Medium (2 obstructions) |
 | `obstruction3d_hard` | `kinder/Obstruction3D-o4-v0` | Hard (4 obstructions) |

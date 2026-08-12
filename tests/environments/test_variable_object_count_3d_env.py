@@ -21,7 +21,6 @@ _FAMILY_CASES = [
         "num_cubes",
         "cube",
         {},
-        True,
         id="table3d-cubes",
     ),
     pytest.param(
@@ -29,7 +28,6 @@ _FAMILY_CASES = [
         "num_cubes",
         "cube",
         {"num_boxes": 1},
-        True,
         id="transport3d-cubes",
     ),
     pytest.param(
@@ -37,7 +35,6 @@ _FAMILY_CASES = [
         "num_cubes",
         "cube",
         {},
-        True,
         id="shelf3d-cubes",
     ),
     pytest.param(
@@ -45,7 +42,6 @@ _FAMILY_CASES = [
         "num_obstructions",
         "obstruction",
         {},
-        True,
         id="obstruction3d-obstructions",
     ),
     pytest.param(
@@ -53,7 +49,6 @@ _FAMILY_CASES = [
         "num_parts",
         "part",
         {},
-        False,
         id="packing3d-parts",
     ),
 ]
@@ -63,15 +58,12 @@ def _num_prefixed(state: ObjectCentricState, prefix: str) -> int:
     return sum(name.startswith(prefix) for name in state.get_object_names())
 
 
-@pytest.mark.parametrize(
-    "path,count_kwarg,prefix,fixed_kwargs,exact_roundtrip", _FAMILY_CASES
-)
+@pytest.mark.parametrize("path,count_kwarg,prefix,fixed_kwargs", _FAMILY_CASES)
 def test_kinematic3d_family_supports_variable_count_roundtrip(
     path: str,
     count_kwarg: str,
     prefix: str,
     fixed_kwargs: dict[str, Any],
-    exact_roundtrip: bool,
 ) -> None:
     """Every 3D count axis supports pinned reset, wire-style restore, and step."""
     env = VariableObjectCountEnv(
@@ -99,12 +91,7 @@ def test_kinematic3d_family_supports_variable_count_roundtrip(
         env.set_state(decoded)
         restored = env.get_state()
         assert restored.__class__ is state.__class__
-        if exact_roundtrip:
-            assert restored.allclose(state)
-        else:
-            # The pinned Kinder revision does not preserve Packing3D's randomized
-            # part geometry during restoration, so this checks only shared routing.
-            assert restored.get_object_names() == state.get_object_names()
+        assert restored.allclose(state)
 
         next_state, _, _, _, step_info = env.step(env.action_space.sample())
         assert next_state.__class__ is state.__class__

@@ -30,6 +30,7 @@ import importlib
 from typing import Any, SupportsFloat
 
 import numpy as np
+import pybullet as p
 from gymnasium.core import RenderFrame
 from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
@@ -154,10 +155,7 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         physics_client_id = getattr(inner, "physics_client_id", None)
         if physics_client_id is not None:
             # kinder currently has no kinematic3d close() implementation, so its
-            # DIRECT clients otherwise survive for the process lifetime. Import
-            # PyBullet only for backends that actually own a client.
-            import pybullet as p  # pylint: disable=import-outside-toplevel
-
+            # DIRECT clients otherwise survive for the process lifetime.
             try:
                 if p.isConnected(physics_client_id):
                     p.disconnect(physicsClientId=physics_client_id)
