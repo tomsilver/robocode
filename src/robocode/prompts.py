@@ -324,7 +324,8 @@ interface:
 Write the best approach you can — ideally one that solves the environment \
 optimally. Your `approach.py` should only use packages available in the \
 current environment. Write test scripts that use the real environment to \
-verify your approach works.
+verify your approach works. Once you have a strong candidate, search for \
+instances it does not yet solve, then use those failures to improve it.
 
 IMPORTANT: Use `{python_executable}` to run your test scripts, since that \
 interpreter has all required packages installed. For example:

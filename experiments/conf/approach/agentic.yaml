@@ -1,5 +1,5 @@
 defaults:
-  - backend: claude_sonnet
+  - backend: claude_opus5
 
 _target_: robocode.approaches.agentic_approach.AgenticApproach
 max_budget_usd: 5.0

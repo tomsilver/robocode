@@ -44,13 +44,15 @@ The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
 
 Optionally set `ROBOCODE_CLAUDE_CMD` to point to a specific `claude` binary (defaults to `claude` on `PATH`).
 
-The `model` parameter in `agentic.yaml` accepts CLI model aliases or full model IDs. Override per-run with e.g. `model=opus` on the command line.
+The `model` parameter in `agentic.yaml` takes a full model ID. Override per-run with e.g. `approach/backend=claude_sonnet5`.
 
-| Alias | Full model ID |
+| Backend preset | Model ID |
 |---|---|
-| `sonnet` | `claude-sonnet-4-6` (latest Sonnet, default) |
-| `opus` | `claude-opus-4-6` (latest Opus) |
-| `haiku` | `claude-haiku-4-5-20251001` (latest Haiku) |
+| `claude_opus5` (default) | `claude-opus-5` |
+| `claude_sonnet5` | `claude-sonnet-5` |
+| `claude_opus48` | `claude-opus-4-8` |
+| `claude_sonnet46` | `claude-sonnet-4-6` |
+| `claude_haiku45` | `claude-haiku-4-5-20251001` |
 
 See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude/models/overview) for the full list.
 
@@ -79,7 +81,7 @@ Models use the `provider/model` format:
 |---|---|
 | `openai/gpt-4o` | OpenAI |
 | `google/gemini-2.5-pro` | Google |
-| `anthropic/claude-sonnet-4-5` | Anthropic |
+| `anthropic/claude-sonnet-5` | Anthropic |
 | `ollama/qwen3.5:latest` | Ollama (local) |
 
 For local models (Ollama, vLLM), create an `opencode.json` config with your provider:
@@ -343,7 +345,7 @@ python experiments/run_experiment.py approach=agentic approach/backend=opencode_
 python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro
 ```
 
-Available backend presets: `claude_sonnet` (default), `claude_opus`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
+Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
 
 To use the legacy OS-level sandbox instead:
 ```bash
