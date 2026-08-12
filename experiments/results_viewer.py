@@ -13,16 +13,15 @@ directory names from a broader scan. Alternatively, --drive-folder downloads
 ZIP archives from a Google Drive folder into a private local cache before
 scanning. Drive access is read-only; rendered GIFs remain in that local cache.
 
-Launch:  python experiments/results_viewer.py --root . --port 8000
-         python experiments/results_viewer.py --root viewer_runs
-         python experiments/results_viewer.py --exclude outputs multirun
+Launch:  python -m experiments.results_viewer --root . --port 8000
+         python -m experiments.results_viewer --root viewer_runs
+         python -m experiments.results_viewer --exclude outputs multirun
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
-import importlib
 import json
 import math
 import os
@@ -39,6 +38,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
+
+from experiments import drive_results
 
 # Repo root (this file lives in <repo>/experiments/).
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -3060,9 +3061,6 @@ def main() -> None:
     if args.drive_folder and args.root:
         ap.error("--root and --drive-folder cannot be used together")
     if args.drive_folder:
-        module_name = "experiments.drive_results" if __package__ else "drive_results"
-        drive_results = importlib.import_module(module_name)
-
         cache_base = (
             Path(args.drive_cache).expanduser()
             if args.drive_cache
