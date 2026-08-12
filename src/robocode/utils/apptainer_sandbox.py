@@ -173,6 +173,28 @@ def _build_apptainer_auth_args(
         yield apptainer_args, extra_env
 
 
+def _apptainer_exec_prefix() -> list[str]:
+    """Return the filesystem/process isolation shared by all Apptainer runs."""
+    # --no-home alone does not reliably suppress administrator-configured host
+    # binds. --containall drops default home, tmp, and cwd binds in every mode,
+    # leaving only the explicit mounts added by each caller.
+    return [
+        "apptainer",
+        "exec",
+        "--containall",
+        # Apptainer shares the host PID namespace by default, so a `pkill -f`
+        # inside the container could otherwise reach the harness, concurrent
+        # runs, and unrelated user processes. --containall implies --pid, but
+        # keeping it explicit documents this boundary.
+        "--pid",
+        "--writable-tmpfs",
+        "--no-home",
+        "--cleanenv",
+        "--pwd",
+        "/sandbox",
+    ]
+
+
 def _build_apptainer_cmd(
     config: ApptainerSandboxConfig,
     sandbox_abs: str,
@@ -189,26 +211,8 @@ def _build_apptainer_cmd(
     Split out from :func:`run_agent_in_apptainer_sandbox` so unit tests
     can inspect the constructed command without running anything.
     """
-    # --no-home alone does not reliably suppress administrator-configured host
-    # binds. --containall drops default home, tmp, and cwd binds in every mode,
-    # leaving only the explicit sandbox and filtered-source mounts below. This
-    # keeps experimenter-side Hydra configuration outside the agent's view.
-    cmd: list[str] = ["apptainer", "exec", "--containall"]
+    cmd = _apptainer_exec_prefix()
     cmd += [
-        # Apptainer shares the host PID namespace by default, so a `pkill -f`
-        # inside the container matches host cmdlines and kills the harness, other
-        # concurrent runs, and unrelated user processes. --pid gives the container
-        # its own PID namespace and its own /proc, so only its own processes are
-        # visible or signalable. Apptainer starts its `appinit` shim as PID 1 (use
-        # --no-init to disable), which reaps orphans and tears the namespace down
-        # when the payload exits, so no extra init flag is needed. --containall
-        # already implies --pid, but keeping it explicit documents this boundary.
-        "--pid",
-        "--writable-tmpfs",
-        "--no-home",
-        "--cleanenv",
-        "--pwd",
-        "/sandbox",
         "--env",
         f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
         "--env",
@@ -458,20 +462,7 @@ def run_genplan_in_apptainer(
                 ":/robocode/third-party/kinder-baselines",
             ]
         apptainer_cmd = [
-            "apptainer",
-            "exec",
-            # Drop Apptainer's default home, tmp, and cwd binds just as the
-            # agentic path does. The GenPlan loop executes generated candidate
-            # code, so --no-home alone is not a sufficient filesystem boundary.
-            "--containall",
-            # Own PID namespace, as in _build_apptainer_cmd. --containall
-            # implies this, but keep it explicit to document the boundary.
-            "--pid",
-            "--writable-tmpfs",
-            "--no-home",
-            "--cleanenv",
-            "--pwd",
-            "/sandbox",
+            *_apptainer_exec_prefix(),
             "--env",
             "ROBOCODE_SKIP_FIREWALL=1",
             *firewall_env,
