@@ -33,6 +33,8 @@ def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
                 for override in overrides:
                     assert isinstance(override, str)
                     key, val = override.split("=", 1)
+                    if key == "seed":
+                        key = "replicate_seed"
                     row[key] = val
 
             if "approach" not in row:
@@ -40,7 +42,7 @@ def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
             if "environment" not in row:
                 row["environment"] = cfg["environment"]["_target_"].rsplit(".", 1)[-1]
             if "replicate_seed" not in row:
-                row["replicate_seed"] = cfg["replicate_seed"]
+                row["replicate_seed"] = cfg.get("replicate_seed", cfg.get("seed"))
 
             for key, value in results.items():
                 # These nested structures stay in results.json; their headline

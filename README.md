@@ -244,14 +244,23 @@ python integration_tests/red_team_sandbox.py --docker  # Docker
 
 ## Experiments
 
+Set the private evaluation-suite seed in your shell before using any experiment
+command or checked-in launcher. The prompt avoids saving it in shell history:
+
+```bash
+read -rsp "Private evaluation seed: " EVAL_SEED
+echo
+export EVAL_SEED
+```
+
 Run an experiment:
 ```bash
-python experiments/run_experiment.py approach=random environment=small_maze replicate_seed=0
+python experiments/run_experiment.py approach=random environment=small_maze replicate_seed=0 eval_seed="$EVAL_SEED"
 ```
 
 Run a sweep over multiple seeds and environments:
 ```bash
-python experiments/run_experiment.py -m replicate_seed=0,1,2 environment=small_maze,large_maze approach=random
+python experiments/run_experiment.py -m replicate_seed=0,1,2 eval_seed="$EVAL_SEED" environment=small_maze,large_maze approach=random
 ```
 
 Analyze results from one or more runs:
@@ -266,7 +275,7 @@ The `agentic` approach launches a coding agent during `train()`. The agent reads
 By default the agent uses the Claude Code CLI backend and runs in the Docker sandbox (requires `bash docker/build.sh` once):
 
 ```bash
-python experiments/run_experiment.py approach=agentic environment=motion2d_easy
+python experiments/run_experiment.py approach=agentic environment=motion2d_easy eval_seed="$EVAL_SEED"
 ```
 
 Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
@@ -275,13 +284,13 @@ To use a different backend/model, override the `approach/backend` config:
 
 ```bash
 # GPT-4o via OpenCode
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt4o
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt4o eval_seed="$EVAL_SEED"
 
 # Local Ollama model
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_ollama
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_ollama eval_seed="$EVAL_SEED"
 
 # Or override individual fields
-python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro
+python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro eval_seed="$EVAL_SEED"
 ```
 
 Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
@@ -294,12 +303,13 @@ synthesis sandbox.
 To skip re-generation and load a previously generated approach:
 ```bash
 python experiments/run_experiment.py approach=agentic environment=small_maze \
+    eval_seed="$EVAL_SEED" \
     approach.load_dir=outputs/2026-02-16/16-00-41
 ```
 
 Parallel sweeps each get their own container (named `robocode-sandbox-<uuid>`), so multiple runs never interfere:
 ```bash
-python experiments/run_experiment.py -m replicate_seed=0,1,2 environment=small_maze,large_maze approach=agentic
+python experiments/run_experiment.py -m replicate_seed=0,1,2 eval_seed="$EVAL_SEED" environment=small_maze,large_maze approach=agentic
 ```
 
 Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run jobs in parallel locally:
@@ -308,6 +318,7 @@ python experiments/run_experiment.py -m \
     approach=agentic \
     approach.container_backend=docker \
     replicate_seed=42,24,424,444,222 \
+    eval_seed="$EVAL_SEED" \
     'primitives=[]' \
     environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
     'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \

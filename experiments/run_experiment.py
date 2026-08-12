@@ -2,9 +2,11 @@
 
 Example usage:
 
-    python experiments/run_experiment.py approach=agentic environment=motion2d_easy
+    python experiments/run_experiment.py approach=agentic environment=motion2d_easy \
+        eval_seed="$EVAL_SEED"
     python experiments/run_experiment.py approach=agentic \
-        approach.container_backend=docker 'primitives=[]' environment=motion2d_easy
+        approach.container_backend=docker 'primitives=[]' environment=motion2d_easy \
+        eval_seed="$EVAL_SEED"
 
 The sandbox backend is selected with approach.container_backend=docker|apptainer|local
 (default docker for agentic and llm_genplan; local runs unsandboxed in-process).
@@ -15,6 +17,7 @@ Parallel sweep with joblib launcher:
         approach=agentic \
         approach.container_backend=docker \
         replicate_seed=42,24,424,444,222 \
+        eval_seed="$EVAL_SEED" \
         'primitives=[]' \
         environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy \
         'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \

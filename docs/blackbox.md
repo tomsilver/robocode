@@ -175,7 +175,7 @@ makes blackbox meaningful differs:
   allow rule above). The `blackbox_proxy_module_escape` and `blackbox_*`
   red-team tests cover this.
 - **apptainer**: real isolation too. Same stripped filtered mounts, and
-  `apptainer exec` is run with `--containall` (blackbox only), `--cleanenv`,
+  `apptainer exec` is run with `--containall` in every mode, `--cleanenv`,
   `--no-home`, and `--pwd /sandbox`, with only the filtered `src`/`kindergarden`
   + sandbox bound. `--no-home` alone is *not* enough to withhold the env source:
   many `apptainer.conf` setups still bind the host `/home`, so the agent could

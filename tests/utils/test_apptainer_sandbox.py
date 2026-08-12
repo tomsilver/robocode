@@ -6,6 +6,7 @@ Unit-level coverage only: verifies config defaults, that
 command line. No SIF or apptainer binary is invoked.
 """
 
+from contextlib import nullcontext
 from pathlib import Path
 
 from robocode.utils.apptainer_sandbox import (
@@ -13,6 +14,7 @@ from robocode.utils.apptainer_sandbox import (
     ApptainerSandboxConfig,
     _build_apptainer_auth_args,
     _build_apptainer_cmd,
+    run_genplan_in_apptainer,
 )
 from robocode.utils.docker_sandbox import DOCKER_PYTHON, _find_repo_root
 
@@ -149,6 +151,47 @@ def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
     # --containall implies --pid, and it remains explicit in both modes.
     assert "--pid" in blackbox_cmd
     assert "--pid" in default_cmd
+
+
+def test_genplan_cmd_adds_containall(tmp_path: Path, monkeypatch) -> None:  # type: ignore
+    """GenPlan gets the same default-bind isolation as the agentic path."""
+    sandbox_dir = tmp_path / "sandbox"
+    sandbox_dir.mkdir()
+    sif_path = tmp_path / "robocode-sandbox.sif"
+    sif_path.touch()
+    filtered_src = tmp_path / "src"
+    filtered_kindergarden = tmp_path / "kindergarden"
+    filtered_src.mkdir()
+    filtered_kindergarden.mkdir()
+
+    monkeypatch.setattr(
+        "robocode.utils.apptainer_sandbox._filtered_repo_mounts",
+        lambda **_kwargs: nullcontext((filtered_src, filtered_kindergarden, None)),
+    )
+    monkeypatch.setattr(
+        "robocode.utils.apptainer_sandbox._build_apptainer_auth_args",
+        lambda _backend: nullcontext(([], {})),
+    )
+    monkeypatch.setattr(
+        "robocode.utils.apptainer_sandbox.firewall_domains_for_provider",
+        lambda *_args: [],
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs) -> None:
+        calls.append(cmd)
+
+    monkeypatch.setattr("robocode.utils.apptainer_sandbox.subprocess.run", fake_run)
+
+    run_genplan_in_apptainer(
+        sandbox_dir,
+        {"provider": "cli"},
+        sif_path=sif_path,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][:3] == ["apptainer", "exec", "--containall"]
+    assert "--pid" in calls[0]
 
 
 def test_build_cmd_firewall_domains(tmp_path: Path) -> None:

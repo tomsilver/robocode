@@ -14,6 +14,8 @@ only differences are at the host invocation layer:
 * ``--pwd`` instead of ``-w``
 * ``--writable-tmpfs`` so the entrypoint's ``uv sync`` can write to
   ``/robocode/.venv`` (the SIF rootfs is read-only)
+* ``--containall`` so administrator-configured home, tmp, and cwd binds do not
+  expose host files beyond the explicit filtered mounts
 * ``--no-home`` so the host home doesn't shadow ``/home/node``
 * ``--cleanenv`` so the host env doesn't leak in
 * ``--pid`` so the container gets its own PID namespace (Docker does this by
@@ -458,7 +460,12 @@ def run_genplan_in_apptainer(
         apptainer_cmd = [
             "apptainer",
             "exec",
-            # Own PID namespace, as in _build_apptainer_cmd.
+            # Drop Apptainer's default home, tmp, and cwd binds just as the
+            # agentic path does. The GenPlan loop executes generated candidate
+            # code, so --no-home alone is not a sufficient filesystem boundary.
+            "--containall",
+            # Own PID namespace, as in _build_apptainer_cmd. --containall
+            # implies this, but keep it explicit to document the boundary.
             "--pid",
             "--writable-tmpfs",
             "--no-home",

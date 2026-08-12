@@ -52,3 +52,24 @@ def test_collect_results_uses_replicate_seed_and_flattens_count_metrics(
     assert dataframe.loc[0, "solve_rate@1"] == 0.75
     assert "count_regimes" not in dataframe.columns
     assert "per_episode" not in dataframe.columns
+
+
+def test_collect_results_accepts_legacy_seed_config(tmp_path: Path) -> None:
+    """Pre-migration Hydra runs are normalized to the replicate-seed column."""
+    run_dir = tmp_path / "legacy-run"
+    hydra_dir = run_dir / ".hydra"
+    hydra_dir.mkdir(parents=True)
+    (hydra_dir / "config.yaml").write_text(
+        "seed: 424\n"
+        "approach:\n  _target_: example.AgenticApproach\n"
+        "environment:\n  _target_: example.VariableEnv\n",
+        encoding="utf-8",
+    )
+    (run_dir / "results.json").write_text(
+        json.dumps({"solve_rate": 0.5}), encoding="utf-8"
+    )
+
+    dataframe = analyze_results._collect_results([tmp_path])
+
+    assert dataframe.loc[0, "replicate_seed"] == 424
+    assert "seed" not in dataframe.columns
