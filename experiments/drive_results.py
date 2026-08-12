@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
@@ -14,7 +15,6 @@ import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
-
 
 DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
@@ -97,10 +97,16 @@ def default_token_path() -> Path:
 def build_drive_service(credentials_path: Path, token_path: Path) -> Any:
     """Authorize a read-only Drive client, using desktop OAuth when needed."""
     try:
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from googleapiclient.discovery import build
+        request_class = importlib.import_module(
+            "google.auth.transport.requests"
+        ).Request
+        credentials_class = importlib.import_module(
+            "google.oauth2.credentials"
+        ).Credentials
+        flow_class = importlib.import_module(
+            "google_auth_oauthlib.flow"
+        ).InstalledAppFlow
+        build = importlib.import_module("googleapiclient.discovery").build
     except ImportError as error:
         raise DriveSyncError(
             "Google Drive support is not installed; run "
@@ -109,17 +115,17 @@ def build_drive_service(credentials_path: Path, token_path: Path) -> Any:
 
     credentials = None
     if token_path.exists():
-        credentials = Credentials.from_authorized_user_file(
+        credentials = credentials_class.from_authorized_user_file(
             str(token_path), [DRIVE_READONLY_SCOPE]
         )
     if credentials and credentials.expired and credentials.refresh_token:
-        credentials.refresh(Request())
+        credentials.refresh(request_class())
     elif not credentials or not credentials.valid:
         if not credentials_path.exists():
             raise DriveSyncError(
                 f"OAuth desktop credentials not found at {credentials_path}"
             )
-        flow = InstalledAppFlow.from_client_secrets_file(
+        flow = flow_class.from_client_secrets_file(
             str(credentials_path), [DRIVE_READONLY_SCOPE]
         )
         credentials = flow.run_local_server(port=0)
@@ -153,9 +159,7 @@ class DriveResultsSync:
 
     def _drive(self) -> Any:
         if self._service is None:
-            self._service = build_drive_service(
-                self.credentials_path, self.token_path
-            )
+            self._service = build_drive_service(self.credentials_path, self.token_path)
         return self._service
 
     def _list_children(self, folder_id: str) -> list[dict[str, Any]]:
@@ -204,7 +208,9 @@ class DriveResultsSync:
                     ignored += 1
                     continue
                 if not item.get("capabilities", {}).get("canDownload", True):
-                    raise DriveSyncError(f"Drive archive cannot be downloaded: {parent / name}")
+                    raise DriveSyncError(
+                        f"Drive archive cannot be downloaded: {parent / name}"
+                    )
                 archives.append(
                     RemoteArchive(
                         file_id=str(item["id"]),
@@ -224,7 +230,9 @@ class DriveResultsSync:
             payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             return dict(payload.get("archives", {}))
         except (OSError, ValueError, TypeError) as error:
-            raise DriveSyncError(f"invalid cache manifest: {self.manifest_path}") from error
+            raise DriveSyncError(
+                f"invalid cache manifest: {self.manifest_path}"
+            ) from error
 
     def _write_manifest(self, entries: dict[str, dict[str, str]]) -> None:
         self.cache_root.mkdir(parents=True, exist_ok=True)
@@ -242,17 +250,21 @@ class DriveResultsSync:
 
     def _download(self, archive: RemoteArchive, destination: Path) -> None:
         try:
-            from googleapiclient.http import MediaIoBaseDownload
+            downloader_class = importlib.import_module(
+                "googleapiclient.http"
+            ).MediaIoBaseDownload
         except ImportError as error:
             raise DriveSyncError(
                 "Google Drive support is not installed; run "
                 "`uv sync --extra drive-viewer`"
             ) from error
-        request = self._drive().files().get_media(
-            fileId=archive.file_id, supportsAllDrives=True
+        request = (
+            self._drive()
+            .files()
+            .get_media(fileId=archive.file_id, supportsAllDrives=True)
         )
         with destination.open("wb") as stream:
-            downloader = MediaIoBaseDownload(stream, request)
+            downloader = downloader_class(stream, request)
             done = False
             while not done:
                 _, done = downloader.next_chunk()
@@ -429,7 +441,9 @@ class RcloneResultsSync(DriveResultsSync):
         try:
             items = json.loads(output)
         except (TypeError, ValueError) as error:
-            raise DriveSyncError("rclone returned invalid JSON while listing Drive") from error
+            raise DriveSyncError(
+                "rclone returned invalid JSON while listing Drive"
+            ) from error
         if not isinstance(items, list):
             raise DriveSyncError("rclone returned an invalid Drive file listing")
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib
 import json
 import math
 import os
@@ -1818,9 +1819,10 @@ def _render_worker() -> None:
                 if not re.fullmatch(r"[A-Za-z0-9_\-]+", env_override):
                     raise RuntimeError(f"bad environment override {env_override!r}")
             policy_dir = _policy_dir(run)
-            if not run.per_instance and not (
-                policy_dir / "sandbox" / "approach.py"
-            ).exists():
+            if (
+                not run.per_instance
+                and not (policy_dir / "sandbox" / "approach.py").exists()
+            ):
                 raise RuntimeError(
                     f"policy sandbox not found locally: {policy_dir / 'sandbox'}"
                 )
@@ -2156,11 +2158,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/refresh":
             try:
                 drive_report = sync_drive_and_refresh()
-            except Exception as error:  # Keep the prior cache usable on sync failure.
+            except (OSError, RuntimeError) as error:
                 return self._err(502, f"refresh failed: {error}")
-            return self._json(
-                {"ok": True, "n": len(RUNS), "drive": drive_report}
-            )
+            return self._json({"ok": True, "n": len(RUNS), "drive": drive_report})
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or "{}")
         if u.path == "/api/history/evaluate":
@@ -3080,30 +3080,16 @@ def main() -> None:
     if args.drive_folder and args.root:
         ap.error("--root and --drive-folder cannot be used together")
     if args.drive_folder:
-        if __package__:
-            from .drive_results import (
-                DriveResultsSync,
-                RcloneResultsSync,
-                default_cache_base,
-                default_credentials_path,
-                default_token_path,
-            )
-        else:
-            from drive_results import (  # type: ignore[no-redef]
-                DriveResultsSync,
-                RcloneResultsSync,
-                default_cache_base,
-                default_credentials_path,
-                default_token_path,
-            )
+        module_name = "experiments.drive_results" if __package__ else "drive_results"
+        drive_results = importlib.import_module(module_name)
 
         cache_base = (
             Path(args.drive_cache).expanduser()
             if args.drive_cache
-            else default_cache_base()
+            else drive_results.default_cache_base()
         )
         if args.drive_backend == "rclone":
-            DRIVE_SYNC = RcloneResultsSync(
+            DRIVE_SYNC = drive_results.RcloneResultsSync(
                 args.drive_folder,
                 cache_base,
                 args.rclone_remote,
@@ -3115,15 +3101,19 @@ def main() -> None:
                 ),
             )
         else:
-            DRIVE_SYNC = DriveResultsSync(
+            DRIVE_SYNC = drive_results.DriveResultsSync(
                 args.drive_folder,
                 cache_base,
-                Path(args.drive_credentials).expanduser()
-                if args.drive_credentials
-                else default_credentials_path(),
-                Path(args.drive_token).expanduser()
-                if args.drive_token
-                else default_token_path(),
+                (
+                    Path(args.drive_credentials).expanduser()
+                    if args.drive_credentials
+                    else drive_results.default_credentials_path()
+                ),
+                (
+                    Path(args.drive_token).expanduser()
+                    if args.drive_token
+                    else drive_results.default_token_path()
+                ),
             )
         SCAN.root = DRIVE_SYNC.runs_dir
     else:
@@ -3132,7 +3122,7 @@ def main() -> None:
     SCAN.tag = f"{SCAN.root.name}:{args.port}"
     try:
         drive_report = sync_drive_and_refresh()
-    except Exception as error:
+    except (OSError, RuntimeError, ValueError) as error:
         ap.error(str(error))
     print(f"discovered {len(RUNS)} runs under {SCAN.root}")
     if drive_report:

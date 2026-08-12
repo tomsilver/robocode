@@ -24,6 +24,7 @@ class _Response:
         self.payload = payload
 
     def execute(self) -> dict[str, Any]:
+        """Return the configured fake API payload."""
         return self.payload
 
 
@@ -32,6 +33,7 @@ class _Files:
         self.children = children
 
     def list(self, **kwargs: Any) -> _Response:
+        """Return the fake children of the requested parent folder."""
         parent = kwargs["q"].split("'", 2)[1]
         return _Response({"files": self.children.get(parent, [])})
 
@@ -41,6 +43,7 @@ class _Drive:
         self._files = _Files(children)
 
     def files(self) -> _Files:
+        """Return the fake Drive files resource."""
         return self._files
 
 
@@ -50,7 +53,9 @@ def _archive(path: Path, files: dict[str, str]) -> None:
             bundle.writestr(name, content)
 
 
-def _sync(tmp_path: Path, children: dict[str, list[dict[str, Any]]]) -> DriveResultsSync:
+def _sync(
+    tmp_path: Path, children: dict[str, list[dict[str, Any]]]
+) -> DriveResultsSync:
     return DriveResultsSync(
         "root-folder",
         tmp_path / "cache",
@@ -61,6 +66,7 @@ def _sync(tmp_path: Path, children: dict[str, list[dict[str, Any]]]) -> DriveRes
 
 
 def test_parse_drive_folder_url_or_id() -> None:
+    """Drive folder URLs and bare IDs resolve to the same folder ID."""
     assert parse_drive_folder_id("folder_123") == "folder_123"
     assert (
         parse_drive_folder_id(
@@ -72,22 +78,44 @@ def test_parse_drive_folder_url_or_id() -> None:
         parse_drive_folder_id("https://example.com/not-drive")
 
 
-def test_safe_extract_rejects_parent_traversal(tmp_path: Path) -> None:
+def test_safe_extract_rejects_parent_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Synchronizing an archive cannot write outside its cache target."""
     archive = tmp_path / "unsafe.zip"
     _archive(archive, {"../outside.txt": "no"})
+    children: dict[str, list[dict[str, Any]]] = {
+        "root-folder": [
+            {
+                "id": "unsafe-archive",
+                "name": "unsafe.zip",
+                "mimeType": "application/zip",
+                "modifiedTime": "2026-08-12T10:00:00Z",
+                "size": str(archive.stat().st_size),
+                "md5Checksum": "unsafe-content",
+            }
+        ]
+    }
+    sync = _sync(tmp_path, children)
+
+    def _download(_archive_info: Any, destination: Path) -> None:
+        shutil.copyfile(archive, destination)
+
+    monkeypatch.setattr(sync, "_download", _download)
 
     with pytest.raises(DriveSyncError, match="unsafe path"):
-        DriveResultsSync._safe_extract(archive, tmp_path / "destination")
+        sync.sync()
 
     assert not (tmp_path / "outside.txt").exists()
 
 
 def test_sync_recurses_and_preserves_local_gifs_for_unchanged_archives(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Unchanged archives retain viewer-generated GIFs in the local cache."""
     source = tmp_path / "experiment.zip"
     _archive(source, {"s42/results.json": "{}", "s42/.hydra/config.yaml": "seed: 42"})
-    children = {
+    children: dict[str, list[dict[str, Any]]] = {
         "root-folder": [
             {
                 "id": "preliminary",
@@ -109,9 +137,11 @@ def test_sync_recurses_and_preserves_local_gifs_for_unchanged_archives(
         ],
     }
     sync = _sync(tmp_path, children)
-    sync._download = lambda _archive_info, destination: shutil.copyfile(  # type: ignore[method-assign]
-        source, destination
-    )
+
+    def _download(_archive_info: Any, destination: Path) -> None:
+        shutil.copyfile(source, destination)
+
+    monkeypatch.setattr(sync, "_download", _download)
 
     first = sync.sync()
     extracted = sync.runs_dir / "Preliminary" / "experiment-id"
@@ -130,11 +160,12 @@ def test_sync_recurses_and_preserves_local_gifs_for_unchanged_archives(
 
 
 def test_sync_removes_cache_for_remote_archive_deleted_from_drive(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Removing a remote archive removes only its corresponding cache tree."""
     source = tmp_path / "experiment.zip"
     _archive(source, {"results.json": "{}"})
-    children = {
+    children: dict[str, list[dict[str, Any]]] = {
         "root-folder": [
             {
                 "id": "archive-1",
@@ -148,9 +179,11 @@ def test_sync_removes_cache_for_remote_archive_deleted_from_drive(
         ]
     }
     sync = _sync(tmp_path, children)
-    sync._download = lambda _archive_info, destination: shutil.copyfile(  # type: ignore[method-assign]
-        source, destination
-    )
+
+    def _download(_archive_info: Any, destination: Path) -> None:
+        shutil.copyfile(source, destination)
+
+    monkeypatch.setattr(sync, "_download", _download)
     sync.sync()
     extracted = sync.runs_dir / "experiment-id"
     assert extracted.is_dir()
@@ -163,8 +196,9 @@ def test_sync_removes_cache_for_remote_archive_deleted_from_drive(
 
 
 def test_rclone_sync_discovers_multiple_archives_and_preserves_local_gifs(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The rclone backend mirrors nested ZIPs and preserves unchanged GIFs."""
     first_source = tmp_path / "first.zip"
     second_source = tmp_path / "second.zip"
     _archive(first_source, {"s42/results.json": "{}"})
@@ -207,7 +241,7 @@ def test_rclone_sync_discovers_multiple_archives_and_preserves_local_gifs(
         shutil.copyfile(sources[relative], arguments[2])
         return ""
 
-    sync._run_rclone = _run  # type: ignore[method-assign]
+    monkeypatch.setattr(sync, "_run_rclone", _run)
 
     first = sync.sync()
     first_target = sync.runs_dir / "first-experiment"

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from experiments import results_viewer as viewer
+from robocode.utils.episode import run_episode
 
 
 def _git(path: Path, *args: str) -> None:
@@ -49,6 +50,7 @@ def test_sync_drive_and_refresh_syncs_before_discovery(
     class _Sync:
         @staticmethod
         def sync() -> _Report:
+            """Record and return one fake Drive synchronization."""
             events.append("sync")
             return _Report()
 
@@ -215,8 +217,6 @@ def test_concurrent_snapshot_requests_share_git_work(
 
 def test_replay_uses_local_source_and_hydra_add_or_override(tmp_path: Path) -> None:
     """Replays use this checkout and support configs without load/output fields."""
-    from robocode.utils.episode import run_episode
-
     assert Path(inspect.getfile(run_episode)).is_relative_to(viewer.SRC_ROOT)
     overrides = viewer._replay_overrides(_run(tmp_path), "/tmp/load", "/tmp/out")
     assert "++approach.load_dir=/tmp/load" in overrides

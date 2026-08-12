@@ -193,11 +193,10 @@ def evaluate(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Build or evaluate the configured high-button task slice."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-slice", type=Path)
-    parser.add_argument(
-        "--distribution", choices=sorted(ENV_PATHS), default="standard"
-    )
+    parser.add_argument("--distribution", choices=sorted(ENV_PATHS), default="standard")
     parser.add_argument("--stick-min", type=float, default=0.0)
     parser.add_argument("--stick-max", type=float, default=3.45)
     parser.add_argument("--slice", type=Path)

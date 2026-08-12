@@ -9,9 +9,7 @@ from kinder.envs.kinematic2d.clutteredstorage2d import (
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 
 
-class EmptyShelfObjectCentricClutteredStorage2DEnv(
-    ObjectCentricClutteredStorage2DEnv
-):
+class EmptyShelfObjectCentricClutteredStorage2DEnv(ObjectCentricClutteredStorage2DEnv):
     """Initialize all blocks outside while retaining the standard shelf geometry."""
 
     def __init__(self, num_blocks: int = 3, **kwargs) -> None:
