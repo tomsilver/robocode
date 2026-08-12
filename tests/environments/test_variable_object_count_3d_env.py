@@ -165,15 +165,15 @@ def test_transport3d_varies_cubes_with_one_box() -> None:
 
 
 def test_constrainedcupboard3d_uses_registered_object_counts() -> None:
-    """ConstrainedCupboard3D selects its existing one, two, and six-rod tasks."""
+    """ConstrainedCupboard3D selects its registered one-through-six-rod tasks."""
     env = VariableObjectCountEnv(
         constant_object_env_path=(
             "robocode.environments.constrained_cupboard3d:ConstrainedCupboard3DEnv"
         ),
         count_kwarg="num_objects",
         count_object_prefix="cuboid_",
-        design_counts=[1, 2],
-        eval_counts=[1, 2, 6],
+        design_counts=[1, 2, 3],
+        eval_counts=[1, 2, 3, 4, 5, 6],
         constant_object_env_kwargs={"scene_bg": False},
     )
     try:

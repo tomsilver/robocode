@@ -10,7 +10,7 @@ from kinder.envs.dynamic3d.envs import TidyBot3DEnv
 class ConstrainedCupboard3DEnv(TidyBot3DEnv):
     """Select a ConstrainedCupboard3D task by its number of rods."""
 
-    supported_counts = frozenset({1, 2, 6})
+    supported_counts = frozenset(range(1, 7))
 
     def __init__(self, num_objects: int = 1, **kwargs: Any) -> None:
         if num_objects not in self.supported_counts:
