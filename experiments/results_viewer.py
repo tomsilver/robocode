@@ -2263,15 +2263,16 @@ button.cp.ok{color:var(--ok);border-color:var(--ok)}
 .ep .ph{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .ep .ph.noplan{gap:3px;color:var(--muted);font-size:11px;text-align:center;
   background:repeating-linear-gradient(45deg,transparent,transparent 6px,var(--bg) 6px,var(--bg) 12px)}
-.render-status{width:100%;padding:6px;font:10px/1.35 ui-monospace,Menlo,monospace;color:var(--muted)}
+.render-status{width:100%;min-width:0;box-sizing:border-box;padding:6px;font:10px/1.35 ui-monospace,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
 .render-meter{height:4px;margin-top:5px;border-radius:3px;overflow:hidden;background:var(--line)}
 .render-meter>span{display:block;width:0;height:100%;background:var(--accent);transition:width .2s}
 .render-meter.indeterminate>span{width:35%;animation:render-wait 1.1s ease-in-out infinite}
 @keyframes render-wait{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
 .fullbtn{font-size:10px;margin:4px 6px}
-.previewctl{display:flex;align-items:center;gap:4px;padding:4px 6px}
-.previewctl input{width:52px;min-width:0;padding:3px 4px;font:10px ui-monospace,Menlo,monospace}
-.previewctl button{font-size:10px;padding:3px 5px;white-space:nowrap}
+.previewctl{display:grid;grid-template-columns:44px minmax(0,1fr);align-items:center;gap:4px;padding:4px 6px;width:100%;box-sizing:border-box}
+.previewctl input{width:100%;min-width:0;box-sizing:border-box;padding:3px 4px;font:10px ui-monospace,Menlo,monospace}
+.previewctl button{min-width:0;font-size:10px;line-height:1.15;padding:3px 4px;white-space:normal;overflow-wrap:anywhere}
+.previewctl .render-status{grid-column:1/-1;padding:2px 0 0}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px}
 .bars{display:flex;flex-direction:column;gap:5px}
 .bar{display:flex;align-items:center;gap:8px;font-size:12px}

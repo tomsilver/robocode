@@ -92,6 +92,17 @@ def test_preview_step_limit_accepts_custom_positive_integers() -> None:
     assert viewer._preview_step_limit("250") == 250
 
 
+def test_preview_progress_uses_a_bounded_card_layout() -> None:
+    """Preview controls and their live status stay within narrow episode cards."""
+    assert ".previewctl{display:grid;grid-template-columns:44px minmax(0,1fr)" in (
+        viewer.APP_CSS
+    )
+    assert ".previewctl .render-status{grid-column:1/-1" in viewer.APP_CSS
+    assert ".render-status{width:100%;min-width:0;box-sizing:border-box" in (
+        viewer.APP_CSS
+    )
+
+
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1.5", "many"])
 def test_preview_step_limit_rejects_non_positive_or_fractional_values(value) -> None:
     """Invalid custom horizons are rejected before a render is queued."""
