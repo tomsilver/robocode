@@ -6,45 +6,14 @@ import json
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from experiments.drive_results import (
-    DRIVE_FOLDER_MIME_TYPE,
-    DriveResultsSync,
     DriveSyncError,
     RcloneResultsSync,
     parse_drive_folder_id,
 )
-
-
-class _Response:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.payload = payload
-
-    def execute(self) -> dict[str, Any]:
-        """Return the configured fake API payload."""
-        return self.payload
-
-
-class _Files:
-    def __init__(self, children: dict[str, list[dict[str, Any]]]) -> None:
-        self.children = children
-
-    def list(self, **kwargs: Any) -> _Response:
-        """Return the fake children of the requested parent folder."""
-        parent = kwargs["q"].split("'", 2)[1]
-        return _Response({"files": self.children.get(parent, [])})
-
-
-class _Drive:
-    def __init__(self, children: dict[str, list[dict[str, Any]]]) -> None:
-        self._files = _Files(children)
-
-    def files(self) -> _Files:
-        """Return the fake Drive files resource."""
-        return self._files
 
 
 def _archive(path: Path, files: dict[str, str]) -> None:
@@ -54,15 +23,27 @@ def _archive(path: Path, files: dict[str, str]) -> None:
 
 
 def _sync(
-    tmp_path: Path, children: dict[str, list[dict[str, Any]]]
-) -> DriveResultsSync:
-    return DriveResultsSync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing: list[dict[str, object]],
+    sources: dict[str, Path],
+) -> RcloneResultsSync:
+    sync = RcloneResultsSync(
         "root-folder",
         tmp_path / "cache",
-        tmp_path / "credentials.json",
-        tmp_path / "token.json",
-        service=_Drive(children),
+        "robocode-drive",
     )
+
+    def _run(arguments: list[str]) -> str:
+        if arguments[0] == "lsjson":
+            return json.dumps(listing)
+        assert arguments[0] == "copyto"
+        relative_path = arguments[1].split(":", 1)[1]
+        shutil.copyfile(sources[relative_path], arguments[2])
+        return ""
+
+    monkeypatch.setattr(sync, "_run_rclone", _run)
+    return sync
 
 
 def test_parse_drive_folder_url_or_id() -> None:
@@ -84,24 +65,16 @@ def test_safe_extract_rejects_parent_traversal(
     """Synchronizing an archive cannot write outside its cache target."""
     archive = tmp_path / "unsafe.zip"
     _archive(archive, {"../outside.txt": "no"})
-    children: dict[str, list[dict[str, Any]]] = {
-        "root-folder": [
-            {
-                "id": "unsafe-archive",
-                "name": "unsafe.zip",
-                "mimeType": "application/zip",
-                "modifiedTime": "2026-08-12T10:00:00Z",
-                "size": str(archive.stat().st_size),
-                "md5Checksum": "unsafe-content",
-            }
-        ]
-    }
-    sync = _sync(tmp_path, children)
-
-    def _download(_archive_info: Any, destination: Path) -> None:
-        shutil.copyfile(archive, destination)
-
-    monkeypatch.setattr(sync, "_download", _download)
+    listing: list[dict[str, object]] = [
+        {
+            "Path": "unsafe.zip",
+            "Name": "unsafe.zip",
+            "Size": archive.stat().st_size,
+            "ModTime": "2026-08-12T10:00:00Z",
+            "Hashes": {"MD5": "unsafe-content"},
+        }
+    ]
+    sync = _sync(tmp_path, monkeypatch, listing, {"unsafe.zip": archive})
 
     with pytest.raises(DriveSyncError, match="unsafe path"):
         sync.sync()
@@ -115,33 +88,27 @@ def test_sync_recurses_and_preserves_local_gifs_for_unchanged_archives(
     """Unchanged archives retain viewer-generated GIFs in the local cache."""
     source = tmp_path / "experiment.zip"
     _archive(source, {"s42/results.json": "{}", "s42/.hydra/config.yaml": "seed: 42"})
-    children: dict[str, list[dict[str, Any]]] = {
-        "root-folder": [
-            {
-                "id": "preliminary",
-                "name": "Preliminary",
-                "mimeType": DRIVE_FOLDER_MIME_TYPE,
-            },
-            {"id": "notes", "name": "README", "mimeType": "text/plain"},
-        ],
-        "preliminary": [
-            {
-                "id": "archive-1",
-                "name": "experiment-id.zip",
-                "mimeType": "application/zip",
-                "modifiedTime": "2026-08-12T10:00:00Z",
-                "size": str(source.stat().st_size),
-                "md5Checksum": "content-v1",
-                "capabilities": {"canDownload": True},
-            }
-        ],
-    }
-    sync = _sync(tmp_path, children)
-
-    def _download(_archive_info: Any, destination: Path) -> None:
-        shutil.copyfile(source, destination)
-
-    monkeypatch.setattr(sync, "_download", _download)
+    listing: list[dict[str, object]] = [
+        {
+            "Path": "Preliminary/experiment-id.zip",
+            "Name": "experiment-id.zip",
+            "Size": source.stat().st_size,
+            "ModTime": "2026-08-12T10:00:00Z",
+            "Hashes": {"MD5": "content-v1"},
+        },
+        {
+            "Path": "README",
+            "Name": "README",
+            "Size": 4,
+            "ModTime": "2026-08-12T10:00:00Z",
+        },
+    ]
+    sync = _sync(
+        tmp_path,
+        monkeypatch,
+        listing,
+        {"Preliminary/experiment-id.zip": source},
+    )
 
     first = sync.sync()
     extracted = sync.runs_dir / "Preliminary" / "experiment-id"
@@ -165,30 +132,26 @@ def test_sync_removes_cache_for_remote_archive_deleted_from_drive(
     """Removing a remote archive removes only its corresponding cache tree."""
     source = tmp_path / "experiment.zip"
     _archive(source, {"results.json": "{}"})
-    children: dict[str, list[dict[str, Any]]] = {
-        "root-folder": [
-            {
-                "id": "archive-1",
-                "name": "experiment-id.zip",
-                "mimeType": "application/zip",
-                "modifiedTime": "2026-08-12T10:00:00Z",
-                "size": str(source.stat().st_size),
-                "md5Checksum": "content-v1",
-                "capabilities": {"canDownload": True},
-            }
-        ]
-    }
-    sync = _sync(tmp_path, children)
-
-    def _download(_archive_info: Any, destination: Path) -> None:
-        shutil.copyfile(source, destination)
-
-    monkeypatch.setattr(sync, "_download", _download)
+    listing: list[dict[str, object]] = [
+        {
+            "Path": "experiment-id.zip",
+            "Name": "experiment-id.zip",
+            "Size": source.stat().st_size,
+            "ModTime": "2026-08-12T10:00:00Z",
+            "Hashes": {"MD5": "content-v1"},
+        }
+    ]
+    sync = _sync(
+        tmp_path,
+        monkeypatch,
+        listing,
+        {"experiment-id.zip": source},
+    )
     sync.sync()
     extracted = sync.runs_dir / "experiment-id"
     assert extracted.is_dir()
 
-    children["root-folder"].clear()
+    listing.clear()
     report = sync.sync()
 
     assert report.removed == 1

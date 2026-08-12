@@ -3024,12 +3024,6 @@ def main() -> None:
         ),
     )
     ap.add_argument(
-        "--drive-backend",
-        choices=("rclone", "api"),
-        default=os.environ.get("ROBOCODE_RESULTS_DRIVE_BACKEND", "rclone"),
-        help="Drive login backend (default: rclone)",
-    )
-    ap.add_argument(
         "--rclone-remote",
         default=os.environ.get("ROBOCODE_RCLONE_REMOTE", "robocode-drive"),
         metavar="NAME",
@@ -3046,20 +3040,6 @@ def main() -> None:
         default=os.environ.get("RCLONE_BINARY", "rclone"),
         metavar="PATH",
         help="rclone executable name or path (default: rclone)",
-    )
-    ap.add_argument(
-        "--drive-credentials",
-        help=(
-            "OAuth desktop-client JSON (default: $ROBOCODE_GOOGLE_OAUTH_CLIENT "
-            "or the platform user config)"
-        ),
-    )
-    ap.add_argument(
-        "--drive-token",
-        help=(
-            "local OAuth token (default: $ROBOCODE_GOOGLE_DRIVE_TOKEN or the "
-            "platform user config)"
-        ),
     )
     ap.add_argument(
         "--exclude",
@@ -3088,33 +3068,15 @@ def main() -> None:
             if args.drive_cache
             else drive_results.default_cache_base()
         )
-        if args.drive_backend == "rclone":
-            DRIVE_SYNC = drive_results.RcloneResultsSync(
-                args.drive_folder,
-                cache_base,
-                args.rclone_remote,
-                rclone_binary=args.rclone_binary,
-                config_path=(
-                    Path(args.rclone_config).expanduser()
-                    if args.rclone_config
-                    else None
-                ),
-            )
-        else:
-            DRIVE_SYNC = drive_results.DriveResultsSync(
-                args.drive_folder,
-                cache_base,
-                (
-                    Path(args.drive_credentials).expanduser()
-                    if args.drive_credentials
-                    else drive_results.default_credentials_path()
-                ),
-                (
-                    Path(args.drive_token).expanduser()
-                    if args.drive_token
-                    else drive_results.default_token_path()
-                ),
-            )
+        DRIVE_SYNC = drive_results.RcloneResultsSync(
+            args.drive_folder,
+            cache_base,
+            args.rclone_remote,
+            rclone_binary=args.rclone_binary,
+            config_path=(
+                Path(args.rclone_config).expanduser() if args.rclone_config else None
+            ),
+        )
         SCAN.root = DRIVE_SYNC.runs_dir
     else:
         SCAN.root = Path(args.root or REPO_ROOT).resolve()

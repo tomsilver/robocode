@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import re
@@ -14,10 +13,7 @@ import threading
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
 
-DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
-DRIVE_FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
 _FOLDER_URL_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
 _RAW_FOLDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -74,154 +70,34 @@ def default_cache_base() -> Path:
     return base / "robocode-results-viewer"
 
 
-def default_credentials_path() -> Path:
-    """Return the default uncommitted OAuth desktop-client JSON path."""
-    configured = os.environ.get("ROBOCODE_GOOGLE_OAUTH_CLIENT")
-    if configured:
-        return Path(configured).expanduser()
-    xdg_config = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config).expanduser() if xdg_config else Path.home() / ".config"
-    return base / "robocode" / "google_oauth_client.json"
-
-
-def default_token_path() -> Path:
-    """Return the default uncommitted OAuth token path."""
-    configured = os.environ.get("ROBOCODE_GOOGLE_DRIVE_TOKEN")
-    if configured:
-        return Path(configured).expanduser()
-    xdg_config = os.environ.get("XDG_CONFIG_HOME")
-    base = Path(xdg_config).expanduser() if xdg_config else Path.home() / ".config"
-    return base / "robocode" / "google_drive_token.json"
-
-
-def build_drive_service(credentials_path: Path, token_path: Path) -> Any:
-    """Authorize a read-only Drive client, using desktop OAuth when needed."""
-    try:
-        request_class = importlib.import_module(
-            "google.auth.transport.requests"
-        ).Request
-        credentials_class = importlib.import_module(
-            "google.oauth2.credentials"
-        ).Credentials
-        flow_class = importlib.import_module(
-            "google_auth_oauthlib.flow"
-        ).InstalledAppFlow
-        build = importlib.import_module("googleapiclient.discovery").build
-    except ImportError as error:
-        raise DriveSyncError(
-            "Google Drive support is not installed; run "
-            "`uv sync --extra drive-viewer`"
-        ) from error
-
-    credentials = None
-    if token_path.exists():
-        credentials = credentials_class.from_authorized_user_file(
-            str(token_path), [DRIVE_READONLY_SCOPE]
-        )
-    if credentials and credentials.expired and credentials.refresh_token:
-        credentials.refresh(request_class())
-    elif not credentials or not credentials.valid:
-        if not credentials_path.exists():
-            raise DriveSyncError(
-                f"OAuth desktop credentials not found at {credentials_path}"
-            )
-        flow = flow_class.from_client_secrets_file(
-            str(credentials_path), [DRIVE_READONLY_SCOPE]
-        )
-        credentials = flow.run_local_server(port=0)
-
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(credentials.to_json(), encoding="utf-8")
-    token_path.chmod(0o600)
-    return build("drive", "v3", credentials=credentials, cache_discovery=False)
-
-
-class DriveResultsSync:
-    """Mirror ZIP result archives from Drive into an extracted local cache."""
+class RcloneResultsSync:
+    """Mirror Drive ZIP archives through rclone into an extracted local cache."""
 
     def __init__(
         self,
         folder: str,
         cache_base: Path,
-        credentials_path: Path,
-        token_path: Path,
+        remote: str,
         *,
-        service: Any = None,
+        rclone_binary: str = "rclone",
+        config_path: Path | None = None,
     ) -> None:
         self.folder_id = parse_drive_folder_id(folder)
         self.cache_root = cache_base.expanduser().resolve() / self.folder_id
         self.runs_dir = self.cache_root / "runs"
         self.manifest_path = self.cache_root / "manifest.json"
-        self.credentials_path = credentials_path.expanduser()
-        self.token_path = token_path.expanduser()
-        self._service = service
+        self.remote = remote.rstrip(":")
+        if not self.remote:
+            raise ValueError("rclone remote name cannot be empty")
+        self.rclone_binary = rclone_binary
+        self.config_path = config_path.expanduser() if config_path else None
         self._lock = threading.Lock()
-
-    def _drive(self) -> Any:
-        if self._service is None:
-            self._service = build_drive_service(self.credentials_path, self.token_path)
-        return self._service
-
-    def _list_children(self, folder_id: str) -> list[dict[str, Any]]:
-        files: list[dict[str, Any]] = []
-        page_token = None
-        while True:
-            response = (
-                self._drive()
-                .files()
-                .list(
-                    q=f"'{folder_id}' in parents and trashed = false",
-                    fields=(
-                        "nextPageToken,files(id,name,mimeType,modifiedTime,size,"
-                        "md5Checksum,capabilities(canDownload))"
-                    ),
-                    pageSize=1000,
-                    pageToken=page_token,
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                )
-                .execute()
-            )
-            files.extend(response.get("files", []))
-            page_token = response.get("nextPageToken")
-            if not page_token:
-                return files
 
     @staticmethod
     def _path_component(name: str) -> str:
         if name in {"", ".", ".."} or "/" in name or "\\" in name or "\0" in name:
             raise DriveSyncError(f"unsafe Drive file name: {name!r}")
         return name
-
-    def _find_archives(self) -> tuple[list[RemoteArchive], int]:
-        archives: list[RemoteArchive] = []
-        ignored = 0
-        pending = [(self.folder_id, PurePosixPath())]
-        while pending:
-            folder_id, parent = pending.pop()
-            for item in self._list_children(folder_id):
-                name = self._path_component(str(item.get("name", "")))
-                if item.get("mimeType") == DRIVE_FOLDER_MIME_TYPE:
-                    pending.append((str(item["id"]), parent / name))
-                    continue
-                if not name.lower().endswith(".zip"):
-                    ignored += 1
-                    continue
-                if not item.get("capabilities", {}).get("canDownload", True):
-                    raise DriveSyncError(
-                        f"Drive archive cannot be downloaded: {parent / name}"
-                    )
-                archives.append(
-                    RemoteArchive(
-                        file_id=str(item["id"]),
-                        name=name,
-                        relative_path=str(parent / name),
-                        modified_time=str(item.get("modifiedTime", "")),
-                        size=str(item.get("size", "")),
-                        md5_checksum=str(item.get("md5Checksum", "")),
-                    )
-                )
-        return sorted(archives, key=lambda archive: archive.relative_path), ignored
 
     def _load_manifest(self) -> dict[str, dict[str, str]]:
         if not self.manifest_path.exists():
@@ -247,27 +123,6 @@ class DriveResultsSync:
             temporary.replace(self.manifest_path)
         finally:
             temporary.unlink(missing_ok=True)
-
-    def _download(self, archive: RemoteArchive, destination: Path) -> None:
-        try:
-            downloader_class = importlib.import_module(
-                "googleapiclient.http"
-            ).MediaIoBaseDownload
-        except ImportError as error:
-            raise DriveSyncError(
-                "Google Drive support is not installed; run "
-                "`uv sync --extra drive-viewer`"
-            ) from error
-        request = (
-            self._drive()
-            .files()
-            .get_media(fileId=archive.file_id, supportsAllDrives=True)
-        )
-        with destination.open("wb") as stream:
-            downloader = downloader_class(stream, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
 
     @staticmethod
     def _safe_extract(archive_path: Path, destination: Path) -> None:
@@ -377,28 +232,6 @@ class DriveResultsSync:
                     removed += 1
             self._write_manifest(current)
             return SyncReport(downloaded, unchanged, removed, ignored)
-
-
-class RcloneResultsSync(DriveResultsSync):
-    """Read Drive archives through an rclone remote with browser-based login."""
-
-    def __init__(
-        self,
-        folder: str,
-        cache_base: Path,
-        remote: str,
-        *,
-        rclone_binary: str = "rclone",
-        config_path: Path | None = None,
-    ) -> None:
-        # The parent owns safe extraction, the manifest, and incremental cache
-        # replacement. This backend replaces only Drive listing and downloading.
-        super().__init__(folder, cache_base, Path(), Path())
-        self.remote = remote.rstrip(":")
-        if not self.remote:
-            raise ValueError("rclone remote name cannot be empty")
-        self.rclone_binary = rclone_binary
-        self.config_path = config_path.expanduser() if config_path else None
 
     def _run_rclone(self, arguments: list[str]) -> str:
         command = [self.rclone_binary, *arguments]

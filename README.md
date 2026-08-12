@@ -302,23 +302,9 @@ Linux and macOS as long as `rclone` is on `PATH`.
 
 Rclone currently warns that its shared Google Drive OAuth client is scheduled
 for retirement during 2026. The blank-client-ID setup is therefore a convenient
-prototype path, not a permanent team dependency. If Google disables it, use a
-team-owned OAuth client with the same rclone remote or the direct API backend
-below; the viewer and archive layout do not change.
-
-The original direct Google API backend remains available when needed. It
-requires a locally stored OAuth desktop-client JSON and the optional Python
-dependencies:
-
-```bash
-uv sync --extra drive-viewer
-python experiments/results_viewer.py \
-  --drive-backend api \
-  --drive-folder "<Google Drive folder URL>"
-```
-
-Its credential locations can be overridden with
-`ROBOCODE_GOOGLE_OAUTH_CLIENT` and `ROBOCODE_GOOGLE_DRIVE_TOKEN`.
+prototype path, not a permanent team dependency. Configure a team-owned OAuth
+client on the same rclone remote before Google disables the shared client; the
+viewer command and archive layout do not change.
 
 ### Agentic approach
 
