@@ -19,8 +19,8 @@ only differences are at the host invocation layer:
 * ``--pid`` so the container gets its own PID namespace (Docker does this by
   default; apptainer shares the host's unless asked)
 
-Namespaces: the filesystem, PID, and (with ``--containall``) IPC namespaces are
-the container's own. The NETWORK namespace is still the host's: ``--net`` needs
+Namespaces: the filesystem, PID, and IPC namespaces are the container's own.
+The NETWORK namespace is still the host's: ``--net`` needs
 privileges the unprivileged cluster install does not have, which is also why the
 firewall is skipped. So host loopback services stay reachable from the sandbox,
 and the render http server must pick a free host port (see ``_free_port``).
@@ -187,15 +187,11 @@ def _build_apptainer_cmd(
     Split out from :func:`run_agent_in_apptainer_sandbox` so unit tests
     can inspect the constructed command without running anything.
     """
-    cmd: list[str] = ["apptainer", "exec"]
-    if config.blackbox:
-        # --no-home alone is NOT enough to withhold the env source: many
-        # apptainer.conf setups still bind the host /home, so a blackbox agent
-        # could read the real source straight off /home/<user>/.../src/robocode/
-        # environments (verified by the --apptainer-blackbox red-team). --containall
-        # drops ALL default binds (home, tmp, cwd), leaving only the filtered
-        # mounts below, so the stripped env source is the only source present.
-        cmd.append("--containall")
+    # --no-home alone does not reliably suppress administrator-configured host
+    # binds. --containall drops default home, tmp, and cwd binds in every mode,
+    # leaving only the explicit sandbox and filtered-source mounts below. This
+    # keeps experimenter-side Hydra configuration outside the agent's view.
+    cmd: list[str] = ["apptainer", "exec", "--containall"]
     cmd += [
         # Apptainer shares the host PID namespace by default, so a `pkill -f`
         # inside the container matches host cmdlines and kills the harness, other
@@ -204,7 +200,7 @@ def _build_apptainer_cmd(
         # visible or signalable. Apptainer starts its `appinit` shim as PID 1 (use
         # --no-init to disable), which reaps orphans and tears the namespace down
         # when the payload exits, so no extra init flag is needed. --containall
-        # already implies --pid; passing it explicitly covers non-blackbox runs too.
+        # already implies --pid, but keeping it explicit documents this boundary.
         "--pid",
         "--writable-tmpfs",
         "--no-home",

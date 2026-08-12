@@ -319,6 +319,27 @@ def summarize_by_count(
     return by_count, largest_all, largest_any
 
 
+def summarize_count_regimes(
+    by_count: dict[int, dict[str, Any]], design_counts: list[int]
+) -> dict[str, dict[str, Any]]:
+    """Aggregate count-sweep results into design and held-out regimes."""
+    design = set(design_counts)
+    regimes: dict[str, dict[str, Any]] = {}
+    for name, counts in (
+        ("design", [count for count in by_count if count in design]),
+        ("held_out", [count for count in by_count if count not in design]),
+    ):
+        scheduled = sum(int(by_count[count]["n"]) for count in counts)
+        solved = sum(int(by_count[count]["n_solved"]) for count in counts)
+        regimes[name] = {
+            "counts": sorted(counts),
+            "n": scheduled,
+            "n_solved": solved,
+            "solve_rate": solved / scheduled if scheduled else float("nan"),
+        }
+    return regimes
+
+
 def run_per_instance_eval(
     env: Any,
     approach: BaseApproach,

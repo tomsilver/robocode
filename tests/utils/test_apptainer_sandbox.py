@@ -57,6 +57,7 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
 
     assert cmd[0] == "apptainer"
     assert cmd[1] == "exec"
+    assert "--containall" in cmd
     # Own PID namespace: apptainer shares the host's by default, so without this a
     # `pkill -f` inside the sandbox reaches the harness and concurrent runs.
     assert "--pid" in cmd
@@ -115,14 +116,13 @@ def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
     assert "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel" in on
 
 
-def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
-    """Blackbox mode adds --containall; --no-home alone leaks the host /home.
+def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
+    """Every mode adds --containall; --no-home alone can leak host paths.
 
-    Without --containall, many apptainer.conf setups still bind the host /home,
-    so a blackbox agent could read the real env source at
-    /home/<user>/.../src/robocode/environments. --containall drops all default
-    binds so only the filtered mounts remain. The default (non-blackbox) command
-    keeps its existing flags.
+    Without --containall, many apptainer.conf setups still bind the host /home, so an
+    agent could read experimenter-side Hydra configuration as well as the real
+    environment source. --containall drops all default binds so only the filtered mounts
+    remain.
     """
     blackbox_cmd = _build_apptainer_cmd(
         ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox", blackbox=True),
@@ -145,8 +145,8 @@ def test_build_cmd_blackbox_adds_containall(tmp_path: Path) -> None:
         agent_cmd=["claude"],
     )
     assert "--containall" in blackbox_cmd
-    assert "--containall" not in default_cmd
-    # --containall implies --pid, but the default command must be contained too.
+    assert "--containall" in default_cmd
+    # --containall implies --pid, and it remains explicit in both modes.
     assert "--pid" in blackbox_cmd
     assert "--pid" in default_cmd
 

@@ -14,11 +14,11 @@ Parallel sweep with joblib launcher:
     python experiments/run_experiment.py -m \
         approach=agentic \
         approach.container_backend=docker \
-        seed=42,24,424,444,222 \
+        replicate_seed=42,24,424,444,222 \
         'primitives=[]' \
         environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy \
         'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
-        'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}' \
+        'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
         hydra/launcher=joblib hydra.launcher.n_jobs=4
 """
 
@@ -40,6 +40,7 @@ from robocode.utils.episode import (
     run_per_instance_eval,
     save_video,
     summarize_by_count,
+    summarize_count_regimes,
 )
 from robocode.utils.telemetry import require_registered
 
@@ -47,16 +48,54 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_eval_seed(cfg: DictConfig) -> int:
-    """Eval-suite seed: ``eval_seed`` when set, else ``seed``."""
-    value = cfg.seed if cfg.get("eval_seed") is None else cfg.eval_seed
-    if value != int(value):
+    """Return the required, experimenter-only evaluation-suite seed."""
+    value = cfg.get("eval_seed")
+    if value is None:
+        raise ValueError(
+            "eval_seed must be set explicitly; it must not follow replicate_seed"
+        )
+    if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"eval_seed must be an integer, got {value!r}")
-    return int(value)
+    return value
+
+
+def resolve_replicate_seed(cfg: DictConfig) -> int:
+    """Return the seed for controllable local randomness in one replicate."""
+    value = cfg.get("replicate_seed")
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"replicate_seed must be an integer, got {value!r}")
+    return value
+
+
+def generate_eval_seeds(eval_seed: int, num_eval_tasks: int) -> list[int]:
+    """Derive the fixed episode suite from the protocol seed."""
+    if num_eval_tasks <= 0:
+        raise ValueError("num_eval_tasks must be positive")
+    task_rng = np.random.default_rng(eval_seed)
+    return [int(task_rng.integers(0, 2**63)) for _ in range(num_eval_tasks)]
+
+
+def validate_eval_seed_isolation(cfg: DictConfig) -> None:
+    """Reject a synthesis backend that can read experimenter-side files.
+
+    Hydra writes ``eval_seed`` into the run directory before ``_main`` starts.
+    The local coding-agent sandbox permits host filesystem reads, whereas Docker
+    and Apptainer mount only the child synthesis directory and filtered source.
+    """
+    if cfg.approach.get("container_backend") == "local":
+        raise ValueError(
+            "container_backend=local cannot isolate eval_seed from generated-code "
+            "methods; use docker or apptainer"
+        )
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
+    validate_eval_seed_isolation(cfg)
+    replicate_seed = resolve_replicate_seed(cfg)
+    eval_seed = resolve_eval_seed(cfg)
+
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -108,7 +147,7 @@ def _main(cfg: DictConfig) -> float:
         cfg.approach,
         action_space=env.action_space,
         observation_space=env.observation_space,
-        seed=cfg.seed,
+        seed=replicate_seed,
         env_description_path=env_description_path,
         mcp_tools=mcp_tools,
         env_name=env_name,
@@ -122,10 +161,7 @@ def _main(cfg: DictConfig) -> float:
     )
     approach = approach_ctor(primitives=primitives)
 
-    eval_seed = resolve_eval_seed(cfg)
-    task_rng = np.random.default_rng(eval_seed)
     num_eval = cfg.num_eval_tasks
-    eval_seeds = [int(task_rng.integers(0, 2**63)) for _ in range(num_eval)]
 
     # A variable-count env sweeps its configured object counts evenly across the eval
     # set, so program and planner face the same (seed, count) instances and a
@@ -140,6 +176,7 @@ def _main(cfg: DictConfig) -> float:
     # global agent budget seed by seed (no single train() step); generalized
     # approaches train once and are then rolled out for free over every seed.
     if approach.per_instance:
+        eval_seeds = generate_eval_seeds(eval_seed, num_eval)
         if cfg.record_approach_history:
             raise ValueError(
                 "record_approach_history is not supported for per-instance "
@@ -166,6 +203,11 @@ def _main(cfg: DictConfig) -> float:
     else:
         approach.train()
 
+        # Derive the held-out episode suite only after synthesis has finished.
+        # The fixed master seed remains in the experimenter process and is never
+        # placed in the agent's prompt, environment, command line, or sandbox.
+        eval_seeds = generate_eval_seeds(eval_seed, num_eval)
+
         # Record approach history: replay every sandbox snapshot.
         if cfg.record_approach_history:
             load_dir = cfg.approach.get("load_dir", None)
@@ -178,7 +220,7 @@ def _main(cfg: DictConfig) -> float:
                 sandbox_dir,
                 env,
                 primitives,
-                cfg.seed,
+                replicate_seed,
                 max_steps=cfg.max_steps,
                 output_dir=output_dir,
             )
@@ -268,6 +310,11 @@ def _main(cfg: DictConfig) -> float:
             results["by_count"] = by_count
             results["largest_count_all_solved"] = largest_all
             results["largest_count_any_solved"] = largest_any
+    if isinstance(env, VariableObjectCountEnv):
+        count_regimes = summarize_count_regimes(results["by_count"], env.design_counts)
+        results["count_regimes"] = count_regimes
+        results["design_count_solve_rate"] = count_regimes["design"]["solve_rate"]
+        results["held_out_count_solve_rate"] = count_regimes["held_out"]["solve_rate"]
     agent_cost = getattr(approach, "total_cost_usd", None)
     if agent_cost is not None:
         results["agent_cost_usd"] = agent_cost
@@ -278,6 +325,7 @@ def _main(cfg: DictConfig) -> float:
     if gen_metrics is not None:
         results.update(gen_metrics.to_dict())
     results["eval_seed"] = eval_seed
+    results["replicate_seed"] = replicate_seed
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

@@ -3,8 +3,11 @@ defaults:
   - environment: small_maze
   - _self_
 
-seed: 42
-# Eval-suite seed; defaults to `seed`. Pin it to score different runs on one suite.
+# Replicate identifier and seed for randomness we control locally (for example,
+# action-space sampling). It does not seed remote language-model generation.
+replicate_seed: 42
+# Experimenter-only seed used to derive the fixed evaluation episode suite.
+# Final-run commands must set the private team value explicitly.
 eval_seed: null
 max_steps: 1000
 num_eval_tasks: 100

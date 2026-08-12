@@ -246,12 +246,12 @@ python integration_tests/red_team_sandbox.py --docker  # Docker
 
 Run an experiment:
 ```bash
-python experiments/run_experiment.py approach=random environment=small_maze seed=0
+python experiments/run_experiment.py approach=random environment=small_maze replicate_seed=0
 ```
 
 Run a sweep over multiple seeds and environments:
 ```bash
-python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_maze approach=random
+python experiments/run_experiment.py -m replicate_seed=0,1,2 environment=small_maze,large_maze approach=random
 ```
 
 Analyze results from one or more runs:
@@ -286,10 +286,10 @@ python experiments/run_experiment.py approach=agentic approach.backend.backend=o
 
 Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
 
-To use the legacy OS-level sandbox instead:
-```bash
-python experiments/run_experiment.py approach=agentic environment=small_maze approach.container_backend=local
-```
+The experiment runner rejects the legacy local sandbox for generated-code
+methods because that sandbox permits host filesystem reads. Use Docker or
+Apptainer so experimenter-only evaluation configuration is outside the
+synthesis sandbox.
 
 To skip re-generation and load a previously generated approach:
 ```bash
@@ -299,7 +299,7 @@ python experiments/run_experiment.py approach=agentic environment=small_maze \
 
 Parallel sweeps each get their own container (named `robocode-sandbox-<uuid>`), so multiple runs never interfere:
 ```bash
-python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_maze approach=agentic
+python experiments/run_experiment.py -m replicate_seed=0,1,2 environment=small_maze,large_maze approach=agentic
 ```
 
 Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run jobs in parallel locally:
@@ -307,15 +307,53 @@ Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run
 python experiments/run_experiment.py -m \
     approach=agentic \
     approach.container_backend=docker \
-    seed=42,24,424,444,222 \
+    replicate_seed=42,24,424,444,222 \
     'primitives=[]' \
     environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
     'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
-    'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}' \
+    'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
     hydra/launcher=joblib hydra.launcher.n_jobs=4
 ```
 
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
+
+### Replicates and the evaluation suite
+
+`replicate_seed` and `eval_seed` have deliberately different roles:
+
+- `replicate_seed` identifies one independent replicate and seeds randomness
+  controlled by Robocode, such as an approach's NumPy generator and action-space
+  sampling. It does not seed Claude or make an agentic run reproducible.
+- `eval_seed` is a fixed team value supplied explicitly in final-run commands.
+  Robocode uses it to derive the same ordered evaluation episode suite for every
+  method and replicate, so score differences are not caused by different sampled
+  test suites. The checked-in default is `null`, and the runner fails if a command
+  omits the value. Keep it out of public configs and agent-visible inputs.
+
+The generalized synthesis agent does not receive `eval_seed` or the derived
+episode seeds. Hydra's full configuration remains on the experimenter side, and
+only the child `sandbox/` directory plus filtered source are mounted into Docker
+or Apptainer. Per-instance methods are a separate protocol: they receive the one
+derived episode seed they are solving, but not the master `eval_seed` used to
+construct the suite.
+
+For variable-object-count environments, evaluation sweeps the configured design
+and held-out counts on that fixed episode schedule. `results.json` retains the
+per-count curve and also reports `design_count_solve_rate` and
+`held_out_count_solve_rate` separately.
+
+The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
+and [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages/create)
+do not expose a sampling-seed control. Consequently, replicates capture
+uncontrolled model-generation variation even when `replicate_seed` is held
+fixed; session IDs and model names are not random seeds.
+
+This isolation boundary protects the synthesis process and its tool calls. The
+generated policy is currently loaded by the trusted experiment runner for
+rollout; it is reviewed as an experiment artifact rather than treated as
+hostile code. Protecting the host from a deliberately malicious generated
+policy would require running policy inference behind a separate process or
+container boundary as well.
 
 #### Example: small_maze
 
