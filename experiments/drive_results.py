@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import tempfile
 import threading
 import zipfile
@@ -364,3 +365,108 @@ class DriveResultsSync:
                     removed += 1
             self._write_manifest(current)
             return SyncReport(downloaded, unchanged, removed, ignored)
+
+
+class RcloneResultsSync(DriveResultsSync):
+    """Read Drive archives through an rclone remote with browser-based login."""
+
+    def __init__(
+        self,
+        folder: str,
+        cache_base: Path,
+        remote: str,
+        *,
+        rclone_binary: str = "rclone",
+        config_path: Path | None = None,
+    ) -> None:
+        # The parent owns safe extraction, the manifest, and incremental cache
+        # replacement. This backend replaces only Drive listing and downloading.
+        super().__init__(folder, cache_base, Path(), Path())
+        self.remote = remote.rstrip(":")
+        if not self.remote:
+            raise ValueError("rclone remote name cannot be empty")
+        self.rclone_binary = rclone_binary
+        self.config_path = config_path.expanduser() if config_path else None
+
+    def _run_rclone(self, arguments: list[str]) -> str:
+        command = [self.rclone_binary, *arguments]
+        if self.config_path is not None:
+            command.extend(["--config", str(self.config_path)])
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError as error:
+            raise DriveSyncError(
+                f"rclone executable not found: {self.rclone_binary}; "
+                "install rclone and run `rclone config`"
+            ) from error
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise DriveSyncError(f"rclone failed: {detail}")
+        return result.stdout
+
+    def _rclone_source(self, relative_path: str = "") -> str:
+        return f"{self.remote}:{relative_path}"
+
+    def _root_folder_arguments(self) -> list[str]:
+        return ["--drive-root-folder-id", self.folder_id]
+
+    def _find_archives(self) -> tuple[list[RemoteArchive], int]:
+        output = self._run_rclone(
+            [
+                "lsjson",
+                self._rclone_source(),
+                "--recursive",
+                "--files-only",
+                "--hash",
+                *self._root_folder_arguments(),
+            ]
+        )
+        try:
+            items = json.loads(output)
+        except (TypeError, ValueError) as error:
+            raise DriveSyncError("rclone returned invalid JSON while listing Drive") from error
+        if not isinstance(items, list):
+            raise DriveSyncError("rclone returned an invalid Drive file listing")
+
+        archives: list[RemoteArchive] = []
+        ignored = 0
+        for item in items:
+            if not isinstance(item, dict):
+                raise DriveSyncError("rclone returned an invalid Drive file entry")
+            relative = PurePosixPath(str(item.get("Path", "")))
+            if not relative.parts:
+                raise DriveSyncError("rclone returned an empty Drive file path")
+            for component in relative.parts:
+                self._path_component(component)
+            if not relative.name.lower().endswith(".zip"):
+                ignored += 1
+                continue
+            hashes = item.get("Hashes") or {}
+            if not isinstance(hashes, dict):
+                hashes = {}
+            archives.append(
+                RemoteArchive(
+                    file_id=str(relative),
+                    name=relative.name,
+                    relative_path=str(relative),
+                    modified_time=str(item.get("ModTime", "")),
+                    size=str(item.get("Size", "")),
+                    md5_checksum=str(hashes.get("MD5") or hashes.get("md5") or ""),
+                )
+            )
+        return sorted(archives, key=lambda archive: archive.relative_path), ignored
+
+    def _download(self, archive: RemoteArchive, destination: Path) -> None:
+        self._run_rclone(
+            [
+                "copyto",
+                self._rclone_source(archive.relative_path),
+                str(destination),
+                *self._root_folder_arguments(),
+            ]
+        )

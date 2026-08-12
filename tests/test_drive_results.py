@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import zipfile
 from pathlib import Path
@@ -13,6 +14,7 @@ from experiments.drive_results import (
     DRIVE_FOLDER_MIME_TYPE,
     DriveResultsSync,
     DriveSyncError,
+    RcloneResultsSync,
     parse_drive_folder_id,
 )
 
@@ -158,3 +160,71 @@ def test_sync_removes_cache_for_remote_archive_deleted_from_drive(
 
     assert report.removed == 1
     assert not extracted.exists()
+
+
+def test_rclone_sync_discovers_multiple_archives_and_preserves_local_gifs(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "first.zip"
+    second_source = tmp_path / "second.zip"
+    _archive(first_source, {"s42/results.json": "{}"})
+    _archive(second_source, {"s24/results.json": "{}"})
+    sources = {
+        "first-experiment.zip": first_source,
+        "nested/second-experiment.zip": second_source,
+    }
+    listing = [
+        {
+            "Path": relative,
+            "Name": Path(relative).name,
+            "Size": source.stat().st_size,
+            "ModTime": "2026-08-12T10:00:00Z",
+            "Hashes": {"MD5": f"hash-{index}"},
+        }
+        for index, (relative, source) in enumerate(sources.items())
+    ]
+    listing.append(
+        {
+            "Path": "notes.txt",
+            "Name": "notes.txt",
+            "Size": 4,
+            "ModTime": "2026-08-12T10:00:00Z",
+        }
+    )
+    sync = RcloneResultsSync(
+        "folder-id",
+        tmp_path / "cache",
+        "robocode-drive",
+    )
+    commands: list[list[str]] = []
+
+    def _run(arguments: list[str]) -> str:
+        commands.append(arguments)
+        if arguments[0] == "lsjson":
+            return json.dumps(listing)
+        assert arguments[0] == "copyto"
+        relative = arguments[1].split(":", 1)[1]
+        shutil.copyfile(sources[relative], arguments[2])
+        return ""
+
+    sync._run_rclone = _run  # type: ignore[method-assign]
+
+    first = sync.sync()
+    first_target = sync.runs_dir / "first-experiment"
+    second_target = sync.runs_dir / "nested" / "second-experiment"
+    assert first.downloaded == 2
+    assert first.ignored == 1
+    assert (first_target / "s42" / "results.json").is_file()
+    assert (second_target / "s24" / "results.json").is_file()
+    assert all("--drive-root-folder-id" in command for command in commands)
+
+    local_gif = first_target / "s42" / "videos" / "episode_0.gif"
+    local_gif.parent.mkdir()
+    local_gif.write_bytes(b"GIF89a")
+    commands.clear()
+    second = sync.sync()
+
+    assert second.downloaded == 0
+    assert second.unchanged == 2
+    assert local_gif.read_bytes() == b"GIF89a"
+    assert [command[0] for command in commands] == ["lsjson"]

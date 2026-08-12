@@ -263,16 +263,25 @@ python experiments/results_viewer.py --root . --port 8000
 ```
 
 The viewer can also read ZIP result archives recursively from a Google Drive
-folder. Install the optional dependencies, create an OAuth desktop client in
-Google Cloud, and keep its downloaded JSON outside the repository at the
-default path shown below. The first launch opens a browser for consent and
-stores a private read-only token beside it.
+folder. The recommended backend is [rclone](https://rclone.org/drive/), which
+provides browser login without requiring every collaborator to create a Google
+Cloud project. Install rclone from its official downloads on Linux or with
+Homebrew on macOS:
 
 ```bash
-uv sync --extra drive-viewer
-mkdir -p ~/.config/robocode
-# Save the OAuth desktop-client JSON as:
-# ~/.config/robocode/google_oauth_client.json
+# Linux: https://rclone.org/downloads/
+# macOS:
+brew install rclone
+
+rclone config
+```
+
+In `rclone config`, create a remote named `robocode-drive`, choose Google
+Drive, leave the client ID and secret blank, choose read-only access, and allow
+browser authentication. The resulting token stays in rclone's user config
+outside the repository. Then launch:
+
+```bash
 python experiments/results_viewer.py --drive-folder "<Google Drive folder URL>"
 ```
 
@@ -282,11 +291,32 @@ renaming. Archives are extracted under the user's cache directory, and the
 viewer scans that local copy. The Refresh button checks Drive again, downloads
 changed archives, removes archives deleted remotely, and rescans the cache.
 Unchanged extracted archives are left in place, so GIFs rendered by the viewer
-stay local and survive refreshes. The Drive folder URL, OAuth client JSON, and
-token are runtime configuration and must not be committed. Their locations can
-be overridden with
+stay local and survive refreshes. The Drive folder URL and rclone configuration
+are runtime configuration and must not be committed. Their locations can be
+overridden with
 `ROBOCODE_RESULTS_DRIVE_FOLDER`, `ROBOCODE_RESULTS_CACHE`,
-`ROBOCODE_GOOGLE_OAUTH_CLIENT`, and `ROBOCODE_GOOGLE_DRIVE_TOKEN`.
+`ROBOCODE_RCLONE_REMOTE`, and `RCLONE_CONFIG`. The same viewer command works on
+Linux and macOS as long as `rclone` is on `PATH`.
+
+Rclone currently warns that its shared Google Drive OAuth client is scheduled
+for retirement during 2026. The blank-client-ID setup is therefore a convenient
+prototype path, not a permanent team dependency. If Google disables it, use a
+team-owned OAuth client with the same rclone remote or the direct API backend
+below; the viewer and archive layout do not change.
+
+The original direct Google API backend remains available when needed. It
+requires a locally stored OAuth desktop-client JSON and the optional Python
+dependencies:
+
+```bash
+uv sync --extra drive-viewer
+python experiments/results_viewer.py \
+  --drive-backend api \
+  --drive-folder "<Google Drive folder URL>"
+```
+
+Its credential locations can be overridden with
+`ROBOCODE_GOOGLE_OAUTH_CLIENT` and `ROBOCODE_GOOGLE_DRIVE_TOKEN`.
 
 ### Agentic approach
 
