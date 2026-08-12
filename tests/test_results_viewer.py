@@ -103,6 +103,16 @@ def test_preview_progress_uses_a_bounded_card_layout() -> None:
     )
 
 
+def test_index_filters_are_restored_from_the_navigation_hash() -> None:
+    """Run navigation retains a bookmarkable filtered index destination."""
+    assert 'let ALL=[], FILTER={}, INDEX_HASH="#/index"' in viewer.APP_JS
+    assert "function indexHash(){" in viewer.APP_JS
+    assert "function restoreFilters(hash){" in viewer.APP_JS
+    assert "location.hash=indexHash()" in viewer.APP_JS
+    assert "restoreFilters(hash);INDEX_HASH=indexHash()" in viewer.APP_JS
+    assert '<a id="brand" href="#/index"' in viewer.INDEX_HTML
+
+
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5, "1.5", "many"])
 def test_preview_step_limit_rejects_non_positive_or_fractional_values(value) -> None:
     """Invalid custom horizons are rejected before a render is queued."""

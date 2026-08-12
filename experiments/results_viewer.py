@@ -2198,7 +2198,7 @@ INDEX_HTML = """<!doctype html>
 <title>robocode results</title>
 <link rel="stylesheet" href="/static/app.css">
 </head><body>
-<header><a href="#/index" class="brand">robocode results</a>
+<header><a id="brand" href="#/index" class="brand">robocode results</a>
   <button id="refresh">refresh</button>
   <button id="cancel-renders" title="Drop every queued render and stop the running one">cancel renders</button></header>
 <main id="app"></main>
@@ -2373,8 +2373,25 @@ function openLightbox(src){
  document.body.append(ov);
 }
 
-let ALL=[], FILTER={};
+let ALL=[], FILTER={}, INDEX_HASH="#/index";
+const FACETS=[["model","model"],["approach","approach"],["environment","eval env"],
+ ["trained_environment","trained on"],["slice","slice"],
+ ["primitives","primitives"],["seed","seed"],["budget","budget"]];
+const FACET_KEYS=new Set(FACETS.map(([key])=>key));
 async function loadRuns(){ALL=await j("/api/runs");}
+
+function indexHash(){
+ const query=new URLSearchParams();
+ for(const [key,values] of Object.entries(FILTER))for(const value of values)query.append(key,value);
+ const encoded=query.toString();return "#/index"+(encoded?"?"+encoded:"");
+}
+function restoreFilters(hash){
+ FILTER={};const q=hash.indexOf("?");if(q<0)return;
+ for(const [key,value] of new URLSearchParams(hash.slice(q+1))){
+  if(!FACET_KEYS.has(key)||!value)continue;
+  FILTER[key]=FILTER[key]||[];if(!FILTER[key].includes(value))FILTER[key].push(value);
+ }
+}
 
 // Stable per-model colors so a run's model is readable at a glance across the
 // grid; unknown models get a hue hashed from the name.
@@ -2390,11 +2407,8 @@ function facetBar(){
  // during synthesis. They differ only in cross-eval cells, so the "trained on"
  // facet mostly mirrors "eval env" but separates e.g. band-trained policies
  // re-scored on the standard suite.
- const keys=[["model","model"],["approach","approach"],["environment","eval env"],
-  ["trained_environment","trained on"],["slice","slice"],
-  ["primitives","primitives"],["seed","seed"],["budget","budget"]];
  const bar=h("div",{class:"facets"});
- for(const [k,lbl] of keys){
+ for(const [k,lbl] of FACETS){
   const vals=[...new Set(ALL.map(r=>r[k]).filter(v=>v!=null))].sort();
   if(vals.length<2)continue;
   const f=h("div",{class:"facet"},h("span",{class:"lbl"},lbl));
@@ -2403,7 +2417,7 @@ function facetBar(){
    f.append(h("button",{class:"chip"+(on?" active":""),onclick:()=>{
     FILTER[k]=FILTER[k]||[];const i=FILTER[k].indexOf(String(v));
     if(i<0)FILTER[k].push(String(v));else FILTER[k].splice(i,1);
-    if(!FILTER[k].length)delete FILTER[k];location.hash="#/index";renderIndex();}},
+    if(!FILTER[k].length)delete FILTER[k];location.hash=indexHash();}},
     k==="model"?[modelDot(String(v)),String(v)]:String(v)));
   }
   bar.append(f);
@@ -2961,8 +2975,8 @@ async function showVersion(panel,id,snaps,v){
 async function route(){
  const hash=location.hash||"#/index";
  if(!ALL.length)await loadRuns();
- if(hash.startsWith("#/run/"))renderRun(decodeURIComponent(hash.slice(6)));
- else renderIndex();
+ if(hash.startsWith("#/run/")){$("#brand").href=INDEX_HASH;renderRun(decodeURIComponent(hash.slice(6)));}
+ else{restoreFilters(hash);INDEX_HASH=indexHash();$("#brand").href=INDEX_HASH;renderIndex();}
 }
 window.addEventListener("hashchange",route);
 $("#refresh").addEventListener("click",async ev=>{
