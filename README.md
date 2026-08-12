@@ -262,6 +262,32 @@ Browse runs in the browser (metrics, per-episode GIFs, and the sandbox git histo
 python experiments/results_viewer.py --root . --port 8000
 ```
 
+The viewer can also read ZIP result archives recursively from a Google Drive
+folder. Install the optional dependencies, create an OAuth desktop client in
+Google Cloud, and keep its downloaded JSON outside the repository at the
+default path shown below. The first launch opens a browser for consent and
+stores a private read-only token beside it.
+
+```bash
+uv sync --extra drive-viewer
+mkdir -p ~/.config/robocode
+# Save the OAuth desktop-client JSON as:
+# ~/.config/robocode/google_oauth_client.json
+python experiments/results_viewer.py --drive-folder "<Google Drive folder URL>"
+```
+
+Only `.zip` files are downloaded. Name each archive `<Experiment ID>.zip` so
+the tracker ID, Drive result, and local cache directory match without manual
+renaming. Archives are extracted under the user's cache directory, and the
+viewer scans that local copy. The Refresh button checks Drive again, downloads
+changed archives, removes archives deleted remotely, and rescans the cache.
+Unchanged extracted archives are left in place, so GIFs rendered by the viewer
+stay local and survive refreshes. The Drive folder URL, OAuth client JSON, and
+token are runtime configuration and must not be committed. Their locations can
+be overridden with
+`ROBOCODE_RESULTS_DRIVE_FOLDER`, `ROBOCODE_RESULTS_CACHE`,
+`ROBOCODE_GOOGLE_OAUTH_CLIENT`, and `ROBOCODE_GOOGLE_DRIVE_TOKEN`.
+
 ### Agentic approach
 
 The `agentic` approach launches a coding agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.

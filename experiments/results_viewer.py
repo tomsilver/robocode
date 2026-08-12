@@ -9,7 +9,9 @@ version. Modeled on the TensorBoard-style predicators log_viewer.
 The scan walks --root recursively and finds every run regardless of where it
 lives (outputs/, multirun/, or a curated collection like viewer_runs/). Point
 --root at a subtree to view only that subtree, or pass --exclude to prune
-directory names from a broader scan.
+directory names from a broader scan. Alternatively, --drive-folder downloads
+ZIP archives from a Google Drive folder into a private local cache before
+scanning. Drive access is read-only; rendered GIFs remain in that local cache.
 
 Launch:  python experiments/results_viewer.py --root . --port 8000
          python experiments/results_viewer.py --root viewer_runs
@@ -93,6 +95,7 @@ class _Scan:
 SCAN = _Scan()
 RUNS: dict[str, RunInfo] = {}
 _RUNS_LOCK = threading.Lock()
+DRIVE_SYNC: Any = None
 
 
 def _parse_overrides(hydra_dir: Path) -> dict[str, str]:
@@ -387,6 +390,19 @@ def refresh_runs() -> None:
     with _RUNS_LOCK:
         RUNS.clear()
         RUNS.update(_discover_runs(SCAN.root))
+
+
+def sync_drive_and_refresh() -> dict[str, int]:
+    """Synchronize the optional Drive source, then rebuild the local run index."""
+    report: dict[str, int] = {}
+    if DRIVE_SYNC is not None:
+        sync_report = DRIVE_SYNC.sync()
+        report = {
+            key: int(getattr(sync_report, key))
+            for key in ("downloaded", "unchanged", "removed", "ignored")
+        }
+    refresh_runs()
+    return report
 
 
 def _run(run_id: str) -> Optional[RunInfo]:
@@ -2138,8 +2154,13 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/render/cancel":
             return self._json(_cancel_renders())
         if u.path == "/api/refresh":
-            refresh_runs()
-            return self._json({"ok": True, "n": len(RUNS)})
+            try:
+                drive_report = sync_drive_and_refresh()
+            except Exception as error:  # Keep the prior cache usable on sync failure.
+                return self._err(502, f"refresh failed: {error}")
+            return self._json(
+                {"ok": True, "n": len(RUNS), "drive": drive_report}
+            )
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or "{}")
         if u.path == "/api/history/evaluate":
@@ -2943,7 +2964,17 @@ async function route(){
  else renderIndex();
 }
 window.addEventListener("hashchange",route);
-$("#refresh").addEventListener("click",async()=>{await fetch("/api/refresh",{method:"POST"});await loadRuns();route();});
+$("#refresh").addEventListener("click",async ev=>{
+ const b=ev.currentTarget,old=b.textContent;b.disabled=true;b.textContent="syncing…";
+ try{
+  const r=await fetch("/api/refresh",{method:"POST"}),payload=await r.json();
+  if(!r.ok)throw new Error(payload.error||"refresh failed");
+  await loadRuns();route();
+  const d=payload.drive||{};
+  b.textContent=d.downloaded!=null?`synced ${d.downloaded}, kept ${d.unchanged}`:"refreshed";
+ }catch(e){b.textContent="sync failed";alert(e.message);}
+ finally{setTimeout(()=>{b.textContent=old;b.disabled=false;},1800);}
+});
 $("#cancel-renders").addEventListener("click",async ev=>{
  const b=ev.currentTarget;b.disabled=true;
  const r=await j("/api/render/cancel",{method:"POST"});
@@ -2960,7 +2991,37 @@ route();
 def main() -> None:
     """Discover runs, start the render worker, serve forever."""
     ap = argparse.ArgumentParser(description="robocode results viewer")
-    ap.add_argument("--root", default=str(REPO_ROOT), help="root to scan for runs")
+    ap.add_argument("--root", help="local root to scan for runs (default: repo root)")
+    ap.add_argument(
+        "--drive-folder",
+        default=os.environ.get("ROBOCODE_RESULTS_DRIVE_FOLDER"),
+        metavar="URL_OR_ID",
+        help=(
+            "read-only Drive folder of ZIP result archives; may also be set with "
+            "ROBOCODE_RESULTS_DRIVE_FOLDER"
+        ),
+    )
+    ap.add_argument(
+        "--drive-cache",
+        help=(
+            "private local cache base (default: $ROBOCODE_RESULTS_CACHE or the "
+            "platform user cache)"
+        ),
+    )
+    ap.add_argument(
+        "--drive-credentials",
+        help=(
+            "OAuth desktop-client JSON (default: $ROBOCODE_GOOGLE_OAUTH_CLIENT "
+            "or the platform user config)"
+        ),
+    )
+    ap.add_argument(
+        "--drive-token",
+        help=(
+            "local OAuth token (default: $ROBOCODE_GOOGLE_DRIVE_TOKEN or the "
+            "platform user config)"
+        ),
+    )
     ap.add_argument(
         "--exclude",
         nargs="*",
@@ -2976,11 +3037,55 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    SCAN.root = Path(args.root).resolve()
+    global DRIVE_SYNC  # pylint: disable=global-statement
+    if args.drive_folder and args.root:
+        ap.error("--root and --drive-folder cannot be used together")
+    if args.drive_folder:
+        if __package__:
+            from .drive_results import (
+                DriveResultsSync,
+                default_cache_base,
+                default_credentials_path,
+                default_token_path,
+            )
+        else:
+            from drive_results import (  # type: ignore[no-redef]
+                DriveResultsSync,
+                default_cache_base,
+                default_credentials_path,
+                default_token_path,
+            )
+
+        DRIVE_SYNC = DriveResultsSync(
+            args.drive_folder,
+            Path(args.drive_cache).expanduser()
+            if args.drive_cache
+            else default_cache_base(),
+            Path(args.drive_credentials).expanduser()
+            if args.drive_credentials
+            else default_credentials_path(),
+            Path(args.drive_token).expanduser()
+            if args.drive_token
+            else default_token_path(),
+        )
+        SCAN.root = DRIVE_SYNC.runs_dir
+    else:
+        SCAN.root = Path(args.root or REPO_ROOT).resolve()
     SCAN.exclude_dirs = set(args.exclude)
     SCAN.tag = f"{SCAN.root.name}:{args.port}"
-    refresh_runs()
+    try:
+        drive_report = sync_drive_and_refresh()
+    except Exception as error:
+        ap.error(str(error))
     print(f"discovered {len(RUNS)} runs under {SCAN.root}")
+    if drive_report:
+        print(
+            "Drive sync: "
+            f"{drive_report['downloaded']} downloaded, "
+            f"{drive_report['unchanged']} unchanged, "
+            f"{drive_report['removed']} removed, "
+            f"{drive_report['ignored']} non-ZIP files ignored"
+        )
 
     threading.Thread(target=_render_worker, daemon=True).start()
 

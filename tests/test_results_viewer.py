@@ -34,6 +34,38 @@ def _run(path: Path) -> viewer.RunInfo:
     )
 
 
+def test_sync_drive_and_refresh_syncs_before_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The refresh action pulls Drive before rebuilding the run index."""
+    events: list[str] = []
+
+    class _Report:
+        downloaded = 1
+        unchanged = 2
+        removed = 0
+        ignored = 3
+
+    class _Sync:
+        @staticmethod
+        def sync() -> _Report:
+            events.append("sync")
+            return _Report()
+
+    def _discover(_root: Path) -> dict[str, viewer.RunInfo]:
+        events.append("discover")
+        return {}
+
+    monkeypatch.setattr(viewer, "DRIVE_SYNC", _Sync())
+    monkeypatch.setattr(viewer, "_discover_runs", _discover)
+    monkeypatch.setattr(viewer.SCAN, "root", tmp_path)
+
+    report = viewer.sync_drive_and_refresh()
+
+    assert events == ["sync", "discover"]
+    assert report == {"downloaded": 1, "unchanged": 2, "removed": 0, "ignored": 3}
+
+
 def _assistant(subject: str, tokens: tuple[int, int]) -> dict:
     return {
         "type": "assistant",

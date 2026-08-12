@@ -52,6 +52,10 @@ develop = [
     "pytest>=7.2.2,<9.1",
     "types-PyYAML",
 ]
+drive-viewer = [
+    "google-api-python-client",
+    "google-auth-oauthlib",
+]
 libero = [
     "libero",
     "robosuite==1.4.0",
