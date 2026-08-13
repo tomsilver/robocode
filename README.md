@@ -327,6 +327,34 @@ python experiments/run_experiment.py -m \
 
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
 
+### Plain-LLM approaches
+
+`llm_genplan` and `best_of_k` call a model directly (messages in, code out) with no tools and no agent loop. They take their model from the `approach/completion` config group, which is separate from the `approach/backend` group the agentic approach uses:
+
+```bash
+# Default: Opus 5 through the Claude CLI
+python experiments/run_experiment.py approach=llm_genplan environment=small_maze eval_seed="$EVAL_SEED"
+
+# Same approach on a different model
+python experiments/run_experiment.py approach=best_of_k approach/completion=cli_sonnet5 eval_seed="$EVAL_SEED"
+```
+
+The `cli_*` presets drive the same authenticated Claude CLI as the agentic backend, so these runs need `claude auth login` (or `ANTHROPIC_API_KEY`) and no separate setup. The CLI applies an irreducible ~2k-token system prompt that cannot be stripped, so these baselines are prompted with that preamble present; the `anthropic_*` presets call the Messages API directly when a prompt with nothing else in it is required.
+
+| Completion preset | Provider | Model |
+|---|---|---|
+| `cli_opus5` (default) | Claude CLI | `claude-opus-5` |
+| `cli_sonnet5` | Claude CLI | `claude-sonnet-5` |
+| `cli_opus48` | Claude CLI | `claude-opus-4-8` |
+| `cli_sonnet46` | Claude CLI | `claude-sonnet-4-6` |
+| `cli_claude` | Claude CLI | `sonnet` (alias; the CLI picks the generation) |
+| `anthropic_opus` | Messages API | `claude-opus-4-8` |
+| `anthropic_sonnet` | Messages API | `claude-sonnet-4-6` |
+| `ollama_qwen` | OpenAI-compatible | `qwen3.6` (local Ollama) |
+| `vllm` | OpenAI-compatible | `Qwen/Qwen3.6-35B-A3B` (local vLLM) |
+
+The `anthropic_*` presets bill the Messages API and need `ANTHROPIC_API_KEY`; their `input_cost_per_mtok` / `output_cost_per_mtok` fields turn reported token usage into an estimated `cost_usd`, which bounds `approach.max_budget_usd`. The CLI reports its own cost, and the local presets report none.
+
 ### Replicates and the evaluation suite
 
 `replicate_seed` and `eval_seed` have deliberately different roles:
