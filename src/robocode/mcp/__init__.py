@@ -240,23 +240,16 @@ def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(f"mcp__{MCP_SERVER_NAME}__{t}" for t in tool_names)
 
 
-# Env-config fields listing the object counts a run is configured for. The sandbox
-# copy of the config keeps a single count in each: the render server needs a
-# constructible env, and its tools pin the object count per call.
+# Count-range fields are dropped from the sandbox copy; the render server
+# re-inserts a placeholder (see local_render._build_env).
 _COUNT_RANGE_KEYS = ("design_counts", "eval_counts")
-_SANDBOX_COUNTS = [1]
 
 
 def _write_sandbox_env_config(source: Path, dest: Path) -> None:
-    """Write the env config the in-sandbox render server instantiates.
-
-    The sandbox copy is readable from inside the sandbox, so it carries only what the
-    server needs: the count-range fields are reduced to a single count.
-    """
+    """Write the env config the in-sandbox render server instantiates."""
     config = json.loads(source.read_text(encoding="utf-8"))
     for key in _COUNT_RANGE_KEYS:
-        if key in config:
-            config[key] = _SANDBOX_COUNTS
+        config.pop(key, None)
     dest.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
