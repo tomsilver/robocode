@@ -569,12 +569,16 @@ def _authorize(args: argparse.Namespace) -> Any:
     return gspread.oauth(**kwargs)
 
 
-def _get_worksheet(spreadsheet: Any, title: str) -> Any:
+def _get_worksheet(
+    spreadsheet: Any, title: str, *, create_if_missing: bool = True
+) -> Any | None:
     gspread = importlib.import_module("gspread")
 
     try:
         return spreadsheet.worksheet(title)
     except gspread.WorksheetNotFound:
+        if not create_if_missing:
+            return None
         worksheets = spreadsheet.worksheets()
         if len(worksheets) == 1 and not worksheets[0].acell("A1").value:
             worksheets[0].update_title(title)
@@ -599,8 +603,8 @@ def main() -> None:
     generated_rows = load_generated_rows(args.csv_files)
     client = _authorize(args)
     spreadsheet = client.open_by_key(args.sheet_id)
-    worksheet = _get_worksheet(spreadsheet, args.worksheet)
-    existing = worksheet.get_all_values()
+    worksheet = _get_worksheet(spreadsheet, args.worksheet, create_if_missing=False)
+    existing = worksheet.get_all_values() if worksheet is not None else []
     projected_existing, schema_upgrade = project_tracker_schema_upgrade(existing)
     plan = plan_upsert(projected_existing, generated_rows)
     if schema_upgrade.required:
@@ -610,6 +614,9 @@ def main() -> None:
     print(f"{plan.inactivated_experiments} experiments marked inactive")
     if args.dry_run:
         return
+    if worksheet is None:
+        worksheet = _get_worksheet(spreadsheet, args.worksheet)
+        assert worksheet is not None
     apply_schema_upgrade(spreadsheet, worksheet, schema_upgrade)
     apply_upsert(worksheet, plan)
     table_values = worksheet.get_all_values()

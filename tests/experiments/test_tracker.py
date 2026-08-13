@@ -509,3 +509,38 @@ def test_table_column_signature_ignores_omitted_zero_index() -> None:
     assert sync._table_column_signature(current) == sync._table_column_signature(
         desired
     )
+
+
+def test_dry_run_does_not_create_a_missing_worksheet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A preview of a new tracker remains read-only at spreadsheet level."""
+
+    class WorksheetNotFound(Exception):
+        pass
+
+    gspread = Mock(WorksheetNotFound=WorksheetNotFound)
+    spreadsheet = Mock()
+    spreadsheet.worksheet.side_effect = WorksheetNotFound
+    client = Mock()
+    client.open_by_key.return_value = spreadsheet
+    args = Mock(
+        csv_files=[Path("generated.csv")],
+        sheet_id="sheet-id",
+        worksheet="Tracker",
+        dry_run=True,
+    )
+    monkeypatch.setattr(
+        sync, "importlib", Mock(import_module=Mock(return_value=gspread))
+    )
+    monkeypatch.setattr(sync, "_parse_args", Mock(return_value=args))
+    monkeypatch.setattr(
+        sync, "load_generated_rows", Mock(return_value=[_generated_row("new")])
+    )
+    monkeypatch.setattr(sync, "_authorize", Mock(return_value=client))
+
+    sync.main()
+
+    spreadsheet.worksheet.assert_called_once_with("Tracker")
+    spreadsheet.worksheets.assert_not_called()
+    spreadsheet.add_worksheet.assert_not_called()
