@@ -41,16 +41,9 @@ _ActType = TypeVar("_ActType")
 
 
 def _redact_held_out_counts(env_cfg: dict[str, Any]) -> dict[str, Any]:
-    """Hide the held-out evaluation counts from a config shipped into the sandbox.
-
-    Results integrity: the generated program is written from what this config
-    exposes, and the object counts it will be evaluated on are held out. If the
-    program could read them it could special-case those counts and inflate its
-    generalization score. Pinning ``eval_counts`` to ``design_counts`` leaves no
-    held-out count recoverable, while keeping the env constructible and its
-    unpinned resets (which ``train()`` samples) over the real design range.
-    Configs without these keys (fixed-count envs) pass through unchanged.
-    """
+    """Pin ``eval_counts`` to ``design_counts`` so the config shipped into the
+    sandbox does not expose the held-out counts. Configs without these keys pass
+    through unchanged."""
     if "eval_counts" in env_cfg and "design_counts" in env_cfg:
         return {**env_cfg, "eval_counts": list(env_cfg["design_counts"])}
     return env_cfg
