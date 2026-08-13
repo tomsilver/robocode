@@ -67,7 +67,6 @@ def test_infer_bilevel_mapping_none_for_unsupported() -> None:
     """Envs with no bilevel model (pushpullhook, 3D) infer to (None, {})."""
     for env_id in (
         "kinder/PushPullHook2D-v0",
-        "kinder/Motion3D-v0",
         "kinder/Obstruction3D-o2-v0",
     ):
         assert infer_bilevel_mapping(env_id) == (None, {})

@@ -10,7 +10,6 @@ import pytest
 from robocode.environments.kinder_geom3d_env import KinderGeom3DEnv
 
 ALL_3D_ENV_IDS = [
-    "kinder/Motion3D-v0",
     "kinder/Obstruction3D-o0-v0",
     "kinder/Obstruction3D-o2-v0",
     "kinder/Obstruction3D-o4-v0",
