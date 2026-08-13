@@ -16,7 +16,7 @@ class ExperimentConfig:
 
 
 def is_valid_experiment(config: ExperimentConfig) -> tuple[bool, str | None]:
-    """Return whether a condition is runnable and explain exclusions."""
+    """Return whether a Hydra-canonicalized condition is runnable."""
     blackbox = config.values.get("approach.blackbox") is True
     bilevel = config.values.get("primitive_level") == "bilevel"
     if blackbox and bilevel:

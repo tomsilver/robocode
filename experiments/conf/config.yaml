@@ -16,7 +16,7 @@ eval_seed: null
 max_steps: 1000
 num_eval_tasks: 100
 # Per-instance eval wall-clock budget (seconds), shared by every approach.
-eval_timeout: 30
+eval_timeout: 60
 render_videos: false
 record_approach_history: false
 mcp_tools:

@@ -17,6 +17,8 @@ from schema import (
     STATUS_OPTIONS,
 )
 
+_PROTOCOL_COLUMNS = ("Replicate Seeds", "Evaluation Seed")
+
 
 @dataclass(frozen=True)
 class CellUpdate:
@@ -233,6 +235,18 @@ def plan_upsert(
             new_rows.append(tuple(generated.get(column, "") for column in header))
             continue
         row_number, current = existing_by_id[condition_id]
+        changed_protocol = [
+            column
+            for column in _PROTOCOL_COLUMNS
+            if current[column_by_name[column] - 1] != generated[column]
+        ]
+        if changed_protocol:
+            columns = ", ".join(changed_protocol)
+            raise ValueError(
+                f"Experiment ID {condition_id} changes its run protocol ({columns}); "
+                "regenerate it with a protocol-sensitive Experiment ID so the new "
+                "run is appended without changing prior results"
+            )
         changed = False
         for column in GENERATED_COLUMNS:
             column_number = column_by_name[column]

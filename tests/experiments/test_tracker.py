@@ -67,6 +67,7 @@ def test_sample_campaign_expansion_and_constraint() -> None:
     assert all(row["Evaluation Seed"] == str(_TEST_EVAL_SEED) for row in rows)
     assert all("replicate_seed=42,24" in row["Command"] for row in rows)
     assert all(f"eval_seed={_TEST_EVAL_SEED}" in row["Command"] for row in rows)
+    assert all("eval_timeout=60" in row["Command"] for row in rows)
 
 
 def test_campaign_contains_replicates_but_not_private_eval_seed() -> None:
@@ -78,14 +79,12 @@ def test_campaign_contains_replicates_but_not_private_eval_seed() -> None:
     assert "eval_seed" not in raw
 
 
-@pytest.mark.parametrize("eval_seed", [None, True, 42.5, "42"])
+@pytest.mark.parametrize("eval_seed", [None, True, -1, 42.5, "42"])
 def test_generator_rejects_non_integer_eval_seed(eval_seed: Any) -> None:
     """Programmatic callers cannot silently coerce the private protocol seed."""
     campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
-    with pytest.raises(ValueError, match="eval_seed must be an integer"):
-        generate.generate_rows(
-            [campaign], eval_seed=eval_seed, validate_hydra=False
-        )
+    with pytest.raises(ValueError, match="eval_seed must be a nonnegative integer"):
+        generate.generate_rows([campaign], eval_seed=eval_seed, validate_hydra=False)
 
 
 def test_generated_command_propagates_id_to_hydra_and_output_path() -> None:
@@ -109,13 +108,13 @@ def test_generated_command_propagates_id_to_hydra_and_output_path() -> None:
     assert "replicate_seed=42,24" in command
     assert f"eval_seed={_TEST_EVAL_SEED}" in command
     assert (
-        f"hydra.sweep.dir=multirun/{condition_id}/" "${now:%Y-%m-%d_%H-%M-%S}"
+        f"hydra.sweep.dir=multirun/{condition_id}/${{now:%Y-%m-%d_%H-%M-%S}}"
     ) in command
     assert "hydra.sweep.subdir=replicate_${replicate_seed}" in command
 
 
-def test_experiment_id_is_independent_of_replicates_and_mapping_order() -> None:
-    """Replicate order and YAML mapping order do not change a condition ID."""
+def test_experiment_id_is_independent_of_mapping_and_replicate_order() -> None:
+    """Mapping and replicate order do not change the canonical run ID."""
     values = {
         "environment": "motion2d_easy",
         "approach": "agentic",
@@ -125,13 +124,15 @@ def test_experiment_id_is_independent_of_replicates_and_mapping_order() -> None:
     }
     first = generate.ExperimentConfig("campaign_a", values, (42, 24))
     second = generate.ExperimentConfig(
-        "campaign_b", dict(reversed(tuple(values.items()))), (424,)
+        "campaign_b", dict(reversed(tuple(values.items()))), (24, 42)
     )
-    assert generate.experiment_id(first) == generate.experiment_id(second)
+    assert generate.experiment_id(first, _TEST_EVAL_SEED) == generate.experiment_id(
+        second, _TEST_EVAL_SEED
+    )
 
 
-def test_experiment_id_is_independent_of_evaluation_seed() -> None:
-    """Changing the protocol suite updates metadata, not the condition key."""
+def test_experiment_id_changes_with_seed_protocol() -> None:
+    """A changed replicate set or evaluation suite appends a distinct run."""
     config = generate.ExperimentConfig(
         "campaign_a",
         {
@@ -141,10 +142,91 @@ def test_experiment_id_is_independent_of_evaluation_seed() -> None:
         },
         (42, 24),
     )
+    changed_replicates = generate.ExperimentConfig(
+        config.campaign, config.values, (42, 24, 424)
+    )
     first = generate.tracker_row(config, eval_seed=_TEST_EVAL_SEED)
     second = generate.tracker_row(config, eval_seed=_TEST_EVAL_SEED + 1)
-    assert first["Experiment ID"] == second["Experiment ID"]
-    assert first["Evaluation Seed"] != second["Evaluation Seed"]
+    third = generate.tracker_row(changed_replicates, eval_seed=_TEST_EVAL_SEED)
+    assert (
+        len(
+            {
+                first["Experiment ID"],
+                second["Experiment ID"],
+                third["Experiment ID"],
+            }
+        )
+        == 3
+    )
+
+
+def test_hydra_defaults_are_canonicalized_for_ids_metadata_and_commands() -> None:
+    """Omitted tracked defaults are identical to the same explicit condition."""
+    implicit = generate.ExperimentConfig(
+        "campaign_a",
+        {
+            "environment": "motion2d_easy",
+            "approach": "agentic",
+            "primitive_level": "none",
+        },
+        (42,),
+    )
+    explicit = generate.ExperimentConfig(
+        "campaign_b",
+        {
+            **implicit.values,
+            "approach.blackbox": False,
+            "approach/backend": "claude_opus5",
+            "eval_timeout": 60,
+        },
+        (42,),
+    )
+
+    implicit_row = generate.tracker_row(implicit, eval_seed=_TEST_EVAL_SEED)
+    explicit_row = generate.tracker_row(explicit, eval_seed=_TEST_EVAL_SEED)
+
+    assert implicit_row["Experiment ID"] == explicit_row["Experiment ID"]
+    assert implicit_row["Access"] == "whitebox"
+    assert implicit_row["Model / Backend"] == "claude_opus5"
+    command = shlex.split(implicit_row["Command"])
+    assert "approach.blackbox=false" in command
+    assert "approach/backend=claude_opus5" in command
+    assert "eval_timeout=60" in command
+
+
+def test_timeout_change_produces_a_distinct_experiment_id() -> None:
+    """Evaluation time is executable condition data, not an ambient default."""
+    values = {
+        "environment": "motion2d_easy",
+        "approach": "agentic",
+        "primitive_level": "none",
+    }
+    default = generate.ExperimentConfig("campaign", values, (42,))
+    shorter = generate.ExperimentConfig(
+        "campaign", {**values, "eval_timeout": 30}, (42,)
+    )
+    assert generate.experiment_id(default, _TEST_EVAL_SEED) != generate.experiment_id(
+        shorter, _TEST_EVAL_SEED
+    )
+
+
+def test_quoted_blackbox_true_is_normalized_before_constraints(tmp_path: Path) -> None:
+    """YAML strings that Hydra parses as booleans cannot bypass validity rules."""
+    campaign = tmp_path / "quoted-blackbox.yaml"
+    campaign.write_text(
+        """name: quoted_blackbox
+matrix:
+  environment: [motion2d_easy]
+  approach: [agentic]
+  primitive_level: [bilevel]
+  approach.blackbox: [\"true\"]
+replicate_seeds: [42]
+"""
+    )
+    rows, excluded = generate.generate_rows([campaign], eval_seed=_TEST_EVAL_SEED)
+    assert not rows
+    assert excluded[0][0].values["approach.blackbox"] is True
+    assert excluded[0][1] == "bilevel_models unavailable under blackbox"
 
 
 def test_missing_hydra_choice_fails_generation(tmp_path: Path) -> None:
@@ -247,9 +329,7 @@ def test_seed_schema_upgrade_preserves_human_cells_in_place() -> None:
 
     assert upgrade.required
     assert upgrade.rename_seeds_column
-    assert upgrade.insert_evaluation_seed_column == (
-        legacy_header.index("Seeds") + 2
-    )
+    assert upgrade.insert_evaluation_seed_column == (legacy_header.index("Seeds") + 2)
     assert upgrade.column_moves
     assert projected[0] == list(schema.ALL_COLUMNS)
     assert projected[1][schema.ALL_COLUMNS.index("Owner")] == "Ada"
@@ -259,16 +339,18 @@ def test_seed_schema_upgrade_preserves_human_cells_in_place() -> None:
         == "https://drive.example/result"
     )
 
-    plan = sync.plan_upsert(projected, [_generated_row("condition-1")])
+    replacement = _generated_row("condition-2")
+    plan = sync.plan_upsert(projected, [replacement])
     human_columns = {
         schema.ALL_COLUMNS.index(column) + 1 for column in schema.HUMAN_COLUMNS
     }
     assert not any(update.column in human_columns for update in plan.updates)
-    assert sync.CellUpdate(
-        2,
-        schema.ALL_COLUMNS.index("Evaluation Seed") + 1,
-        str(_TEST_EVAL_SEED),
-    ) in plan.updates
+    assert len(plan.new_rows) == 1
+    assert projected[1][schema.ALL_COLUMNS.index("Evaluation Seed")] == ""
+    assert (
+        projected[1][schema.ALL_COLUMNS.index("Results")]
+        == "https://drive.example/result"
+    )
 
     spreadsheet = Mock()
     worksheet = Mock(id=123)
@@ -283,6 +365,56 @@ def test_seed_schema_upgrade_preserves_human_cells_in_place() -> None:
         {"range": "J1", "values": [["Replicate Seeds"]]},
         {"range": "K1", "values": [["Evaluation Seed"]]},
     ]
+
+
+def test_upsert_rejects_seed_changes_for_the_same_experiment_id() -> None:
+    """A malformed old-style ID cannot relabel an existing row's protocol."""
+    old = _generated_row("condition-1")
+    existing = [
+        list(schema.ALL_COLUMNS),
+        [old[column] for column in schema.ALL_COLUMNS],
+    ]
+    changed = _generated_row("condition-1")
+    changed["Replicate Seeds"] = "[42, 24, 424]"
+    changed["Progress"] = "0/3"
+
+    with pytest.raises(ValueError, match="changes its run protocol"):
+        sync.plan_upsert(existing, [changed])
+
+
+def test_changed_protocol_appends_and_preserves_completed_results() -> None:
+    """Canonical protocol IDs keep an earlier completed campaign row untouched."""
+    values = {
+        "environment": "motion2d_easy",
+        "approach": "agentic",
+        "primitive_level": "none",
+    }
+    old_config = generate.ExperimentConfig("campaign_a", values, (42, 24))
+    new_config = generate.ExperimentConfig("campaign_a", values, (42, 24, 424))
+    old = generate.tracker_row(old_config, eval_seed=_TEST_EVAL_SEED)
+    new = generate.tracker_row(new_config, eval_seed=_TEST_EVAL_SEED)
+    existing_row = [old[column] for column in schema.ALL_COLUMNS]
+    existing_row[schema.ALL_COLUMNS.index("Status")] = "Done"
+    existing_row[schema.ALL_COLUMNS.index("Progress")] = "2/2"
+    existing_row[schema.ALL_COLUMNS.index("Results")] = "result-link"
+    existing_row[schema.ALL_COLUMNS.index("Git SHA")] = "abc123"
+
+    plan = sync.plan_upsert(
+        [list(schema.ALL_COLUMNS), existing_row],
+        [new],
+    )
+
+    assert len(plan.new_rows) == 1
+    assert not any(
+        update.column
+        in {
+            schema.ALL_COLUMNS.index("Status") + 1,
+            schema.ALL_COLUMNS.index("Progress") + 1,
+            schema.ALL_COLUMNS.index("Results") + 1,
+            schema.ALL_COLUMNS.index("Git SHA") + 1,
+        }
+        for update in plan.updates
+    )
 
 
 def test_upsert_inactivates_only_campaigns_in_the_input() -> None:

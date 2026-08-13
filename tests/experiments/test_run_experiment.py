@@ -21,6 +21,7 @@ _SPEC.loader.exec_module(run_experiment)
 def test_repository_protocol_requires_explicit_eval_seed() -> None:
     """The public config does not contain the private evaluation seed."""
     cfg = OmegaConf.load(_MODULE_PATH.parent / "conf" / "config.yaml")
+    assert cfg.eval_timeout == 60
     with pytest.raises(ValueError, match="must be set explicitly"):
         run_experiment.resolve_eval_seed(cfg)
 
@@ -39,10 +40,11 @@ def test_eval_seed_cannot_be_null() -> None:
         run_experiment.resolve_eval_seed(cfg)
 
 
-def test_non_integer_eval_seed_is_rejected() -> None:
-    """A fractional evaluation seed cannot be silently coerced."""
-    with pytest.raises(ValueError, match="eval_seed must be an integer"):
-        run_experiment.resolve_eval_seed(OmegaConf.create({"eval_seed": 42.5}))
+@pytest.mark.parametrize("eval_seed", [-1, 42.5])
+def test_invalid_eval_seed_is_rejected(eval_seed: Any) -> None:
+    """Invalid evaluation seeds fail before synthesis work can begin."""
+    with pytest.raises(ValueError, match="eval_seed must be a nonnegative integer"):
+        run_experiment.resolve_eval_seed(OmegaConf.create({"eval_seed": eval_seed}))
 
 
 def test_pinned_eval_seed_yields_identical_suite_across_replicates() -> None:

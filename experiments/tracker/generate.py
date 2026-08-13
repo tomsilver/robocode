@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from constraints import ExperimentConfig, Scalar, is_valid_experiment
 from hydra import compose, initialize_config_dir
+from omegaconf import DictConfig, OmegaConf
 from schema import ALL_COLUMNS
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,7 +25,12 @@ _PREFERRED_DIMENSIONS = (
     "primitive_level",
     "approach.blackbox",
     "approach/backend",
+    "approach/completion",
+    "eval_timeout",
 )
+_TOP_LEVEL_CHOICES = ("environment", "approach", "primitive_level")
+_NESTED_APPROACH_CHOICES = ("approach/backend", "approach/completion")
+_PROTOCOL_CONFIG_KEYS = ("experiment_id", "replicate_seed", "eval_seed")
 
 
 def _require_mapping(value: Any, description: str) -> Mapping[str, Any]:
@@ -108,20 +114,75 @@ def hydra_overrides(config: ExperimentConfig) -> list[str]:
     ]
 
 
-def validate_with_hydra(config: ExperimentConfig, eval_seed: int) -> None:
-    """Compose a condition so missing config choices fail during generation."""
-    overrides = [
-        *hydra_overrides(config),
-        f"experiment_id={experiment_id(config)}",
-        f"replicate_seed={config.replicate_seeds[0]}",
-        f"eval_seed={eval_seed}",
-    ]
+def _compose_with_hydra(
+    config: ExperimentConfig, extra_overrides: Sequence[str] = ()
+) -> DictConfig:
+    """Compose one condition and report invalid overrides with useful context."""
+    overrides = [*hydra_overrides(config), *extra_overrides]
     try:
         with initialize_config_dir(config_dir=str(_CONF_DIR), version_base=None):
-            compose(config_name="config", overrides=overrides)
+            return compose(
+                config_name="config",
+                overrides=overrides,
+                return_hydra_config=True,
+            )
     except Exception as error:
         condition = ", ".join(overrides)
         raise ValueError(f"Hydra could not compose {condition}: {error}") from error
+
+
+def canonicalize_config(config: ExperimentConfig) -> ExperimentConfig:
+    """Materialize tracked Hydra defaults and normalize their parsed values."""
+    cfg = _compose_with_hydra(config)
+    choices = cfg.hydra.runtime.choices
+    values = dict(config.values)
+    for key in _TOP_LEVEL_CHOICES:
+        choice = choices.get(key)
+        if choice is not None:
+            values[key] = str(choice)
+    for key in _NESTED_APPROACH_CHOICES:
+        choice = choices.get(key)
+        if choice is None:
+            values.pop(key, None)
+        else:
+            values[key] = str(choice)
+
+    if "blackbox" in cfg.approach:
+        blackbox = cfg.approach.blackbox
+        if not isinstance(blackbox, bool):
+            raise ValueError(
+                f"Hydra must compose approach.blackbox to a boolean, got {blackbox!r}"
+            )
+        values["approach.blackbox"] = blackbox
+    else:
+        values.pop("approach.blackbox", None)
+
+    eval_timeout = cfg.get("eval_timeout")
+    if (
+        not isinstance(eval_timeout, (int, float))
+        or isinstance(eval_timeout, bool)
+        or eval_timeout <= 0
+    ):
+        raise ValueError(
+            "Hydra must compose eval_timeout to a positive number of seconds, "
+            f"got {eval_timeout!r}"
+        )
+    values["eval_timeout"] = eval_timeout
+    return ExperimentConfig(config.campaign, values, config.replicate_seeds)
+
+
+def validate_with_hydra(config: ExperimentConfig, eval_seed: int) -> None:
+    """Compose the exact generated run, including its fixed protocol values."""
+    canonical = canonicalize_config(config)
+    condition_id = _experiment_id(canonical, eval_seed)
+    _compose_with_hydra(
+        canonical,
+        (
+            f"experiment_id={condition_id}",
+            f"replicate_seed={canonical.replicate_seeds[0]}",
+            f"eval_seed={eval_seed}",
+        ),
+    )
 
 
 def _slug(value: Scalar) -> str:
@@ -129,8 +190,8 @@ def _slug(value: Scalar) -> str:
     return text or "unset"
 
 
-def experiment_id(config: ExperimentConfig) -> str:
-    """Build a readable ID plus a hash of every canonical matrix dimension."""
+def _experiment_id(config: ExperimentConfig, eval_seed: int) -> str:
+    """Build an ID from one already-canonicalized executable run protocol."""
     labels: list[str] = []
     for key in _PREFERRED_DIMENSIONS:
         if key not in config.values:
@@ -138,23 +199,39 @@ def experiment_id(config: ExperimentConfig) -> str:
         value = config.values[key]
         if key == "approach.blackbox":
             labels.append("blackbox" if value is True else "whitebox")
+        elif key == "eval_timeout":
+            labels.append(f"timeout_{_slug(value)}s")
         else:
             labels.append(_slug(value))
-    canonical = json.dumps(config.values, sort_keys=True, separators=(",", ":"))
+
+    composed = OmegaConf.to_container(_compose_with_hydra(config), resolve=False)
+    assert isinstance(composed, dict)
+    composed.pop("hydra", None)
+    for key in _PROTOCOL_CONFIG_KEYS:
+        composed.pop(key, None)
+    payload = {
+        "config": composed,
+        "replicate_seeds": sorted(config.replicate_seeds),
+        "eval_seed": eval_seed,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
     return "__".join([*(labels or ["condition"]), digest])
 
 
-def hydra_command(
-    config: ExperimentConfig, condition_id: str, eval_seed: int
-) -> str:
+def experiment_id(config: ExperimentConfig, eval_seed: int) -> str:
+    """Build a shared ID from Hydra's canonical config and the run protocol."""
+    return _experiment_id(canonicalize_config(config), eval_seed)
+
+
+def hydra_command(config: ExperimentConfig, condition_id: str, eval_seed: int) -> str:
     """Create one multirun command with fixed evaluation and swept replicates."""
     overrides = [
         *hydra_overrides(config),
         f"experiment_id={condition_id}",
         f"replicate_seed={','.join(map(str, config.replicate_seeds))}",
         f"eval_seed={eval_seed}",
-        (f"hydra.sweep.dir=multirun/{condition_id}/" "${now:%Y-%m-%d_%H-%M-%S}"),
+        (f"hydra.sweep.dir=multirun/{condition_id}/${{now:%Y-%m-%d_%H-%M-%S}}"),
         "hydra.sweep.subdir=replicate_${replicate_seed}",
     ]
     quoted = " ".join(shlex.quote(override) for override in overrides)
@@ -163,7 +240,8 @@ def hydra_command(
 
 def tracker_row(config: ExperimentConfig, eval_seed: int) -> dict[str, str]:
     """Convert a valid condition to the shared tracker schema."""
-    condition_id = experiment_id(config)
+    config = canonicalize_config(config)
+    condition_id = _experiment_id(config, eval_seed)
     blackbox = config.values.get("approach.blackbox")
     access = ""
     if isinstance(blackbox, bool):
@@ -177,7 +255,12 @@ def tracker_row(config: ExperimentConfig, eval_seed: int) -> dict[str, str]:
             "Method": str(config.values.get("approach", "")),
             "Primitive Level": str(config.values.get("primitive_level", "")),
             "Access": access,
-            "Model / Backend": str(config.values.get("approach/backend", "")),
+            "Model / Backend": str(
+                config.values.get(
+                    "approach/backend",
+                    config.values.get("approach/completion", ""),
+                )
+            ),
             "Replicate Seeds": json.dumps(config.replicate_seeds),
             "Evaluation Seed": str(eval_seed),
             "Command": hydra_command(config, condition_id, eval_seed),
@@ -195,14 +278,15 @@ def generate_rows(
     validate_hydra: bool = True,
 ) -> tuple[list[dict[str, str]], list[tuple[ExperimentConfig, str]]]:
     """Expand campaigns, exclude constraints, and return tracker rows."""
-    if not isinstance(eval_seed, int) or isinstance(eval_seed, bool):
-        raise ValueError(f"eval_seed must be an integer, got {eval_seed!r}")
+    if not isinstance(eval_seed, int) or isinstance(eval_seed, bool) or eval_seed < 0:
+        raise ValueError(f"eval_seed must be a nonnegative integer, got {eval_seed!r}")
     rows: list[dict[str, str]] = []
     excluded: list[tuple[ExperimentConfig, str]] = []
     seen_ids: dict[str, str] = {}
     for path in campaign_paths:
         campaign, matrix, replicate_seeds = load_campaign(path)
-        for config in expand_matrix(campaign, matrix, replicate_seeds):
+        for requested_config in expand_matrix(campaign, matrix, replicate_seeds):
+            config = canonicalize_config(requested_config)
             valid, reason = is_valid_experiment(config)
             if not valid:
                 assert reason is not None
@@ -240,6 +324,7 @@ def _summary(
     rows: Sequence[Mapping[str, str]],
     excluded: Sequence[tuple[ExperimentConfig, str]],
     list_conditions: bool,
+    eval_seed: int,
 ) -> None:
     print(f"{len(rows)} valid experiment conditions")
     print(f"{len(excluded)} invalid combinations excluded")
@@ -247,7 +332,7 @@ def _summary(
         for row in rows:
             print(f"+ {row['Experiment ID']}")
         for config, reason in excluded:
-            print(f"SKIP {experiment_id(config)}")
+            print(f"SKIP {experiment_id(config, eval_seed)}")
             print(f"     {reason}")
 
 
@@ -274,7 +359,7 @@ def main() -> None:
         eval_seed=args.eval_seed,
         validate_hydra=not args.no_hydra_validation,
     )
-    _summary(rows, excluded, list_conditions=args.dry_run)
+    _summary(rows, excluded, list_conditions=args.dry_run, eval_seed=args.eval_seed)
     if not args.dry_run:
         output = args.output or _default_output(args.campaigns)
         write_csv(rows, output)

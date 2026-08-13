@@ -348,7 +348,10 @@ The generated Experiment ID is passed into Hydra, recorded in every `results.jso
 and used as the exact parent directory under `multirun/`. Each invocation creates a
 timestamped run beneath that parent with one `replicate_<replicate_seed>` directory
 per replicate, so the condition folder can be uploaded to Drive without renaming it.
-Neither seed field is part of the stable condition ID.
+The ID fingerprints the complete Hydra-composed condition and both seed fields. Hydra
+defaults such as access mode, model/backend, and the 60-second evaluation timeout are
+materialized in every generated command. Editing any executable setting or seed
+protocol therefore appends a distinct run instead of relabeling earlier results.
 The named `primitive_level=none|low_level|bilevel` config group resolves to the
 primitive list consumed by `build_primitives()`. Explicit constraints exclude invalid
 cells such as `primitive_level=bilevel` with `approach.blackbox=true`, and Hydra
@@ -362,10 +365,12 @@ python experiments/tracker/sync_google_sheet.py \
     experiments/generated/tracker_smoke_test.csv --sheet-id SPREADSHEET_ID
 ```
 
-The sync uses Experiment ID as its key. It updates generated columns, appends new
-conditions, marks removed conditions from the synchronized campaign inactive, and
-never writes existing Owner, Status, Progress, Priority, Notes, Results, or Git SHA
-cells. New Sheets receive a native table with People, file, and dropdown column types.
+The sync uses Experiment ID as its key. It updates generated columns only for the exact
+same canonical run, appends changed conditions or seed protocols, marks removed
+conditions from the synchronized campaign inactive, and never writes existing Owner,
+Status, Progress, Priority, Notes, Results, or Git SHA cells. It also rejects a
+same-ID seed change as malformed input. New Sheets receive a native table with People,
+file, and dropdown column types.
 Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
 Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
 rows in the tracker, including inactive experiments from older campaigns. Priority is

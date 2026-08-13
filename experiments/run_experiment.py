@@ -73,8 +73,8 @@ def resolve_eval_seed(cfg: DictConfig) -> int:
         raise ValueError(
             "eval_seed must be set explicitly; it must not follow replicate_seed"
         )
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"eval_seed must be an integer, got {value!r}")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"eval_seed must be a nonnegative integer, got {value!r}")
     return value
 
 
