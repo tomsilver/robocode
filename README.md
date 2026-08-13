@@ -282,17 +282,17 @@ Set `approach.blackbox=true` to hide the environment source and force the agent 
 To use a different backend/model, override the `approach/backend` config:
 
 ```bash
-# GPT-4o via OpenCode
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt4o eval_seed="$EVAL_SEED"
+# GPT-5.4 via OpenCode
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt54 eval_seed="$EVAL_SEED"
 
 # Local Ollama model
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_ollama eval_seed="$EVAL_SEED"
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_qwen eval_seed="$EVAL_SEED"
 
 # Or override individual fields
 python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro eval_seed="$EVAL_SEED"
 ```
 
-Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
+Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
 
 The experiment runner rejects the legacy local sandbox for generated-code
 methods because that sandbox permits host filesystem reads. Use Docker or
