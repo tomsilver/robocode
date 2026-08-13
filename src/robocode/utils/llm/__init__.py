@@ -1,8 +1,9 @@
 """Pure LLM completion clients: one model API call (no tools, no agent loop),
 unlike ``robocode.utils.backends`` which drives an autonomous coding agent.
 
-Providers (``cfg.provider``): ``anthropic``, ``openai_compatible`` (vLLM/Ollama),
-``cli`` (experimental).
+Providers (``cfg.provider``): ``cli`` (the authenticated Claude CLI, used by
+default), ``anthropic`` and ``openai_compatible`` (vLLM/Ollama) for direct API
+access.
 """
 
 from collections.abc import Callable

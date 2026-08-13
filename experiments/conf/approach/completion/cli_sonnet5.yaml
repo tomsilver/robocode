@@ -1,0 +1,6 @@
+# Subscription-billed via the authenticated Claude CLI; the CLI reports
+# total_cost_usd itself, so no list prices are configured here.
+provider: cli
+model: claude-sonnet-5  # full model id, passed to the CLI verbatim
+request_timeout_s: 1200.0
+max_thinking_tokens: 0  # 0 disables extended thinking

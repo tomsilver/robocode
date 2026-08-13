@@ -1,8 +1,13 @@
-"""Claude CLI driven as a plain LLM (experimental, best-effort non-agentic).
+"""Claude CLI driven as a plain LLM: the default completion backend.
 
-Runs ``claude -p`` single-shot with tools and system prompt stripped. The CLI
-keeps an irreducible ~2k-token system prompt, so prefer the SDK clients
-(anthropic/openai) when a faithful plain LLM is needed.
+Runs ``claude -p`` single-shot with tools and system prompt stripped. Billing
+follows the authenticated CLI (no API key needed), and the same CLI serves the
+agentic backend, so completion and agentic runs share one auth path and one set
+of model ids.
+
+The CLI keeps an irreducible ~2k-token system prompt that ``--system-prompt ""``
+does not remove. The plain-LLM baselines are therefore prompted with that
+preamble present, which is worth stating whenever their prompts are described.
 """
 
 from __future__ import annotations
