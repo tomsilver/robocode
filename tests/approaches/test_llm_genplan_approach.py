@@ -10,8 +10,10 @@ from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode.approaches.llm_genplan_approach import (
     LLMGenPlanApproach,
+    _gather_env_source,
     _parse_python_code,
 )
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.llm import LLMResponse, create_llm_client
 
 
@@ -113,6 +115,27 @@ def test_parse_python_code_recovers_truncated_block():
     """A response cut off mid-block (no closing fence) still yields the code."""
     response = f"Here is the approach:\n```python\n{_FULL_APPROACH}"
     assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_variable_count_env_source_includes_kinder_family() -> None:
+    """A generalized (variable-count) env bundles the kinder family source too, not only
+    the robocode wrapper."""
+    env = VariableObjectCountEnv(
+        constant_object_env_path=(
+            "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv"
+        ),
+        count_kwarg="num_obstructions",
+        count_object_prefix="obstruction",
+        design_counts=[0, 1],
+        eval_counts=[0, 1, 2],
+    )
+    try:
+        source = _gather_env_source(env)
+    finally:
+        env.close()
+    assert "### variable_object_count_env.py" in source
+    assert "### obstruction2d.py" in source
+    assert "class Obstruction2DEnv" in source
 
 
 def test_create_llm_client_dispatch(monkeypatch):

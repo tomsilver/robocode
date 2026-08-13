@@ -281,6 +281,11 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
         return state_cls(data, canonical_features)
 
     @property
+    def constant_object_env_class(self) -> type[ConstantObjectKinDEREnv]:
+        """The env family class this wrapper instantiates once per object count."""
+        return self._env_cls
+
+    @property
     def design_counts(self) -> list[int]:
         """The object counts an unpinned reset samples from."""
         return list(self._design_counts)

@@ -382,11 +382,11 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
 def _gather_env_source(env: gymnasium.Env) -> str:
     """Best-effort bundle of the env's local source (robocode + kinder)."""
     files: list[Path] = []
-    for obj, package in _source_targets(env):
-        source_file = inspect.getsourcefile(type(obj))
+    for cls, package in _source_targets(env):
+        source_file = inspect.getsourcefile(cls)
         assert source_file is not None
         src = Path(source_file)
-        root = src.parents[len(type(obj).__module__.split(".")) - 1]
+        root = src.parents[len(cls.__module__.split(".")) - 1]
         files.extend(collect_local_deps(src, root, package))
     seen: set[Path] = set()
     blocks: list[str] = []
@@ -398,13 +398,18 @@ def _gather_env_source(env: gymnasium.Env) -> str:
     return "\n\n".join(blocks)
 
 
-def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
-    """The objects whose source to bundle, with their top-level package."""
-    targets: list[tuple[Any, str]] = [(env, type(env).__module__.split(".")[0])]
+def _source_targets(env: gymnasium.Env) -> list[tuple[type[Any], str]]:
+    """The classes whose source to bundle, with their top-level package."""
+    classes: list[type[Any]] = [type(env)]
+    # A fixed-count wrapper holds one kinder env; a variable-count wrapper builds a
+    # kinder env per object count and exposes the family class it instantiates.
     underlying = getattr(env, "_kinder_env", None)
     if underlying is not None:
-        targets.append((underlying, type(underlying).__module__.split(".")[0]))
-    return targets
+        classes.append(type(underlying))
+    family = getattr(env, "constant_object_env_class", None)
+    if family is not None:
+        classes.append(family)
+    return [(cls, cls.__module__.split(".")[0]) for cls in classes]
 
 
 _FENCE = r"```[ \t]*[a-zA-Z0-9]*[ \t]*\r?\n"
