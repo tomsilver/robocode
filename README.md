@@ -327,17 +327,19 @@ python experiments/run_experiment.py -m \
 
 ### Experiment tracker
 
-Hydra defines executable choices, while small campaign files under
-`experiments/campaigns/` select the conditions intended for one study. Generate a
-local CSV without running experiments:
+Hydra defines executable choices, while small campaign files select the conditions
+intended for one study. Keep exploratory or smoke-test campaigns local, and commit
+only study definitions that should be shared. Generate a local CSV without running
+experiments:
 
 ```bash
 python experiments/tracker/generate.py \
-    experiments/campaigns/tracker_smoke_test.yaml \
+    path/to/campaign.yaml \
     --eval-seed "$EVAL_SEED" --dry-run
 python experiments/tracker/generate.py \
-    experiments/campaigns/tracker_smoke_test.yaml \
-    --eval-seed "$EVAL_SEED"
+    path/to/campaign.yaml \
+    --eval-seed "$EVAL_SEED" \
+    --output experiments/generated/my_campaign.csv
 ```
 
 Campaign files call the repeated runs `replicate_seeds`; they never contain the
@@ -362,7 +364,7 @@ Install the optional Google client and synchronize the generated CSV:
 ```bash
 uv sync --extra tracker
 python experiments/tracker/sync_google_sheet.py \
-    experiments/generated/tracker_smoke_test.csv --sheet-id SPREADSHEET_ID
+    experiments/generated/my_campaign.csv --sheet-id SPREADSHEET_ID
 ```
 
 The sync uses Experiment ID as its key. It updates generated columns only for the exact

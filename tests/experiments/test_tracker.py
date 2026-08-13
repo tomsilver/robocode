@@ -21,6 +21,21 @@ sys.path.pop(0)
 
 
 _TEST_EVAL_SEED = 918273645
+_SAMPLE_CAMPAIGN_YAML = """name: test_campaign
+matrix:
+  environment: [motion2d_easy]
+  approach: [agentic]
+  primitive_level: [none, low_level, bilevel]
+  approach.blackbox: [false, true]
+  approach/backend: [claude_opus5]
+replicate_seeds: [42, 24]
+"""
+
+
+def _sample_campaign(tmp_path: Path) -> Path:
+    campaign = tmp_path / "campaign.yaml"
+    campaign.write_text(_SAMPLE_CAMPAIGN_YAML, encoding="utf-8")
+    return campaign
 
 
 def test_priority_is_immediately_after_seed_protocol() -> None:
@@ -56,9 +71,9 @@ def _generated_row(
     return row
 
 
-def test_sample_campaign_expansion_and_constraint() -> None:
-    """The smoke campaign yields five rows and excludes one blackbox bilevel cell."""
-    campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
+def test_sample_campaign_expansion_and_constraint(tmp_path: Path) -> None:
+    """The sample campaign yields five rows and excludes one invalid matrix cell."""
+    campaign = _sample_campaign(tmp_path)
     rows, excluded = generate.generate_rows([campaign], eval_seed=_TEST_EVAL_SEED)
     assert len(rows) == 5
     assert len(excluded) == 1
@@ -70,9 +85,11 @@ def test_sample_campaign_expansion_and_constraint() -> None:
     assert all("eval_timeout=60" in row["Command"] for row in rows)
 
 
-def test_campaign_contains_replicates_but_not_private_eval_seed() -> None:
+def test_campaign_contains_replicates_but_not_private_eval_seed(
+    tmp_path: Path,
+) -> None:
     """The public scientific plan does not publish the evaluation-suite seed."""
-    campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
+    campaign = _sample_campaign(tmp_path)
     raw = yaml.safe_load(campaign.read_text(encoding="utf-8"))
     assert raw["replicate_seeds"] == [42, 24]
     assert "seeds" not in raw
@@ -80,9 +97,11 @@ def test_campaign_contains_replicates_but_not_private_eval_seed() -> None:
 
 
 @pytest.mark.parametrize("eval_seed", [None, True, -1, 42.5, "42"])
-def test_generator_rejects_non_integer_eval_seed(eval_seed: Any) -> None:
+def test_generator_rejects_non_integer_eval_seed(
+    eval_seed: Any, tmp_path: Path
+) -> None:
     """Programmatic callers cannot silently coerce the private protocol seed."""
-    campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
+    campaign = _sample_campaign(tmp_path)
     with pytest.raises(ValueError, match="eval_seed must be a nonnegative integer"):
         generate.generate_rows([campaign], eval_seed=eval_seed, validate_hydra=False)
 
@@ -213,16 +232,14 @@ def test_timeout_change_produces_a_distinct_experiment_id() -> None:
 def test_quoted_blackbox_true_is_normalized_before_constraints(tmp_path: Path) -> None:
     """YAML strings that Hydra parses as booleans cannot bypass validity rules."""
     campaign = tmp_path / "quoted-blackbox.yaml"
-    campaign.write_text(
-        """name: quoted_blackbox
+    campaign.write_text("""name: quoted_blackbox
 matrix:
   environment: [motion2d_easy]
   approach: [agentic]
   primitive_level: [bilevel]
   approach.blackbox: [\"true\"]
 replicate_seeds: [42]
-"""
-    )
+""")
     rows, excluded = generate.generate_rows([campaign], eval_seed=_TEST_EVAL_SEED)
     assert not rows
     assert excluded[0][0].values["approach.blackbox"] is True
