@@ -523,6 +523,7 @@ def test_table_column_signature_ignores_omitted_zero_index() -> None:
     current = [dict(column) for column in desired]
     current[0].pop("columnIndex")
 
+    # pylint: disable-next=protected-access
     assert sync._table_column_signature(current) == sync._table_column_signature(
         desired
     )
@@ -534,7 +535,7 @@ def test_dry_run_does_not_create_a_missing_worksheet(
     """A preview of a new tracker remains read-only at spreadsheet level."""
 
     class WorksheetNotFound(Exception):
-        pass
+        """Test substitute for gspread's missing-worksheet exception."""
 
     gspread = Mock(WorksheetNotFound=WorksheetNotFound)
     spreadsheet = Mock()
