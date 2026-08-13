@@ -153,7 +153,9 @@ def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
     assert "--pid" in default_cmd
 
 
-def test_genplan_cmd_adds_containall(tmp_path: Path, monkeypatch) -> None:  # type: ignore
+def test_genplan_cmd_adds_containall(
+    tmp_path: Path, monkeypatch  # type: ignore
+) -> None:
     """GenPlan gets the same default-bind isolation as the agentic path."""
     sandbox_dir = tmp_path / "sandbox"
     sandbox_dir.mkdir()

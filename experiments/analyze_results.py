@@ -8,7 +8,7 @@ import pandas as pd
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
-def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
+def collect_results(search_dirs: list[Path]) -> pd.DataFrame:
     """Recursively find results.json files and build a DataFrame."""
     rows: list[dict] = []
     for search_dir in search_dirs:
@@ -71,7 +71,7 @@ def _main() -> None:
         help="Hydra output directories to scan for results.json files.",
     )
     args = parser.parse_args()
-    dataframe = _collect_results(args.dirs)
+    dataframe = collect_results(args.dirs)
     if dataframe.empty:
         print("No results found.")
         return

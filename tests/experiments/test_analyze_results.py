@@ -44,7 +44,7 @@ def test_collect_results_uses_replicate_seed_and_flattens_count_metrics(
         encoding="utf-8",
     )
 
-    dataframe = analyze_results._collect_results([tmp_path])
+    dataframe = analyze_results.collect_results([tmp_path])
 
     assert dataframe.loc[0, "replicate_seed"] == 24
     assert dataframe.loc[0, "design_count_solve_rate"] == 0.75
@@ -69,7 +69,7 @@ def test_collect_results_accepts_legacy_seed_config(tmp_path: Path) -> None:
         json.dumps({"solve_rate": 0.5}), encoding="utf-8"
     )
 
-    dataframe = analyze_results._collect_results([tmp_path])
+    dataframe = analyze_results.collect_results([tmp_path])
 
     assert dataframe.loc[0, "replicate_seed"] == 424
     assert "seed" not in dataframe.columns

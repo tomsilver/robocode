@@ -1010,9 +1010,7 @@ echo AUDIT_COMPLETE
             f"exit={result.returncode}, stderr={result.stderr[-500:]}"
         )
     if _EVAL_SEED_CANARY in result.stdout:
-        raise SandboxBreachError(
-            "The eval-seed canary reached the Docker sandbox"
-        )
+        raise SandboxBreachError("The eval-seed canary reached the Docker sandbox")
     print("  EVAL SEED: HIDDEN")
     print("  AUDIT: EXECUTED")
 
