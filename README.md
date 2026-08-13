@@ -333,16 +333,22 @@ local CSV without running experiments:
 
 ```bash
 python experiments/tracker/generate.py \
-    experiments/campaigns/tracker_smoke_test.yaml --dry-run
+    experiments/campaigns/tracker_smoke_test.yaml \
+    --eval-seed "$EVAL_SEED" --dry-run
 python experiments/tracker/generate.py \
-    experiments/campaigns/tracker_smoke_test.yaml
+    experiments/campaigns/tracker_smoke_test.yaml \
+    --eval-seed "$EVAL_SEED"
 ```
 
-Each condition becomes one row with a Hydra multirun command containing every seed.
+Campaign files call the repeated runs `replicate_seeds`; they never contain the
+private evaluation seed. The generator requires that fixed seed explicitly and places
+it in the ignored local CSV and shared Sheet. Each condition becomes one row whose
+Hydra command sweeps every replicate while holding the evaluation suite fixed.
 The generated Experiment ID is passed into Hydra, recorded in every `results.json`,
 and used as the exact parent directory under `multirun/`. Each invocation creates a
-timestamped run beneath that parent with one `seed_<seed>` directory per replicate, so
-the condition folder can be uploaded to Drive without renaming it.
+timestamped run beneath that parent with one `replicate_<replicate_seed>` directory
+per replicate, so the condition folder can be uploaded to Drive without renaming it.
+Neither seed field is part of the stable condition ID.
 The named `primitive_level=none|low_level|bilevel` config group resolves to the
 primitive list consumed by `build_primitives()`. Explicit constraints exclude invalid
 cells such as `primitive_level=bilevel` with `approach.blackbox=true`, and Hydra
@@ -363,9 +369,12 @@ cells. New Sheets receive a native table with People, file, and dropdown column 
 Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
 Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
 rows in the tracker, including inactive experiments from older campaigns. Priority is
-placed immediately after Seeds. Dropdown-chip colors can be customized directly in the
-Google Sheets UI without changing the cells' backgrounds; an unchanged sync preserves
-that native chip styling.
+placed immediately after Replicate Seeds and Evaluation Seed. Dropdown-chip colors can
+be customized directly in the Google Sheets UI without changing the cells'
+backgrounds; an unchanged sync preserves that native chip styling.
+Status and Owner are the first two columns so the Sheet reads as a work queue at a
+glance. Existing prototype Sheets are upgraded by moving whole columns in place, which
+preserves their human-entered values and native chip types.
 
 Authentication uses gspread's desktop OAuth flow. By default it reads
 `~/.config/gspread/credentials.json` and stores the authorized-user token outside the

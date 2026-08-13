@@ -5,8 +5,10 @@ import shlex
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
+import yaml
 from hydra import compose, initialize_config_dir
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,9 +20,15 @@ sync: Any = importlib.import_module("sync_google_sheet")
 sys.path.pop(0)
 
 
-def test_priority_is_immediately_after_seeds() -> None:
+_TEST_EVAL_SEED = 918273645
+
+
+def test_priority_is_immediately_after_seed_protocol() -> None:
     """The main scheduling signal stays visible before the long command field."""
-    assert schema.ALL_COLUMNS.index("Priority") == schema.ALL_COLUMNS.index("Seeds") + 1
+    assert schema.ALL_COLUMNS[:2] == ("Status", "Owner")
+    assert schema.ALL_COLUMNS.index("Priority") == (
+        schema.ALL_COLUMNS.index("Evaluation Seed") + 1
+    )
     assert "Priority" in schema.HUMAN_COLUMNS
 
 
@@ -37,7 +45,8 @@ def _generated_row(
             "Primitive Level": "none",
             "Access": "whitebox",
             "Model / Backend": "claude_opus5",
-            "Seeds": "[42, 24]",
+            "Replicate Seeds": "[42, 24]",
+            "Evaluation Seed": str(_TEST_EVAL_SEED),
             "Command": command,
             "Active": "TRUE",
             "Status": "Todo",
@@ -50,12 +59,33 @@ def _generated_row(
 def test_sample_campaign_expansion_and_constraint() -> None:
     """The smoke campaign yields five rows and excludes one blackbox bilevel cell."""
     campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
-    rows, excluded = generate.generate_rows([campaign])
+    rows, excluded = generate.generate_rows([campaign], eval_seed=_TEST_EVAL_SEED)
     assert len(rows) == 5
     assert len(excluded) == 1
     assert excluded[0][1] == "bilevel_models unavailable under blackbox"
-    assert all(row["Seeds"] == "[42, 24]" for row in rows)
-    assert all("seed=42,24" in row["Command"] for row in rows)
+    assert all(row["Replicate Seeds"] == "[42, 24]" for row in rows)
+    assert all(row["Evaluation Seed"] == str(_TEST_EVAL_SEED) for row in rows)
+    assert all("replicate_seed=42,24" in row["Command"] for row in rows)
+    assert all(f"eval_seed={_TEST_EVAL_SEED}" in row["Command"] for row in rows)
+
+
+def test_campaign_contains_replicates_but_not_private_eval_seed() -> None:
+    """The public scientific plan does not publish the evaluation-suite seed."""
+    campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
+    raw = yaml.safe_load(campaign.read_text(encoding="utf-8"))
+    assert raw["replicate_seeds"] == [42, 24]
+    assert "seeds" not in raw
+    assert "eval_seed" not in raw
+
+
+@pytest.mark.parametrize("eval_seed", [None, True, 42.5, "42"])
+def test_generator_rejects_non_integer_eval_seed(eval_seed: Any) -> None:
+    """Programmatic callers cannot silently coerce the private protocol seed."""
+    campaign = _REPO_ROOT / "experiments" / "campaigns" / "tracker_smoke_test.yaml"
+    with pytest.raises(ValueError, match="eval_seed must be an integer"):
+        generate.generate_rows(
+            [campaign], eval_seed=eval_seed, validate_hydra=False
+        )
 
 
 def test_generated_command_propagates_id_to_hydra_and_output_path() -> None:
@@ -71,19 +101,20 @@ def test_generated_command_propagates_id_to_hydra_and_output_path() -> None:
         },
         (42, 24),
     )
-    row = generate.tracker_row(config)
+    row = generate.tracker_row(config, eval_seed=_TEST_EVAL_SEED)
     condition_id = row["Experiment ID"]
     command = shlex.split(row["Command"])
 
     assert f"experiment_id={condition_id}" in command
-    assert "seed=42,24" in command
+    assert "replicate_seed=42,24" in command
+    assert f"eval_seed={_TEST_EVAL_SEED}" in command
     assert (
         f"hydra.sweep.dir=multirun/{condition_id}/" "${now:%Y-%m-%d_%H-%M-%S}"
     ) in command
-    assert "hydra.sweep.subdir=seed_${seed}" in command
+    assert "hydra.sweep.subdir=replicate_${replicate_seed}" in command
 
 
-def test_experiment_id_is_independent_of_seeds_and_mapping_order() -> None:
+def test_experiment_id_is_independent_of_replicates_and_mapping_order() -> None:
     """Replicate order and YAML mapping order do not change a condition ID."""
     values = {
         "environment": "motion2d_easy",
@@ -99,6 +130,23 @@ def test_experiment_id_is_independent_of_seeds_and_mapping_order() -> None:
     assert generate.experiment_id(first) == generate.experiment_id(second)
 
 
+def test_experiment_id_is_independent_of_evaluation_seed() -> None:
+    """Changing the protocol suite updates metadata, not the condition key."""
+    config = generate.ExperimentConfig(
+        "campaign_a",
+        {
+            "environment": "motion2d_easy",
+            "approach": "agentic",
+            "primitive_level": "none",
+        },
+        (42, 24),
+    )
+    first = generate.tracker_row(config, eval_seed=_TEST_EVAL_SEED)
+    second = generate.tracker_row(config, eval_seed=_TEST_EVAL_SEED + 1)
+    assert first["Experiment ID"] == second["Experiment ID"]
+    assert first["Evaluation Seed"] != second["Evaluation Seed"]
+
+
 def test_missing_hydra_choice_fails_generation(tmp_path: Path) -> None:
     """Campaign typos fail at Hydra composition instead of reaching the Sheet."""
     campaign = tmp_path / "bad.yaml"
@@ -107,10 +155,10 @@ matrix:
   environment: [not_an_environment]
   approach: [agentic]
   primitive_level: [none]
-seeds: [42]
+replicate_seeds: [42]
 """)
     with pytest.raises(ValueError, match="Hydra could not compose"):
-        generate.generate_rows([campaign])
+        generate.generate_rows([campaign], eval_seed=_TEST_EVAL_SEED)
 
 
 @pytest.mark.parametrize(
@@ -161,6 +209,80 @@ def test_upsert_updates_generated_cells_and_preserves_human_cells() -> None:
         schema.ALL_COLUMNS.index(column) + 1 for column in schema.HUMAN_COLUMNS
     }
     assert not any(update.column in human_columns for update in plan.updates)
+
+
+def test_seed_schema_upgrade_preserves_human_cells_in_place() -> None:
+    """The prototype Sheet gains explicit seed columns without a table rewrite."""
+    legacy_header = [
+        "Experiment ID",
+        "Campaign",
+        "Environment",
+        "Method",
+        "Primitive Level",
+        "Access",
+        "Model / Backend",
+        "Seeds",
+        "Priority",
+        "Command",
+        "Active",
+        "Owner",
+        "Status",
+        "Progress",
+        "Notes",
+        "Results",
+        "Git SHA",
+    ]
+    old = _generated_row("condition-1")
+    legacy_row = [
+        old["Replicate Seeds"] if column == "Seeds" else old[column]
+        for column in legacy_header
+    ]
+    legacy_row[legacy_header.index("Owner")] = "Ada"
+    legacy_row[legacy_header.index("Status")] = "Running"
+    legacy_row[legacy_header.index("Results")] = "https://drive.example/result"
+
+    projected, upgrade = sync.project_tracker_schema_upgrade(
+        [legacy_header, legacy_row]
+    )
+
+    assert upgrade.required
+    assert upgrade.rename_seeds_column
+    assert upgrade.insert_evaluation_seed_column == (
+        legacy_header.index("Seeds") + 2
+    )
+    assert upgrade.column_moves
+    assert projected[0] == list(schema.ALL_COLUMNS)
+    assert projected[1][schema.ALL_COLUMNS.index("Owner")] == "Ada"
+    assert projected[1][schema.ALL_COLUMNS.index("Status")] == "Running"
+    assert (
+        projected[1][schema.ALL_COLUMNS.index("Results")]
+        == "https://drive.example/result"
+    )
+
+    plan = sync.plan_upsert(projected, [_generated_row("condition-1")])
+    human_columns = {
+        schema.ALL_COLUMNS.index(column) + 1 for column in schema.HUMAN_COLUMNS
+    }
+    assert not any(update.column in human_columns for update in plan.updates)
+    assert sync.CellUpdate(
+        2,
+        schema.ALL_COLUMNS.index("Evaluation Seed") + 1,
+        str(_TEST_EVAL_SEED),
+    ) in plan.updates
+
+    spreadsheet = Mock()
+    worksheet = Mock(id=123)
+    sync.apply_schema_upgrade(spreadsheet, worksheet, upgrade)
+    requests = spreadsheet.batch_update.call_args.args[0]["requests"]
+    assert requests[0]["insertDimension"]["range"]["startIndex"] == (
+        legacy_header.index("Seeds") + 1
+    )
+    assert all("moveDimension" in request for request in requests[1:])
+    header_updates = worksheet.batch_update.call_args.args[0]
+    assert header_updates == [
+        {"range": "J1", "values": [["Replicate Seeds"]]},
+        {"range": "K1", "values": [["Evaluation Seed"]]},
+    ]
 
 
 def test_upsert_inactivates_only_campaigns_in_the_input() -> None:

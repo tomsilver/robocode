@@ -57,26 +57,32 @@ def load_campaign(path: Path) -> tuple[str, dict[str, list[Scalar]], tuple[int, 
             _require_scalar(choice, f"{path}: matrix.{key}") for choice in choices
         ]
 
-    raw_seeds = raw.get("seeds")
+    raw_seeds = raw.get("replicate_seeds")
     if not isinstance(raw_seeds, list) or not raw_seeds:
-        raise ValueError(f"{path}: seeds must be a non-empty list")
+        raise ValueError(f"{path}: replicate_seeds must be a non-empty list")
     if not all(
         isinstance(seed, int) and not isinstance(seed, bool) for seed in raw_seeds
     ):
-        raise ValueError(f"{path}: every seed must be an integer")
-    seeds = tuple(raw_seeds)
-    if len(seeds) != len(set(seeds)):
-        raise ValueError(f"{path}: seeds must be unique")
-    return name, matrix, seeds
+        raise ValueError(f"{path}: every replicate seed must be an integer")
+    replicate_seeds = tuple(raw_seeds)
+    if len(replicate_seeds) != len(set(replicate_seeds)):
+        raise ValueError(f"{path}: replicate_seeds must be unique")
+    return name, matrix, replicate_seeds
 
 
 def expand_matrix(
-    campaign: str, matrix: Mapping[str, Sequence[Scalar]], seeds: tuple[int, ...]
+    campaign: str,
+    matrix: Mapping[str, Sequence[Scalar]],
+    replicate_seeds: tuple[int, ...],
 ) -> list[ExperimentConfig]:
     """Compute a campaign's requested Cartesian product in file order."""
     keys = tuple(matrix)
     return [
-        ExperimentConfig(campaign, dict(zip(keys, choices, strict=True)), seeds)
+        ExperimentConfig(
+            campaign,
+            dict(zip(keys, choices, strict=True)),
+            replicate_seeds,
+        )
         for choices in itertools.product(*(matrix[key] for key in keys))
     ]
 
@@ -102,11 +108,13 @@ def hydra_overrides(config: ExperimentConfig) -> list[str]:
     ]
 
 
-def validate_with_hydra(config: ExperimentConfig) -> None:
+def validate_with_hydra(config: ExperimentConfig, eval_seed: int) -> None:
     """Compose a condition so missing config choices fail during generation."""
     overrides = [
         *hydra_overrides(config),
         f"experiment_id={experiment_id(config)}",
+        f"replicate_seed={config.replicate_seeds[0]}",
+        f"eval_seed={eval_seed}",
     ]
     try:
         with initialize_config_dir(config_dir=str(_CONF_DIR), version_base=None):
@@ -137,20 +145,23 @@ def experiment_id(config: ExperimentConfig) -> str:
     return "__".join([*(labels or ["condition"]), digest])
 
 
-def hydra_command(config: ExperimentConfig, condition_id: str) -> str:
-    """Create one copyable Hydra multirun command for all required seeds."""
+def hydra_command(
+    config: ExperimentConfig, condition_id: str, eval_seed: int
+) -> str:
+    """Create one multirun command with fixed evaluation and swept replicates."""
     overrides = [
         *hydra_overrides(config),
         f"experiment_id={condition_id}",
-        f"seed={','.join(map(str, config.seeds))}",
+        f"replicate_seed={','.join(map(str, config.replicate_seeds))}",
+        f"eval_seed={eval_seed}",
         (f"hydra.sweep.dir=multirun/{condition_id}/" "${now:%Y-%m-%d_%H-%M-%S}"),
-        "hydra.sweep.subdir=seed_${seed}",
+        "hydra.sweep.subdir=replicate_${replicate_seed}",
     ]
     quoted = " ".join(shlex.quote(override) for override in overrides)
     return f"python experiments/run_experiment.py -m {quoted}"
 
 
-def tracker_row(config: ExperimentConfig) -> dict[str, str]:
+def tracker_row(config: ExperimentConfig, eval_seed: int) -> dict[str, str]:
     """Convert a valid condition to the shared tracker schema."""
     condition_id = experiment_id(config)
     blackbox = config.values.get("approach.blackbox")
@@ -167,34 +178,39 @@ def tracker_row(config: ExperimentConfig) -> dict[str, str]:
             "Primitive Level": str(config.values.get("primitive_level", "")),
             "Access": access,
             "Model / Backend": str(config.values.get("approach/backend", "")),
-            "Seeds": json.dumps(config.seeds),
-            "Command": hydra_command(config, condition_id),
+            "Replicate Seeds": json.dumps(config.replicate_seeds),
+            "Evaluation Seed": str(eval_seed),
+            "Command": hydra_command(config, condition_id, eval_seed),
             "Active": "TRUE",
             "Status": "Todo",
-            "Progress": f"0/{len(config.seeds)}",
+            "Progress": f"0/{len(config.replicate_seeds)}",
         }
     )
     return row
 
 
 def generate_rows(
-    campaign_paths: Iterable[Path], validate_hydra: bool = True
+    campaign_paths: Iterable[Path],
+    eval_seed: int,
+    validate_hydra: bool = True,
 ) -> tuple[list[dict[str, str]], list[tuple[ExperimentConfig, str]]]:
     """Expand campaigns, exclude constraints, and return tracker rows."""
+    if not isinstance(eval_seed, int) or isinstance(eval_seed, bool):
+        raise ValueError(f"eval_seed must be an integer, got {eval_seed!r}")
     rows: list[dict[str, str]] = []
     excluded: list[tuple[ExperimentConfig, str]] = []
     seen_ids: dict[str, str] = {}
     for path in campaign_paths:
-        campaign, matrix, seeds = load_campaign(path)
-        for config in expand_matrix(campaign, matrix, seeds):
+        campaign, matrix, replicate_seeds = load_campaign(path)
+        for config in expand_matrix(campaign, matrix, replicate_seeds):
             valid, reason = is_valid_experiment(config)
             if not valid:
                 assert reason is not None
                 excluded.append((config, reason))
                 continue
             if validate_hydra:
-                validate_with_hydra(config)
-            row = tracker_row(config)
+                validate_with_hydra(config, eval_seed)
+            row = tracker_row(config, eval_seed)
             condition_id = row["Experiment ID"]
             if condition_id in seen_ids:
                 raise ValueError(
@@ -238,6 +254,12 @@ def _summary(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("campaigns", type=Path, nargs="+")
+    parser.add_argument(
+        "--eval-seed",
+        type=int,
+        required=True,
+        help="Private fixed evaluation-suite seed (do not add it to campaign YAML)",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-hydra-validation", action="store_true")
@@ -248,7 +270,9 @@ def main() -> None:
     """Run the campaign generator CLI."""
     args = _parse_args()
     rows, excluded = generate_rows(
-        args.campaigns, validate_hydra=not args.no_hydra_validation
+        args.campaigns,
+        eval_seed=args.eval_seed,
+        validate_hydra=not args.no_hydra_validation,
     )
     _summary(rows, excluded, list_conditions=args.dry_run)
     if not args.dry_run:

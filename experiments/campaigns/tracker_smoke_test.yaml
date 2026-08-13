@@ -15,6 +15,6 @@ matrix:
   approach/backend:
     - claude_opus5
 
-seeds:
+replicate_seeds:
   - 42
   - 24

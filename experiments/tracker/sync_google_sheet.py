@@ -39,6 +39,24 @@ class UpsertPlan:
     inactivated_experiments: int
 
 
+@dataclass(frozen=True)
+class SchemaUpgrade:
+    """Structural changes needed to bring an existing Sheet to current order."""
+
+    rename_seeds_column: bool = False
+    insert_evaluation_seed_column: int | None = None
+    column_moves: tuple[tuple[int, int], ...] = ()
+
+    @property
+    def required(self) -> bool:
+        """Return whether the worksheet needs a structural update."""
+        return (
+            self.rename_seeds_column
+            or self.insert_evaluation_seed_column is not None
+            or bool(self.column_moves)
+        )
+
+
 def load_generated_rows(paths: list[Path]) -> list[dict[str, str]]:
     """Read generated CSVs and require their generated schema."""
     rows: list[dict[str, str]] = []
@@ -62,6 +80,120 @@ def load_generated_rows(paths: list[Path]) -> list[dict[str, str]]:
 
 def _padded(row: list[str], width: int) -> list[str]:
     return [*row, *("" for _ in range(width - len(row)))]
+
+
+def project_tracker_schema_upgrade(
+    existing_values: list[list[str]],
+) -> tuple[list[list[str]], SchemaUpgrade]:
+    """Project seed-column changes and the glanceable column order in memory."""
+    if not existing_values or not any(existing_values[0]):
+        return existing_values, SchemaUpgrade()
+
+    header = list(existing_values[0])
+    if len(header) != len(set(header)):
+        raise ValueError("Tracker header contains duplicate column names")
+    legacy_name = "Seeds"
+    replicate_name = "Replicate Seeds"
+    if legacy_name in header and replicate_name in header:
+        raise ValueError("Tracker contains both Seeds and Replicate Seeds columns")
+
+    rename_seeds = False
+    if legacy_name in header:
+        legacy_index = header.index(legacy_name)
+        header[legacy_index] = replicate_name
+        rename_seeds = True
+
+    insert_column: int | None = None
+    rows = [_padded(list(row), len(header)) for row in existing_values[1:]]
+    if replicate_name in header and "Evaluation Seed" not in header:
+        insert_index = header.index(replicate_name) + 1
+        header.insert(insert_index, "Evaluation Seed")
+        for row in rows:
+            row.insert(insert_index, "")
+        insert_column = insert_index + 1
+
+    desired_header = [
+        *ALL_COLUMNS,
+        *(column for column in header if column not in ALL_COLUMNS),
+    ]
+    column_moves: list[tuple[int, int]] = []
+    for target_index, column in enumerate(desired_header):
+        if column not in header:
+            continue
+        current_index = header.index(column)
+        if current_index == target_index:
+            continue
+        destination_index = (
+            target_index if current_index > target_index else target_index + 1
+        )
+        column_moves.append((current_index, destination_index))
+        header.insert(target_index, header.pop(current_index))
+        for row in rows:
+            row.insert(target_index, row.pop(current_index))
+
+    return [header, *rows], SchemaUpgrade(
+        rename_seeds,
+        insert_column,
+        tuple(column_moves),
+    )
+
+
+def apply_schema_upgrade(
+    spreadsheet: Any, worksheet: Any, upgrade: SchemaUpgrade
+) -> None:
+    """Upgrade the Sheet by inserting or moving whole columns in place."""
+    requests: list[dict[str, Any]] = []
+    if upgrade.insert_evaluation_seed_column is not None:
+        index = upgrade.insert_evaluation_seed_column - 1
+        requests.append(
+            {
+                "insertDimension": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "dimension": "COLUMNS",
+                        "startIndex": index,
+                        "endIndex": index + 1,
+                    },
+                    "inheritFromBefore": True,
+                }
+            }
+        )
+    requests.extend(
+        {
+            "moveDimension": {
+                "source": {
+                    "sheetId": worksheet.id,
+                    "dimension": "COLUMNS",
+                    "startIndex": source_index,
+                    "endIndex": source_index + 1,
+                },
+                "destinationIndex": destination_index,
+            }
+        }
+        for source_index, destination_index in upgrade.column_moves
+    )
+    if requests:
+        spreadsheet.batch_update({"requests": requests})
+
+    header_updates = []
+    if upgrade.rename_seeds_column:
+        replicate_column = ALL_COLUMNS.index("Replicate Seeds") + 1
+        header_updates.append(
+            {
+                "range": f"{_column_letter(replicate_column)}1",
+                "values": [["Replicate Seeds"]],
+            }
+        )
+    if upgrade.insert_evaluation_seed_column is not None:
+        evaluation_column = ALL_COLUMNS.index("Evaluation Seed") + 1
+        header_updates.append(
+            {
+                "range": f"{_column_letter(evaluation_column)}1",
+                "values": [["Evaluation Seed"]],
+            }
+        )
+    if header_updates:
+        worksheet.batch_update(header_updates, value_input_option="RAW")
 
 
 def plan_upsert(
@@ -323,7 +455,8 @@ def ensure_tracker_table(
             "Primitive Level": 140,
             "Access": 110,
             "Model / Backend": 180,
-            "Seeds": 140,
+            "Replicate Seeds": 160,
+            "Evaluation Seed": 140,
             "Command": 420,
             "Owner": 180,
             "Status": 120,
@@ -454,12 +587,16 @@ def main() -> None:
     spreadsheet = client.open_by_key(args.sheet_id)
     worksheet = _get_worksheet(spreadsheet, args.worksheet)
     existing = worksheet.get_all_values()
-    plan = plan_upsert(existing, generated_rows)
+    projected_existing, schema_upgrade = project_tracker_schema_upgrade(existing)
+    plan = plan_upsert(projected_existing, generated_rows)
+    if schema_upgrade.required:
+        print("Tracker columns will be upgraded in place")
     print(f"{len(plan.new_rows)} new experiments")
     print(f"{plan.updated_experiments} existing experiments updated")
     print(f"{plan.inactivated_experiments} experiments marked inactive")
     if args.dry_run:
         return
+    apply_schema_upgrade(spreadsheet, worksheet, schema_upgrade)
     apply_upsert(worksheet, plan)
     table_values = worksheet.get_all_values()
     ensure_tracker_table(spreadsheet, worksheet, table_values)

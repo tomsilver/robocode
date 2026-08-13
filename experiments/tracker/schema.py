@@ -8,7 +8,8 @@ GENERATED_COLUMNS = (
     "Primitive Level",
     "Access",
     "Model / Backend",
-    "Seeds",
+    "Replicate Seeds",
+    "Evaluation Seed",
     "Command",
     "Active",
 )
@@ -24,9 +25,11 @@ HUMAN_COLUMNS = (
 )
 
 # Display order is intentionally independent from column ownership. Priority is a
-# human-owned field, but belongs next to Seeds so it is visible before the long
-# generated Command column.
+# human-owned field, but belongs next to the seed protocol so it is visible before
+# the long generated Command column.
 ALL_COLUMNS = (
+    "Status",
+    "Owner",
     "Experiment ID",
     "Campaign",
     "Environment",
@@ -34,13 +37,12 @@ ALL_COLUMNS = (
     "Primitive Level",
     "Access",
     "Model / Backend",
-    "Seeds",
+    "Replicate Seeds",
+    "Evaluation Seed",
     "Priority",
+    "Progress",
     "Command",
     "Active",
-    "Owner",
-    "Status",
-    "Progress",
     "Notes",
     "Results",
     "Git SHA",

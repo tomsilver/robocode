@@ -12,7 +12,7 @@ class ExperimentConfig:
 
     campaign: str
     values: dict[str, Scalar]
-    seeds: tuple[int, ...]
+    replicate_seeds: tuple[int, ...]
 
 
 def is_valid_experiment(config: ExperimentConfig) -> tuple[bool, str | None]:
