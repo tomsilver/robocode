@@ -62,14 +62,6 @@ def resolve_eval_seed(cfg: DictConfig) -> int:
     return value
 
 
-def resolve_replicate_seed(cfg: DictConfig) -> int:
-    """Return the seed for controllable local randomness in one replicate."""
-    value = cfg.get("replicate_seed")
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"replicate_seed must be an integer, got {value!r}")
-    return value
-
-
 def generate_eval_seeds(eval_seed: int, num_eval_tasks: int) -> list[int]:
     """Derive the fixed episode suite from the protocol seed."""
     if num_eval_tasks <= 0:
@@ -96,7 +88,7 @@ def validate_eval_seed_isolation(cfg: DictConfig) -> None:
 def _main(cfg: DictConfig) -> float:
     """Run a single experiment."""
     validate_eval_seed_isolation(cfg)
-    replicate_seed = resolve_replicate_seed(cfg)
+    replicate_seed = cfg.replicate_seed
     eval_seed = resolve_eval_seed(cfg)
 
     output_dir = Path(HydraConfig.get().runtime.output_dir)

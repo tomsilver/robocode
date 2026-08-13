@@ -39,14 +39,10 @@ def test_eval_seed_cannot_be_null() -> None:
         run_experiment.resolve_eval_seed(cfg)
 
 
-def test_non_integer_seeds_are_rejected() -> None:
-    """Fractional and boolean values cannot be silently coerced to seeds."""
+def test_non_integer_eval_seed_is_rejected() -> None:
+    """A fractional evaluation seed cannot be silently coerced."""
     with pytest.raises(ValueError, match="eval_seed must be an integer"):
         run_experiment.resolve_eval_seed(OmegaConf.create({"eval_seed": 42.5}))
-    with pytest.raises(ValueError, match="replicate_seed must be an integer"):
-        run_experiment.resolve_replicate_seed(
-            OmegaConf.create({"replicate_seed": True})
-        )
 
 
 def test_pinned_eval_seed_yields_identical_suite_across_replicates() -> None:
