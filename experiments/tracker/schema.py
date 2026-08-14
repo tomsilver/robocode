@@ -71,3 +71,32 @@ CATEGORICAL_COLUMNS = (
     "Status",
     "Priority",
 )
+
+COLUMN_WIDTHS = {
+    "Status": 120,
+    "Owner": 180,
+    "Experiment ID": 300,
+    "Campaign": 180,
+    "Environment": 180,
+    "Method": 120,
+    "Primitive Level": 140,
+    "Access": 110,
+    "Model / Backend": 180,
+    "Replicate Seeds": 160,
+    "Evaluation Seed": 140,
+    "Priority": 100,
+    "Progress": 90,
+    "Command": 420,
+    "Active": 110,
+    "Notes": 320,
+    "Results": 220,
+    "Git SHA": 120,
+}
+
+WRAPPED_COLUMNS = ("Experiment ID", "Command", "Notes", "Results")
+
+assert len(ALL_COLUMNS) == len(set(ALL_COLUMNS))
+assert set(GENERATED_COLUMNS).isdisjoint(HUMAN_COLUMNS)
+assert set(ALL_COLUMNS) == set(GENERATED_COLUMNS) | set(HUMAN_COLUMNS)
+assert set(COLUMN_WIDTHS) == set(ALL_COLUMNS)
+assert set(WRAPPED_COLUMNS) <= set(ALL_COLUMNS)

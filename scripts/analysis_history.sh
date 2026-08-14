@@ -14,7 +14,7 @@ python experiments/run_experiment.py \
     replicate_seed="$REPLICATE_SEED" \
     eval_seed="$EVAL_SEED" \
     approach.load_dir=outputs/cdl_no_primitives_${ENV}/s${REPLICATE_SEED} \
-    'primitives=[]' \
+    primitive_level=none \
     'mcp_tools=[]' \
     environment="$ENV" \
     "hydra.run.dir=outputs/cdl_no_primitives_visualize_${ENV}/s${REPLICATE_SEED}"

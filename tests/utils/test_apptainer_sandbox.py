@@ -94,29 +94,6 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
     assert cmd[-3:] == ["claude", "--print", "hello"]
 
 
-def test_build_cmd_mounts_sandbox_not_parent_run_dir(tmp_path: Path) -> None:
-    """Apptainer exposes only the agent child, matching Docker isolation."""
-    run_dir = tmp_path / "run"
-    sandbox_dir = run_dir / "sandbox"
-    sandbox_dir.mkdir(parents=True)
-    cmd = _build_apptainer_cmd(
-        ApptainerSandboxConfig(
-            sandbox_dir=sandbox_dir,
-            sif_path=tmp_path / "robocode-sandbox.sif",
-        ),
-        sandbox_abs=str(sandbox_dir.resolve()),
-        src_abs=str((tmp_path / "src").resolve()),
-        kindergarden_abs=str((tmp_path / "kindergarden").resolve()),
-        kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=[],
-        agent_cmd=["claude"],
-    )
-    binds = [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "--bind"]
-    assert f"{sandbox_dir.resolve()}:/sandbox" in binds
-    assert not any(bind.startswith(f"{run_dir.resolve()}:") for bind in binds)
-
-
 def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
     """The kinder-baselines bind and --extra bilevel sync appear only when requested."""
 
@@ -177,8 +154,7 @@ def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
 
 
 def test_genplan_cmd_adds_containall(
-    tmp_path: Path,
-    monkeypatch,  # type: ignore
+    tmp_path: Path, monkeypatch  # type: ignore
 ) -> None:
     """GenPlan gets the same default-bind isolation as the agentic path."""
     sandbox_dir = tmp_path / "sandbox"

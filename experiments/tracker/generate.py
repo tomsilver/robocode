@@ -17,6 +17,12 @@ from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 from schema import ALL_COLUMNS
 
+from robocode.experiment_protocol import (
+    EXPERIMENT_ID_DIGEST_LENGTH,
+    EXPERIMENT_ID_SEPARATOR,
+    validate_eval_seed,
+)
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONF_DIR = _REPO_ROOT / "experiments" / "conf"
 _PREFERRED_DIMENSIONS = (
@@ -57,6 +63,10 @@ def load_campaign(path: Path) -> tuple[str, dict[str, list[Scalar]], tuple[int, 
     raw_matrix = _require_mapping(raw.get("matrix"), f"{path}: matrix")
     matrix: dict[str, list[Scalar]] = {}
     for key, choices in raw_matrix.items():
+        if key in _PROTOCOL_CONFIG_KEYS:
+            raise ValueError(
+                f"{path}: matrix cannot override protocol field {key!r}"
+            )
         if not isinstance(choices, list) or not choices:
             raise ValueError(f"{path}: matrix.{key} must be a non-empty list")
         matrix[key] = [
@@ -131,8 +141,10 @@ def _compose_with_hydra(
         raise ValueError(f"Hydra could not compose {condition}: {error}") from error
 
 
-def canonicalize_config(config: ExperimentConfig) -> ExperimentConfig:
-    """Materialize tracked Hydra defaults and normalize their parsed values."""
+def _canonicalize_with_hydra(
+    config: ExperimentConfig,
+) -> tuple[ExperimentConfig, DictConfig]:
+    """Materialize tracked Hydra defaults and retain their composed config."""
     cfg = _compose_with_hydra(config)
     choices = cfg.hydra.runtime.choices
     values = dict(config.values)
@@ -167,19 +179,36 @@ def canonicalize_config(config: ExperimentConfig) -> ExperimentConfig:
             "Hydra must compose eval_timeout to a positive number of seconds, "
             f"got {eval_timeout!r}"
         )
-    values["eval_timeout"] = eval_timeout
-    return ExperimentConfig(config.campaign, values, config.replicate_seeds)
+    normalized_timeout: int | float = (
+        int(eval_timeout) if float(eval_timeout).is_integer() else float(eval_timeout)
+    )
+    values["eval_timeout"] = normalized_timeout
+    cfg.eval_timeout = normalized_timeout
+    return ExperimentConfig(config.campaign, values, config.replicate_seeds), cfg
+
+
+def canonicalize_config(config: ExperimentConfig) -> ExperimentConfig:
+    """Materialize tracked Hydra defaults and normalize their parsed values."""
+    return _canonicalize_with_hydra(config)[0]
 
 
 def validate_with_hydra(config: ExperimentConfig, eval_seed: int) -> None:
     """Compose the exact generated run, including its fixed protocol values."""
-    canonical = canonicalize_config(config)
-    condition_id = _experiment_id(canonical, eval_seed)
+    eval_seed = validate_eval_seed(eval_seed)
+    canonical, composed = _canonicalize_with_hydra(config)
+    condition_id = _experiment_id(canonical, eval_seed, composed)
+    _validate_canonical_run(canonical, condition_id, eval_seed)
+
+
+def _validate_canonical_run(
+    config: ExperimentConfig, condition_id: str, eval_seed: int
+) -> None:
+    """Compose a canonical condition with its generated protocol overrides."""
     _compose_with_hydra(
-        canonical,
+        config,
         (
             f"experiment_id={condition_id}",
-            f"replicate_seed={canonical.replicate_seeds[0]}",
+            f"replicate_seed={config.replicate_seeds[0]}",
             f"eval_seed={eval_seed}",
         ),
     )
@@ -190,7 +219,9 @@ def _slug(value: Scalar) -> str:
     return text or "unset"
 
 
-def _experiment_id(config: ExperimentConfig, eval_seed: int) -> str:
+def _experiment_id(
+    config: ExperimentConfig, eval_seed: int, composed_cfg: DictConfig | None = None
+) -> str:
     """Build an ID from one already-canonicalized executable run protocol."""
     labels: list[str] = []
     for key in _PREFERRED_DIMENSIONS:
@@ -204,7 +235,8 @@ def _experiment_id(config: ExperimentConfig, eval_seed: int) -> str:
         else:
             labels.append(_slug(value))
 
-    composed = OmegaConf.to_container(_compose_with_hydra(config), resolve=False)
+    cfg = composed_cfg if composed_cfg is not None else _compose_with_hydra(config)
+    composed = OmegaConf.to_container(cfg, resolve=False)
     assert isinstance(composed, dict)
     composed.pop("hydra", None)
     for key in _PROTOCOL_CONFIG_KEYS:
@@ -215,13 +247,17 @@ def _experiment_id(config: ExperimentConfig, eval_seed: int) -> str:
         "eval_seed": eval_seed,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
-    return "__".join([*(labels or ["condition"]), digest])
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[
+        :EXPERIMENT_ID_DIGEST_LENGTH
+    ]
+    return EXPERIMENT_ID_SEPARATOR.join([*(labels or ["condition"]), digest])
 
 
 def experiment_id(config: ExperimentConfig, eval_seed: int) -> str:
     """Build a shared ID from Hydra's canonical config and the run protocol."""
-    return _experiment_id(canonicalize_config(config), eval_seed)
+    eval_seed = validate_eval_seed(eval_seed)
+    canonical, composed = _canonicalize_with_hydra(config)
+    return _experiment_id(canonical, eval_seed, composed)
 
 
 def hydra_command(config: ExperimentConfig, condition_id: str, eval_seed: int) -> str:
@@ -238,10 +274,10 @@ def hydra_command(config: ExperimentConfig, condition_id: str, eval_seed: int) -
     return f"python experiments/run_experiment.py -m {quoted}"
 
 
-def tracker_row(config: ExperimentConfig, eval_seed: int) -> dict[str, str]:
-    """Convert a valid condition to the shared tracker schema."""
-    config = canonicalize_config(config)
-    condition_id = _experiment_id(config, eval_seed)
+def _tracker_row(
+    config: ExperimentConfig, condition_id: str, eval_seed: int
+) -> dict[str, str]:
+    """Convert one canonical condition to the shared tracker schema."""
     blackbox = config.values.get("approach.blackbox")
     access = ""
     if isinstance(blackbox, bool):
@@ -272,30 +308,37 @@ def tracker_row(config: ExperimentConfig, eval_seed: int) -> dict[str, str]:
     return row
 
 
+def tracker_row(config: ExperimentConfig, eval_seed: int) -> dict[str, str]:
+    """Convert a valid condition to the shared tracker schema."""
+    eval_seed = validate_eval_seed(eval_seed)
+    canonical, composed = _canonicalize_with_hydra(config)
+    condition_id = _experiment_id(canonical, eval_seed, composed)
+    return _tracker_row(canonical, condition_id, eval_seed)
+
+
 def generate_rows(
     campaign_paths: Iterable[Path],
     eval_seed: int,
     validate_hydra: bool = True,
-) -> tuple[list[dict[str, str]], list[tuple[ExperimentConfig, str]]]:
+) -> tuple[list[dict[str, str]], list[tuple[ExperimentConfig, str, str]]]:
     """Expand campaigns, exclude constraints, and return tracker rows."""
-    if not isinstance(eval_seed, int) or isinstance(eval_seed, bool) or eval_seed < 0:
-        raise ValueError(f"eval_seed must be a nonnegative integer, got {eval_seed!r}")
+    eval_seed = validate_eval_seed(eval_seed)
     rows: list[dict[str, str]] = []
-    excluded: list[tuple[ExperimentConfig, str]] = []
+    excluded: list[tuple[ExperimentConfig, str, str]] = []
     seen_ids: dict[str, str] = {}
     for path in campaign_paths:
         campaign, matrix, replicate_seeds = load_campaign(path)
         for requested_config in expand_matrix(campaign, matrix, replicate_seeds):
-            config = canonicalize_config(requested_config)
+            config, composed = _canonicalize_with_hydra(requested_config)
+            condition_id = _experiment_id(config, eval_seed, composed)
             valid, reason = is_valid_experiment(config)
             if not valid:
                 assert reason is not None
-                excluded.append((config, reason))
+                excluded.append((config, reason, condition_id))
                 continue
             if validate_hydra:
-                validate_with_hydra(config, eval_seed)
-            row = tracker_row(config, eval_seed)
-            condition_id = row["Experiment ID"]
+                _validate_canonical_run(config, condition_id, eval_seed)
+            row = _tracker_row(config, condition_id, eval_seed)
             if condition_id in seen_ids:
                 raise ValueError(
                     f"Experiment ID {condition_id} occurs in both "
@@ -322,17 +365,16 @@ def _default_output(campaign_paths: Sequence[Path]) -> Path:
 
 def _summary(
     rows: Sequence[Mapping[str, str]],
-    excluded: Sequence[tuple[ExperimentConfig, str]],
+    excluded: Sequence[tuple[ExperimentConfig, str, str]],
     list_conditions: bool,
-    eval_seed: int,
 ) -> None:
     print(f"{len(rows)} valid experiment conditions")
     print(f"{len(excluded)} invalid combinations excluded")
     if list_conditions:
         for row in rows:
             print(f"+ {row['Experiment ID']}")
-        for config, reason in excluded:
-            print(f"SKIP {experiment_id(config, eval_seed)}")
+        for _, reason, condition_id in excluded:
+            print(f"SKIP {condition_id}")
             print(f"     {reason}")
 
 
@@ -359,7 +401,7 @@ def main() -> None:
         eval_seed=args.eval_seed,
         validate_hydra=not args.no_hydra_validation,
     )
-    _summary(rows, excluded, list_conditions=args.dry_run, eval_seed=args.eval_seed)
+    _summary(rows, excluded, list_conditions=args.dry_run)
     if not args.dry_run:
         output = args.output or _default_output(args.campaigns)
         write_csv(rows, output)

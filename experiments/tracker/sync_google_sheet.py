@@ -11,10 +11,12 @@ from typing import Any
 from schema import (
     ALL_COLUMNS,
     CATEGORICAL_COLUMNS,
+    COLUMN_WIDTHS,
     GENERATED_COLUMNS,
     HUMAN_COLUMNS,
     PRIORITY_OPTIONS,
     STATUS_OPTIONS,
+    WRAPPED_COLUMNS,
 )
 
 _PROTOCOL_COLUMNS = ("Replicate Seeds", "Evaluation Seed")
@@ -41,30 +43,12 @@ class UpsertPlan:
     inactivated_experiments: int
 
 
-@dataclass(frozen=True)
-class SchemaUpgrade:
-    """Structural changes needed to bring an existing Sheet to current order."""
-
-    rename_seeds_column: bool = False
-    insert_evaluation_seed_column: int | None = None
-    column_moves: tuple[tuple[int, int], ...] = ()
-
-    @property
-    def required(self) -> bool:
-        """Return whether the worksheet needs a structural update."""
-        return (
-            self.rename_seeds_column
-            or self.insert_evaluation_seed_column is not None
-            or bool(self.column_moves)
-        )
-
-
 def load_generated_rows(paths: list[Path]) -> list[dict[str, str]]:
     """Read generated CSVs and require their generated schema."""
     rows: list[dict[str, str]] = []
     for path in paths:
         with path.open(encoding="utf-8", newline="") as csv_file:
-            reader = csv.DictReader(csv_file)
+            reader = csv.DictReader(csv_file, restval="")
             header = reader.fieldnames or []
             missing = set(GENERATED_COLUMNS) - set(header)
             if missing:
@@ -82,120 +66,6 @@ def load_generated_rows(paths: list[Path]) -> list[dict[str, str]]:
 
 def _padded(row: list[str], width: int) -> list[str]:
     return [*row, *("" for _ in range(width - len(row)))]
-
-
-def project_tracker_schema_upgrade(
-    existing_values: list[list[str]],
-) -> tuple[list[list[str]], SchemaUpgrade]:
-    """Project seed-column changes and the glanceable column order in memory."""
-    if not existing_values or not any(existing_values[0]):
-        return existing_values, SchemaUpgrade()
-
-    header = list(existing_values[0])
-    if len(header) != len(set(header)):
-        raise ValueError("Tracker header contains duplicate column names")
-    legacy_name = "Seeds"
-    replicate_name = "Replicate Seeds"
-    if legacy_name in header and replicate_name in header:
-        raise ValueError("Tracker contains both Seeds and Replicate Seeds columns")
-
-    rename_seeds = False
-    if legacy_name in header:
-        legacy_index = header.index(legacy_name)
-        header[legacy_index] = replicate_name
-        rename_seeds = True
-
-    insert_column: int | None = None
-    rows = [_padded(list(row), len(header)) for row in existing_values[1:]]
-    if replicate_name in header and "Evaluation Seed" not in header:
-        insert_index = header.index(replicate_name) + 1
-        header.insert(insert_index, "Evaluation Seed")
-        for row in rows:
-            row.insert(insert_index, "")
-        insert_column = insert_index + 1
-
-    desired_header = [
-        *ALL_COLUMNS,
-        *(column for column in header if column not in ALL_COLUMNS),
-    ]
-    column_moves: list[tuple[int, int]] = []
-    for target_index, column in enumerate(desired_header):
-        if column not in header:
-            continue
-        current_index = header.index(column)
-        if current_index == target_index:
-            continue
-        destination_index = (
-            target_index if current_index > target_index else target_index + 1
-        )
-        column_moves.append((current_index, destination_index))
-        header.insert(target_index, header.pop(current_index))
-        for row in rows:
-            row.insert(target_index, row.pop(current_index))
-
-    return [header, *rows], SchemaUpgrade(
-        rename_seeds,
-        insert_column,
-        tuple(column_moves),
-    )
-
-
-def apply_schema_upgrade(
-    spreadsheet: Any, worksheet: Any, upgrade: SchemaUpgrade
-) -> None:
-    """Upgrade the Sheet by inserting or moving whole columns in place."""
-    requests: list[dict[str, Any]] = []
-    if upgrade.insert_evaluation_seed_column is not None:
-        index = upgrade.insert_evaluation_seed_column - 1
-        requests.append(
-            {
-                "insertDimension": {
-                    "range": {
-                        "sheetId": worksheet.id,
-                        "dimension": "COLUMNS",
-                        "startIndex": index,
-                        "endIndex": index + 1,
-                    },
-                    "inheritFromBefore": True,
-                }
-            }
-        )
-    requests.extend(
-        {
-            "moveDimension": {
-                "source": {
-                    "sheetId": worksheet.id,
-                    "dimension": "COLUMNS",
-                    "startIndex": source_index,
-                    "endIndex": source_index + 1,
-                },
-                "destinationIndex": destination_index,
-            }
-        }
-        for source_index, destination_index in upgrade.column_moves
-    )
-    if requests:
-        spreadsheet.batch_update({"requests": requests})
-
-    header_updates = []
-    if upgrade.rename_seeds_column:
-        replicate_column = ALL_COLUMNS.index("Replicate Seeds") + 1
-        header_updates.append(
-            {
-                "range": f"{_column_letter(replicate_column)}1",
-                "values": [["Replicate Seeds"]],
-            }
-        )
-    if upgrade.insert_evaluation_seed_column is not None:
-        evaluation_column = ALL_COLUMNS.index("Evaluation Seed") + 1
-        header_updates.append(
-            {
-                "range": f"{_column_letter(evaluation_column)}1",
-                "values": [["Evaluation Seed"]],
-            }
-        )
-    if header_updates:
-        worksheet.batch_update(header_updates, value_input_option="RAW")
 
 
 def plan_upsert(
@@ -280,12 +150,37 @@ def plan_upsert(
     )
 
 
-def _column_letter(column: int) -> str:
-    result = ""
-    while column:
-        column, remainder = divmod(column - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
+def _coalesced_update_ranges(
+    updates: tuple[CellUpdate, ...],
+) -> list[dict[str, Any]]:
+    """Combine adjacent generated cells on each row into one Sheets range."""
+    rowcol_to_a1 = importlib.import_module("gspread.utils").rowcol_to_a1
+    ranges: list[dict[str, Any]] = []
+    ordered = sorted(updates, key=lambda update: (update.row, update.column))
+    start = ordered[0]
+    previous = start
+    values = [start.value]
+
+    def append_range() -> None:
+        start_a1 = rowcol_to_a1(start.row, start.column)
+        end_a1 = rowcol_to_a1(previous.row, previous.column)
+        ranges.append(
+            {
+                "range": start_a1 if start_a1 == end_a1 else f"{start_a1}:{end_a1}",
+                "values": [list(values)],
+            }
+        )
+
+    for update in ordered[1:]:
+        if update.row == previous.row and update.column == previous.column + 1:
+            values.append(update.value)
+        else:
+            append_range()
+            start = update
+            values = [update.value]
+        previous = update
+    append_range()
+    return ranges
 
 
 def apply_upsert(worksheet: Any, plan: UpsertPlan) -> None:
@@ -294,19 +189,31 @@ def apply_upsert(worksheet: Any, plan: UpsertPlan) -> None:
         worksheet.update([list(plan.header)], "A1", value_input_option="RAW")
     if plan.updates:
         worksheet.batch_update(
-            [
-                {
-                    "range": f"{_column_letter(update.column)}{update.row}",
-                    "values": [[update.value]],
-                }
-                for update in plan.updates
-            ],
+            _coalesced_update_ranges(plan.updates),
             value_input_option="RAW",
         )
     if plan.new_rows:
         worksheet.append_rows(
             [list(row) for row in plan.new_rows], value_input_option="RAW"
         )
+
+
+def project_upsert(
+    existing_values: list[list[str]], plan: UpsertPlan
+) -> list[list[str]]:
+    """Apply a plan in memory for table schema refreshes without another fetch."""
+    width = len(plan.header)
+    if plan.initialize_header:
+        table_values = [list(plan.header)]
+    else:
+        table_values = [
+            list(plan.header),
+            *[_padded(list(row), width)[:width] for row in existing_values[1:]],
+        ]
+    for update in plan.updates:
+        table_values[update.row - 1][update.column - 1] = update.value
+    table_values.extend(list(row) for row in plan.new_rows)
+    return table_values
 
 
 def _dropdown_options(column: str, table_values: list[list[str]]) -> tuple[str, ...]:
@@ -461,25 +368,6 @@ def ensure_tracker_table(
                 },
             ]
         )
-        widths = {
-            "Experiment ID": 300,
-            "Campaign": 180,
-            "Environment": 180,
-            "Method": 120,
-            "Primitive Level": 140,
-            "Access": 110,
-            "Model / Backend": 180,
-            "Replicate Seeds": 160,
-            "Evaluation Seed": 140,
-            "Command": 420,
-            "Owner": 180,
-            "Status": 120,
-            "Progress": 90,
-            "Priority": 100,
-            "Notes": 320,
-            "Results": 220,
-            "Git SHA": 120,
-        }
         requests.extend(
             {
                 "updateDimensionProperties": {
@@ -489,13 +377,13 @@ def ensure_tracker_table(
                         "startIndex": index,
                         "endIndex": index + 1,
                     },
-                    "properties": {"pixelSize": widths.get(column, 110)},
+                    "properties": {"pixelSize": COLUMN_WIDTHS[column]},
                     "fields": "pixelSize",
                 }
             }
             for index, column in enumerate(header)
         )
-        for column in ("Experiment ID", "Command", "Notes", "Results"):
+        for column in WRAPPED_COLUMNS:
             index = header.index(column)
             requests.append(
                 {
@@ -580,7 +468,7 @@ def _get_worksheet(
         if not create_if_missing:
             return None
         worksheets = spreadsheet.worksheets()
-        if len(worksheets) == 1 and not worksheets[0].acell("A1").value:
+        if len(worksheets) == 1 and not worksheets[0].get_all_values():
             worksheets[0].update_title(title)
             return worksheets[0]
         return spreadsheet.add_worksheet(title=title, rows=100, cols=len(ALL_COLUMNS))
@@ -605,10 +493,7 @@ def main() -> None:
     spreadsheet = client.open_by_key(args.sheet_id)
     worksheet = _get_worksheet(spreadsheet, args.worksheet, create_if_missing=False)
     existing = worksheet.get_all_values() if worksheet is not None else []
-    projected_existing, schema_upgrade = project_tracker_schema_upgrade(existing)
-    plan = plan_upsert(projected_existing, generated_rows)
-    if schema_upgrade.required:
-        print("Tracker columns will be upgraded in place")
+    plan = plan_upsert(existing, generated_rows)
     print(f"{len(plan.new_rows)} new experiments")
     print(f"{plan.updated_experiments} existing experiments updated")
     print(f"{plan.inactivated_experiments} experiments marked inactive")
@@ -617,9 +502,8 @@ def main() -> None:
     if worksheet is None:
         worksheet = _get_worksheet(spreadsheet, args.worksheet)
         assert worksheet is not None
-    apply_schema_upgrade(spreadsheet, worksheet, schema_upgrade)
+    table_values = project_upsert(existing, plan)
     apply_upsert(worksheet, plan)
-    table_values = worksheet.get_all_values()
     ensure_tracker_table(spreadsheet, worksheet, table_values)
     print(f"Synchronized https://docs.google.com/spreadsheets/d/{args.sheet_id}")
 

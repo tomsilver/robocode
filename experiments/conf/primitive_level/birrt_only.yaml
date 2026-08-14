@@ -1,0 +1,7 @@
+# @package _global_
+
+# Legacy runs used BiRRT without the collision-check primitive. Keep this named
+# choice so gap-filling evaluations record their actual primitive set.
+primitive_level: birrt_only
+primitives:
+  - BiRRT

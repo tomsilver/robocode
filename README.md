@@ -354,8 +354,10 @@ The ID fingerprints the complete Hydra-composed condition and both seed fields. 
 defaults such as access mode, model/backend, and the 60-second evaluation timeout are
 materialized in every generated command. Editing any executable setting or seed
 protocol therefore appends a distinct run instead of relabeling earlier results.
-The named `primitive_level=none|low_level|bilevel` config group resolves to the
-primitive list consumed by `build_primitives()`. Explicit constraints exclude invalid
+Study campaigns use the named `primitive_level=none|low_level|bilevel` config choices,
+which resolve to the primitive list consumed by `build_primitives()`. A `birrt_only`
+choice preserves the exact protocol of historical gap-filling runs. Explicit
+constraints exclude invalid
 cells such as `primitive_level=bilevel` with `approach.blackbox=true`, and Hydra
 composition catches missing config choices.
 
@@ -380,8 +382,7 @@ placed immediately after Replicate Seeds and Evaluation Seed. Dropdown-chip colo
 be customized directly in the Google Sheets UI without changing the cells'
 backgrounds; an unchanged sync preserves that native chip styling.
 Status and Owner are the first two columns so the Sheet reads as a work queue at a
-glance. Existing prototype Sheets are upgraded by moving whole columns in place, which
-preserves their human-entered values and native chip types.
+glance.
 
 Authentication uses gspread's desktop OAuth flow. By default it reads
 `~/.config/gspread/credentials.json` and stores the authorized-user token outside the

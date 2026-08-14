@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "experiments" / "analyze_results.py"
 )
@@ -73,3 +75,28 @@ def test_collect_results_accepts_legacy_seed_config(tmp_path: Path) -> None:
 
     assert dataframe.loc[0, "replicate_seed"] == 424
     assert "seed" not in dataframe.columns
+
+
+def test_aggregation_keeps_manual_rows_when_tracker_ids_are_present() -> None:
+    """Optional experiment IDs do not drop manual or legacy runs from summaries."""
+    dataframe = pd.DataFrame(
+        [
+            {
+                "approach": "AgenticApproach",
+                "environment": "ExampleEnv",
+                "replicate_seed": 24,
+                "experiment_id": None,
+                "solve_rate": 0.5,
+            },
+            {
+                "approach": "AgenticApproach",
+                "environment": "ExampleEnv",
+                "replicate_seed": 42,
+                "experiment_id": "condition__abc12345",
+                "solve_rate": 0.75,
+            },
+        ]
+    )
+    averaged = analyze_results.aggregate_results(dataframe)
+    assert len(averaged) == 2
+    assert set(averaged["replicate_seeds"]) == {"24", "42"}

@@ -27,7 +27,6 @@ Parallel sweep with joblib launcher:
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +36,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
+from robocode.experiment_protocol import EXPERIMENT_ID_PATTERN, validate_eval_seed
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
 from robocode.utils.episode import (
@@ -50,15 +50,12 @@ from robocode.utils.telemetry import require_registered
 
 logger = logging.getLogger(__name__)
 
-_EXPERIMENT_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_]*(?:__[a-z0-9_]+)*__[0-9a-f]{8}")
-
-
 def resolve_experiment_id(cfg: DictConfig) -> str | None:
     """Return a tracker-generated condition ID and reject unsafe identifiers."""
     value = cfg.get("experiment_id")
     if value is None:
         return None
-    if not isinstance(value, str) or _EXPERIMENT_ID_PATTERN.fullmatch(value) is None:
+    if not isinstance(value, str) or EXPERIMENT_ID_PATTERN.fullmatch(value) is None:
         raise ValueError(
             "experiment_id must be null or a tracker-generated identifier, "
             f"got {value!r}"
@@ -68,14 +65,7 @@ def resolve_experiment_id(cfg: DictConfig) -> str | None:
 
 def resolve_eval_seed(cfg: DictConfig) -> int:
     """Return the required, experimenter-only evaluation-suite seed."""
-    value = cfg.get("eval_seed")
-    if value is None:
-        raise ValueError(
-            "eval_seed must be set explicitly; it must not follow replicate_seed"
-        )
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"eval_seed must be a nonnegative integer, got {value!r}")
-    return value
+    return validate_eval_seed(cfg.get("eval_seed"))
 
 
 def generate_eval_seeds(eval_seed: int, num_eval_tasks: int) -> list[int]:
@@ -339,7 +329,8 @@ def _main(cfg: DictConfig) -> float:
         results.update(gen_metrics.to_dict())
     results["eval_seed"] = eval_seed
     results["replicate_seed"] = replicate_seed
-    results["experiment_id"] = condition_id
+    if condition_id is not None:
+        results["experiment_id"] = condition_id
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

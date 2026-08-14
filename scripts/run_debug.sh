@@ -9,7 +9,7 @@ python experiments/run_experiment.py \
     environment=obstruction2d_hard \
     replicate_seed=24 \
     eval_seed="$EVAL_SEED" \
-    "primitives=[]" \
+    primitive_level=none \
     num_eval_tasks=1 \
     render_videos=true \
     record_approach_history=true \
