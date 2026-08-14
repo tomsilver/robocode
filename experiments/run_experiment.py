@@ -50,6 +50,7 @@ from robocode.utils.telemetry import require_registered
 
 logger = logging.getLogger(__name__)
 
+
 def resolve_experiment_id(cfg: DictConfig) -> str | None:
     """Return a tracker-generated condition ID and reject unsafe identifiers."""
     value = cfg.get("experiment_id")

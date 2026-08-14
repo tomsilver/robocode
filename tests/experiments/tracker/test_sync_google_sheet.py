@@ -45,8 +45,7 @@ def test_load_generated_rows_fills_truncated_cells_with_blanks(tmp_path: Path) -
     """Short CSV rows never emit null values that Sheets silently skips."""
     csv_path = tmp_path / "short.csv"
     csv_path.write_text(
-        ",".join(schema.GENERATED_COLUMNS)
-        + "\ncondition-1,campaign_a,motion2d_easy\n",
+        ",".join(schema.GENERATED_COLUMNS) + "\ncondition-1,campaign_a,motion2d_easy\n",
         encoding="utf-8",
     )
     [row] = sync.load_generated_rows([csv_path])
@@ -215,9 +214,10 @@ def test_blank_categorical_column_remains_text() -> None:
         list(schema.ALL_COLUMNS),
         [row[column] for column in schema.ALL_COLUMNS],
     ]
-    assert sync.build_table_column("Model / Backend", 6, table_values)[
-        "columnType"
-    ] == "TEXT"
+    assert (
+        sync.build_table_column("Model / Backend", 6, table_values)["columnType"]
+        == "TEXT"
+    )
 
 
 def test_table_column_signature_ignores_omitted_zero_index() -> None:
@@ -233,7 +233,9 @@ def test_table_column_signature_ignores_omitted_zero_index() -> None:
     ]
     current = [dict(column) for column in desired]
     current[0].pop("columnIndex")
-    assert sync._table_column_signature(current) == sync._table_column_signature(  # pylint: disable=protected-access
+    assert sync._table_column_signature(
+        current
+    ) == sync._table_column_signature(  # pylint: disable=protected-access
         desired
     )
 
@@ -247,15 +249,15 @@ def test_missing_title_does_not_reuse_a_nonempty_worksheet(
         """Test substitute for gspread's missing-worksheet exception."""
 
     gspread = Mock(WorksheetNotFound=WorksheetNotFound)
-    monkeypatch.setattr(
-        sync.importlib, "import_module", Mock(return_value=gspread)
-    )
+    monkeypatch.setattr(sync.importlib, "import_module", Mock(return_value=gspread))
     default = Mock()
     default.get_all_values.return_value = [["", "existing note"]]
     spreadsheet = Mock()
     spreadsheet.worksheet.side_effect = WorksheetNotFound
     spreadsheet.worksheets.return_value = [default]
-    created = sync._get_worksheet(spreadsheet, "Tracker")  # pylint: disable=protected-access
+    created = sync._get_worksheet(
+        spreadsheet, "Tracker"
+    )  # pylint: disable=protected-access
     assert created == spreadsheet.add_worksheet.return_value
     default.update_title.assert_not_called()
 

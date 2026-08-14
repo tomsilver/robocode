@@ -64,9 +64,7 @@ def load_campaign(path: Path) -> tuple[str, dict[str, list[Scalar]], tuple[int, 
     matrix: dict[str, list[Scalar]] = {}
     for key, choices in raw_matrix.items():
         if key in _PROTOCOL_CONFIG_KEYS:
-            raise ValueError(
-                f"{path}: matrix cannot override protocol field {key!r}"
-            )
+            raise ValueError(f"{path}: matrix cannot override protocol field {key!r}")
         if not isinstance(choices, list) or not choices:
             raise ValueError(f"{path}: matrix.{key} must be a non-empty list")
         matrix[key] = [
