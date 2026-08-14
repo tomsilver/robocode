@@ -1,0 +1,13 @@
+name: baselines
+matrix:
+  environment:
+    - motion2d_generalized
+    - obstruction2d_generalized
+    - clutteredretrieval2d_generalized
+    - clutteredstorage2d_generalized
+    - stickbutton2d_generalized
+  approach: [bilevel_planning]
+  primitive_level: [none]
+  num_eval_tasks: [100]
+  eval_timeout: [60]
+replicate_seeds: [42, 24, 424, 444, 222]

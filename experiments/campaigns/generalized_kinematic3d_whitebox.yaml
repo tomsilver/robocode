@@ -1,0 +1,16 @@
+name: generalized_kinematic3d_whitebox
+matrix:
+  environment:
+    - obstruction3d_generalized
+    - packing3d_generalized
+    - shelf3d_generalized
+    - table3d_generalized
+    - transport3d_generalized
+  approach: [agentic]
+  primitive_level: [none]
+  approach.blackbox: [false]
+  approach/backend: [claude_opus5]
+  approach.max_budget_usd: [20.0]
+  num_eval_tasks: [100]
+  eval_timeout: [60]
+replicate_seeds: [42, 24, 424, 444, 222]

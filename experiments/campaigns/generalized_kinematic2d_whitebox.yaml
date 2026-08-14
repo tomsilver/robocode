@@ -1,0 +1,16 @@
+name: generalized_kinematic2d_whitebox
+matrix:
+  environment:
+    - motion2d_generalized
+    - obstruction2d_generalized
+    - clutteredretrieval2d_generalized
+    - clutteredstorage2d_generalized
+    - stickbutton2d_generalized
+  approach: [agentic]
+  primitive_level: [none]
+  approach.blackbox: [false]
+  approach/backend: [claude_opus5]
+  approach.max_budget_usd: [20.0]
+  num_eval_tasks: [100]
+  eval_timeout: [60]
+replicate_seeds: [42, 24, 424, 444, 222]
