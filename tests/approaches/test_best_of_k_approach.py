@@ -1,5 +1,7 @@
 """Tests for best_of_k_approach.py."""
 
+import json
+
 import numpy as np
 import pytest
 from gymnasium import Env
@@ -157,6 +159,39 @@ def test_prefers_runnable_over_crashing(tmp_path):
     assert "raise ValueError" not in approach_py  # the crasher was not kept
     assert "[0.0]" in approach_py  # the runnable (stall) policy was kept
     assert approach.num_generations == 2
+
+
+def test_shipped_config_hides_held_out_eval_counts(tmp_path):
+    """Best-of-K ships the same redacted sandbox config: no held-out count leaks."""
+    # pylint: disable=protected-access
+    env_cfg = {
+        "_target_": (
+            "robocode.environments.variable_object_count_env.VariableObjectCountEnv"
+        ),
+        "constant_object_env_path": (
+            "kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv"
+        ),
+        "count_kwarg": "num_obstructions",
+        "count_object_prefix": "obstruction",
+        "design_counts": [1, 3, 5, 10],
+        "eval_counts": [1, 3, 5, 10, 15, 20, 25],
+        "bilevel_env_name": "clutteredretrieval2d",
+    }
+    approach = BestOfKApproach(
+        action_space=_ToyEnv().action_space,
+        observation_space=_ToyEnv().observation_space,
+        seed=0,
+        primitives={},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env_cfg=json.dumps(env_cfg),
+        output_dir=str(tmp_path),
+        use_docker=True,
+    )
+    config = approach._driver_config({})
+    assert config["approach"] == "bestofk"  # the best-of-k driver path
+    shipped = config["environment"]
+    assert {15, 20, 25}.isdisjoint(shipped["eval_counts"])
+    assert shipped["eval_counts"] == shipped["design_counts"] == [1, 3, 5, 10]
 
 
 def test_unbounded_loop_raises(tmp_path):
