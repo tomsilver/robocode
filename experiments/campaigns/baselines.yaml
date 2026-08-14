@@ -6,6 +6,13 @@ matrix:
     - clutteredretrieval2d_generalized
     - clutteredstorage2d_generalized
     - stickbutton2d_generalized
+    # TODO: generalized 3D environments do not expose bilevel models yet.
+    # Keep these planned conditions visible; implementation is required before run.
+    - obstruction3d_generalized
+    - packing3d_generalized
+    - shelf3d_generalized
+    - table3d_generalized
+    - transport3d_generalized
   approach: [bilevel_planning]
   primitive_level: [none]
   num_eval_tasks: [100]
