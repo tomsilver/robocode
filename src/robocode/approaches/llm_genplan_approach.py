@@ -40,6 +40,15 @@ _ObsType = TypeVar("_ObsType")
 _ActType = TypeVar("_ActType")
 
 
+def _redact_held_out_counts(env_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Pin ``eval_counts`` to ``design_counts`` so the config shipped into the
+    sandbox does not expose the held-out counts. Configs without these keys pass
+    through unchanged."""
+    if "eval_counts" in env_cfg and "design_counts" in env_cfg:
+        return {**env_cfg, "eval_counts": list(env_cfg["design_counts"])}
+    return env_cfg
+
+
 class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
     """Generate a policy with a plain LLM and debug it against training tasks."""
 
@@ -178,7 +187,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         return {
             "approach": "genplan",
             "completion": completion,
-            "environment": json.loads(self._env_cfg),
+            "environment": _redact_held_out_counts(json.loads(self._env_cfg)),
             "seed": self._seed,
             "primitive_names": list(self._primitives),
             "max_steps": self._max_steps,

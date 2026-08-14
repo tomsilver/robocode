@@ -523,8 +523,8 @@ class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
             f'    count_object_prefix="{self._count_object_prefix}",\n'
             f"{fixed_kwargs_example_arg}"
             f"{bilevel_example_arg}"
-            "    design_counts=[<count list>],\n"
-            "    eval_counts=[<count list>],\n"
+            "    design_counts=[<count list>],  # counts of your choice\n"
+            "    eval_counts=[<count list>],  # counts of your choice\n"
             ")\n\n"
             "# Pin a count to build an instance of that size, for any count:\n"
             "state, info = env.reset(seed=0, options={'object_count': 3})\n"

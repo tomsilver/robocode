@@ -1,10 +1,13 @@
 """Tests for llm_genplan_approach.py."""
 
+import json
+
+import hydra
 import numpy as np
 import pytest
 from gymnasium import Env
 from gymnasium.spaces import Box
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from relational_structs import Type
 from relational_structs.spaces import ObjectCentricStateSpace
 
@@ -113,6 +116,89 @@ def test_parse_python_code_recovers_truncated_block():
     """A response cut off mid-block (no closing fence) still yields the code."""
     response = f"Here is the approach:\n```python\n{_FULL_APPROACH}"
     assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+# A generalized (variable-count) env whose held-out eval counts strictly extend the
+# design counts: 15, 20, 25 are evaluated but must never reach the generated program.
+_GENERALIZED_ENV_CFG = {
+    "_target_": "robocode.environments.variable_object_count_env.VariableObjectCountEnv",
+    "constant_object_env_path": (
+        "kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv"
+    ),
+    "count_kwarg": "num_obstructions",
+    "count_object_prefix": "obstruction",
+    "design_counts": [1, 3, 5, 10],
+    "eval_counts": [1, 3, 5, 10, 15, 20, 25],
+    "bilevel_env_name": "clutteredretrieval2d",
+}
+_HELD_OUT = {15, 20, 25}
+
+
+def _config_only_approach(env_cfg, tmp_path):
+    """An approach carrying ``env_cfg`` for driving ``_driver_config`` only."""
+    env = _ToyEnv()
+    return LLMGenPlanApproach(
+        action_space=env.action_space,
+        observation_space=env.observation_space,
+        seed=0,
+        primitives={},
+        completion=DictConfig({"provider": "cli", "model": "x"}),
+        env_cfg=json.dumps(env_cfg),
+        output_dir=str(tmp_path),
+        use_docker=True,
+    )
+
+
+def test_shipped_config_hides_held_out_eval_counts(tmp_path):
+    """The sandbox config the generated program reads carries no held-out count."""
+    # pylint: disable=protected-access
+    approach = _config_only_approach(_GENERALIZED_ENV_CFG, tmp_path)
+    shipped = approach._driver_config({})["environment"]
+    # (a) no held-out count is present; (b) eval_counts collapses to design_counts.
+    assert _HELD_OUT.isdisjoint(shipped["eval_counts"])
+    assert shipped["eval_counts"] == shipped["design_counts"]
+    # (d) design_counts is the real, unchanged training range.
+    assert shipped["design_counts"] == [1, 3, 5, 10]
+    # The host config is untouched: real eval_counts stay available host-side.
+    assert json.loads(approach._env_cfg)["eval_counts"] == [1, 3, 5, 10, 15, 20, 25]
+
+
+def test_shipped_config_leaves_fixed_count_env_untouched(tmp_path):
+    """A config with no count keys (fixed-count env) passes through unchanged."""
+    # pylint: disable=protected-access
+    fixed_cfg = {"_target_": "some.module:FixedEnv", "num_blocks": 3}
+    approach = _config_only_approach(fixed_cfg, tmp_path)
+    shipped = approach._driver_config({})["environment"]
+    assert shipped == fixed_cfg
+
+
+def test_env_from_shipped_config_exposes_no_held_out_count(tmp_path):
+    """An env built from the shipped config hides the held-out counts (part c).
+
+    Uses Obstruction2D, whose small design range keeps backend construction cheap.
+    """
+    # pylint: disable=protected-access
+    obstruction_cfg = {
+        "_target_": (
+            "robocode.environments.variable_object_count_env.VariableObjectCountEnv"
+        ),
+        "constant_object_env_path": (
+            "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv"
+        ),
+        "count_kwarg": "num_obstructions",
+        "count_object_prefix": "obstruction",
+        "design_counts": [0, 1, 2],
+        "eval_counts": [0, 1, 2, 3, 4],  # 3, 4 held out
+        "bilevel_env_name": "obstruction2d",
+    }
+    approach = _config_only_approach(obstruction_cfg, tmp_path)
+    shipped = approach._driver_config({})["environment"]
+    env = hydra.utils.instantiate(OmegaConf.create(shipped))
+    try:
+        assert env.eval_counts == env.design_counts == [0, 1, 2]
+        assert {3, 4}.isdisjoint(env.eval_counts)
+    finally:
+        env.close()
 
 
 def test_create_llm_client_dispatch(monkeypatch):

@@ -1,5 +1,5 @@
 defaults:
-  - completion: cli_claude  # CLI/subscription by default; never the paid API unless overridden
+  - completion: cli_opus5  # authenticated Claude CLI, same model as the agentic default
 
 _target_: robocode.approaches.llm_genplan_approach.LLMGenPlanApproach
 output_dir: ${hydra:runtime.output_dir}
