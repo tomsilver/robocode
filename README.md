@@ -355,11 +355,9 @@ defaults such as access mode, model/backend, and the 60-second evaluation timeou
 materialized in every generated command. Editing any executable setting or seed
 protocol therefore appends a distinct run instead of relabeling earlier results.
 Study campaigns use the named `primitive_level=none|low_level|bilevel` config choices,
-which resolve to the primitive list consumed by `build_primitives()`. A `birrt_only`
-choice preserves the exact protocol of historical gap-filling runs. Explicit
-constraints exclude invalid
-cells such as `primitive_level=bilevel` with `approach.blackbox=true`, and Hydra
-composition catches missing config choices.
+which resolve to the primitive list consumed by `build_primitives()`. Explicit
+constraints exclude invalid cells such as `primitive_level=bilevel` with
+`approach.blackbox=true`, and Hydra composition catches missing config choices.
 
 Install the optional Google client and synchronize the generated CSV:
 

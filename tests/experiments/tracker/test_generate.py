@@ -208,7 +208,6 @@ replicate_seeds: [42]
     ("primitive_level", "expected"),
     [
         ("none", []),
-        ("birrt_only", ["BiRRT"]),
         ("low_level", ["check_action_collision", "BiRRT"]),
         ("bilevel", ["bilevel_models"]),
     ],
