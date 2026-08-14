@@ -21,7 +21,7 @@ _ENVIRONMENTS = (
     ("Dynamic PushPullHook2D", "dynpushpullhook2d_generalized"),
     ("Dynamic ScoopPour2D", "dynscooppour2d_generalized"),
 )
-_PANEL_SIZE = (480, 408)
+_PANEL_SIZE = (480, 424)
 _IMAGE_SIZE = (480, 360)
 
 
@@ -31,20 +31,48 @@ def _create_environment(config_name: str) -> VariableObjectCountEnv:
     return cast(VariableObjectCountEnv, instantiate(config.environment))
 
 
-def _panel(frame: NDArray[Any], label: str) -> Image.Image:
+def _panel(
+    frame: NDArray[Any], phase: str, label: str, count: int, seed: int
+) -> Image.Image:
     image = Image.fromarray(np.asarray(frame, dtype=np.uint8))
     image.thumbnail(_IMAGE_SIZE, Image.Resampling.LANCZOS)
     panel = Image.new("RGB", _PANEL_SIZE, "white")
     x = (_PANEL_SIZE[0] - image.width) // 2
-    y = 48 + (_IMAGE_SIZE[1] - image.height) // 2
+    y = 64 + (_IMAGE_SIZE[1] - image.height) // 2
     panel.paste(image, (x, y))
     draw = ImageDraw.Draw(panel)
-    font = ImageFont.truetype("DejaVuSans.ttf", 20)
-    draw.text((12, 12), label, fill="black", font=font)
+    header_color = "#dceefa" if phase == "DESIGN" else "#ffe4bc"
+    draw.rectangle((0, 0, _PANEL_SIZE[0], 64), fill=header_color)
+    font = ImageFont.truetype("DejaVuSans.ttf", 18)
+    draw.multiline_text(
+        (12, 7),
+        f"{phase} | {label}\ncount={count} | seed={seed}",
+        fill="black",
+        font=font,
+        spacing=2,
+    )
     return panel
 
 
-def render_gif(output: Path, num_frames: int) -> None:
+def _render_montage(
+    environments: list[tuple[str, VariableObjectCountEnv]],
+    phase: str,
+    seed: int,
+    counts: list[int] | None = None,
+) -> Image.Image:
+    panels = []
+    for index, (label, env) in enumerate(environments):
+        options = None if counts is None else {"object_count": counts[index]}
+        _, info = env.reset(seed=seed, options=options)
+        frame = cast(NDArray[Any], env.render())
+        panels.append(_panel(frame, phase, label, info["object_count"], seed))
+    montage = Image.new("RGB", (_PANEL_SIZE[0] * len(panels), _PANEL_SIZE[1]), "white")
+    for index, panel in enumerate(panels):
+        montage.paste(panel, (index * _PANEL_SIZE[0], 0))
+    return montage
+
+
+def render_gif(output: Path, num_design_frames: int) -> None:
     """Render synchronized initial-state samples from all generalized families."""
     environments = [
         (label, _create_environment(config_name))
@@ -52,22 +80,22 @@ def render_gif(output: Path, num_frames: int) -> None:
     ]
     frames: list[Image.Image] = []
     try:
-        for seed in range(num_frames):
-            panels = []
-            for label, env in environments:
-                _, info = env.reset(seed=seed)
-                frame = cast(NDArray[Any], env.render())
-                panels.append(
-                    _panel(
-                        frame, f"{label} | count={info['object_count']} | seed={seed}"
-                    )
+        for seed in range(num_design_frames):
+            frames.append(_render_montage(environments, "DESIGN", seed))
+
+        num_eval_frames = max(len(env.eval_counts) for _, env in environments)
+        for index in range(num_eval_frames):
+            counts = [
+                env.eval_counts[index % len(env.eval_counts)] for _, env in environments
+            ]
+            frames.append(
+                _render_montage(
+                    environments,
+                    "EVAL",
+                    seed=num_design_frames + index,
+                    counts=counts,
                 )
-            montage = Image.new(
-                "RGB", (_PANEL_SIZE[0] * len(panels), _PANEL_SIZE[1]), "white"
             )
-            for index, panel in enumerate(panels):
-                montage.paste(panel, (index * _PANEL_SIZE[0], 0))
-            frames.append(montage)
     finally:
         for _, env in environments:
             env.close()
@@ -86,10 +114,10 @@ def render_gif(output: Path, num_frames: int) -> None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--num-frames", type=int, default=12)
+    parser.add_argument("--num-design-frames", type=int, default=12)
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    render_gif(args.output, args.num_frames)
+    render_gif(args.output, args.num_design_frames)
