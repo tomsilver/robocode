@@ -3,10 +3,8 @@
 import json
 from pathlib import Path
 
-from hydra.utils import instantiate
-from omegaconf import OmegaConf
-
 from robocode.mcp import setup_mcp_config
+from robocode.mcp.local_render import _build_env
 
 STICKBUTTON2D_CFG = {
     "_target_": "robocode.environments.variable_object_count_env.VariableObjectCountEnv",
@@ -48,8 +46,8 @@ def test_sandbox_env_config_holds_no_count_range(tmp_path: Path) -> None:
     written = json.loads(
         (sandbox_dir / ".mcp" / "env_config.json").read_text(encoding="utf-8")
     )
-    assert written["design_counts"] == [1]
-    assert written["eval_counts"] == [1]
+    assert "design_counts" not in written
+    assert "eval_counts" not in written
 
     for path in sandbox_dir.rglob("*"):
         if path.is_file():
@@ -59,14 +57,14 @@ def test_sandbox_env_config_holds_no_count_range(tmp_path: Path) -> None:
 
 
 def test_sandbox_env_config_still_instantiates(tmp_path: Path) -> None:
-    """The reduced config builds an env, and a pinned count still resets to that
-    size."""
+    """The reduced config builds an env through the render server, and a pinned
+    count still resets to that size."""
     sandbox_dir = _write_sandbox(tmp_path, STICKBUTTON2D_CFG)
     written = json.loads(
         (sandbox_dir / ".mcp" / "env_config.json").read_text(encoding="utf-8")
     )
 
-    env = instantiate(OmegaConf.create(written))
+    env = _build_env(written)
     state, info = env.reset(seed=0, options={"object_count": 4})
     assert info["object_count"] == 4
     assert sum(1 for n in state.get_object_names() if n.startswith("button")) == 4
