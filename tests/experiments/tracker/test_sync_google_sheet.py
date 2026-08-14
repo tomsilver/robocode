@@ -233,11 +233,11 @@ def test_table_column_signature_ignores_omitted_zero_index() -> None:
     ]
     current = [dict(column) for column in desired]
     current[0].pop("columnIndex")
-    assert sync._table_column_signature(
-        current
-    ) == sync._table_column_signature(  # pylint: disable=protected-access
-        desired
-    )
+    # pylint: disable-next=protected-access
+    current_signature = sync._table_column_signature(current)
+    # pylint: disable-next=protected-access
+    desired_signature = sync._table_column_signature(desired)
+    assert current_signature == desired_signature
 
 
 def test_missing_title_does_not_reuse_a_nonempty_worksheet(
@@ -255,9 +255,8 @@ def test_missing_title_does_not_reuse_a_nonempty_worksheet(
     spreadsheet = Mock()
     spreadsheet.worksheet.side_effect = WorksheetNotFound
     spreadsheet.worksheets.return_value = [default]
-    created = sync._get_worksheet(
-        spreadsheet, "Tracker"
-    )  # pylint: disable=protected-access
+    # pylint: disable-next=protected-access
+    created = sync._get_worksheet(spreadsheet, "Tracker")
     assert created == spreadsheet.add_worksheet.return_value
     default.update_title.assert_not_called()
 
