@@ -42,9 +42,9 @@ _FAMILY_CASES = [
             "count_kwarg": "num_obstructions",
             "count_object_prefix": "obstruction",
             "design_counts": [0, 1, 2, 3],
-            "eval_counts": [0, 1, 2, 3, 5],
+            "eval_counts": [0, 1, 2, 3, 5, 10],
         },
-        5,
+        10,
         id="dynpushpullhook2d",
     ),
     pytest.param(

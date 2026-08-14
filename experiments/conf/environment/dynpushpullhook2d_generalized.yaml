@@ -5,4 +5,4 @@ constant_object_env_path: kinder.envs.dynamic2d.dyn_pushpullhook2d:DynPushPullHo
 count_kwarg: num_obstructions
 count_object_prefix: obstruction
 design_counts: [0, 1, 2, 3]
-eval_counts: [0, 1, 2, 3, 5]
+eval_counts: [0, 1, 2, 3, 5, 10]
