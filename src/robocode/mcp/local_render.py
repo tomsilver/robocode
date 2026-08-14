@@ -54,7 +54,6 @@ from robocode.rendering.render_policy import render_policy as _render_policy_fn
 from robocode.rendering.render_state import render_state as _render_state_fn
 from robocode.utils.render_paths import safe_label, unique_path
 
-
 # Placeholder counts, temporary so the env is constructible for rendering; the
 # render tools pin the actual object count per call.
 _PLACEHOLDER_COUNTS = [1]
