@@ -1,0 +1,8 @@
+# Dynamic ScoopPour2D with a variable total number of small objects. Each count
+# is split as evenly as possible between circles and squares.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: robocode.environments.generalized_dynamic2d:CountParameterizedDynScoopPour2DEnv
+count_kwarg: num_small_objects
+count_object_prefix: small_
+design_counts: [10, 20, 30]
+eval_counts: [10, 20, 30, 50]
