@@ -36,9 +36,15 @@ ARG OPENCODE_VERSION=latest
 # --build-arg USER_UID=$(id -u) USER_GID=$(id -g).
 ARG USER_UID=1000
 ARG USER_GID=1000
-RUN if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
-        groupmod --gid "$USER_GID" node \
-        && usermod --uid "$USER_UID" --gid "$USER_GID" node; \
+# The host GID may already be taken in the base image, in which case renumbering
+# node's own group fails. Every macOS user is GID 20 (`staff`), which Debian
+# ships as `dialout`. So only renumber node's group when the target GID is free;
+# otherwise leave the existing group alone and just move node into it.
+RUN if [ "$USER_GID" != "1000" ] && ! getent group "$USER_GID" > /dev/null; then \
+        groupmod --gid "$USER_GID" node; \
+    fi \
+    && if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
+        usermod --uid "$USER_UID" --gid "$USER_GID" node; \
     fi
 
 # ---------------------------------------------------------------------------
