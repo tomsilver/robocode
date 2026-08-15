@@ -18,7 +18,7 @@ dependencies = [
    "hydra-joblib-launcher",
    "omegaconf",
    "kindergarden>=0.2.0",
-   "pybullet",
+   "pybullet-arm64>=3.2.8",
    "types-shapely",
    "scipy-stubs",
    "imageio",
