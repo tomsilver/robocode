@@ -2869,15 +2869,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pybullet"
-version = "3.2.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/95/b9a98cd4ed948d4f25a7d0b13cb0c1f87e58dc6d113be9e18940641eb25f/pybullet-3.2.7.tar.gz", hash = "sha256:042879db8d101ac7590dee475fc6aded508b85fe1273fdbbfde1d88bd200e14f", size = 80508379, upload-time = "2025-01-30T00:34:00.527Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/78/a23a300110968586a9dbfd516ccd66906450d57567c9f60cddaeaaf10fa6/pybullet-3.2.7-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5d858abf7c12a21ef3ed351cf81dac1b5e486ec25c9ab59bfc84beb89034edff", size = 103196742, upload-time = "2025-01-30T00:19:07.063Z" },
-]
-
-[[package]]
 name = "pybullet-arm64"
 version = "3.2.8"
 source = { registry = "https://pypi.org/simple" }
@@ -3539,7 +3530,7 @@ dependencies = [
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
     { name = "pandas", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
     { name = "pandas-stubs" },
-    { name = "pybullet" },
+    { name = "pybullet-arm64" },
     { name = "scipy-stubs" },
     { name = "types-shapely" },
 ]
@@ -3599,7 +3590,7 @@ requires-dist = [
     { name = "openai" },
     { name = "pandas" },
     { name = "pandas-stubs" },
-    { name = "pybullet" },
+    { name = "pybullet-arm64", specifier = ">=3.2.8" },
     { name = "pylint", marker = "extra == 'develop'", specifier = ">=2.14.5" },
     { name = "pytest", marker = "extra == 'develop'", specifier = ">=7.2.2,<9.1" },
     { name = "pytest-pylint", marker = "extra == 'develop'", specifier = ">=0.18.0" },
