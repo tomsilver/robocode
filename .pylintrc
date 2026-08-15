@@ -291,7 +291,10 @@ ignored-classes=optparse.Values,thread._local,_thread._local,argparse.Namespace
 # (useful for modules/projects where namespaces are manipulated during runtime
 # and thus existing member attributes cannot be deduced by static analysis. It
 # supports qualified module names, as well as Unix pattern matching.
-ignored-modules=mit_semseg,semseg
+# libero ships behind the optional `[libero]` extra that install.sh skips, so it
+# is absent from a default dev environment; its tests skip at runtime via
+# pytest.importorskip, but pylint still resolves the import statically.
+ignored-modules=mit_semseg,semseg,libero
 
 # Show a hint with possible names when a member name was not found. The aspect
 # of finding the hint is based on edit distance.
