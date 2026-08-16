@@ -7,7 +7,7 @@ name = "robocode"
 version = "0.1.0"
 description = "Agents for robot physical reasoning."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
    "matplotlib",
    "numpy",
@@ -19,7 +19,7 @@ dependencies = [
    "omegaconf",
    "PyYAML",
    "kindergarden>=0.2.0",
-   "pybullet",
+   "pybullet-arm64>=3.2.8",
    "types-shapely",
    "scipy-stubs",
    "imageio",

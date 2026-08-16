@@ -13,6 +13,21 @@ cd robocode
 bash install.sh
 ```
 
+This installs everything except the optional [LIBERO-PRO](#libero-pro-manipulation-benchmark-optional-extra) extra, which is opt-in.
+
+### Python version
+
+**Use Python 3.11.**
+It is pinned in `.python-version`, so `uv` picks it up automatically and `install.sh` needs no flags.
+If `uv` has no 3.11 on hand it downloads one.
+
+3.11 is the only version actually exercised: the CI matrix is `["3.11"]`, and the Docker image installs `python3.11` and syncs against it.
+3.12 resolves and would probably work, but nothing tests it, and a local/sandbox version split is a bad trade in a project where agent code runs in the container.
+Moving to 3.12 means updating the CI matrix and the Dockerfile first.
+
+3.13 and newer cannot work at all, because the `kindergarden` submodule declares `requires-python = ">=3.10,<3.13"`.
+`robocode` mirrors that ceiling in its own `requires-python` so `uv` rejects a too-new interpreter up front instead of failing deep in a build.
+
 ### System prerequisites
 
 The following tools are **not** installed by `install.sh` / `uv sync` and must be set up separately:
@@ -152,11 +167,17 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 
 [LIBERO-PRO](https://github.com/uynitsuj/LIBERO-PRO) is a Franka tabletop manipulation benchmark (~80 task suites covering goal / spatial / object / 10-task mixes plus OOD and perturbation variants) built on MuJoCo via robosuite. It is vendored as a submodule under `third-party/LIBERO-PRO/` and gated behind the optional `libero` extra — it is **not** installed by default because it pins old upstreams (`robosuite==1.4.0`, `gym==0.25.2`, `robomimic==0.2.0`, `bddl==1.0.1`) and drags in a CUDA-enabled torch.
 
+`install.sh` passes `--no-extra libero`, so the default install skips it entirely.
+
+**Linux only.**
+The extra cannot be installed on macOS: `robomimic 0.2.0` depends on `egl-probe`, which compiles an EGL loader, and EGL has no macOS implementation.
+Use the Docker sandbox to run LIBERO from a Mac.
+
 Install (into the same venv as the rest of robocode):
 
 ```bash
-sudo apt-get install -y libegl1 libgl1    # EGL/GL runtime for MuJoCo
-uv sync --extra libero --all-extras --dev  # ~60 extra Python packages, several GB
+sudo apt-get install -y libegl1 libgl1 cmake  # EGL/GL runtime for MuJoCo; cmake builds egl-probe
+uv sync --all-extras --dev                    # ~60 extra Python packages, several GB
 ```
 
 First use of the `libero` package runs an interactive `input()` prompt asking where to store datasets; the test harness writes `~/.libero/config.yaml` automatically. If you hit the prompt manually, answer `N` — the default paths are fine for env rollouts (pre-recorded demos are not required).
