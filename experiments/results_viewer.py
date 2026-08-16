@@ -318,7 +318,8 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
         if budget is None:
             m = re.search(r"budget_(\d+)", run_id)
             budget = m.group(1) if m else None
-        seed = ov.get("seed")
+        # replicate_seed labels the run; older runs called the same knob seed.
+        seed = ov.get("replicate_seed") or ov.get("seed")
         m2 = re.search(r"[/_]s(\d+)", run_id)
         approach = (
             marker.get("approach")
@@ -1625,15 +1626,19 @@ def _replay_overrides(
     primitives always follow the policy, since a generated approach.py indexes the
     exact primitives dict it was written against.
     """
-    return [
+    overrides = [
         f"approach={run.approach}",
         f"++approach.load_dir={load_dir}",
         f"++approach.output_dir={output_dir}",
         f"primitives={_replay_primitives(run)}",
         "mcp_tools=[]",
         f"environment={environment or run.environment}",
-        f"seed={run.seed}",
     ]
+    # An unlabelled run keeps the config default rather than replaying under a
+    # null seed, which no RNG accepts.
+    if run.seed is not None:
+        overrides.append(f"replicate_seed={run.seed}")
+    return overrides
 
 
 def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
@@ -1692,7 +1697,7 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
                     cfg.approach,
                     action_space=env.action_space,
                     observation_space=env.observation_space,
-                    seed=cfg.seed,
+                    seed=cfg.replicate_seed,
                     env_description_path=None,
                     mcp_tools=(),
                     env_name=run.environment,
@@ -1872,7 +1877,7 @@ def _render_worker() -> None:
                     cfg.approach,
                     action_space=env.action_space,
                     observation_space=env.observation_space,
-                    seed=cfg.seed,
+                    seed=cfg.replicate_seed,
                     env_description_path=None,
                     mcp_tools=(),
                     env_name=env_override or run.environment,
