@@ -1,19 +1,21 @@
 #!/bin/bash
 # Re-run evaluation for all runs missing results.json using approach.load_dir
 set -e
+: "${EVAL_SEED:?Set EVAL_SEED to the private evaluation-suite seed}"
 
 run_eval() {
     local dir="$1"
     local env="$2"
-    local seed="$3"
+    local replicate_seed="$3"
     local primitives="$4"
 
-    echo ">>> Running: $dir (env=$env, seed=$seed, primitives=$primitives)"
+    echo ">>> Running: $dir (env=$env, replicate_seed=$replicate_seed, primitives=$primitives)"
     python experiments/run_experiment.py \
         approach=agentic_cdl \
         approach.container_backend=docker \
         approach.max_budget_usd=20.0 \
-        seed="$seed" \
+        replicate_seed="$replicate_seed" \
+        eval_seed="$EVAL_SEED" \
         num_eval_tasks=100 \
         "primitives=$primitives" \
         'mcp_tools=[render_state,render_policy]' \

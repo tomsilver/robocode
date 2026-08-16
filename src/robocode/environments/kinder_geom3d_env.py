@@ -111,7 +111,7 @@ class KinderGeom3DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             f"Key files in that directory:\n"
             f"- `base_env.py` \u2014 `step()` transition dynamics and collision "
             f"handling\n"
-            f"- The environment-specific module (e.g. `motion3d.py`) \u2014 "
+            f"- The environment-specific module (e.g. `obstruction3d.py`) \u2014 "
             f"reward function (`_get_reward_and_done`), config, and "
             f"scene generation\n"
             f"- `object_types.py` \u2014 object type definitions and feature names"

@@ -36,6 +36,19 @@ _OBSTRUCTION2D_CFG = (
     / "environment"
     / "obstruction2d_generalized.yaml"
 )
+_OBSTRUCTION3D_CFG = {
+    "_target_": (
+        "robocode.environments.variable_object_count_env.VariableObjectCountEnv"
+    ),
+    "constant_object_env_path": (
+        "kinder.envs.kinematic3d.obstruction3d:Obstruction3DEnv"
+    ),
+    "count_kwarg": "num_obstructions",
+    "count_object_prefix": "obstruction",
+    "design_counts": [0, 1],
+    "eval_counts": [0, 1, 2],
+    "constant_object_env_kwargs": {"realistic_bg": False},
+}
 
 
 def _env() -> VariableObjectCountEnv:
@@ -140,13 +153,19 @@ def _load_env_client(metadata_path: pathlib.Path):
 
 
 @contextmanager
-def _blackbox_client(primitive_names: list[str]):
-    """Serve obstruction2d_generalized over the wire; yield (client_module, client_env).
+def _blackbox_client(
+    primitive_names: list[str], env_config: dict[str, Any] | None = None
+):
+    """Serve a variable-count env over the wire; yield (client_module, client_env).
 
     Mirrors what a black-box sandbox sees: a live env server plus an ``env_client``
     built from ``env_spaces.json`` with the requested primitives.
     """
-    cfg = OmegaConf.load(_OBSTRUCTION2D_CFG)
+    cfg = (
+        OmegaConf.load(_OBSTRUCTION2D_CFG)
+        if env_config is None
+        else OmegaConf.create(env_config)
+    )
     container = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(container, dict)
     kwargs: dict[str, Any] = {
@@ -154,25 +173,28 @@ def _blackbox_client(primitive_names: list[str]):
     }
     host_env = VariableObjectCountEnv(**kwargs)
     env_cfg_json = json.dumps(container)
-    with tempfile.TemporaryDirectory() as tmp:
-        sandbox = pathlib.Path(tmp) / "sandbox"
-        sandbox.mkdir()
-        with env_server_running(env_cfg_json, sandbox) as (port, token):
-            write_env_spaces(
-                sandbox,
-                container_backend="local",
-                port=port,
-                token=token,
-                observation_space=host_env.observation_space,
-                action_space=host_env.action_space,
-                max_steps=200,
-                primitives_manifest=blackbox_primitive_manifest(primitive_names),
-            )
-            client_mod, env = _load_env_client(sandbox / "env_spaces.json")
-            try:
-                yield client_mod, env
-            finally:
-                env.close()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            sandbox = pathlib.Path(tmp) / "sandbox"
+            sandbox.mkdir()
+            with env_server_running(env_cfg_json, sandbox) as (port, token):
+                write_env_spaces(
+                    sandbox,
+                    container_backend="local",
+                    port=port,
+                    token=token,
+                    observation_space=host_env.observation_space,
+                    action_space=host_env.action_space,
+                    max_steps=200,
+                    primitives_manifest=blackbox_primitive_manifest(primitive_names),
+                )
+                client_mod, env = _load_env_client(sandbox / "env_spaces.json")
+                try:
+                    yield client_mod, env
+                finally:
+                    env.close()
+    finally:
+        host_env.close()
 
 
 def test_blackbox_object_centric_loop() -> None:
@@ -203,6 +225,27 @@ def test_blackbox_object_centric_loop() -> None:
             env.get_state(), env.action_space.sample()
         )
         assert isinstance(collision, bool)
+
+
+def test_blackbox_kinematic3d_state_restore() -> None:
+    """A sandbox-local state is rehydrated to its specialized 3D class on restore."""
+    with _blackbox_client([], _OBSTRUCTION3D_CFG) as (client_mod, env):
+        state, info = env.reset(seed=3, options={"object_count": 2})
+        # pylint: disable-next=protected-access
+        assert isinstance(state, client_mod._ObjectCentricState)
+        assert info["object_count"] == 2
+
+        env.step(env.action_space.sample())
+        env.set_state(state)
+        restored = env.get_state()
+        assert state.allclose(restored)
+
+        # Stepping proves the host reconstructed Obstruction3DObjectCentricState;
+        # the plain decoded base class lacks the robot pose helpers step/reset use.
+        next_state, _, _, _, step_info = env.step(env.action_space.sample())
+        # pylint: disable-next=protected-access
+        assert isinstance(next_state, client_mod._ObjectCentricState)
+        assert step_info["object_count"] == 2
 
 
 def test_blackbox_crv_remote_module_receives_local_ocs() -> None:

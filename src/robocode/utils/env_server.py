@@ -125,8 +125,21 @@ def encode(obj: Any) -> Any:
         return {key: encode(value) for key, value in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [encode(value) for value in obj]
-    if type(obj) in _ENCODERS:
-        tag, encode_fn = _ENCODERS[type(obj)]
+    # Prefer an exact registration, then allow a codec registered for a base class.
+    # Kinematic3D observations are family-specific ObjectCentricState subclasses and
+    # intentionally share the ObjectCentricState wire format.
+    codec = _ENCODERS.get(type(obj))
+    if codec is None:
+        codec = next(
+            (
+                registered_codec
+                for cls, registered_codec in _ENCODERS.items()
+                if isinstance(obj, cls)
+            ),
+            None,
+        )
+    if codec is not None:
+        tag, encode_fn = codec
         return {tag: encode_fn(obj)}
     raise TypeError(
         f"No codec for type {type(obj).__name__}; register one with "

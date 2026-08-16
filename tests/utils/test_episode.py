@@ -27,6 +27,7 @@ from robocode.utils.episode import (
     save_frames,
     save_video,
     summarize_by_count,
+    summarize_count_regimes,
 )
 
 
@@ -67,6 +68,28 @@ def test_summarize_by_count_rejects_length_mismatch() -> None:
     """Scheduled counts and episode entries must be parallel."""
     with pytest.raises(ValueError, match="scheduled_counts and per_episode"):
         summarize_by_count([1, 2], [{"solved": True}])
+
+
+def test_summarize_count_regimes_reports_design_and_held_out_separately() -> None:
+    """Count-regime rates pool scheduled episodes within each protocol regime."""
+    by_count = {
+        1: {"n": 2, "n_solved": 2, "solve_rate": 1.0},
+        3: {"n": 2, "n_solved": 1, "solve_rate": 0.5},
+        5: {"n": 3, "n_solved": 1, "solve_rate": 1 / 3},
+    }
+    regimes = summarize_count_regimes(by_count, design_counts=[1, 3])
+    assert regimes["design"] == {
+        "counts": [1, 3],
+        "n": 4,
+        "n_solved": 3,
+        "solve_rate": 0.75,
+    }
+    assert regimes["held_out"] == {
+        "counts": [5],
+        "n": 3,
+        "n_solved": 1,
+        "solve_rate": 1 / 3,
+    }
 
 
 class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):

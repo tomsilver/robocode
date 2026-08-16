@@ -8,7 +8,7 @@ import pandas as pd
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 
-def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
+def collect_results(search_dirs: list[Path]) -> pd.DataFrame:
     """Recursively find results.json files and build a DataFrame."""
     rows: list[dict] = []
     for search_dir in search_dirs:
@@ -33,19 +33,21 @@ def _collect_results(search_dirs: list[Path]) -> pd.DataFrame:
                 for override in overrides:
                     assert isinstance(override, str)
                     key, val = override.split("=", 1)
+                    if key == "seed":
+                        key = "replicate_seed"
                     row[key] = val
 
             if "approach" not in row:
                 row["approach"] = cfg["approach"]["_target_"].rsplit(".", 1)[-1]
             if "environment" not in row:
                 row["environment"] = cfg["environment"]["_target_"].rsplit(".", 1)[-1]
-            if "seed" not in row:
-                row["seed"] = cfg["seed"]
+            if "replicate_seed" not in row:
+                row["replicate_seed"] = cfg.get("replicate_seed", cfg.get("seed"))
 
             for key, value in results.items():
-                # per_episode is a list; gen_model_usage is a nested per-model dict.
-                # Both stay in results.json but are not flat DataFrame columns.
-                if key in ("per_episode", "gen_model_usage"):
+                # These nested structures stay in results.json; their headline
+                # metrics are surfaced through separate flat fields below.
+                if key in ("per_episode", "gen_model_usage", "count_regimes"):
                     continue
                 # by_count is a nested {count: {...}} dict; flatten its solve rates to
                 # numeric solve_rate@<count> columns so they aggregate across seeds.
@@ -69,15 +71,15 @@ def _main() -> None:
         help="Hydra output directories to scan for results.json files.",
     )
     args = parser.parse_args()
-    dataframe = _collect_results(args.dirs)
+    dataframe = collect_results(args.dirs)
     if dataframe.empty:
         print("No results found.")
         return
 
     numeric_cols = dataframe.select_dtypes(include="number").columns.tolist()
-    if "seed" in numeric_cols:
-        numeric_cols.remove("seed")
-    exclude_from_group = {"seed", "approach.load_dir"}
+    if "replicate_seed" in numeric_cols:
+        numeric_cols.remove("replicate_seed")
+    exclude_from_group = {"replicate_seed", "approach.load_dir"}
     group_cols = [
         c
         for c in dataframe.columns
@@ -85,22 +87,22 @@ def _main() -> None:
     ]
 
     seed_info = (
-        dataframe.groupby(group_cols, sort=False)["seed"]
-        .agg(seeds=lambda s: sorted(s.astype(str)))
+        dataframe.groupby(group_cols, sort=False)["replicate_seed"]
+        .agg(replicate_seeds=lambda s: sorted(s.astype(str)))
         .reset_index()
     )
-    seed_info["seeds"] = seed_info["seeds"].apply(",".join)
-    seed_info["n_seeds"] = seed_info["seeds"].str.count(",") + 1
+    seed_info["replicate_seeds"] = seed_info["replicate_seeds"].apply(",".join)
+    seed_info["n_replicates"] = seed_info["replicate_seeds"].str.count(",") + 1
 
     averaged = (
-        dataframe.drop(columns=["seed"])
+        dataframe.drop(columns=["replicate_seed"])
         .groupby(group_cols, sort=False)
         .mean(numeric_only=True)
         .reset_index()
     )
     averaged = averaged.merge(seed_info, on=group_cols)
 
-    col_order = group_cols + ["n_seeds", "seeds"] + numeric_cols
+    col_order = group_cols + ["n_replicates", "replicate_seeds"] + numeric_cols
     averaged = averaged[[c for c in col_order if c in averaged.columns]]
 
     sort_cols = ["environment"] + [c for c in group_cols if c != "environment"]

@@ -13,6 +13,21 @@ cd robocode
 bash install.sh
 ```
 
+This installs everything except the optional [LIBERO-PRO](#libero-pro-manipulation-benchmark-optional-extra) extra, which is opt-in.
+
+### Python version
+
+**Use Python 3.11.**
+It is pinned in `.python-version`, so `uv` picks it up automatically and `install.sh` needs no flags.
+If `uv` has no 3.11 on hand it downloads one.
+
+3.11 is the only version actually exercised: the CI matrix is `["3.11"]`, and the Docker image installs `python3.11` and syncs against it.
+3.12 resolves and would probably work, but nothing tests it, and a local/sandbox version split is a bad trade in a project where agent code runs in the container.
+Moving to 3.12 means updating the CI matrix and the Dockerfile first.
+
+3.13 and newer cannot work at all, because the `kindergarden` submodule declares `requires-python = ">=3.10,<3.13"`.
+`robocode` mirrors that ceiling in its own `requires-python` so `uv` rejects a too-new interpreter up front instead of failing deep in a build.
+
 ### System prerequisites
 
 The following tools are **not** installed by `install.sh` / `uv sync` and must be set up separately:
@@ -134,7 +149,6 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 
 | Config | Kinder ID | Difficulty |
 |---|---|---|
-| `motion3d` | `kinder/Motion3D-v0` | Single variant |
 | `obstruction3d_easy` | `kinder/Obstruction3D-o0-v0` | Easy (0 obstructions) |
 | `obstruction3d_medium` | `kinder/Obstruction3D-o2-v0` | Medium (2 obstructions) |
 | `obstruction3d_hard` | `kinder/Obstruction3D-o4-v0` | Hard (4 obstructions) |
@@ -153,11 +167,17 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 
 [LIBERO-PRO](https://github.com/uynitsuj/LIBERO-PRO) is a Franka tabletop manipulation benchmark (~80 task suites covering goal / spatial / object / 10-task mixes plus OOD and perturbation variants) built on MuJoCo via robosuite. It is vendored as a submodule under `third-party/LIBERO-PRO/` and gated behind the optional `libero` extra — it is **not** installed by default because it pins old upstreams (`robosuite==1.4.0`, `gym==0.25.2`, `robomimic==0.2.0`, `bddl==1.0.1`) and drags in a CUDA-enabled torch.
 
+`install.sh` passes `--no-extra libero`, so the default install skips it entirely.
+
+**Linux only.**
+The extra cannot be installed on macOS: `robomimic 0.2.0` depends on `egl-probe`, which compiles an EGL loader, and EGL has no macOS implementation.
+Use the Docker sandbox to run LIBERO from a Mac.
+
 Install (into the same venv as the rest of robocode):
 
 ```bash
-sudo apt-get install -y libegl1 libgl1    # EGL/GL runtime for MuJoCo
-uv sync --extra libero --all-extras --dev  # ~60 extra Python packages, several GB
+sudo apt-get install -y libegl1 libgl1 cmake  # EGL/GL runtime for MuJoCo; cmake builds egl-probe
+uv sync --all-extras --dev                    # ~60 extra Python packages, several GB
 ```
 
 First use of the `libero` package runs an interactive `input()` prompt asking where to store datasets; the test harness writes `~/.libero/config.yaml` automatically. If you hit the prompt manually, answer `N` — the default paths are fine for env rollouts (pre-recorded demos are not required).
@@ -244,14 +264,23 @@ python integration_tests/red_team_sandbox.py --docker  # Docker
 
 ## Experiments
 
+Set the private evaluation-suite seed in your shell before using any experiment
+command or checked-in launcher. The prompt avoids saving it in shell history:
+
+```bash
+read -rsp "Private evaluation seed: " EVAL_SEED
+echo
+export EVAL_SEED
+```
+
 Run an experiment:
 ```bash
-python experiments/run_experiment.py approach=random environment=small_maze seed=0
+python experiments/run_experiment.py approach=random environment=small_maze replicate_seed=0 eval_seed="$EVAL_SEED"
 ```
 
 Run a sweep over multiple seeds and environments:
 ```bash
-python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_maze approach=random
+python experiments/run_experiment.py -m replicate_seed=0,1,2 eval_seed="$EVAL_SEED" environment=small_maze,large_maze approach=random
 ```
 
 Analyze results from one or more runs:
@@ -313,7 +342,7 @@ The `agentic` approach launches a coding agent during `train()`. The agent reads
 By default the agent uses the Claude Code CLI backend and runs in the Docker sandbox (requires `bash docker/build.sh` once):
 
 ```bash
-python experiments/run_experiment.py approach=agentic environment=motion2d_easy
+python experiments/run_experiment.py approach=agentic environment=motion2d_easy eval_seed="$EVAL_SEED"
 ```
 
 Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
@@ -321,32 +350,33 @@ Set `approach.blackbox=true` to hide the environment source and force the agent 
 To use a different backend/model, override the `approach/backend` config:
 
 ```bash
-# GPT-4o via OpenCode
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt4o
+# GPT-5.4 via OpenCode
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt54 eval_seed="$EVAL_SEED"
 
 # Local Ollama model
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_ollama
+python experiments/run_experiment.py approach=agentic approach/backend=opencode_qwen eval_seed="$EVAL_SEED"
 
 # Or override individual fields
-python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro
+python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro eval_seed="$EVAL_SEED"
 ```
 
-Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `opencode_gpt4o`, `opencode_gemini`, `opencode_ollama`.
+Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
 
-To use the legacy OS-level sandbox instead:
-```bash
-python experiments/run_experiment.py approach=agentic environment=small_maze approach.container_backend=local
-```
+The experiment runner rejects the legacy local sandbox for generated-code
+methods because that sandbox permits host filesystem reads. Use Docker or
+Apptainer so experimenter-only evaluation configuration is outside the
+synthesis sandbox.
 
 To skip re-generation and load a previously generated approach:
 ```bash
 python experiments/run_experiment.py approach=agentic environment=small_maze \
+    eval_seed="$EVAL_SEED" \
     approach.load_dir=outputs/2026-02-16/16-00-41
 ```
 
 Parallel sweeps each get their own container (named `robocode-sandbox-<uuid>`), so multiple runs never interfere:
 ```bash
-python experiments/run_experiment.py -m seed=0,1,2 environment=small_maze,large_maze approach=agentic
+python experiments/run_experiment.py -m replicate_seed=0,1,2 eval_seed="$EVAL_SEED" environment=small_maze,large_maze approach=agentic
 ```
 
 Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run jobs in parallel locally:
@@ -354,15 +384,82 @@ Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run
 python experiments/run_experiment.py -m \
     approach=agentic \
     approach.container_backend=docker \
-    seed=42,24,424,444,222 \
+    replicate_seed=42,24,424,444,222 \
+    eval_seed="$EVAL_SEED" \
     'primitives=[]' \
     environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
     'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
-    'hydra.sweep.subdir=s${seed}/${hydra:runtime.choices.environment}' \
+    'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
     hydra/launcher=joblib hydra.launcher.n_jobs=4
 ```
 
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
+
+### Plain-LLM approaches
+
+`llm_genplan` and `best_of_k` call a model directly (messages in, code out) with no tools and no agent loop. They take their model from the `approach/completion` config group, which is separate from the `approach/backend` group the agentic approach uses:
+
+```bash
+# Default: Opus 5 through the Claude CLI
+python experiments/run_experiment.py approach=llm_genplan environment=small_maze eval_seed="$EVAL_SEED"
+
+# Same approach on a different model
+python experiments/run_experiment.py approach=best_of_k approach/completion=cli_sonnet5 eval_seed="$EVAL_SEED"
+```
+
+The `cli_*` presets drive the same authenticated Claude CLI as the agentic backend, so these runs need `claude auth login` (or `ANTHROPIC_API_KEY`) and no separate setup. The CLI applies an irreducible ~2k-token system prompt that cannot be stripped, so these baselines are prompted with that preamble present; the `anthropic_*` presets call the Messages API directly when a prompt with nothing else in it is required.
+
+| Completion preset | Provider | Model |
+|---|---|---|
+| `cli_opus5` (default) | Claude CLI | `claude-opus-5` |
+| `cli_sonnet5` | Claude CLI | `claude-sonnet-5` |
+| `cli_opus48` | Claude CLI | `claude-opus-4-8` |
+| `cli_sonnet46` | Claude CLI | `claude-sonnet-4-6` |
+| `cli_claude` | Claude CLI | `sonnet` (alias; the CLI picks the generation) |
+| `anthropic_opus` | Messages API | `claude-opus-4-8` |
+| `anthropic_sonnet` | Messages API | `claude-sonnet-4-6` |
+| `ollama_qwen` | OpenAI-compatible | `qwen3.6` (local Ollama) |
+| `vllm` | OpenAI-compatible | `Qwen/Qwen3.6-35B-A3B` (local vLLM) |
+
+The `anthropic_*` presets bill the Messages API and need `ANTHROPIC_API_KEY`; their `input_cost_per_mtok` / `output_cost_per_mtok` fields turn reported token usage into an estimated `cost_usd`, which bounds `approach.max_budget_usd`. The CLI reports its own cost, and the local presets report none.
+
+### Replicates and the evaluation suite
+
+`replicate_seed` and `eval_seed` have deliberately different roles:
+
+- `replicate_seed` identifies one independent replicate and seeds randomness
+  controlled by Robocode, such as an approach's NumPy generator and action-space
+  sampling. It does not seed Claude or make an agentic run reproducible.
+- `eval_seed` is a fixed team value supplied explicitly in final-run commands.
+  Robocode uses it to derive the same ordered evaluation episode suite for every
+  method and replicate, so score differences are not caused by different sampled
+  test suites. The checked-in default is `null`, and the runner fails if a command
+  omits the value. Keep it out of public configs and agent-visible inputs.
+
+The generalized synthesis agent does not receive `eval_seed` or the derived
+episode seeds. Hydra's full configuration remains on the experimenter side, and
+only the child `sandbox/` directory plus filtered source are mounted into Docker
+or Apptainer. Per-instance methods are a separate protocol: they receive the one
+derived episode seed they are solving, but not the master `eval_seed` used to
+construct the suite.
+
+For variable-object-count environments, evaluation sweeps the configured design
+and held-out counts on that fixed episode schedule. `results.json` retains the
+per-count curve and also reports `design_count_solve_rate` and
+`held_out_count_solve_rate` separately.
+
+The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
+and [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages/create)
+do not expose a sampling-seed control. Consequently, replicates capture
+uncontrolled model-generation variation even when `replicate_seed` is held
+fixed; session IDs and model names are not random seeds.
+
+This isolation boundary protects the synthesis process and its tool calls. The
+generated policy is currently loaded by the trusted experiment runner for
+rollout; it is reviewed as an experiment artifact rather than treated as
+hostile code. Protecting the host from a deliberately malicious generated
+policy would require running policy inference behind a separate process or
+container boundary as well.
 
 #### Example: small_maze
 

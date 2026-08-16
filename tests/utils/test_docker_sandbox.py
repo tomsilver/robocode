@@ -303,6 +303,26 @@ def test_docker_run_prefix_adds_extra_volumes(tmp_path: Path) -> None:
     assert cmd[cmd.index(volume) - 1] == "-v"
 
 
+def test_docker_run_prefix_mounts_sandbox_not_parent_run_dir(tmp_path: Path) -> None:
+    """Only the agent child directory, not its parent Hydra run, is mounted."""
+    run_dir = tmp_path / "run"
+    sandbox_dir = run_dir / "sandbox"
+    sandbox_dir.mkdir(parents=True)
+    cmd = _docker_run_prefix(
+        "c",
+        "img",
+        sandbox_dir,
+        tmp_path / "src",
+        tmp_path / "kindergarden",
+        None,
+        [],
+        [],
+    )
+    volumes = [cmd[i + 1] for i, token in enumerate(cmd[:-1]) if token == "-v"]
+    assert f"{sandbox_dir.resolve()}:/sandbox" in volumes
+    assert not any(volume.startswith(f"{run_dir.resolve()}:") for volume in volumes)
+
+
 def test_claude_auth_mount_excludes_host_state(tmp_path: Path, monkeypatch) -> None:
     """Credential fallback cannot expose or modify the live host config."""
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
