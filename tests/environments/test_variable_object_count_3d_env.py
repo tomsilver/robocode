@@ -1,4 +1,7 @@
-"""Kinematic3D coverage for the shared variable-object-count environment."""
+"""3D coverage for the shared variable-object-count environment.
+
+Kinematic3D families first, then the dynamic3D ones.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +11,6 @@ import pybullet as p
 import pytest
 from relational_structs import ObjectCentricState
 
-from robocode.environments.constrained_cupboard3d import ConstrainedCupboard3DEnv
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.object_centric_codec import (
     decode_object_centric_state,
@@ -155,7 +157,7 @@ def test_constrainedcupboard3d_uses_registered_object_counts() -> None:
     """ConstrainedCupboard3D selects its registered one-through-six-rod tasks."""
     env = VariableObjectCountEnv(
         constant_object_env_path=(
-            "robocode.environments.constrained_cupboard3d:ConstrainedCupboard3DEnv"
+            "kinder.envs.dynamic3d.task_families:ConstrainedCupboard3DEnv"
         ),
         count_kwarg="num_objects",
         count_object_prefix="cuboid_",
@@ -179,21 +181,47 @@ def test_constrainedcupboard3d_uses_registered_object_counts() -> None:
         env.close()
 
 
-def test_constrainedcupboard3d_adapter_kwargs() -> None:
-    """The adapter owns its task path while allowing a camera override."""
-    with pytest.raises(ValueError, match="selects task_config_path"):
-        ConstrainedCupboard3DEnv(
-            num_objects=1,
-            task_config_path="ignored.json",
-        )
+# How a family class rejects a bad count, an explicit task_config_path or an
+# unregistered instruction is kinder's contract, covered by its own
+# tests/envs/dynamic3d/test_task_families.py rather than duplicated here.
 
-    env = ConstrainedCupboard3DEnv(
-        num_objects=1,
-        scene_bg=False,
-        scene_render_camera="task_view",
+
+# The dynamic3D families kinder exposes with a count constructor argument, paired
+# with the object-name prefix each configures here. Two counts per family is
+# enough to exercise the count axis; the largest variants (100 scooped cubes, 50
+# swept cubes) only make the suite slower. kinder owns the classes and tests them
+# directly -- what matters here is that the wrapper drives them and that the
+# prefixes the configs use really do select the count-defining objects.
+_DYNAMIC3D_CASES = [
+    pytest.param("ConstrainedCupboard3DEnv", "cuboid_", [1, 2], id="cupboard-rods"),
+    pytest.param("Shelf3DEnv", "cube", [1, 2], id="dynamicshelf3d-cubes"),
+    pytest.param("Dynamo3DEnv", "obstacle_chair", [1, 3], id="dynamo3d-chairs"),
+    pytest.param("Tossing3DEnv", "cube_", [1, 2], id="tossing3d-cubes"),
+    pytest.param("ScoopPour3DEnv", "cube_", [10], id="scooppour3d-cubes"),
+    pytest.param("SweepSimple3DEnv", "cube_", [1, 5], id="sweepsimple3d-cubes"),
+    pytest.param(
+        "SortClutteredBlocks3DEnv", "cube", [4, 20], id="sortclutteredblocks3d-cubes"
+    ),
+]
+
+
+@pytest.mark.parametrize("class_name,prefix,counts", _DYNAMIC3D_CASES)
+def test_dynamic3d_family_supports_variable_count(
+    class_name: str, prefix: str, counts: list[int]
+) -> None:
+    """Each dynamic3D family varies its count and names count objects by prefix."""
+    env = VariableObjectCountEnv(
+        constant_object_env_path=(f"kinder.envs.dynamic3d.task_families:{class_name}"),
+        count_kwarg="num_objects",
+        count_object_prefix=prefix,
+        design_counts=counts[:1],
+        eval_counts=counts,
+        constant_object_env_kwargs={"scene_bg": False},
     )
     try:
-        env.reset(seed=0)
+        for count in counts:
+            state, info = env.reset(seed=0, options={"object_count": count})
+            assert info["object_count"] == count
+            assert _num_prefixed(state, prefix) == count
     finally:
         env.close()
-        getattr(env, "_object_centric_env").close()
