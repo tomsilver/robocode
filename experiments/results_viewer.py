@@ -83,6 +83,9 @@ class RunInfo:
     # Short label for the synthesis model (e.g. "opus-5"); None when the run has
     # no LLM backend.
     model: Optional[str] = None
+    # "whitebox" when the agent could read the environment source, "blackbox" when it
+    # could not; None for approaches with no such setting.
+    env_access: Optional[str] = None
 
 
 @dataclass
@@ -238,6 +241,24 @@ def _backend_model(hydra_dir: Path) -> Optional[str]:
     return _MODEL_LABELS.get(raw, raw.removeprefix("claude-"))
 
 
+_ACCESS_LABELS = {"true": "blackbox", "false": "whitebox"}
+
+
+def _env_access(hydra_dir: Path) -> Optional[str]:
+    """Whether the agent could read the environment source, from the resolved config.
+
+    ``blackbox:`` only occurs under ``approach`` in the resolved config, so a flat scan
+    is safe; approaches without the flag (e.g. bilevel planning) return None.
+    """
+    cfg = hydra_dir / "config.yaml"
+    if cfg.exists():
+        m = re.search(r"^\s+blackbox:\s*(\S+)\s*$", cfg.read_text(), re.MULTILINE)
+        if m is not None:
+            return _ACCESS_LABELS.get(m.group(1).strip("'\"").lower())
+    raw = _parse_overrides(hydra_dir).get("approach.blackbox")
+    return _ACCESS_LABELS.get(raw.strip("'\"").lower()) if raw else None
+
+
 # Environment pairs that sample the same task family from different spawn ranges;
 # an episode of one can be replayed under the other for a matched comparison.
 _ENV_COUNTERPART = {
@@ -351,9 +372,14 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
         if not trained and marker.get("policy_source"):
             trained = _environment_of_dir(root / marker["policy_source"])
         model = _backend_model(hydra_dir)
-        if model is None and marker.get("policy_source"):
+        env_access = _env_access(hydra_dir)
+        if marker.get("policy_source"):
             # A cross-eval cell replays a policy synthesized elsewhere.
-            model = _backend_model(root / marker["policy_source"] / ".hydra")
+            policy_hydra = root / marker["policy_source"] / ".hydra"
+            if model is None:
+                model = _backend_model(policy_hydra)
+            if env_access is None:
+                env_access = _env_access(policy_hydra)
         runs[run_id] = RunInfo(
             run_id=run_id,
             path=run_dir,
@@ -384,6 +410,7 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
             trained_environment=trained or environment,
             slice=str(marker.get("slice", "")),
             model=model,
+            env_access=env_access,
         )
     return runs
 
@@ -471,6 +498,7 @@ def _summary(run: RunInfo) -> dict[str, Any]:
         "seed": run.seed,
         "budget": run.budget,
         "model": run.model,
+        "env_access": run.env_access,
         "status": _status(run),
         "solve_rate": r.get("solve_rate"),
         "mean_eval_reward": r.get("mean_eval_reward"),
@@ -2380,8 +2408,8 @@ function openLightbox(src){
 }
 
 let ALL=[], FILTER={}, INDEX_HASH="#/index";
-const FACETS=[["model","model"],["approach","approach"],["environment","eval env"],
- ["trained_environment","trained on"],["slice","slice"],
+const FACETS=[["model","model"],["approach","approach"],["env_access","env access"],
+ ["environment","eval env"],["trained_environment","trained on"],["slice","slice"],
  ["primitives","primitives"],["seed","seed"],["budget","budget"]];
 const FACET_KEYS=new Set(FACETS.map(([key])=>key));
 async function loadRuns(){ALL=await j("/api/runs");}
@@ -2407,6 +2435,10 @@ function modelColor(m){if(!m)return null;if(MODEL_COLORS[m])return MODEL_COLORS[
 function modelDot(m){return h("span",{class:"dot",style:`background:${modelColor(m)}`});}
 function modelPill(m){return m?h("span",{class:"pill",
  style:`color:${modelColor(m)};border-color:${modelColor(m)}`},m):"";}
+// blackbox = the agent could not read the environment source during synthesis.
+function accessPill(a){return a?h("span",{class:"pill",
+ title:a==="blackbox"?"agent could not read the environment source"
+  :"agent could read the environment source"},a):"";}
 
 function facetBar(){
  // environment = the evaluated suite; trained_environment = what the policy saw
@@ -2448,6 +2480,7 @@ function renderIndex(){
    h("div",{class:"row"},
     h("span",{class:"pill "+r.status},r.status),
     modelPill(r.model),
+    accessPill(r.env_access),
     r.budget!=null?h("span",{class:"pill"},"$"+r.budget):"",
     r.seed!=null?h("span",{class:"pill"},"s"+r.seed):"",
     r.agent_cost_usd!=null?h("span",{class:"pill"},"$"+num(r.agent_cost_usd)):"",
@@ -2620,12 +2653,13 @@ async function renderRun(id){
  const d=await j("/api/run?run="+enc(id));
  const m=d.metrics,s=d.summary;app.innerHTML="";
  VIEWER=d.viewer||VIEWER;
- RUNTAG=[s.model,s.environment,s.primitives,s.approach].filter(Boolean).join(" ");
+ RUNTAG=[s.model,s.env_access,s.environment,s.primitives,s.approach].filter(Boolean).join(" ");
  const runRef=()=>`[${VIEWER}] ${id} | ${RUNTAG}`
   +` | solve_rate=${num(m.solve_rate)} | ${d.run_path}`;
  app.append(h("div",{class:"hrow"},h("h1",{},id),copyBtn(runRef,"copy run ref")),
   h("div",{class:"row"},h("span",{class:"pill "+s.status},s.status),
    modelPill(s.model),
+   accessPill(s.env_access),
    s.budget!=null?h("span",{class:"pill"},"$"+s.budget):"",s.seed!=null?h("span",{class:"pill"},"s"+s.seed):"",
    h("span",{class:"pill"},s.approach),h("span",{class:"pill",title:"evaluated suite"},"eval: "+s.environment),
    s.trained_environment&&s.trained_environment!==s.environment?
