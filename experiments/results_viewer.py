@@ -2259,6 +2259,8 @@ a{color:var(--accent)}
 .facet{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .facet .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-right:2px}
 .chip{padding:3px 9px;font-size:12.5px;border-radius:99px}
+.chip .chip-n{margin-left:5px;font-size:11px;opacity:.55;font-variant-numeric:tabular-nums}
+.chip.empty{opacity:.4}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
 .card{border:1px solid var(--line);border-radius:11px;padding:13px 14px;background:var(--card);text-decoration:none;color:var(--fg);display:block}
 .card:hover{border-color:var(--accent)}
@@ -2440,6 +2442,16 @@ function accessPill(a){return a?h("span",{class:"pill",
  title:a==="blackbox"?"agent could not read the environment source"
   :"agent could read the environment source"},a):"";}
 
+// Runs surviving every active filter except the named facet, which is the pool a
+// facet's own chips are drawn from: picking a model narrows the env chips to the
+// envs that model has runs for, while leaving the model chips themselves whole.
+function matchExcept(r,skip){
+ for(const[k,vs]of Object.entries(FILTER)){
+  if(k===skip)continue;
+  if(vs.length&&!vs.includes(String(r[k])))return false;
+ }
+ return true;
+}
 function facetBar(){
  // environment = the evaluated suite; trained_environment = what the policy saw
  // during synthesis. They differ only in cross-eval cells, so the "trained on"
@@ -2447,22 +2459,34 @@ function facetBar(){
  // re-scored on the standard suite.
  const bar=h("div",{class:"facets"});
  for(const [k,lbl] of FACETS){
-  const vals=[...new Set(ALL.map(r=>r[k]).filter(v=>v!=null))].sort();
-  if(vals.length<2)continue;
+  // A facet appears whenever the whole corpus offers a choice there, so the bar
+  // keeps its shape as filters narrow.
+  if(new Set(ALL.map(r=>r[k]).filter(v=>v!=null)).size<2)continue;
+  const counts=new Map();
+  for(const r of ALL){
+   if(r[k]==null||!matchExcept(r,k))continue;
+   const key=String(r[k]);counts.set(key,(counts.get(key)||0)+1);
+  }
+  const selected=FILTER[k]||[];
+  // Selected values stay on screen at zero so they can be switched back off.
+  const vals=[...new Set([...counts.keys(),...selected])].sort();
+  if(!vals.length)continue;
   const f=h("div",{class:"facet"},h("span",{class:"lbl"},lbl));
   for(const v of vals){
-   const on=(FILTER[k]||[]).includes(String(v));
-   f.append(h("button",{class:"chip"+(on?" active":""),onclick:()=>{
-    FILTER[k]=FILTER[k]||[];const i=FILTER[k].indexOf(String(v));
-    if(i<0)FILTER[k].push(String(v));else FILTER[k].splice(i,1);
+   const on=selected.includes(v);
+   const n=counts.get(v)||0;
+   f.append(h("button",{class:"chip"+(on?" active":"")+(n?"":" empty"),
+    title:`${n} run(s)`,onclick:()=>{
+    FILTER[k]=FILTER[k]||[];const i=FILTER[k].indexOf(v);
+    if(i<0)FILTER[k].push(v);else FILTER[k].splice(i,1);
     if(!FILTER[k].length)delete FILTER[k];location.hash=indexHash();}},
-    k==="model"?[modelDot(String(v)),String(v)]:String(v)));
+    k==="model"?[modelDot(v),v]:v,h("span",{class:"chip-n"},String(n))));
   }
   bar.append(f);
  }
  return bar;
 }
-function match(r){for(const[k,vs]of Object.entries(FILTER))if(vs.length&&!vs.includes(String(r[k])))return false;return true;}
+function match(r){return matchExcept(r,null);}
 
 function srColor(v){if(v==null)return"var(--muted)";const g=Math.round(160*v);return`rgb(${160-g},${90+g*0.6},${70+g*0.3})`;}
 
