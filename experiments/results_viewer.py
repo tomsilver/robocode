@@ -1833,7 +1833,11 @@ def _render_worker() -> None:
 
             from robocode.primitives import build_primitives
             from robocode.utils.approach_history import _export_snapshot
-            from robocode.utils.episode import run_episode, save_video
+            from robocode.utils.episode import (
+                open_video_writer,
+                run_episode,
+                save_video,
+            )
 
             if run is None:
                 raise RuntimeError(f"unknown run {run_id}")
@@ -1923,6 +1927,9 @@ def _render_worker() -> None:
                 render_steps = max_steps if full else min(max_steps, preview_steps)
                 approach = approach_ctor(primitives=primitives)
                 capped = False
+                # Set by the per-instance branch; the generated-policy branch
+                # streams frames straight to disk and leaves this as None.
+                frames: Optional[list[Any]] = None
 
                 def report_instance(phase: str, current: int, total: int) -> None:
                     _raise_if_cancelled(epoch)
@@ -1978,28 +1985,50 @@ def _render_worker() -> None:
                         job.phase = "preparing"
                         job.message = "loading generated policy"
                     approach.train()
-                    metrics, frames, _ = run_episode(
-                        env,
-                        approach,
-                        eval_seeds[i],
-                        render_steps,
-                        render=True,
-                        count=count,
-                        progress_callback=report_rollout,
-                    )
+                    # Stream each frame into the GIF encoder as it is rendered:
+                    # holding a long episode's raw RGB frames in memory can OOM
+                    # the machine. The partial file replaces ``out`` only once
+                    # the rollout finishes.
+                    part = out.with_name(out.name + ".part")
+                    n_frames = 0
+                    try:
+                        with open_video_writer(part) as append_frame:
+
+                            def _sink(frame: Any) -> None:
+                                nonlocal n_frames
+                                append_frame(frame)
+                                n_frames += 1
+
+                            metrics, _, _ = run_episode(
+                                env,
+                                approach,
+                                eval_seeds[i],
+                                render_steps,
+                                render=True,
+                                count=count,
+                                progress_callback=report_rollout,
+                                frame_sink=_sink,
+                            )
+                        if n_frames == 0:
+                            raise RuntimeError("no frames rendered")
+                        part.replace(out)
+                    finally:
+                        part.unlink(missing_ok=True)
                     capped = (
                         render_steps < max_steps
                         and metrics["num_steps"] >= render_steps
                     )
-                if not frames:
-                    raise RuntimeError("no frames rendered")
-                with _JOBS_LOCK:
-                    job.phase = "encoding"
-                    job.message = f"encoding {len(frames)} frames as GIF"
-                save_video(frames, out)
+                if frames is not None:
+                    if not frames:
+                        raise RuntimeError("no frames rendered")
+                    n_frames = len(frames)
+                    with _JOBS_LOCK:
+                        job.phase = "encoding"
+                        job.message = f"encoding {n_frames} frames as GIF"
+                    save_video(frames, out)
                 preview_marker = out.with_suffix(out.suffix + ".preview")
                 if capped:
-                    preview_marker.write_text(f"{len(frames)} frames\n")
+                    preview_marker.write_text(f"{n_frames} frames\n")
                 else:
                     preview_marker.unlink(missing_ok=True)
                 # A preview stops before the episode ends, so its metrics are not the

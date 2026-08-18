@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import multiprocessing as mp
+import subprocess
 import os
 import re
 import signal
@@ -11,9 +13,10 @@ import sys
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import imageio.v3 as iio
+import imageio_ffmpeg
 import numpy as np
 from numpy.typing import NDArray
 
@@ -111,11 +114,14 @@ def run_episode(
     render: bool = False,
     count: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    frame_sink: Callable[[NDArray[np.uint8]], None] | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
     """Run a single evaluation episode; return metrics, frames, final state.
 
     ``count`` pins the object count for a variable-count env (via
     ``reset(options={"object_count": count})``); ``None`` leaves the env to sample.
+    ``frame_sink`` receives each rendered frame as it is captured and the returned
+    frame list stays empty; long episodes then need only one frame in memory.
     """
     if count is not None:
         state, info = env.reset(seed=seed, options={"object_count": count})
@@ -128,7 +134,10 @@ def run_episode(
     def _capture() -> None:
         rendered: Any = env.render()
         if isinstance(rendered, np.ndarray):
-            frames.append(rendered)
+            if frame_sink is not None:
+                frame_sink(rendered)
+            else:
+                frames.append(rendered)
 
     if render:
         _capture()
@@ -500,10 +509,73 @@ def run_per_instance_eval(
     return results
 
 
+@contextlib.contextmanager
+def open_video_writer(
+    path: Path, fps: int = 10
+) -> Iterator[Callable[[NDArray[np.uint8]], None]]:
+    """Yield an ``append(frame)`` callable that streams RGB frames into a GIF.
+
+    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak
+    memory stays at one frame regardless of episode length. (Pillow-based GIF
+    writers buffer every frame until close, which can OOM on long episodes.)
+    All frames must share the first frame's shape.
+    """
+    proc: subprocess.Popen[bytes] | None = None
+    size: tuple[int, int] | None = None
+
+    def _append(frame: NDArray[np.uint8]) -> None:
+        nonlocal proc, size
+        rgb = np.ascontiguousarray(frame[..., :3], dtype=np.uint8)
+        if proc is None:
+            size = (rgb.shape[1], rgb.shape[0])
+            # stats_mode=single + new=1 builds a palette per frame, keeping the
+            # whole pipeline single-pass and streaming.
+            proc = subprocess.Popen(
+                [
+                    imageio_ffmpeg.get_ffmpeg_exe(),
+                    "-y",
+                    "-v",
+                    "error",
+                    *("-f", "rawvideo", "-pix_fmt", "rgb24"),
+                    *("-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-"),
+                    *(
+                        "-vf",
+                        "split[a][b];[a]palettegen=stats_mode=single[p];"
+                        "[b][p]paletteuse=new=1",
+                    ),
+                    *("-loop", "0"),
+                    str(path),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        if (rgb.shape[1], rgb.shape[0]) != size:
+            raise ValueError(f"frame shape changed mid-video: {rgb.shape}")
+        assert proc.stdin is not None
+        proc.stdin.write(rgb.tobytes())
+
+    try:
+        yield _append
+        if proc is not None:
+            assert proc.stdin is not None and proc.stderr is not None
+            proc.stdin.close()
+            err = proc.stderr.read().decode(errors="replace")
+            if proc.wait() != 0:
+                raise RuntimeError(f"ffmpeg GIF encode failed: {err.strip()}")
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
 def save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:
-    """Save a list of RGB frames as a gif."""
-    duration = 1000.0 / fps  # ms per frame
-    iio.imwrite(str(path), frames, duration=duration, loop=0)
+    """Save a list of RGB frames as a gif, encoding one frame at a time."""
+    if not frames:
+        raise ValueError("no frames to save")
+    with open_video_writer(path, fps=fps) as append_frame:
+        for frame in frames:
+            append_frame(frame)
     logger.info("Saved video to %s", path)
 
 

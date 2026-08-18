@@ -20,6 +20,7 @@ from gymnasium.spaces import Box
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
 from robocode.utils.episode import (
     load_generated_approach,
+    open_video_writer,
     run_episode,
     run_episode_with_timeout,
     run_in_forked_worker,
@@ -694,3 +695,34 @@ def test_save_video_creates_gif(
     save_video(sample_frames, gif_path)
     assert gif_path.exists()
     assert gif_path.stat().st_size > 0
+
+
+def test_open_video_writer_streams_frames(
+    tmp_path: Path, sample_frames: list[np.ndarray]
+) -> None:
+    """Frames appended one at a time produce the same GIF as save_video."""
+    streamed = tmp_path / "streamed.gif"
+    with open_video_writer(streamed) as append_frame:
+        for frame in sample_frames:
+            append_frame(frame)
+    batch = tmp_path / "batch.gif"
+    save_video(sample_frames, batch)
+    assert streamed.read_bytes() == batch.read_bytes()
+
+
+def test_run_episode_frame_sink_receives_frames() -> None:
+    """With a frame_sink, frames go to the sink and the returned list is empty."""
+
+    class _RenderingCountEnv(_CountEnv):
+        def render(self):
+            return np.zeros((4, 4, 3), dtype=np.uint8)
+
+    env = _RenderingCountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    sunk: list[np.ndarray] = []
+    metrics, frames, _ = run_episode(
+        env, approach, seed=0, max_steps=10, render=True, frame_sink=sunk.append
+    )
+    assert not frames
+    # One frame for the initial state plus one per step.
+    assert len(sunk) == metrics["num_steps"] + 1
