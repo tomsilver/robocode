@@ -101,6 +101,36 @@ HOST_NETWORK=$(echo "$HOST_IP" | sed 's/\.[0-9]*$/.0\/24/')
 iptables -A INPUT  -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
+# Also allow the Docker Desktop host, which sits on its own subnet
+# (192.168.65.0/24) rather than the container's default gateway (172.17.0.1), so
+# the rule above does not cover it and the blackbox env server is unreachable.
+# Note the names: HOST_IP above is the gateway, while DOCKER_HOST_IP below is the
+# host itself.
+#
+# Only the IPv4 record is used. The name also carries an AAAA record that no
+# container route can reach, and since socket.create_connection() re-raises its
+# first error, that unreachable IPv6 attempt is what a caller sees even when the
+# real failure is the blocked IPv4 one.
+#
+# The `|| true` is load-bearing. Whitebox runs do not pass
+# --add-host host.docker.internal:host-gateway, so on Linux the name does not
+# resolve and getent exits 2. Under `set -euo pipefail` that status propagates
+# out of the substitution and aborts the script here, before the default-deny
+# policies below are ever applied. Docker Desktop hides this by resolving the
+# name with or without the flag.
+DOCKER_HOST_IP=$(getent ahosts host.docker.internal 2>/dev/null \
+    | awk '$1 ~ /^[0-9.]+$/ {print $1; exit}' || true)
+if [ -n "$DOCKER_HOST_IP" ]; then
+    DOCKER_HOST_NETWORK=$(echo "$DOCKER_HOST_IP" | sed 's/\.[0-9]*$/.0\/24/')
+    # Compare networks, not addresses: the rules above are per-/24, so this is
+    # what "already covered" actually means. On Linux the name resolves to the
+    # gateway and this correctly adds nothing.
+    if [ "$DOCKER_HOST_NETWORK" != "$HOST_NETWORK" ]; then
+        iptables -A INPUT  -s "$DOCKER_HOST_NETWORK" -j ACCEPT
+        iptables -A OUTPUT -d "$DOCKER_HOST_NETWORK" -j ACCEPT
+    fi
+fi
+
 # Set default-deny policies.
 iptables -P INPUT   DROP
 iptables -P FORWARD DROP
