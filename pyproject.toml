@@ -17,6 +17,7 @@ dependencies = [
    "hydra-core",
    "hydra-joblib-launcher",
    "omegaconf",
+   "PyYAML",
    "kindergarden>=0.2.0",
    "pybullet-arm64>=3.2.8",
    "types-shapely",
@@ -39,6 +40,9 @@ bilevel = [
     "bilevel_planning>=0.1.4",
     "kinder_bilevel_planning",
     "kinder_models",
+]
+tracker = [
+    "gspread>=6.2,<7",
 ]
 develop = [
     "black",

@@ -1,0 +1,5 @@
+# @package _global_
+
+primitive_level: bilevel
+primitives:
+  - bilevel_models

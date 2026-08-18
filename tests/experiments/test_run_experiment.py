@@ -21,6 +21,7 @@ _SPEC.loader.exec_module(run_experiment)
 def test_repository_protocol_requires_explicit_eval_seed() -> None:
     """The public config does not contain the private evaluation seed."""
     cfg = OmegaConf.load(_MODULE_PATH.parent / "conf" / "config.yaml")
+    assert cfg.eval_timeout == 60
     with pytest.raises(ValueError, match="must be set explicitly"):
         run_experiment.resolve_eval_seed(cfg)
 
@@ -39,10 +40,11 @@ def test_eval_seed_cannot_be_null() -> None:
         run_experiment.resolve_eval_seed(cfg)
 
 
-def test_non_integer_eval_seed_is_rejected() -> None:
-    """A fractional evaluation seed cannot be silently coerced."""
-    with pytest.raises(ValueError, match="eval_seed must be an integer"):
-        run_experiment.resolve_eval_seed(OmegaConf.create({"eval_seed": 42.5}))
+@pytest.mark.parametrize("eval_seed", [-1, 42.5])
+def test_invalid_eval_seed_is_rejected(eval_seed: Any) -> None:
+    """Invalid evaluation seeds fail before synthesis work can begin."""
+    with pytest.raises(ValueError, match="eval_seed must be a nonnegative integer"):
+        run_experiment.resolve_eval_seed(OmegaConf.create({"eval_seed": eval_seed}))
 
 
 def test_pinned_eval_seed_yields_identical_suite_across_replicates() -> None:
@@ -90,3 +92,26 @@ def test_non_generated_approach_needs_no_container_backend() -> None:
     """Ordinary baselines do not launch an untrusted synthesis process."""
     cfg = OmegaConf.create({"approach": {"_target_": "example.RandomApproach"}})
     run_experiment.validate_eval_seed_isolation(cfg)
+
+
+def test_tracker_experiment_id_is_accepted() -> None:
+    """Generated identifiers are available to output metadata."""
+    condition_id = "motion2d_easy__agentic__none__whitebox__abc12345"
+    cfg = OmegaConf.create({"experiment_id": condition_id})
+    assert run_experiment.resolve_experiment_id(cfg) == condition_id
+
+
+def test_missing_experiment_id_is_allowed_for_manual_runs() -> None:
+    """Existing ad-hoc commands remain valid without tracker metadata."""
+    assert run_experiment.resolve_experiment_id(OmegaConf.create({})) is None
+
+
+@pytest.mark.parametrize(
+    "condition_id",
+    ["renamed by hand", "../../other-result", "condition__not-a-hash"],
+)
+def test_invalid_experiment_id_is_rejected(condition_id: str) -> None:
+    """Unsafe or hand-edited identifiers fail before an experiment starts."""
+    cfg = OmegaConf.create({"experiment_id": condition_id})
+    with pytest.raises(ValueError, match="tracker-generated"):
+        run_experiment.resolve_experiment_id(cfg)

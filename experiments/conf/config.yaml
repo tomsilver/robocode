@@ -1,4 +1,5 @@
 defaults:
+  - primitive_level: low_level
   - approach: random
   - environment: small_maze
   - _self_
@@ -6,18 +7,18 @@ defaults:
 # Replicate identifier and seed for randomness we control locally (for example,
 # action-space sampling). It does not seed remote language-model generation.
 replicate_seed: 42
+# Stable condition identifier supplied by the campaign generator. Manual runs may
+# leave this unset; tracker-generated commands always set it.
+experiment_id: null
 # Experimenter-only seed used to derive the fixed evaluation episode suite.
 # Final-run commands must set the private team value explicitly.
 eval_seed: null
 max_steps: 1000
 num_eval_tasks: 100
 # Per-instance eval wall-clock budget (seconds), shared by every approach.
-eval_timeout: 30
+eval_timeout: 60
 render_videos: false
 record_approach_history: false
-primitives:
-  - check_action_collision
-  - BiRRT
 mcp_tools:
   - render_state
   - render_policy
