@@ -2,16 +2,28 @@
 
 Importing ``mujoco`` binds PyOpenGL permanently to whatever GL platform the env
 vars name at that moment, and anything that renders a kinder env pulls in mujoco.
-So the platform is chosen once, here: default EGL, but honor a ``MUJOCO_GL`` the
-caller set (the sandbox picks ``osmesa`` since headless EGL needs a GPU).
+So the platform is chosen once, here: EGL on Linux, CGL on macOS, but honor a
+``MUJOCO_GL`` the caller set (the sandbox picks ``osmesa`` since headless EGL
+needs a GPU).
 """
 
 import importlib
 import os
+import sys
 
 # PyOpenGL's platform must match MUJOCO_GL. glfw is on-screen (GLX on Linux); the
 # rest map to themselves.
-_PYOPENGL_FOR_MUJOCO = {"egl": "egl", "osmesa": "osmesa", "glfw": "glx"}
+_PYOPENGL_FOR_MUJOCO = {
+    "egl": "egl",
+    "osmesa": "osmesa",
+    "glfw": "glx",
+    "cgl": "darwin",
+}
+
+# mujoco has no EGL on macOS -- it raises "invalid value for environment variable
+# MUJOCO_GL: egl" the first time a GL context is built -- so the default has to be
+# per-platform. CGL is what mujoco itself picks there.
+_DEFAULT_MUJOCO_GL = "cgl" if sys.platform == "darwin" else "egl"
 
 # Import mujoco at most once, on first configuration (mutated in place, no global).
 _mujoco_import = {"attempted": False}
@@ -20,13 +32,13 @@ _mujoco_import = {"attempted": False}
 def configure_gl_backend() -> tuple[str, str]:
     """Set and lock the GL backend once (idempotent); return the current pair.
 
-    Callers that then run code overwriting those env vars (kinder registration
-    forces osmesa on headless Linux) can restore the returned choice.
+    Callers that then run code overwriting those env vars (kinder registration forces
+    osmesa on headless Linux) can restore the returned choice.
     """
-    os.environ.setdefault("MUJOCO_GL", "egl")
+    os.environ.setdefault("MUJOCO_GL", _DEFAULT_MUJOCO_GL)
     os.environ.setdefault(
         "PYOPENGL_PLATFORM",
-        _PYOPENGL_FOR_MUJOCO.get(os.environ["MUJOCO_GL"], "egl"),
+        _PYOPENGL_FOR_MUJOCO.get(os.environ["MUJOCO_GL"], _DEFAULT_MUJOCO_GL),
     )
     if not _mujoco_import["attempted"]:
         _mujoco_import["attempted"] = True

@@ -1,0 +1,13 @@
+# Pins the sweep-left-on-the-island instruction, the only one registered at every
+# count; the right-side instructions exist at 50 cubes only.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.dynamic3d.task_families:SweepSimple3DEnv
+count_kwarg: num_objects
+count_object_prefix: cube_
+design_counts: [1, 5]
+eval_counts: [1, 5, 10, 50]
+constant_object_env_kwargs:
+  scene_bg: false
+# Swept in bulk, so the horizon grows slowly per object. UNCALIBRATED.
+base_steps: 600
+steps_per_object: 20
