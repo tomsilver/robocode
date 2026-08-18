@@ -543,7 +543,9 @@ def open_video_writer(
                         "split[a][b];[a]palettegen=stats_mode=single[p];"
                         "[b][p]paletteuse=new=1",
                     ),
-                    *("-loop", "0"),
+                    # Explicit format: the target may be a temp name without
+                    # a .gif extension.
+                    *("-loop", "0", "-f", "gif"),
                     str(path),
                 ],
                 stdin=subprocess.PIPE,
@@ -553,20 +555,35 @@ def open_video_writer(
         if (rgb.shape[1], rgb.shape[0]) != size:
             raise ValueError(f"frame shape changed mid-video: {rgb.shape}")
         assert proc.stdin is not None
-        proc.stdin.write(rgb.tobytes())
+        try:
+            proc.stdin.write(rgb.tobytes())
+        except BrokenPipeError:
+            _raise_encode_failure(proc)
 
     try:
         yield _append
         if proc is not None:
-            assert proc.stdin is not None and proc.stderr is not None
-            proc.stdin.close()
-            err = proc.stderr.read().decode(errors="replace")
+            assert proc.stdin is not None
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
             if proc.wait() != 0:
-                raise RuntimeError(f"ffmpeg GIF encode failed: {err.strip()}")
+                _raise_encode_failure(proc)
     finally:
         if proc is not None and proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+def _raise_encode_failure(proc: subprocess.Popen[bytes]) -> None:
+    """Kill a failed ffmpeg process and raise with its stderr."""
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+    assert proc.stderr is not None
+    err = proc.stderr.read().decode(errors="replace")
+    raise RuntimeError(f"ffmpeg GIF encode failed: {err.strip()}")
 
 
 def save_video(frames: list[NDArray[np.uint8]], path: Path, fps: int = 10) -> None:
