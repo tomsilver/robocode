@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import signal
 import sys
 import time
 from functools import partial
@@ -19,6 +20,7 @@ from gymnasium.spaces import Box
 
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
 from robocode.utils.episode import (
+    _EPISODE_FORK_SAFE,
     load_generated_approach,
     open_video_writer,
     run_episode,
@@ -654,6 +656,91 @@ def test_run_episode_with_timeout_reraises_worker_crash() -> None:
     approach = _CrashApproach(env.action_space, env.observation_space, 0, {})
     with pytest.raises(RuntimeError, match="boom"):
         run_episode_with_timeout(env, approach, seed=0, max_steps=10, timeout=30)
+
+
+class _SlowPerStepApproach(BaseApproach[Any, Any]):
+    """Slow across many steps rather than stuck in one, so only a deadline sees it."""
+
+    def _get_action(self) -> Any:
+        time.sleep(0.2)
+        return np.zeros(1, dtype=np.float32)
+
+
+def test_fork_is_avoided_on_macos() -> None:
+    """MacOS must take the in-process path; a forked child cannot touch MuJoCo there."""
+    assert _EPISODE_FORK_SAFE == (sys.platform != "darwin")
+
+
+def test_in_process_episode_scores_like_the_forked_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The in-process path scores a fast policy exactly as the forked one does."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30
+    )
+    assert metrics["solved"]
+    assert not metrics.get("timed_out")
+
+
+def test_in_process_episode_stops_a_policy_hung_in_one_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A single call that never returns is cut off by the alarm, not left to run.
+
+    Without the alarm a deadline checked between steps would never be reached, so this
+    is the case that would hang the whole campaign.
+    """
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    env = _CountEnv()
+    approach = _SlowApproach(env.action_space, env.observation_space, 0, {})
+    metrics, frames, final_state = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5
+    )
+    assert metrics["solved"] is False
+    assert metrics["timed_out"] is True
+    assert metrics["num_steps"] == 0
+    assert not frames
+    assert final_state is None
+
+
+def test_in_process_episode_stops_a_policy_slow_across_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A policy that is merely slow is stopped by the per-step deadline."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    env = _CountEnv()
+    approach = _SlowPerStepApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=100, timeout=0.5
+    )
+    assert metrics["timed_out"] is True
+    assert metrics["solved"] is False
+
+
+def test_in_process_episode_reraises_crash_as_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A policy crash surfaces as RuntimeError, matching the forked path's shape."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    env = _CountEnv()
+    approach = _CrashApproach(env.action_space, env.observation_space, 0, {})
+    with pytest.raises(RuntimeError, match="boom"):
+        run_episode_with_timeout(env, approach, seed=0, max_steps=10, timeout=30)
+
+
+def test_in_process_episode_restores_the_previous_alarm_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard must not leak its handler, or the next episode inherits the alarm."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    before = signal.getsignal(signal.SIGALRM)
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    run_episode_with_timeout(env, approach, seed=0, max_steps=10, timeout=30)
+    assert signal.getsignal(signal.SIGALRM) is before
 
 
 def test_save_frames_creates_pngs(
