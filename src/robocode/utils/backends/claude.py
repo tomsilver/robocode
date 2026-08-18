@@ -57,13 +57,18 @@ def _tool_timing_category(block: dict[str, Any]) -> str:
     if name != "Bash":
         return "other"
     command = str((block.get("input") or {}).get("command", ""))
+    # Rollouts are often launched through wrappers (``timeout 900 python ...``,
+    # ``nohup ...``, ``env VAR=1 ...``), so a python/pytest invocation still
+    # counts when such prefixes sit at the command position.
+    wrappers = r"(?:timeout\s+(?:-\S+\s+)*\S+\s+|nohup\s+|env\s+(?:\S+=\S*\s+)*)*"
     has_python = bool(
         re.search(
-            r"(?:^|[;&|]\s*)(?:(?:uv\s+run\s+)?(?:/\S+/)?)python(?:3)?\s",
+            r"(?:^|[;&|]\s*)"
+            + wrappers
+            + r"(?:(?:uv\s+run\s+)?(?:/\S+/)?)(?:python(?:3)?|pytest)\s",
             command,
             re.MULTILINE,
         )
-        or re.search(r"(?:^|[;&|]\s*)pytest\s", command, re.MULTILINE)
     )
     if not has_python:
         return "other"

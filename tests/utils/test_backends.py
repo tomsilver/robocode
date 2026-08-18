@@ -834,6 +834,26 @@ def test_tool_timing_category_identifies_environment_runs() -> None:
     )
 
 
+def test_tool_timing_category_sees_through_command_wrappers() -> None:
+    """Wrapped and path-qualified rollout launches still count as experiment."""
+    for command in (
+        "timeout 900 /robocode/.venv/bin/python test_approach.py 2>&1 | tail -20",
+        "nohup python3 debug_rollout.py &",
+        "env MUJOCO_GL=osmesa uv run python evaluate.py",
+        "cd /sandbox && timeout 60 pytest test_approach.py",
+    ):
+        assert (
+            _tool_timing_category({"name": "Bash", "input": {"command": command}})
+            == "experiment"
+        ), command
+    assert (
+        _tool_timing_category(
+            {"name": "Bash", "input": {"command": "grep -rn python /robocode/src"}}
+        )
+        == "other"
+    )
+
+
 # ---------------------------------------------------------------------------
 # OpenCode stream parser
 # ---------------------------------------------------------------------------
