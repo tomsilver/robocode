@@ -1,21 +1,16 @@
 """Tests for Hydra-backed campaign expansion and canonical IDs."""
 
-import importlib
 import shlex
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from hydra import compose, initialize_config_dir
 
+from experiments.tracker import generate
 from robocode.experiment_protocol import EXPERIMENT_ID_PATTERN
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_TRACKER_DIR = _REPO_ROOT / "experiments" / "tracker"
-sys.path.insert(0, str(_TRACKER_DIR))
-generate: Any = importlib.import_module("generate")
-sys.path.pop(0)
 
 _TEST_EVAL_SEED = 918273645
 _SAMPLE_CAMPAIGN_YAML = """name: test_campaign

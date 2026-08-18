@@ -1,14 +1,6 @@
 """Tests for tracker column ownership and display order."""
 
-import importlib
-import sys
-from pathlib import Path
-from typing import Any
-
-_TRACKER_DIR = Path(__file__).resolve().parents[3] / "experiments" / "tracker"
-sys.path.insert(0, str(_TRACKER_DIR))
-schema: Any = importlib.import_module("schema")
-sys.path.pop(0)
+from experiments.tracker import schema
 
 
 def test_priority_is_immediately_after_seed_protocol() -> None:

@@ -401,10 +401,10 @@ only study definitions that should be shared. Generate a local CSV without runni
 experiments:
 
 ```bash
-python experiments/tracker/generate.py \
+python -m experiments.tracker.generate \
     path/to/campaign.yaml \
     --eval-seed "$EVAL_SEED" --dry-run
-python experiments/tracker/generate.py \
+python -m experiments.tracker.generate \
     path/to/campaign.yaml \
     --eval-seed "$EVAL_SEED" \
     --output experiments/generated/my_campaign.csv
@@ -431,7 +431,7 @@ Install the optional Google client and synchronize the generated CSV:
 
 ```bash
 uv sync --extra tracker
-python experiments/tracker/sync_google_sheet.py \
+python -m experiments.tracker.sync_google_sheet \
     experiments/generated/my_campaign.csv --sheet-id SPREADSHEET_ID
 ```
 

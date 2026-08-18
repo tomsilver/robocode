@@ -1,18 +1,12 @@
 """Tests for preservation-safe Google Sheet tracker upserts."""
 
-import importlib
-import sys
 from pathlib import Path
-from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
-_TRACKER_DIR = Path(__file__).resolve().parents[3] / "experiments" / "tracker"
-sys.path.insert(0, str(_TRACKER_DIR))
-schema: Any = importlib.import_module("schema")
-sync: Any = importlib.import_module("sync_google_sheet")
-sys.path.pop(0)
+from experiments.tracker import schema
+from experiments.tracker import sync_google_sheet as sync
 
 _TEST_EVAL_SEED = 918273645
 
@@ -48,7 +42,9 @@ def test_load_generated_rows_fills_truncated_cells_with_blanks(tmp_path: Path) -
         ",".join(schema.GENERATED_COLUMNS) + "\ncondition-1,campaign_a,motion2d_easy\n",
         encoding="utf-8",
     )
-    [row] = sync.load_generated_rows([csv_path])
+    rows = sync.load_generated_rows([csv_path])
+    assert len(rows) == 1
+    row = rows[0]
     assert row["Experiment ID"] == "condition-1"
     assert row["Command"] == ""
     assert all(value is not None for value in row.values())
