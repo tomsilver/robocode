@@ -2472,6 +2472,7 @@ pre{background:var(--code);border:1px solid var(--line);border-radius:9px;paddin
 .vc input[type=range]{flex:1;margin:0}
 .vc-lbl{font:12px ui-monospace,Menlo,monospace;color:var(--muted);
   min-width:104px;text-align:right;white-space:nowrap}
+.vc-hint{justify-content:center;color:var(--muted);font-size:12px}
 """
 
 APP_JS = r"""
@@ -2516,10 +2517,12 @@ const FPS=10; // save_video default; frame 0 = initial state, frame k = after st
 function openLightbox(src){
  const close=()=>{ov.remove();document.removeEventListener("keydown",keys);};
  const ov=h("div",{class:"lb",onclick:close});
- // Interactive player over a server-side mp4 transcode of the gif (seekable,
- // frame-steppable). If the transcode fails, fall back to the plain gif.
+ // The gif shows immediately; meanwhile the server transcodes it to a seekable
+ // mp4 (cached, so only the first open of an episode waits) and the scrubber
+ // swaps in once that is ready. If the transcode fails, the gif simply stays.
+ const img=h("img",{src,onclick:e=>e.stopPropagation()});
  const v=h("video",{src:src.replace("/api/gif?","/api/video?"),autoplay:"",loop:"",
-  playsinline:"",onclick:e=>{e.stopPropagation();toggle();},
+  playsinline:"",preload:"auto",onclick:e=>{e.stopPropagation();toggle();},
   title:"click: play/pause | ←/→: step (shift: ×10) | home/end: jump"});
  v.muted=true;
  const nframes=()=>v.duration?Math.max(1,Math.round(v.duration*FPS)):0;
@@ -2532,13 +2535,15 @@ function openLightbox(src){
  const lbl=h("span",{class:"vc-lbl"},"");
  const playBtn=h("button",{title:"play/pause (click video)",
   onclick:e=>{e.stopPropagation();toggle();}},"⏯");
- const wrap=h("div",{class:"vwrap",onclick:e=>e.stopPropagation()},v,
-  h("div",{class:"vc"},playBtn,
-   h("button",{title:"back one step (←)",onclick:e=>{e.stopPropagation();stepBy(-1);}},"◀"),
-   h("button",{title:"forward one step (→)",onclick:e=>{e.stopPropagation();stepBy(1);}},"▶"),
-   bar,lbl));
- v.addEventListener("error",()=>{ // no mp4 => old behavior: replaying gif
-  wrap.replaceWith(h("img",{src,onclick:e=>e.stopPropagation()}));});
+ const hint=h("div",{class:"vc vc-hint"},"preparing scrubber…");
+ const ctr=h("div",{class:"vc"},playBtn,
+  h("button",{title:"back one step (←)",onclick:e=>{e.stopPropagation();stepBy(-1);}},"◀"),
+  h("button",{title:"forward one step (→)",onclick:e=>{e.stopPropagation();stepBy(1);}},"▶"),
+  bar,lbl);
+ const wrap=h("div",{class:"vwrap",onclick:e=>e.stopPropagation()},img,hint);
+ let ready=false;
+ v.addEventListener("loadeddata",()=>{ready=true;img.replaceWith(v);hint.replaceWith(ctr);});
+ v.addEventListener("error",()=>hint.remove()); // no mp4 => the gif stays
  const sync=()=>{if(!ov.isConnected)return;
   const n=nframes();
   if(n){bar.max=n-1;const f=Math.min(n-1,Math.floor(v.currentTime*FPS));
@@ -2546,7 +2551,7 @@ function openLightbox(src){
   requestAnimationFrame(sync);};
  const keys=e=>{
   if(e.key==="Escape"){close();return;}
-  if(!wrap.isConnected)return;
+  if(!ready||!wrap.isConnected)return;
   if(e.key===" "){e.preventDefault();toggle();}
   else if(e.key==="ArrowLeft"){e.preventDefault();stepBy(e.shiftKey?-10:-1);}
   else if(e.key==="ArrowRight"){e.preventDefault();stepBy(e.shiftKey?10:1);}
