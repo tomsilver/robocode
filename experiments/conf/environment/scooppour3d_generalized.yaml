@@ -1,0 +1,13 @@
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.dynamic3d.task_families:ScoopPour3DEnv
+count_kwarg: num_objects
+count_object_prefix: cube_
+# Only 10 and 100 are registered, so the count axis is a single 10x jump.
+design_counts: [10]
+eval_counts: [10, 100]
+constant_object_env_kwargs:
+  scene_bg: false
+# Cubes are scooped in bulk rather than one at a time, so the horizon grows far
+# more slowly per object than in the pick-and-place families. UNCALIBRATED.
+base_steps: 600
+steps_per_object: 20
