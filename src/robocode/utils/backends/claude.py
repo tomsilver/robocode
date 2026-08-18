@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -44,6 +45,49 @@ _OUTPUT_TOKEN_LIMIT_RE = re.compile(
     r"response exceeded (?:the )?\d+ output token maximum", re.IGNORECASE
 )
 _PROMPT_TOO_LONG_RE = re.compile(r"\bprompt is too long\b", re.IGNORECASE)
+
+
+def _tool_timing_category(block: dict[str, Any]) -> str:
+    """Classify a Claude tool call for non-invasive wall-time accounting."""
+    name = block.get("name", "")
+    if name in ("Task", "Agent"):
+        return "model"
+    if "render_policy" in name or "render_state" in name:
+        return "experiment"
+    if name != "Bash":
+        return "other"
+    command = str((block.get("input") or {}).get("command", ""))
+    # Rollouts are often launched through wrappers (``timeout 900 python ...``,
+    # ``nohup ...``, ``env VAR=1 ...``), so a python/pytest invocation still
+    # counts when such prefixes sit at the command position.
+    wrappers = r"(?:timeout\s+(?:-\S+\s+)*\S+\s+|nohup\s+|env\s+(?:\S+=\S*\s+)*)*"
+    has_python = bool(
+        re.search(
+            r"(?:^|[;&|]\s*)"
+            + wrappers
+            + r"(?:(?:uv\s+run\s+)?(?:/\S+/)?)(?:python(?:3)?|pytest)\s",
+            command,
+            re.MULTILINE,
+        )
+    )
+    if not has_python:
+        return "other"
+    # A tiny ``python -c 'import ...; print(...)'`` is usually source discovery,
+    # while these markers identify environment rollouts and policy diagnostics.
+    experiment_markers = (
+        "test",
+        "debug",
+        "approach",
+        "run_episode",
+        "env.reset",
+        "render",
+        "evaluate",
+    )
+    is_inspection = "python -c" in command and not any(
+        marker in command.lower() for marker in experiment_markers
+    )
+    return "other" if is_inspection else "experiment"
+
 
 _VALIDATE_SANDBOX_SCRIPT = """\
 #!/usr/bin/env python3
@@ -261,6 +305,11 @@ class ClaudeBackend(AgentBackend):
         cli_duration_api_ms: int | None = None
         stop_reason: str | None = None
         model_usage: dict[str, Any] = {}
+        pending_tools: dict[str, str] = {}
+        model_wait_time_s = 0.0
+        experiment_time_s = 0.0
+        other_tool_time_s = 0.0
+        last_event_time = time.monotonic()
 
         stream_log_fh = (
             open(stream_log_path, "a", encoding="utf-8")  # noqa: SIM115
@@ -270,6 +319,18 @@ class ClaudeBackend(AgentBackend):
 
         assert proc.stdout is not None
         for line in proc.stdout:
+            now = time.monotonic()
+            elapsed = max(0.0, now - last_event_time)
+            categories = set(pending_tools.values())
+            if "experiment" in categories:
+                experiment_time_s += elapsed
+            elif "other" in categories:
+                other_tool_time_s += elapsed
+            else:
+                # Includes direct Claude API waits and Task/Agent subagent
+                # thinking. Parser/logging overhead here is negligible.
+                model_wait_time_s += elapsed
+            last_event_time = now
             line = line.strip()
             if not line:
                 continue
@@ -357,9 +418,7 @@ class ClaudeBackend(AgentBackend):
                     os.killpg(proc.pid, 9)
                     is_error = True
                     turn_limit_hit = True
-                    error_text = (
-                        f"Turn limit reached: {num_turns} >= " f"{self._max_turns}"
-                    )
+                    error_text = f"Turn limit reached: {num_turns} >= {self._max_turns}"
                     break
                 for block in msg.get("message", {}).get("content", []):
                     if block.get("type") == "thinking":
@@ -376,6 +435,9 @@ class ClaudeBackend(AgentBackend):
                             prompt_too_long_hit = True
                     elif block.get("type") == "tool_use":
                         num_tool_calls += 1
+                        tool_id = block.get("id")
+                        if tool_id:
+                            pending_tools[tool_id] = _tool_timing_category(block)
                         input_str = json.dumps(block.get("input", {}))
                         if len(input_str) > 300:
                             input_str = input_str[:300] + "..."
@@ -386,6 +448,12 @@ class ClaudeBackend(AgentBackend):
                         )
 
             elif msg_type in ("tool_result", "user"):
+                content = (msg.get("message") or {}).get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if block.get("type") == "tool_result":
+                            pending_tools.pop(block.get("tool_use_id", ""), None)
+                pending_tools.pop(msg.get("tool_use_id", ""), None)
                 tool_use_result = msg.get("tool_use_result")
                 if tool_use_result is not None:
                     if len(tool_use_result) > 500:
@@ -499,6 +567,9 @@ class ClaudeBackend(AgentBackend):
             turn_limit_hit=turn_limit_hit,
             cli_duration_ms=cli_duration_ms,
             cli_duration_api_ms=cli_duration_api_ms,
+            model_wait_time_s=model_wait_time_s,
+            experiment_time_s=experiment_time_s,
+            other_tool_time_s=other_tool_time_s,
             stop_reason=stop_reason,
             model_usage=model_usage,
         )
