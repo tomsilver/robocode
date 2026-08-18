@@ -5,10 +5,10 @@ from __future__ import annotations
 import contextlib
 import logging
 import multiprocessing as mp
-import subprocess
 import os
 import re
 import signal
+import subprocess
 import sys
 import traceback
 from collections.abc import Callable
