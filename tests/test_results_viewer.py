@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from experiments import results_viewer as viewer
+from robocode.utils import approach_history
 from robocode.utils.episode import run_episode
 
 
@@ -407,3 +408,27 @@ def test_discovery_labels_backend_model(tmp_path: Path) -> None:
     assert runs["pinned"].model == "opus-5"
     assert runs["alias"].model == "sonnet-4.6"
     assert runs["no_llm"].model is None
+
+
+def test_history_evaluation_cancel_persists_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A cancel unwinds the job instead of recording fabricated crash records."""
+    run = _run(tmp_path)
+    snapshot = {"commit_hash": "abc", "version": 0, "evaluation": {"evaluated": 0}}
+    final = {"commit_hash": "def", "version": 1, "evaluation": {"evaluated": 2}}
+    monkeypatch.setattr(viewer, "_snapshots", lambda _run: [snapshot, final])
+    monkeypatch.setattr(viewer, "_eval_seeds", lambda _run: [1, 2])
+    monkeypatch.setattr(
+        viewer, "_results", lambda _run: {"per_episode": [{"solved": True}] * 2}
+    )
+
+    def _cancelled_export(*_args: object) -> None:
+        raise viewer._Cancelled
+
+    monkeypatch.setattr(approach_history, "_export_snapshot", _cancelled_export)
+
+    with pytest.raises(viewer._Cancelled):
+        viewer._evaluate_history(run, viewer.Job(job_id="j"), epoch=0)
+
+    assert not (tmp_path / "approach_history" / "v000" / "episodes.json").exists()

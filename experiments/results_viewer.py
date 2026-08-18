@@ -176,9 +176,9 @@ def _primitives_category(value: str) -> str:
 def _variant_marker(run_dir: Path) -> dict[str, Any]:
     """Optional env_variant.json next to results.json, labelling special cells.
 
-    Records the environment group whose sampler produced the recorded suite, the
-    run dir holding the evaluated policy for re-eval cells, and, for cells without
-    their own .hydra, enough (approach/primitives/eval_seed) to rebuild a replay.
+    Records the environment group whose sampler produced the recorded suite, the run dir
+    holding the evaluated policy for re-eval cells, and, for cells without their own
+    .hydra, enough (approach/primitives/eval_seed) to rebuild a replay.
     """
     f = run_dir / "env_variant.json"
     if not f.exists():
@@ -763,9 +763,9 @@ def _history_gif_path(run: RunInfo, version: int, i: int) -> Optional[Path]:
 def _eval_seeds(run: RunInfo) -> list[int]:
     """The held-out episode seeds of this run's recorded evaluation suite.
 
-    Prefer per-episode seeds recorded in results.json; otherwise recreate the
-    suite the way run_experiment.py draws it, from the pinned eval_seed when the
-    run recorded one and from the run seed otherwise.
+    Prefer per-episode seeds recorded in results.json; otherwise recreate the suite the
+    way run_experiment.py draws it, from the pinned eval_seed when the run recorded one
+    and from the run seed otherwise.
     """
     if run.explicit_seeds:
         per = _results(run).get("per_episode") or []
@@ -1563,8 +1563,8 @@ def _raise_if_cancelled(epoch: int) -> None:
 def _cancel_renders() -> dict[str, Any]:
     """Drop every queued render and ask the running one to stop.
 
-    Queued jobs are discarded here; the running job cannot be interrupted mid-step,
-    so it unwinds at its next progress report.
+    Queued jobs are discarded here; the running job cannot be interrupted mid-step, so
+    it unwinds at its next progress report.
     """
     dropped = []
     while True:
@@ -1811,6 +1811,8 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
                             "object_count": count,
                             **metrics,
                         }
+                    except _Cancelled:
+                        raise
                     except Exception as error:  # pylint: disable=broad-exception-caught
                         records[i] = {
                             "episode_index": i,
@@ -1826,6 +1828,10 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
                         job.message = (
                             f"v{version} episode {i + 1}/{len(final_per_episode)}"
                         )
+        except _Cancelled:
+            # A cancel must unwind the whole job without persisting fabricated
+            # records for the version that was interrupted.
+            raise
         except Exception as error:  # pylint: disable=broad-exception-caught
             # A version that cannot even load is a crash on every seed, not a
             # reason to lose the rest of the history comparison.
