@@ -110,6 +110,8 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         output_subdir: Path,
         render: bool = False,
         count: int | None = None,
+        max_steps: int | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> InstanceResult:
         """Spend up to ``budget_usd`` of eval-time agent budget on one seed.
 
@@ -117,7 +119,8 @@ class BaseApproach(Generic[_StateType, _ActType], abc.ABC):
         Generalized approaches train once and are rolled out for free, so they
         leave this unimplemented. ``render`` requests RGB frames on the scored
         episode (for video saving). ``count`` pins the object count for a
-        variable-count env (``None`` leaves the env to sample).
+        variable-count env (``None`` leaves the env to sample). ``max_steps`` can
+        shorten a replay preview; ``progress_callback`` reports its current phase.
         """
         raise NotImplementedError(
             "solve_instance is only implemented by per-instance approaches"

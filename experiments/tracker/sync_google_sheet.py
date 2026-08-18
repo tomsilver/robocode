@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from schema import (
+from experiments.tracker.schema import (
     ALL_COLUMNS,
     CATEGORICAL_COLUMNS,
     COLUMN_WIDTHS,

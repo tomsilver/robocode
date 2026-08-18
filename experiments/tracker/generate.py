@@ -12,11 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from constraints import ExperimentConfig, Scalar, is_valid_experiment
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
-from schema import ALL_COLUMNS
 
+from experiments.tracker.constraints import (
+    ExperimentConfig,
+    Scalar,
+    is_valid_experiment,
+)
+from experiments.tracker.schema import ALL_COLUMNS
 from robocode.experiment_protocol import (
     EXPERIMENT_ID_DIGEST_LENGTH,
     EXPERIMENT_ID_SEPARATOR,

@@ -23,6 +23,7 @@ dependencies = [
    "types-shapely",
    "scipy-stubs",
    "imageio",
+   "imageio-ffmpeg",
    "mcp[cli]>=1.27,<2",
    "anthropic",
    "openai",
@@ -102,6 +103,7 @@ kinder_models = { path = "third-party/kinder-baselines/kinder-models", editable 
 
 [[tool.mypy.overrides]]
 module = [
+    "imageio_ffmpeg.*",
     "matplotlib.*",
     "pybullet.*",
     "pybullet_helpers.*",

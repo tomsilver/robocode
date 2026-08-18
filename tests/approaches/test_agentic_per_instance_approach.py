@@ -80,6 +80,38 @@ def test_solve_instance_targets_seed_and_scores_program(tmp_path, monkeypatch):
     assert result.num_steps is not None
 
 
+def test_preview_horizon_and_phases_are_reported(tmp_path, monkeypatch):
+    """A per-instance replay stops at its preview horizon and names slow phases."""
+    env, approach = _make_approach(tmp_path)
+
+    def fake_run(*, sandbox_dir, **_kwargs):
+        approach_file = sandbox_dir / "approach.py"
+        approach_file.write_text(_GENERATED_RETURNS_ZERO)
+        return SandboxResult(
+            success=True, output_file=approach_file, error=None, total_cost_usd=0.0
+        )
+
+    monkeypatch.setattr(approach, "_run_sandbox", fake_run)
+    updates = []
+    result = approach.solve_instance(
+        env=env,
+        seed=99,
+        budget_usd=2.0,
+        output_subdir=tmp_path / "instance_0",
+        max_steps=1,
+        progress_callback=lambda phase, current, total: updates.append(
+            (phase, current, total)
+        ),
+    )
+
+    assert result.num_steps == 1
+    assert [update[0] for update in updates] == [
+        "generating specialized approach",
+        "loading generated approach",
+        "running episode",
+    ]
+
+
 def test_solve_instance_pins_count_in_prompt(tmp_path, monkeypatch):
     """For a variable-count env the system prompt names the pinned (seed, count)
     instance, so the agent develops against exactly what it is scored on."""

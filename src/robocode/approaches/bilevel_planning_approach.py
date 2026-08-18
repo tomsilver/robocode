@@ -15,6 +15,7 @@ from the env's `bilevel_env_name` / `bilevel_env_model_kwargs` mapping (see
 """
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +102,8 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         output_subdir: Path,
         render: bool = False,
         count: int | None = None,
+        max_steps: int | None = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> InstanceResult:
         """Plan once for this seed, then execute the plan open-loop.
 
@@ -134,6 +137,8 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             object_count = env.current_count
 
         plan_start = time.perf_counter()
+        if progress_callback is not None:
+            progress_callback("planning", 0, 0)
         try:
             agent.reset(self._planner_obs(env, obs), info)
             plan_found = True
@@ -178,12 +183,14 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         env_step_time = 0.0
         # A variable-count instance gets a horizon that grows with its object count,
         # so a large instance is not cut off before its (longer) plan can execute.
-        max_steps = (
+        episode_max_steps = (
             env.max_steps_for_count(count)
             if count is not None and isinstance(env, VariableObjectCountEnv)
             else self._max_steps
         )
-        for _ in range(max_steps):
+        if max_steps is not None:
+            episode_max_steps = min(episode_max_steps, max_steps)
+        for _ in range(episode_max_steps):
             t0 = time.perf_counter()
             try:
                 action = agent.step()
@@ -197,6 +204,8 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
             env_step_time += time.perf_counter() - t0
             total_reward += float(reward)
             num_steps += 1
+            if progress_callback is not None:
+                progress_callback("running episode", num_steps, episode_max_steps)
             t0 = time.perf_counter()
             agent.update(
                 self._planner_obs(env, obs),

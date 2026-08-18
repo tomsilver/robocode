@@ -36,8 +36,14 @@ def test_solve_instance_solves_and_reports_metrics(tmp_path: Path) -> None:
     """A solvable instance is solved and reports the planning/execution split."""
     env = _make_env()
     approach = _make_approach(env)
+    phases: list[str] = []
     result = approach.solve_instance(
-        env=env, seed=0, budget_usd=0.0, output_subdir=tmp_path
+        env=env,
+        seed=0,
+        budget_usd=0.0,
+        output_subdir=tmp_path,
+        render=True,
+        progress_callback=lambda phase, _current, _total: phases.append(phase),
     )
     assert result.solved
     assert result.cost_usd == 0.0
@@ -61,6 +67,30 @@ def test_solve_instance_captures_frames_when_rendering(tmp_path: Path) -> None:
     # One frame captured at reset plus one per executed step.
     assert len(result.frames) == result.num_steps + 1
     assert isinstance(result.frames[0], np.ndarray)
+
+
+def test_preview_horizon_reports_planning_and_rollout(tmp_path: Path) -> None:
+    """A planner replay reports its phases and does not run beyond the preview."""
+    env = _make_env()
+    approach = _make_approach(env)
+    updates: list[tuple[str, int, int]] = []
+
+    result = approach.solve_instance(
+        env=env,
+        seed=0,
+        budget_usd=0.0,
+        output_subdir=tmp_path,
+        render=True,
+        max_steps=1,
+        progress_callback=lambda phase, current, total: updates.append(
+            (phase, current, total)
+        ),
+    )
+
+    assert result.num_steps == 1
+    assert updates[0] == ("planning", 0, 0)
+    assert updates[-1] == ("running episode", 1, 1)
+    assert result.frames is not None and len(result.frames) == 2
 
 
 def test_solve_instance_skips_frames_without_rendering(tmp_path: Path) -> None:

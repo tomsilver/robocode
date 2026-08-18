@@ -288,6 +288,53 @@ Analyze results from one or more runs:
 python experiments/analyze_results.py multirun/
 ```
 
+Browse runs in the browser (metrics, per-episode GIFs, and the sandbox git history of the generated `approach.py`), then open http://localhost:8000. The history view charts replay solve rate and per-commit effort, and can replay the same failed seed across versions to show where it was fixed:
+```bash
+python -m experiments.results_viewer --root . --port 8000
+```
+
+The viewer can also read ZIP result archives recursively from a Google Drive
+folder. The recommended backend is [rclone](https://rclone.org/drive/), which
+provides browser login without requiring every collaborator to create a Google
+Cloud project. Install rclone from its official downloads on Linux or with
+Homebrew on macOS:
+
+```bash
+# Linux: https://rclone.org/downloads/
+# macOS:
+brew install rclone
+
+rclone config
+```
+
+In `rclone config`, create a remote named `robocode-drive`, choose Google
+Drive, leave the client ID and secret blank, choose read-only access, and allow
+browser authentication. The resulting token stays in rclone's user config
+outside the repository. Then launch:
+
+```bash
+python -m experiments.results_viewer --drive-folder "<Google Drive folder URL>"
+```
+
+Only `.zip` files are downloaded. Name each archive `<Experiment ID>.zip` so
+the tracker ID, Drive result, and local cache directory match without manual
+renaming. Archives are extracted under the user's cache directory, and the
+viewer scans that local copy. The Refresh button checks Drive again, downloads
+changed archives, removes archives deleted remotely, and rescans the cache.
+Unchanged extracted archives are left in place, so GIFs rendered by the viewer
+stay local and survive refreshes. The Drive folder URL and rclone configuration
+are runtime configuration and must not be committed. Their locations can be
+overridden with
+`ROBOCODE_RESULTS_DRIVE_FOLDER`, `ROBOCODE_RESULTS_CACHE`,
+`ROBOCODE_RCLONE_REMOTE`, and `RCLONE_CONFIG`. The same viewer command works on
+Linux and macOS as long as `rclone` is on `PATH`.
+
+Rclone currently warns that its shared Google Drive OAuth client is scheduled
+for retirement during 2026. The blank-client-ID setup is therefore a convenient
+prototype path, not a permanent team dependency. Configure a team-owned OAuth
+client on the same rclone remote before Google disables the shared client; the
+viewer command and archive layout do not change.
+
 ### Agentic approach
 
 The `agentic` approach launches a coding agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.
@@ -354,10 +401,10 @@ only study definitions that should be shared. Generate a local CSV without runni
 experiments:
 
 ```bash
-python experiments/tracker/generate.py \
+python -m experiments.tracker.generate \
     path/to/campaign.yaml \
     --eval-seed "$EVAL_SEED" --dry-run
-python experiments/tracker/generate.py \
+python -m experiments.tracker.generate \
     path/to/campaign.yaml \
     --eval-seed "$EVAL_SEED" \
     --output experiments/generated/my_campaign.csv
@@ -384,7 +431,7 @@ Install the optional Google client and synchronize the generated CSV:
 
 ```bash
 uv sync --extra tracker
-python experiments/tracker/sync_google_sheet.py \
+python -m experiments.tracker.sync_google_sheet \
     experiments/generated/my_campaign.csv --sheet-id SPREADSHEET_ID
 ```
 
