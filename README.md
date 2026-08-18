@@ -339,12 +339,75 @@ python experiments/run_experiment.py -m \
     approach.container_backend=docker \
     replicate_seed=42,24,424,444,222 \
     eval_seed="$EVAL_SEED" \
-    'primitives=[]' \
+    primitive_level=none \
     environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
     'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
     'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
     hydra/launcher=joblib hydra.launcher.n_jobs=4
 ```
+
+### Experiment tracker
+
+Hydra defines executable choices, while small campaign files select the conditions
+intended for one study. Keep exploratory or smoke-test campaigns local, and commit
+only study definitions that should be shared. Generate a local CSV without running
+experiments:
+
+```bash
+python experiments/tracker/generate.py \
+    path/to/campaign.yaml \
+    --eval-seed "$EVAL_SEED" --dry-run
+python experiments/tracker/generate.py \
+    path/to/campaign.yaml \
+    --eval-seed "$EVAL_SEED" \
+    --output experiments/generated/my_campaign.csv
+```
+
+Campaign files call the repeated runs `replicate_seeds`; they never contain the
+private evaluation seed. The generator requires that fixed seed explicitly and places
+it in the ignored local CSV and shared Sheet. Each condition becomes one row whose
+Hydra command sweeps every replicate while holding the evaluation suite fixed.
+The generated Experiment ID is passed into Hydra, recorded in every `results.json`,
+and used as the exact parent directory under `multirun/`. Each invocation creates a
+timestamped run beneath that parent with one `replicate_<replicate_seed>` directory
+per replicate, so the condition folder can be uploaded to Drive without renaming it.
+The ID fingerprints the complete Hydra-composed condition and both seed fields. Hydra
+defaults such as access mode, model/backend, and the 60-second evaluation timeout are
+materialized in every generated command. Editing any executable setting or seed
+protocol therefore appends a distinct run instead of relabeling earlier results.
+Study campaigns use the named `primitive_level=none|low_level|bilevel` config choices,
+which resolve to the primitive list consumed by `build_primitives()`. Explicit
+constraints exclude invalid cells such as `primitive_level=bilevel` with
+`approach.blackbox=true`, and Hydra composition catches missing config choices.
+
+Install the optional Google client and synchronize the generated CSV:
+
+```bash
+uv sync --extra tracker
+python experiments/tracker/sync_google_sheet.py \
+    experiments/generated/my_campaign.csv --sheet-id SPREADSHEET_ID
+```
+
+The sync uses Experiment ID as its key. It updates generated columns only for the exact
+same canonical run, appends changed conditions or seed protocols, marks removed
+conditions from the synchronized campaign inactive, and never writes existing Owner,
+Status, Progress, Priority, Notes, Results, or Git SHA cells. It also rejects a
+same-ID seed change as malformed input. New Sheets receive a native table with People,
+file, and dropdown column types.
+Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
+Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
+rows in the tracker, including inactive experiments from older campaigns. Priority is
+placed immediately after Replicate Seeds and Evaluation Seed. Dropdown-chip colors can
+be customized directly in the Google Sheets UI without changing the cells'
+backgrounds; an unchanged sync preserves that native chip styling.
+Status and Owner are the first two columns so the Sheet reads as a work queue at a
+glance.
+
+Authentication uses gspread's desktop OAuth flow. By default it reads
+`~/.config/gspread/credentials.json` and stores the authorized-user token outside the
+repository. Override those paths with `--credentials` / `--authorized-user` or the
+`GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_AUTHORIZED_USER` environment variables. Never
+commit either credential file.
 
 The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
 

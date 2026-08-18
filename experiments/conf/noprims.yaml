@@ -1,5 +1,0 @@
-# No-primitives experiment condition (inherits config.yaml).
-defaults:
-  - config
-  - _self_
-primitives: []

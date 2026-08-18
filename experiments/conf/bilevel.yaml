@@ -1,6 +1,0 @@
-# Bilevel-models experiment condition (inherits config.yaml).
-defaults:
-  - config
-  - _self_
-primitives:
-  - bilevel_models

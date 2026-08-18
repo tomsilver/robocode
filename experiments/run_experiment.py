@@ -5,8 +5,8 @@ Example usage:
     python experiments/run_experiment.py approach=agentic environment=motion2d_easy \
         eval_seed="$EVAL_SEED"
     python experiments/run_experiment.py approach=agentic \
-        approach.container_backend=docker 'primitives=[]' environment=motion2d_easy \
-        eval_seed="$EVAL_SEED"
+        approach.container_backend=docker primitive_level=none \
+        environment=motion2d_easy eval_seed="$EVAL_SEED"
 
 The sandbox backend is selected with approach.container_backend=docker|apptainer|local
 (default docker for agentic and llm_genplan; local runs unsandboxed in-process).
@@ -18,7 +18,7 @@ Parallel sweep with joblib launcher:
         approach.container_backend=docker \
         replicate_seed=42,24,424,444,222 \
         eval_seed="$EVAL_SEED" \
-        'primitives=[]' \
+        primitive_level=none \
         environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy \
         'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
         'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
@@ -36,6 +36,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
+from robocode.experiment_protocol import EXPERIMENT_ID_PATTERN, validate_eval_seed
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
 from robocode.utils.episode import (
@@ -50,16 +51,22 @@ from robocode.utils.telemetry import require_registered
 logger = logging.getLogger(__name__)
 
 
+def resolve_experiment_id(cfg: DictConfig) -> str | None:
+    """Return a tracker-generated condition ID and reject unsafe identifiers."""
+    value = cfg.get("experiment_id")
+    if value is None:
+        return None
+    if not isinstance(value, str) or EXPERIMENT_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            "experiment_id must be null or a tracker-generated identifier, "
+            f"got {value!r}"
+        )
+    return value
+
+
 def resolve_eval_seed(cfg: DictConfig) -> int:
     """Return the required, experimenter-only evaluation-suite seed."""
-    value = cfg.get("eval_seed")
-    if value is None:
-        raise ValueError(
-            "eval_seed must be set explicitly; it must not follow replicate_seed"
-        )
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"eval_seed must be an integer, got {value!r}")
-    return value
+    return validate_eval_seed(cfg.get("eval_seed"))
 
 
 def generate_eval_seeds(eval_seed: int, num_eval_tasks: int) -> list[int]:
@@ -90,9 +97,11 @@ def _main(cfg: DictConfig) -> float:
     validate_eval_seed_isolation(cfg)
     replicate_seed = cfg.replicate_seed
     eval_seed = resolve_eval_seed(cfg)
-
+    condition_id = resolve_experiment_id(cfg)
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    if condition_id is not None:
+        logger.info("Experiment ID: %s", condition_id)
 
     if cfg.eval_timeout is None:
         raise ValueError(
@@ -321,6 +330,8 @@ def _main(cfg: DictConfig) -> float:
         results.update(gen_metrics.to_dict())
     results["eval_seed"] = eval_seed
     results["replicate_seed"] = replicate_seed
+    if condition_id is not None:
+        results["experiment_id"] = condition_id
     results_path = output_dir / "results.json"
     with open(results_path, "w", encoding="utf-8") as results_file:
         json.dump(results, results_file, indent=2)

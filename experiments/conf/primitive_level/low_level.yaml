@@ -1,0 +1,6 @@
+# @package _global_
+
+primitive_level: low_level
+primitives:
+  - check_action_collision
+  - BiRRT
