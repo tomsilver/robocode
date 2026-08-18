@@ -39,6 +39,9 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
+import imageio.v3 as iio
+import imageio_ffmpeg
+
 from experiments import drive_results
 
 # Repo root (this file lives in <repo>/experiments/).
@@ -700,6 +703,52 @@ def _eval_gif_path(
         if p.exists() and p.stat().st_size > 0:
             return p
     return None
+
+
+def _gif_from_query(run: RunInfo, q: dict[str, str]) -> Optional[Path]:
+    """Resolve the episode gif addressed by /api/gif- or /api/video-style params."""
+    kind, key = q.get("kind", "eval"), q.get("key", "0")
+    if kind == "eval":
+        return _eval_gif_path(run, int(key), environment=q.get("env"))
+    return _history_gif_path(run, int(key), int(q.get("i", "0")))
+
+
+def _mp4_for_gif(gif: Path) -> Path:
+    """Return a cached MP4 transcode of ``gif`` for seekable in-browser playback.
+
+    The gif stays the artifact of record; the .mp4 next to it is a derived cache,
+    refreshed whenever the gif is newer (e.g. after a re-render).
+    """
+    mp4 = gif.with_suffix(gif.suffix + ".mp4")
+    if mp4.exists() and mp4.stat().st_mtime >= gif.stat().st_mtime:
+        return mp4
+    part = mp4.with_name(mp4.name + ".part")
+    # ffmpeg's gif demuxer appends a duplicate of the final frame; cap the
+    # output so mp4 frame k stays episode step k.
+    n_frames = iio.improps(str(gif)).n_images
+    result = subprocess.run(
+        [
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            *("-y", "-v", "error"),
+            *("-i", str(gif)),
+            *("-frames:v", str(n_frames)),
+            # yuv420p needs even dimensions; scale at most one pixel down.
+            *("-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"),
+            *("-pix_fmt", "yuv420p"),
+            *("-movflags", "+faststart"),
+            *("-f", "mp4"),
+            str(part),
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"ffmpeg transcode failed: {result.stderr.decode(errors='replace').strip()}"
+        )
+    part.replace(mp4)
+    return mp4
 
 
 def _history_gif_path(run: RunInfo, version: int, i: int) -> Optional[Path]:
@@ -2126,6 +2175,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(self, path: Path, ctype: str) -> None:
+        """Serve a file honoring single-range requests so <video> can seek."""
+        data = path.read_bytes()
+        m = re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range") or "")
+        if m and (m.group(1) or m.group(2)):
+            start = int(m.group(1) or 0)
+            end = min(int(m.group(2)) if m.group(2) else len(data) - 1, len(data) - 1)
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(data)}")
+                self.end_headers()
+                return
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+            data = data[start : end + 1]
+        else:
+            self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _json(self, obj: Any, code: int = 200) -> None:
         body = json.dumps(_safe_json_value(obj), allow_nan=False).encode()
         self._send(code, body, "application/json")
@@ -2184,14 +2256,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(404, "missing")
             return self._send(200, p.read_bytes(), "text/plain; charset=utf-8")
         if path == "/api/gif":
-            kind, key = q.get("kind", "eval"), q.get("key", "0")
-            if kind == "eval":
-                p = _eval_gif_path(run, int(key), environment=q.get("env"))
-            else:
-                p = _history_gif_path(run, int(key), int(q.get("i", "0")))
+            p = _gif_from_query(run, q)
             if p is None:
                 return self._err(404, "not rendered")
             return self._send(200, p.read_bytes(), "image/gif")
+        if path == "/api/video":
+            p = _gif_from_query(run, q)
+            if p is None:
+                return self._err(404, "not rendered")
+            try:
+                return self._send_file(_mp4_for_gif(p), "video/mp4")
+            except RuntimeError as error:
+                return self._err(500, str(error))
         if path == "/api/history":
             return self._json(_snapshots(run))
         if path == "/api/history/training-seeds":
@@ -2388,6 +2464,14 @@ pre{background:var(--code);border:1px solid var(--line);border-radius:9px;paddin
 .lb img{max-width:92vw;max-height:88vh;image-rendering:auto;border-radius:10px;
   box-shadow:0 12px 48px rgba(0,0,0,.5);cursor:default}
 .lbx{position:fixed;top:16px;right:18px}
+.lb .vwrap{display:flex;flex-direction:column;gap:8px;cursor:default;max-width:92vw}
+.lb video{max-width:92vw;max-height:80vh;border-radius:10px;
+  box-shadow:0 12px 48px rgba(0,0,0,.5);cursor:pointer}
+.vc{display:flex;gap:8px;align-items:center;background:var(--card);
+  border:1px solid var(--line);border-radius:9px;padding:8px 12px}
+.vc input[type=range]{flex:1;margin:0}
+.vc-lbl{font:12px ui-monospace,Menlo,monospace;color:var(--muted);
+  min-width:104px;text-align:right;white-space:nowrap}
 """
 
 APP_JS = r"""
@@ -2428,14 +2512,50 @@ const compact=x=>x==null?"-":x>=1e6?`${(x/1e6).toFixed(1)}m`:x>=1e3?`${(x/1e3).t
 // A gif thumbnail that opens a large, replaying view on click.
 function gifImg(src){return h("img",{loading:"lazy",src,style:"cursor:zoom-in",title:"click to enlarge",
  onclick:()=>openLightbox(src)});}
+const FPS=10; // save_video default; frame 0 = initial state, frame k = after step k
 function openLightbox(src){
- // new <img> element => the gif restarts from frame 0 ("see it play")
- const ov=h("div",{class:"lb",onclick:()=>ov.remove()},
-  h("img",{src,onclick:e=>e.stopPropagation()}),
-  h("button",{class:"lbx",onclick:()=>ov.remove()},"close (esc)"));
- const esc=e=>{if(e.key==="Escape"){ov.remove();document.removeEventListener("keydown",esc);}};
- document.addEventListener("keydown",esc);
+ const close=()=>{ov.remove();document.removeEventListener("keydown",keys);};
+ const ov=h("div",{class:"lb",onclick:close});
+ // Interactive player over a server-side mp4 transcode of the gif (seekable,
+ // frame-steppable). If the transcode fails, fall back to the plain gif.
+ const v=h("video",{src:src.replace("/api/gif?","/api/video?"),autoplay:"",loop:"",
+  playsinline:"",onclick:e=>{e.stopPropagation();toggle();},
+  title:"click: play/pause | ←/→: step (shift: ×10) | home/end: jump"});
+ v.muted=true;
+ const nframes=()=>v.duration?Math.max(1,Math.round(v.duration*FPS)):0;
+ const seek=f=>{v.pause();
+  v.currentTime=Math.min(Math.max((f+0.5)/FPS,0),Math.max(v.duration-1e-3,0));};
+ const stepBy=d=>seek(Math.floor(v.currentTime*FPS)+d);
+ const toggle=()=>v.paused?v.play():v.pause();
+ const bar=h("input",{type:"range",min:0,max:0,step:1,value:0,
+  oninput:e=>seek(+e.target.value),onclick:e=>e.stopPropagation()});
+ const lbl=h("span",{class:"vc-lbl"},"");
+ const playBtn=h("button",{title:"play/pause (click video)",
+  onclick:e=>{e.stopPropagation();toggle();}},"⏯");
+ const wrap=h("div",{class:"vwrap",onclick:e=>e.stopPropagation()},v,
+  h("div",{class:"vc"},playBtn,
+   h("button",{title:"back one step (←)",onclick:e=>{e.stopPropagation();stepBy(-1);}},"◀"),
+   h("button",{title:"forward one step (→)",onclick:e=>{e.stopPropagation();stepBy(1);}},"▶"),
+   bar,lbl));
+ v.addEventListener("error",()=>{ // no mp4 => old behavior: replaying gif
+  wrap.replaceWith(h("img",{src,onclick:e=>e.stopPropagation()}));});
+ const sync=()=>{if(!ov.isConnected)return;
+  const n=nframes();
+  if(n){bar.max=n-1;const f=Math.min(n-1,Math.floor(v.currentTime*FPS));
+   bar.value=f;lbl.textContent=`step ${f} / ${n-1}`;}
+  requestAnimationFrame(sync);};
+ const keys=e=>{
+  if(e.key==="Escape"){close();return;}
+  if(!wrap.isConnected)return;
+  if(e.key===" "){e.preventDefault();toggle();}
+  else if(e.key==="ArrowLeft"){e.preventDefault();stepBy(e.shiftKey?-10:-1);}
+  else if(e.key==="ArrowRight"){e.preventDefault();stepBy(e.shiftKey?10:1);}
+  else if(e.key==="Home"){e.preventDefault();seek(0);}
+  else if(e.key==="End"){e.preventDefault();seek(nframes()-1);}};
+ document.addEventListener("keydown",keys);
+ ov.append(wrap,h("button",{class:"lbx",onclick:close},"close (esc)"));
  document.body.append(ov);
+ requestAnimationFrame(sync);
 }
 
 let ALL=[], FILTER={}, INDEX_HASH="#/index";
