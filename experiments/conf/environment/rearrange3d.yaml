@@ -1,0 +1,8 @@
+# Rearrange3D's o1 and o2 variants swap in a different object (o2 adds a can
+# beside the boxed drink) and reword the goal, so they are two tasks rather than
+# one count axis. Pinned here to the two-object `next_to` variant; the other nine
+# registered variants differ only in the goal wording and object set:
+#   kinder/Rearrange3D-o{1,2}-<instruction>-v0
+_target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
+env_id: kinder/Rearrange3D-o2-put_the_boxed_drink_and_the_can_next_to_the_bowl-v0
+scene_bg: false

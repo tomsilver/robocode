@@ -108,6 +108,12 @@ def test_wrapper_honors_preset_mujoco_gl(module: str) -> None:
 
 
 @pytest.mark.parametrize("module", _WRAPPER_MODULES)
-def test_wrapper_defaults_to_egl(module: str) -> None:
-    """With no MUJOCO_GL set, the wrapper defaults to egl."""
-    assert _mujoco_gl_after_import(module, None) == "egl"
+def test_wrapper_defaults_to_platform_backend(module: str) -> None:
+    """With no MUJOCO_GL set, the wrapper pins the platform's default backend.
+
+    EGL is Linux-only: on macOS mujoco raises "invalid value for environment
+    variable MUJOCO_GL: egl" the first time it builds a GL context, so darwin
+    defaults to CGL instead.
+    """
+    expected = "cgl" if sys.platform == "darwin" else "egl"
+    assert _mujoco_gl_after_import(module, None) == expected

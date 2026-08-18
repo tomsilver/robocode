@@ -1,0 +1,6 @@
+# BalanceBeam3D ships a single registered variant, so there is no object-count
+# axis to generalize over; it is a fixed environment rather than a `_generalized`
+# one. Its blocks are named `small_block_1`, `small_block_2` and `large_block`.
+_target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
+env_id: kinder/BalanceBeam3D-o3-v0
+scene_bg: false

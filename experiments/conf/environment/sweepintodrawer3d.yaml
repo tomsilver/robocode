@@ -1,0 +1,4 @@
+# Single registered variant (5 cubes), so no count axis; see balancebeam3d.yaml.
+_target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
+env_id: kinder/SweepIntoDrawer3D-o5-v0
+scene_bg: false
