@@ -101,6 +101,20 @@ HOST_NETWORK=$(echo "$HOST_IP" | sed 's/\.[0-9]*$/.0\/24/')
 iptables -A INPUT  -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
+# On Docker Desktop the host sits on its own subnet (192.168.65.0/24) rather than
+# the container's default gateway (172.17.0.1), so the rule above does not cover
+# it and the blackbox env server becomes unreachable. Allow whatever
+# host.docker.internal actually resolves to. Only the IPv4 record is used: the
+# name also carries an AAAA record that no container route can reach, and it is
+# that failure Python surfaces when create_connection() re-raises its first error.
+GATEWAY_IP=$(getent ahosts host.docker.internal 2>/dev/null \
+    | awk '$1 ~ /^[0-9.]+$/ {print $1; exit}')
+if [ -n "$GATEWAY_IP" ] && [ "$GATEWAY_IP" != "$HOST_IP" ]; then
+    GATEWAY_NETWORK=$(echo "$GATEWAY_IP" | sed 's/\.[0-9]*$/.0\/24/')
+    iptables -A INPUT  -s "$GATEWAY_NETWORK" -j ACCEPT
+    iptables -A OUTPUT -d "$GATEWAY_NETWORK" -j ACCEPT
+fi
+
 # Set default-deny policies.
 iptables -P INPUT   DROP
 iptables -P FORWARD DROP
