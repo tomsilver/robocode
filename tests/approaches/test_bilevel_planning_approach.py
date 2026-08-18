@@ -9,6 +9,7 @@ import pytest
 
 from robocode.approaches.bilevel_planning_approach import BilevelPlanningApproach
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
+from robocode.utils.episode import save_video
 
 
 def _make_env() -> KinderGeom2DEnv:
@@ -135,8 +136,14 @@ def test_planning_failure_is_unsolved_not_crashed(tmp_path: Path) -> None:
         max_steps=1000,
         eval_timeout=0.001,
     )
+    phases: list[str] = []
     result = approach.solve_instance(
-        env=env, seed=0, budget_usd=0.0, output_subdir=tmp_path
+        env=env,
+        seed=0,
+        budget_usd=0.0,
+        output_subdir=tmp_path,
+        render=True,
+        progress_callback=lambda phase, _current, _total: phases.append(phase),
     )
     assert result.solved is False
     assert result.crashed is False
@@ -146,6 +153,11 @@ def test_planning_failure_is_unsolved_not_crashed(tmp_path: Path) -> None:
     assert result.extras["plan_found"] is False
     assert result.extras["plan_length"] == 0
     assert result.extras["planning_time"] >= 0.0
+    assert result.frames is not None and len(result.frames) == 1
+    assert phases[-1] == "planning failed; saving initial state"
+    gif_path = tmp_path / "planning_failure.gif"
+    save_video(result.frames, gif_path)
+    assert gif_path.stat().st_size > 0
 
 
 def test_planning_is_deterministic(tmp_path: Path) -> None:
