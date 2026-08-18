@@ -136,20 +136,6 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         if object_count is None and isinstance(env, VariableObjectCountEnv):
             object_count = env.current_count
 
-        frames: list[Any] = []
-
-        def _capture() -> None:
-            rendered = env.render()
-            # render() may return a single frame, a list, or None; keep only
-            # numpy RGB frames (matches run_episode and what save_video expects).
-            if isinstance(rendered, np.ndarray):
-                frames.append(rendered)
-
-        # Capture before planning: a timeout or unreachable goal still has a useful
-        # visualization of the instance the planner could not solve.
-        if render:
-            _capture()
-
         plan_start = time.perf_counter()
         if progress_callback is not None:
             progress_callback("planning", 0, 0)
@@ -161,14 +147,11 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         planning_time = time.perf_counter() - plan_start
 
         if not plan_found:
-            if progress_callback is not None:
-                progress_callback("planning failed; saving initial state", 0, 0)
             return InstanceResult(
                 solved=False,
                 total_reward=None,
                 num_steps=None,
                 cost_usd=0.0,
-                frames=frames if render else None,
                 extras={
                     "planning_time": planning_time,
                     "plan_found": False,
@@ -180,6 +163,18 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
                     ),
                 },
             )
+
+        frames: list[Any] = []
+
+        def _capture() -> None:
+            rendered = env.render()
+            # render() may return a single frame, a list, or None; keep only
+            # numpy RGB frames (matches run_episode and what save_video expects).
+            if isinstance(rendered, np.ndarray):
+                frames.append(rendered)
+
+        if render:
+            _capture()
 
         total_reward = 0.0
         num_steps = 0
