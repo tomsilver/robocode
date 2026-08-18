@@ -107,8 +107,14 @@ iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 # host.docker.internal actually resolves to. Only the IPv4 record is used: the
 # name also carries an AAAA record that no container route can reach, and it is
 # that failure Python surfaces when create_connection() re-raises its first error.
+# The `|| true` is load-bearing: whitebox runs do not pass
+# --add-host host.docker.internal:host-gateway, so on Linux the name does not
+# resolve and getent exits 2. Under `set -euo pipefail` that status propagates
+# out of the substitution and aborts the script here, before the default-deny
+# policies below are ever applied. Docker Desktop hides this by resolving the
+# name with or without the flag.
 GATEWAY_IP=$(getent ahosts host.docker.internal 2>/dev/null \
-    | awk '$1 ~ /^[0-9.]+$/ {print $1; exit}')
+    | awk '$1 ~ /^[0-9.]+$/ {print $1; exit}' || true)
 if [ -n "$GATEWAY_IP" ] && [ "$GATEWAY_IP" != "$HOST_IP" ]; then
     GATEWAY_NETWORK=$(echo "$GATEWAY_IP" | sed 's/\.[0-9]*$/.0\/24/')
     iptables -A INPUT  -s "$GATEWAY_NETWORK" -j ACCEPT
