@@ -1,0 +1,15 @@
+# Dynamic Shelf3D. NOT the same environment as shelf3d_*.yaml, which wraps
+# kinder.envs.kinematic3d.shelf3d: same name, different physics.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.dynamic3d.task_families:Shelf3DEnv
+count_kwarg: num_objects
+count_object_prefix: cube
+# Registered variants are 1, 2, 8 cubes; design on the small two, evaluate on all.
+design_counts: [1, 2]
+eval_counts: [1, 2, 8]
+constant_object_env_kwargs:
+  # Plain scene. Set `mimiclabs-lab2` for the realistic background, which fetches
+  # ~2 GB of assets on first use; purely cosmetic either way.
+  scene_bg: false
+base_steps: 400
+steps_per_object: 400

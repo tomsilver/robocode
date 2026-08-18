@@ -1,0 +1,13 @@
+# Pins the sort-into-bins instruction, which holds four bins fixed while the cubes
+# scale. The other instructions are single-count and offer no count axis.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.dynamic3d.task_families:SortClutteredBlocks3DEnv
+count_kwarg: num_objects
+count_object_prefix: cube
+design_counts: [4]
+eval_counts: [4, 20]
+constant_object_env_kwargs:
+  scene_bg: false
+# Blocks are sorted individually, so the horizon scales per object. UNCALIBRATED.
+base_steps: 400
+steps_per_object: 200

@@ -1,0 +1,11 @@
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.dynamic3d.task_families:Tossing3DEnv
+count_kwarg: num_objects
+# `cube_` and not `cube`, so the fixed `cuboid_barrier` is not counted.
+count_object_prefix: cube_
+design_counts: [1]
+eval_counts: [1, 2]
+constant_object_env_kwargs:
+  scene_bg: false
+base_steps: 400
+steps_per_object: 400
