@@ -1271,7 +1271,7 @@ provides-extras = ["develop"]
 
 [[package]]
 name = "kindergarden"
-version = "0.2.0"
+version = "0.2.3"
 source = { editable = "third-party/kindergarden" }
 dependencies = [
     { name = "dill" },
