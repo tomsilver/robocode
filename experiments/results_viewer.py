@@ -2888,8 +2888,8 @@ async function renderRun(id){
  const cols=h("div",{class:"cols"});
  const cS=h("div",{},h("div",{class:"muted",style:"margin-bottom:6px"},"Solved"),h("div",{class:"eph"}));
  const cF=h("div",{},h("div",{class:"muted",style:"margin-bottom:6px"},"Failed"),h("div",{class:"eph"}));
- for(const e of succ.slice(0,60))cS.querySelector(".eph").append(epCard(id,e,s));
- for(const e of fail.slice(0,60))cF.querySelector(".eph").append(epCard(id,e,s));
+ for(const e of succ)cS.querySelector(".eph").append(epCard(id,e,s));
+ for(const e of fail)cF.querySelector(".eph").append(epCard(id,e,s));
  cols.append(cS,cF);app.append(cols);
 
  if(d.has_history)await renderHistory(app,id,d.episodes);
