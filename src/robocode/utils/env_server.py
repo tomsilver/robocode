@@ -325,6 +325,12 @@ def env_server_running(
     died = threading.Event()
     stopping = threading.Event()
 
+    def _died_error() -> RuntimeError:
+        return RuntimeError(
+            f"env server {_describe_exit(proc.returncode)} during the run; "
+            f"see {log_path}"
+        )
+
     try:
         deadline = time.monotonic() + 60
         while not port_file.exists():
@@ -359,22 +365,20 @@ def env_server_running(
             target=_watch_server, name="env-server-watchdog", daemon=True
         ).start()
 
-        try:
-            yield port, token
-        except KeyboardInterrupt:
-            # Tell our own interrupt apart from an operator's Ctrl-C, so a dead
-            # server is not reported as somebody pressing a key.
-            if not died.is_set():
-                raise
-            raise RuntimeError(
-                f"env server {_describe_exit(proc.returncode)} during the run; "
-                f"see {log_path}"
-            ) from None
+        yield port, token
+
         if proc.poll() is not None:
-            raise RuntimeError(
-                f"env server {_describe_exit(proc.returncode)} during the run; "
-                f"see {log_path}"
-            )
+            raise _died_error()
+    except KeyboardInterrupt:
+        # Tell our own interrupt apart from an operator's Ctrl-C, so a dead server
+        # is not reported as somebody pressing a key. This handler sits on the same
+        # try as the finally below rather than in a nested one, so that the single
+        # try/finally wrapping the yield is the whole story: whatever is thrown in
+        # here -- our interrupt, a real Ctrl-C, or the GeneratorExit a caller raises
+        # by abandoning the block -- reaches the shutdown below by one path.
+        if not died.is_set():
+            raise
+        raise _died_error() from None
     finally:
         stopping.set()
         if proc.poll() is None:
