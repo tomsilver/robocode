@@ -32,7 +32,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1870,6 +1870,55 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
         _record_history_episodes(run, version, records)
 
 
+class _ActionRecorder:
+    """Approach wrapper that keeps the action tape of a rollout.
+
+    Frame capture and GIF encoding add seconds per rollout, which changes what a
+    policy reading the wall clock does. A replay therefore runs the real policy
+    once with rendering off, and renders the recorded tape in a second pass.
+    """
+
+    def __init__(self, approach: Any) -> None:
+        self.approach = approach
+        self.actions: list[Any] = []
+
+    def reset(self, state: Any, info: dict[str, Any]) -> None:
+        """Start a new episode on the wrapped approach."""
+        self.actions.clear()
+        self.approach.reset(state, info)
+
+    def step(self) -> Any:
+        """Return the wrapped approach's next action, recording it."""
+        action = self.approach.step()
+        self.actions.append(action)
+        return action
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        """Forward the transition to the wrapped approach."""
+        self.approach.update(*args, **kwargs)
+
+
+class _ActionPlayback:
+    """Approach that emits a recorded action tape, one action per step."""
+
+    def __init__(self, actions: list[Any]) -> None:
+        self.actions = actions
+        self._next = 0
+
+    def reset(self, _state: Any, _info: dict[str, Any]) -> None:
+        """Rewind to the start of the tape."""
+        self._next = 0
+
+    def step(self) -> Any:
+        """Return the next recorded action."""
+        action = self.actions[self._next]
+        self._next += 1
+        return action
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        """Ignore the transition; the tape is fixed."""
+
+
 def _render_worker() -> None:
     # pylint: disable=import-outside-toplevel
     conf_dir = str(REPO_ROOT / "experiments" / "conf")
@@ -2012,13 +2061,16 @@ def _render_worker() -> None:
                         job.current = current
                         job.total = total
 
-                def report_rollout(current: int, total: int) -> None:
-                    _raise_if_cancelled(epoch)
-                    with _JOBS_LOCK:
-                        job.phase = "rollout"
-                        job.message = f"rendering step {current}/{total}"
-                        job.current = current
-                        job.total = total
+                def rollout_reporter(label: str) -> Callable[[int, int], None]:
+                    def report(current: int, total: int) -> None:
+                        _raise_if_cancelled(epoch)
+                        with _JOBS_LOCK:
+                            job.phase = "rollout"
+                            job.message = f"{label} step {current}/{total}"
+                            job.current = current
+                            job.total = total
+
+                    return report
 
                 if approach.per_instance:
                     result = approach.solve_instance(
@@ -2058,10 +2110,22 @@ def _render_worker() -> None:
                         job.phase = "preparing"
                         job.message = "loading generated policy"
                     approach.train()
-                    # Stream each frame into the GIF encoder as it is rendered:
-                    # holding a long episode's raw RGB frames in memory can OOM
-                    # the machine. The partial file replaces ``out`` only once
-                    # the rollout finishes.
+                    # Pass 1: the policy runs unrendered, so its outcome is the one
+                    # the evaluation recorded, and its actions are taped.
+                    recorder = _ActionRecorder(approach)
+                    metrics, _, _ = run_episode(
+                        env,
+                        recorder,
+                        eval_seeds[i],
+                        render_steps,
+                        count=count,
+                        progress_callback=rollout_reporter("policy"),
+                    )
+                    # Pass 2: the same seed and instance replayed from the tape, with
+                    # rendering on. Each frame is streamed into the GIF encoder as it
+                    # is captured, since holding a long episode's raw RGB frames in
+                    # memory can OOM the machine; the partial file replaces ``out``
+                    # only once the replay finishes.
                     part = out.with_name(out.name + ".part")
                     n_frames = 0
                     try:
@@ -2072,14 +2136,14 @@ def _render_worker() -> None:
                                 append_frame(frame)
                                 n_frames += 1
 
-                            metrics, _, _ = run_episode(
+                            replay, _, _ = run_episode(
                                 env,
-                                approach,
+                                _ActionPlayback(recorder.actions),
                                 eval_seeds[i],
-                                render_steps,
+                                len(recorder.actions),
                                 render=True,
                                 count=count,
-                                progress_callback=report_rollout,
+                                progress_callback=rollout_reporter("rendering"),
                                 frame_sink=_sink,
                             )
                         if n_frames == 0:
@@ -2087,6 +2151,13 @@ def _render_worker() -> None:
                         part.replace(out)
                     finally:
                         part.unlink(missing_ok=True)
+                    if replay["num_steps"] != metrics["num_steps"]:
+                        print(
+                            f"replay diverged for {out}: policy ran "
+                            f"{metrics['num_steps']} steps, render ran "
+                            f"{replay['num_steps']}",
+                            file=sys.stderr,
+                        )
                     capped = (
                         render_steps < max_steps
                         and metrics["num_steps"] >= render_steps
