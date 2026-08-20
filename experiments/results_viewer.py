@@ -36,7 +36,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 from urllib.parse import parse_qs, urlparse
 
 import imageio.v3 as iio
@@ -2112,10 +2112,12 @@ def _render_worker() -> None:
                     approach.train()
                     # Pass 1: the policy runs unrendered, so its outcome is the one
                     # the evaluation recorded, and its actions are taped.
+                    # The tape shims implement the reset/step/update protocol
+                    # run_episode drives; cast past its BaseApproach annotation.
                     recorder = _ActionRecorder(approach)
                     metrics, _, _ = run_episode(
                         env,
-                        recorder,
+                        cast(Any, recorder),
                         eval_seeds[i],
                         render_steps,
                         count=count,
@@ -2138,7 +2140,7 @@ def _render_worker() -> None:
 
                             replay, _, _ = run_episode(
                                 env,
-                                _ActionPlayback(recorder.actions),
+                                cast(Any, _ActionPlayback(recorder.actions)),
                                 eval_seeds[i],
                                 len(recorder.actions),
                                 render=True,
