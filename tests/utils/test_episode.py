@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import multiprocessing as mp
 import sys
 import time
@@ -29,7 +30,104 @@ from robocode.utils.episode import (
     save_video,
     summarize_by_count,
     summarize_count_regimes,
+    summarize_eval_episodes,
 )
+
+
+def test_summarize_eval_episodes_counts_a_crash_as_unsolved() -> None:
+    """A crashed episode is a failure in solve_rate, not an episode that never ran.
+
+    Excluding it instead rescales the headline to whatever survived, so a policy that
+    crashes on the instances it cannot handle scores higher the more of them it kills.
+    """
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "total_reward": -10.0, "num_steps": 10},
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+    ]
+    summary = summarize_eval_episodes(per_episode)
+    assert summary["solve_rate"] == 0.25  # 1 of 4 scheduled, not 1 of 1 survivor
+    assert summary["num_eval_tasks"] == 4
+    assert summary["num_evaluated_episodes"] == 1
+    assert summary["num_crashed_episodes"] == 3
+    assert summary["eval_complete"] is False
+    # Reward and steps keep the scored denominator: there is no worst-case return to
+    # charge a crash with, so they describe the one episode that produced a number.
+    assert summary["mean_eval_reward"] == -10.0
+    assert summary["mean_eval_steps"] == 10.0
+
+
+def test_summarize_eval_episodes_agrees_with_the_by_count_curve() -> None:
+    """The headline solve rate matches the scaling curve it is supposed to summarize.
+
+    Both use the full scheduled denominator. Before that was true they diverged
+    exactly when episodes crashed, i.e. when a reader most needs them to agree.
+    """
+    scheduled = [2, 2, 5, 5]
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "total_reward": -5.0, "num_steps": 5},
+        {"solved": False, "total_reward": -9.0, "num_steps": 9},
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+    ]
+    summary = summarize_eval_episodes(per_episode)
+    by_count, _largest_all, _largest_any = summarize_by_count(scheduled, per_episode)
+    pooled = sum(e["n_solved"] for e in by_count.values()) / sum(
+        e["n"] for e in by_count.values()
+    )
+    assert summary["solve_rate"] == pooled == 0.25
+
+
+def test_summarize_eval_episodes_flags_an_unattempted_suite_incomplete() -> None:
+    """Budget exhaustion leaves seeds unattempted; that is a partial eval too."""
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "attempted": True, "total_reward": -5.0, "num_steps": 5},
+        {"solved": False, "attempted": False, "total_reward": None, "num_steps": None},
+    ]
+    summary = summarize_eval_episodes(per_episode)
+    assert summary["eval_complete"] is False
+    assert summary["num_crashed_episodes"] == 0  # unattempted is not a crash
+    assert summary["num_evaluated_episodes"] == 1
+    assert summary["solve_rate"] == 0.5
+
+
+def test_summarize_eval_episodes_marks_a_clean_suite_complete() -> None:
+    """Nothing crashed and nothing was skipped, so the means cover the whole suite."""
+    per_episode: list[dict[str, Any]] = [
+        {"solved": True, "total_reward": -5.0, "num_steps": 5},
+        {"solved": False, "total_reward": -9.0, "num_steps": 9},
+    ]
+    summary = summarize_eval_episodes(per_episode)
+    assert summary["eval_complete"] is True
+    assert summary["solve_rate"] == 0.5
+    assert summary["num_evaluated_episodes"] == 2
+
+
+def test_summarize_eval_episodes_reports_nan_when_everything_crashed() -> None:
+    """With no scored episode there is no mean, but solve_rate is 0, not nan.
+
+    This is the shape a macOS run produced before the eval fork fix: every episode
+    crashed, and a nan solve rate reads as "no data" when the honest reading is
+    "nothing was solved".
+    """
+    per_episode: list[dict[str, Any]] = [
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+        {"solved": False, "crashed": True, "total_reward": None, "num_steps": None},
+    ]
+    summary = summarize_eval_episodes(per_episode)
+    assert summary["solve_rate"] == 0.0
+    assert math.isnan(summary["mean_eval_reward"])
+    assert math.isnan(summary["mean_eval_steps"])
+    assert summary["eval_complete"] is False
+
+
+def test_summarize_eval_episodes_handles_an_empty_suite() -> None:
+    """No scheduled episodes yields nan rather than dividing by zero."""
+    summary = summarize_eval_episodes([])
+    assert math.isnan(summary["solve_rate"])
+    assert summary["num_eval_tasks"] == 0
+    assert summary["eval_complete"] is True
 
 
 def test_summarize_by_count_uses_full_scheduled_denominator() -> None:

@@ -56,7 +56,14 @@ def collect_results(search_dirs: list[Path]) -> pd.DataFrame:
                         if isinstance(entry, dict) and "solve_rate" in entry:
                             row[f"solve_rate@{count}"] = entry["solve_rate"]
                     continue
-                row[key] = value
+                # Booleans are per-run flags (eval_complete, gen_turn_limit_hit, ...).
+                # Left as bools they are not a numeric dtype, so aggregate_results
+                # treats them as *grouping* keys and splits one condition into a row
+                # per flag value -- replicates that differ only in whether a limit was
+                # hit stop being averaged together. As floats they aggregate into the
+                # fraction of replicates where the flag held, which is what a summary
+                # table wants: eval_complete 0.8 means one replicate in five is partial.
+                row[key] = float(value) if isinstance(value, bool) else value
             rows.append(row)
 
     return pd.DataFrame(rows)
