@@ -7,11 +7,13 @@ from __future__ import annotations
 import multiprocessing as mp
 import signal
 import sys
+import threading
 import time
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
+import _thread
 import imageio.v3 as iio
 import numpy as np
 import pytest
@@ -741,6 +743,89 @@ def test_in_process_episode_restores_the_previous_alarm_handler(
     approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
     run_episode_with_timeout(env, approach, seed=0, max_steps=10, timeout=30)
     assert signal.getsignal(signal.SIGALRM) is before
+    # A leaked handler and a leaked alarm are separate failures, and the alarm is
+    # the one that would fire partway through the next episode.
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+class _SwallowingApproach(BaseApproach[Any, Any]):
+    """Retries forever behind ``except Exception``, a common generated-code shape."""
+
+    def _get_action(self) -> Any:
+        while True:
+            try:
+                time.sleep(0.05)
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
+
+
+def test_in_process_episode_stops_a_policy_that_catches_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A policy swallowing Exception must not escape its budget.
+
+    EpisodeTimeout is a BaseException precisely so ``except Exception`` cannot catch
+    it. When it subclassed Exception this policy ran unbounded -- 45s and counting on
+    a 3s budget -- while the forked path stopped it on time, so the in-process path
+    was quietly weaker rather than equivalent.
+    """
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    env = _CountEnv()
+    approach = _SwallowingApproach(env.action_space, env.observation_space, 0, {})
+    # Regressing this makes the policy unbounded, so without a backstop the test
+    # would hang CI instead of failing it. KeyboardInterrupt is the right lever:
+    # the policy under test catches Exception, which does not cover it.
+    rescue = threading.Timer(15.0, _thread.interrupt_main)
+    rescue.start()
+    started = time.monotonic()
+    try:
+        metrics, _, _ = run_episode_with_timeout(
+            env, approach, seed=0, max_steps=1000, timeout=1.0
+        )
+    except KeyboardInterrupt:
+        pytest.fail("policy escaped its 1s budget; the timeout was swallowed")
+    finally:
+        rescue.cancel()
+    assert metrics["timed_out"] is True
+    assert time.monotonic() - started < 10
+
+
+def test_in_process_episode_returns_rendered_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """render=True is served by the in-process path, not only the forked one."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+
+    class _RenderingCountEnv(_CountEnv):
+        def render(self) -> Any:
+            return np.zeros((4, 4, 3), dtype=np.uint8)
+
+    env = _RenderingCountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, frames, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30, render=True
+    )
+    # One frame for the initial state plus one per step.
+    assert len(frames) == metrics["num_steps"] + 1
+
+
+def test_in_process_timed_out_metrics_keep_the_scheduled_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed-out episode still reports the count it was scheduled at.
+
+    The scaling curve buckets by object_count, so losing it on the in-process path
+    would drop timed-out episodes out of their bucket instead of scoring them as
+    failures there.
+    """
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+    env = _CountEnv()
+    approach = _SlowApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5, count=7
+    )
+    assert metrics["timed_out"] is True
+    assert metrics["object_count"] == 7
 
 
 def test_save_frames_creates_pngs(

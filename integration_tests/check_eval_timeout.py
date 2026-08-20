@@ -20,6 +20,14 @@ Two properties are checked against a real env:
 2. ``run_episode_with_timeout`` scores a working policy, and still stops a policy that
    overruns its budget both by hanging in one call and by being slow across steps.
 
+On Linux this exercises the forked path, so the in-process path goes uncovered here.
+To drive that path on Linux, force it::
+
+    _EPISODE_FORK_SAFE = False
+
+That is how the swallowed-timeout bug was found: an ``except Exception`` policy
+escaped its budget in-process while the forked path stopped it on time.
+
 Needs the kinder dynamic3D extras. Raises on any failure.
 """
 

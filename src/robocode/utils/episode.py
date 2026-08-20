@@ -180,8 +180,24 @@ def run_episode(
 _EPISODE_FORK_SAFE = sys.platform != "darwin"
 
 
-class EpisodeTimeout(Exception):
-    """Raised in-process when an episode overruns its wall-clock budget."""
+class EpisodeTimeout(BaseException):
+    """Raised in-process when an episode overruns its wall-clock budget.
+
+    Deliberately a :class:`BaseException`, for the reason :class:`KeyboardInterrupt`
+    is one: a generated policy that wraps its body in ``except Exception`` would
+    otherwise swallow the timeout and run unbounded. That shape is common in
+    generated code::
+
+        while True:
+            try:
+                ...
+            except Exception:
+                continue
+
+    The forked path is immune because it stops such a policy with SIGINT and then
+    SIGKILL, so making this catchable would have quietly dropped the guarantee that
+    path provides rather than matching it.
+    """
 
 
 def _timed_out_metrics(count: int | None) -> dict[str, Any]:
@@ -213,7 +229,10 @@ def _sigalrm_guard(timeout: float) -> Iterator[None]:
         raise EpisodeTimeout
 
     previous = signal.signal(signal.SIGALRM, _fire)
-    signal.setitimer(signal.ITIMER_REAL, timeout)
+    # Repeating, not one-shot. A policy that catches BaseException could still
+    # swallow the first alarm; re-arming means it keeps being interrupted rather
+    # than escaping the budget outright on a single catch.
+    signal.setitimer(signal.ITIMER_REAL, timeout, timeout)
     try:
         yield
     finally:
