@@ -1,0 +1,4 @@
+# DynPushT2D currently has one registered task with one T block, so this is a
+# fixed environment rather than a generalized object-count family.
+_target_: robocode.environments.kinder_geom2d_env.KinderGeom2DEnv
+env_id: kinder/DynPushT2D-t1-v0
