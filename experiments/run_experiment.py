@@ -45,6 +45,7 @@ from robocode.utils.episode import (
     save_video,
     summarize_by_count,
     summarize_count_regimes,
+    summarize_eval_episodes,
 )
 from robocode.utils.telemetry import require_registered
 
@@ -250,13 +251,14 @@ def _main(cfg: DictConfig) -> float:
                     count=count,
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                # A loaded policy can raise on an unseen eval seed. We cannot fairly
-                # score a crash without the env's worst-case return (not available
-                # per env), so flag it and exclude it from the aggregate metrics
-                # rather than inventing a score that could flatter a crashy policy.
-                # (The by_count scaling curve still counts it as unsolved.)
+                # A loaded policy can raise on an unseen eval seed. It counts as
+                # unsolved, but there is no per-env worst-case return to charge it
+                # with, so it carries no reward or step count and is left out of
+                # those means rather than given an invented score.
                 logger.exception(
-                    "Eval episode (seed %d) crashed; excluding from metrics", s
+                    "Eval episode (seed %d) crashed; scored unsolved, and left out "
+                    "of the reward and step means",
+                    s,
                 )
                 per_episode.append(
                     {
@@ -275,38 +277,22 @@ def _main(cfg: DictConfig) -> float:
                 video_dir.mkdir(exist_ok=True)
                 save_video(frames, video_dir / f"episode_{i}.gif")
 
-        # Aggregate over episodes that actually ran; crashed episodes are reported
-        # separately so partial evaluations stay honest (see the crash handler).
-        evaluated = [e for e in per_episode if not e.get("crashed")]
-        num_crashed = len(per_episode) - len(evaluated)
+        # Crashed episodes count as unsolved but carry no reward or step count, so
+        # the summary reports the two on different denominators and flags the run
+        # incomplete. See summarize_eval_episodes.
+        results = {**summarize_eval_episodes(per_episode), "per_episode": per_episode}
+        num_crashed = results["num_crashed_episodes"]
         if num_crashed:
             logger.warning(
-                "%d/%d eval episodes crashed and are excluded from the metrics; "
-                "see per_episode errors in results.json.",
+                "%d/%d eval episodes crashed; they count as unsolved in solve_rate "
+                "but are excluded from the reward and step means, and the run is "
+                "marked eval_complete=false. See per_episode errors in results.json.",
                 num_crashed,
                 len(per_episode),
             )
-
-        def _mean(key: str) -> float:
-            return (
-                float(np.mean([e[key] for e in evaluated]))
-                if evaluated
-                else float("nan")
-            )
-
-        mean_reward = _mean("total_reward")
-        mean_steps = _mean("num_steps")
-        solve_rate = _mean("solved")
-
-        results = {
-            "mean_eval_reward": mean_reward,
-            "mean_eval_steps": mean_steps,
-            "solve_rate": solve_rate,
-            "num_eval_tasks": num_eval,
-            "num_evaluated_episodes": len(evaluated),
-            "num_crashed_episodes": num_crashed,
-            "per_episode": per_episode,
-        }
+        mean_reward = results["mean_eval_reward"]
+        mean_steps = results["mean_eval_steps"]
+        solve_rate = results["solve_rate"]
         if eval_counts is not None:
             by_count, largest_all, largest_any = summarize_by_count(
                 eval_counts, per_episode

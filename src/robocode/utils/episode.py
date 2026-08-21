@@ -477,6 +477,52 @@ def summarize_count_regimes(
     return regimes
 
 
+def summarize_eval_episodes(per_episode: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate an eval suite's per-episode records into headline metrics.
+
+    ``per_episode`` is parallel to the scheduled eval seeds: every scheduled episode
+    contributes exactly one entry, whether it ran, crashed, or was never attempted.
+
+    ``solve_rate`` uses the **full scheduled** denominator -- a crashed or unattempted
+    episode is an unsolved one -- because the alternative silently rescales the headline
+    to whatever survived, so a policy that crashes on the hard instances scores higher
+    the more of them it kills. That is also the denominator
+    :func:`summarize_by_count` already uses, so a run's headline and its scaling curve
+    now agree instead of disagreeing exactly when something went wrong.
+
+    Reward and step means stay over scored episodes only. There is no per-env worst-case
+    return to charge a crash with, and inventing one would flatter a crashy policy in
+    the other direction; ``eval_complete`` is what tells a reader the mean is partial.
+    """
+    scored = [
+        e for e in per_episode if e.get("attempted", True) and not e.get("crashed")
+    ]
+    num_crashed = sum(1 for e in per_episode if e.get("crashed"))
+    num_unattempted = sum(1 for e in per_episode if not e.get("attempted", True))
+    num_eval = len(per_episode)
+
+    def _mean(key: str) -> float:
+        vals = [e[key] for e in scored if e.get(key) is not None]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    return {
+        "mean_eval_reward": _mean("total_reward"),
+        "mean_eval_steps": _mean("num_steps"),
+        "solve_rate": (
+            sum(1 for e in per_episode if e.get("solved")) / num_eval
+            if num_eval
+            else float("nan")
+        ),
+        "num_eval_tasks": num_eval,
+        "num_evaluated_episodes": len(scored),
+        "num_crashed_episodes": num_crashed,
+        # Every scheduled episode produced a real score. False means the means above
+        # cover only part of the suite, which is otherwise indistinguishable from a
+        # clean run once these numbers reach a summary table.
+        "eval_complete": num_crashed == 0 and num_unattempted == 0,
+    }
+
+
 def run_per_instance_eval(
     env: Any,
     approach: BaseApproach,
@@ -573,22 +619,10 @@ def run_per_instance_eval(
         )
 
     scored = [e for e in per_episode if e["attempted"] and not e["crashed"]]
-    num_crashed = sum(1 for e in per_episode if e["crashed"])
-
-    def _mean(key: str) -> float:
-        vals = [e[key] for e in scored if e[key] is not None]
-        return float(np.mean(vals)) if vals else float("nan")
-
-    num_eval = len(eval_seeds)
     results = {
-        "mean_eval_reward": _mean("total_reward"),
-        "mean_eval_steps": _mean("num_steps"),
-        "solve_rate": num_solved / num_eval if num_eval else float("nan"),
-        "num_eval_tasks": num_eval,
+        **summarize_eval_episodes(per_episode),
         "num_attempted": num_attempted,
         "num_solved": num_solved,
-        "num_evaluated_episodes": len(scored),
-        "num_crashed_episodes": num_crashed,
         "per_episode": per_episode,
         "total_cost_usd": total_cost,
     }
