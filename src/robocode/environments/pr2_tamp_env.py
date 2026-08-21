@@ -25,6 +25,7 @@ import threading
 from typing import Any, SupportsFloat, cast
 
 import numpy as np
+import pybullet as p
 from gymnasium.core import RenderFrame
 from gymnasium.spaces import Box
 from numpy.typing import NDArray
@@ -53,7 +54,6 @@ from robocode.environments.ss_pybullet import (
     get_arm_joints,
     get_gripper_joints,
     get_group_joints,
-    get_image,
     get_joint_limits,
     get_joint_positions,
     get_link_pose,
@@ -98,6 +98,17 @@ _NUM_ARM_JOINTS = 7
 
 # Index of the yaw entry within the base group (x, y, yaw).
 _BASE_YAW_INDEX = 2
+
+# Rendering camera: an elevated three-quarter view. The robot circles the table over
+# an episode, so the camera sits far enough back that it stays in frame throughout,
+# and high enough to look down onto the plate, which is where the task is decided.
+_RENDER_WIDTH = 640
+_RENDER_HEIGHT = 480
+_CAMERA_EYE = [1.9, -1.9, 2.4]
+_CAMERA_TARGET = [-0.2, 0.0, 0.8]
+_CAMERA_FOV_DEGREES = 55.0
+_CAMERA_NEAR = 0.05
+_CAMERA_FAR = 10.0
 
 
 class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
@@ -591,10 +602,38 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             self._current_obs = self._get_obs()
 
     def render(self) -> RenderFrame | list[RenderFrame] | None:
+        # Driving PyBullet's camera directly rather than through pybullet_tools'
+        # get_image: that helper forwards its `vertical_fov` to get_projection_matrix,
+        # which documents the argument as RADIANS and calls math.degrees() on it, while
+        # get_image defaults it to 60.0. The projection is then built from
+        # degrees(60) = 3438 degrees, which renders a fisheye horizon with the scene a
+        # few pixels across and no error raised.
         with _CLIENT_LOCK:
             set_client(self._client)
-            image = get_image(camera_pos=[1.2, -1.2, 1.6], target_pos=[0.0, 0.0, 0.75])
-        frame = np.asarray(image.rgbPixels, dtype=np.uint8)[:, :, :3]
+            view = p.computeViewMatrix(
+                _CAMERA_EYE, _CAMERA_TARGET, [0, 0, 1], physicsClientId=self._client
+            )
+            projection = p.computeProjectionMatrixFOV(
+                _CAMERA_FOV_DEGREES,
+                _RENDER_WIDTH / _RENDER_HEIGHT,
+                _CAMERA_NEAR,
+                _CAMERA_FAR,
+                physicsClientId=self._client,
+            )
+            # DIRECT mode has no OpenGL context, so the hardware renderer is not an
+            # option here.
+            _, _, rgba, _, _ = p.getCameraImage(
+                _RENDER_WIDTH,
+                _RENDER_HEIGHT,
+                viewMatrix=view,
+                projectionMatrix=projection,
+                renderer=p.ER_TINY_RENDERER,
+                shadow=False,
+                physicsClientId=self._client,
+            )
+        frame = np.asarray(rgba, dtype=np.uint8).reshape(
+            _RENDER_HEIGHT, _RENDER_WIDTH, 4
+        )[:, :, :3]
         # gymnasium declares RenderFrame as an unbound TypeVar, so a concrete frame
         # type never unifies with it.
         return cast(RenderFrame, frame)
