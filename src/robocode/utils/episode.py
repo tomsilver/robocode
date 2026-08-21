@@ -10,6 +10,8 @@ import re
 import signal
 import subprocess
 import sys
+import threading
+import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
@@ -168,6 +170,123 @@ def run_episode(
     return metrics, frames, state
 
 
+# A forked child cannot touch MuJoCo on macOS. Constructing an env initializes
+# CGL/Metal in this process, and Apple's GPU frameworks are undefined in a child that
+# forks without exec'ing, so the child dies with SIGSEGV inside ``mjr_freeContext`` the
+# moment it resets the env. That holds even when the parent never rendered and even
+# when the child builds its own env, so there is nothing to hand over or tear down
+# first: the rollout has to stay in this process. See
+# integration_tests/check_eval_timeout.py.
+_EPISODE_FORK_SAFE = sys.platform != "darwin"
+
+
+class EpisodeTimeout(BaseException):
+    """Raised in-process when an episode overruns its wall-clock budget.
+
+    Deliberately a :class:`BaseException`, for the reason :class:`KeyboardInterrupt`
+    is one: a generated policy that wraps its body in ``except Exception`` would
+    otherwise swallow the timeout and run unbounded. That shape is common in
+    generated code::
+
+        while True:
+            try:
+                ...
+            except Exception:
+                continue
+
+    The forked path is immune because it stops such a policy with SIGINT and then
+    SIGKILL, so making this catchable would have quietly dropped the guarantee that
+    path provides rather than matching it.
+    """
+
+
+def _timed_out_metrics(count: int | None) -> dict[str, Any]:
+    """Score an episode stopped at its budget: unsolved, and flagged as timed out."""
+    metrics: dict[str, Any] = {
+        "total_reward": 0.0,
+        "num_steps": 0,
+        "solved": False,
+        "timed_out": True,
+    }
+    if count is not None:
+        metrics["object_count"] = count
+    return metrics
+
+
+@contextlib.contextmanager
+def _sigalrm_guard(timeout: float) -> Iterator[None]:
+    """Raise :class:`EpisodeTimeout` in this thread once *timeout* seconds pass.
+
+    This is what catches a policy that hangs *inside* a single call, which a deadline
+    checked between steps cannot see. ``setitimer`` is main-thread-only, so off the
+    main thread this is a no-op and the per-step deadline is the only guard.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _fire(_signum: int, _frame: Any) -> None:
+        raise EpisodeTimeout
+
+    previous = signal.signal(signal.SIGALRM, _fire)
+    # Repeating, not one-shot. A policy that catches BaseException could still
+    # swallow the first alarm; re-arming means it keeps being interrupted rather
+    # than escaping the budget outright on a single catch.
+    signal.setitimer(signal.ITIMER_REAL, timeout, timeout)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _run_episode_in_process(
+    env: Any,
+    approach: BaseApproach,
+    seed: int,
+    max_steps: int,
+    *,
+    timeout: float,
+    render: bool,
+    count: int | None,
+) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
+    """Run one episode here, aborting it if it overruns ``timeout``.
+
+    The path for platforms where ``fork`` cannot carry the env (see
+    :data:`_EPISODE_FORK_SAFE`). Scoring matches the forked path exactly: an overrun
+    returns :func:`_timed_out_metrics` and a policy exception propagates for the
+    caller to score as a crash.
+
+    The one thing it cannot do is contain a *native* crash in the policy, which takes
+    this process down instead of one worker. That is the deliberate trade: on macOS
+    the alternative is not a safer rollout but no rollout at all.
+    """
+    deadline = time.monotonic() + timeout
+
+    def _abort_if_overrun(_step: int, _total: int) -> None:
+        if time.monotonic() > deadline:
+            raise EpisodeTimeout
+
+    try:
+        with _sigalrm_guard(timeout):
+            return run_episode(
+                env,
+                approach,
+                seed,
+                max_steps,
+                render=render,
+                count=count,
+                progress_callback=_abort_if_overrun,
+            )
+    except EpisodeTimeout:
+        return _timed_out_metrics(count), [], None
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Re-raise as the forked path does -- a RuntimeError carrying the traceback --
+        # so the error strings a caller records in results.json have the same shape on
+        # every platform rather than the concrete type here and RuntimeError there.
+        raise RuntimeError(traceback.format_exc()) from exc
+
+
 def run_in_forked_worker(
     ctx: mp.context.ForkContext,
     target: Callable[..., None],
@@ -212,7 +331,21 @@ def run_episode_with_timeout(
     hung or too-slow policy can be killed; on overrun it is scored unsolved
     (``metrics["timed_out"]``). A worker that dies before reporting (policy
     exception, OOM, native crash) re-raises here.
+
+    Where forking cannot carry the env, the rollout runs in this process instead and
+    is bounded the same way; :func:`_run_episode_in_process` covers what that costs.
     """
+    if not _EPISODE_FORK_SAFE:
+        return _run_episode_in_process(
+            env,
+            approach,
+            seed,
+            max_steps,
+            timeout=timeout,
+            render=render,
+            count=count,
+        )
+
     ctx = mp.get_context("fork")  # fork: the worker inherits the live env + approach
     with ctx.Manager() as manager:
         result = manager.dict()
@@ -223,15 +356,7 @@ def run_episode_with_timeout(
             timeout,
         )
         if outcome == "timeout":
-            metrics: dict[str, Any] = {
-                "total_reward": 0.0,
-                "num_steps": 0,
-                "solved": False,
-                "timed_out": True,
-            }
-            if count is not None:
-                metrics["object_count"] = count
-            return metrics, [], None
+            return _timed_out_metrics(count), [], None
         if "metrics" in result:
             return result["metrics"], list(result["frames"]), result["final_state"]
         # The worker died before reporting; surface it so the caller scores a crash.
