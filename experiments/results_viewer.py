@@ -617,6 +617,8 @@ def _run_detail(run: RunInfo) -> dict[str, Any]:
                 "outcome": _episode_outcome(e),
                 "has_gif": gif_path is not None,
                 "gif_path": str(gif_path) if gif_path is not None else None,
+                "has_topdown": gif_path is not None
+                and _topdown_path(gif_path).exists(),
                 # Planner runs record these; an episode with no plan executed no
                 # action, so its GIF is a single frame and reads as a stuck render.
                 "plan_found": e.get("plan_found"),
@@ -758,6 +760,95 @@ def _history_gif_path(run: RunInfo, version: int, i: int) -> Optional[Path]:
     if i == 0:
         candidates.append(version_dir / "episode.gif")
     return next((p for p in candidates if p.exists() and p.stat().st_size > 0), None)
+
+
+# Overhead snapshot of an episode's end state, per environment family (matched by
+# substring of the environment name). "center" names the object the camera looks
+# straight down at; the rest are camera kwargs for pybullet_helpers.capture_image.
+_TOPDOWN_PROFILES: dict[str, dict[str, Any]] = {
+    "packing3d": {
+        "center": "rack",
+        "camera_yaw": 90.0,
+        "camera_pitch": -89.9,
+        "camera_distance": 0.55,
+        "image_width": 640,
+        "image_height": 400,
+    },
+}
+
+
+def _topdown_profile(environment: str) -> Optional[dict[str, Any]]:
+    """The overhead camera profile for this environment, or None if it has none."""
+    name = environment.lower()
+    return next((p for k, p in _TOPDOWN_PROFILES.items() if k in name), None)
+
+
+def _topdown_path(gif: Path) -> Path:
+    """The overhead snapshot that accompanies an episode gif."""
+    return gif.with_name(f"{gif.stem}_topdown.png")
+
+
+def _hide_robot(env: Any) -> None:
+    """Make the robot and its attached visualization bodies invisible.
+
+    An episode usually ends with the arm parked over the target region, where it
+    would hide the very placement the overhead shot is meant to show. Scene objects
+    stay visible, a still-grasped one included: a part left hanging in mid-air is
+    part of the end state.
+    """
+    # pylint: disable=import-outside-toplevel
+    import pybullet as p
+
+    robot = env.robot
+    arm, base = getattr(robot, "arm", None), getattr(robot, "base", None)
+    bodies = {
+        body
+        for body in (
+            getattr(robot, "robot_id", None),
+            getattr(arm, "robot_id", None),
+            getattr(base, "robot_id", None),
+            getattr(env, "end_effector_viz_id", None),
+        )
+        if body is not None
+    }
+    client = env.physics_client_id
+    for body in bodies:
+        # Link -1 is the base link, which getNumJoints does not count.
+        for link in range(-1, p.getNumJoints(body, physicsClientId=client)):
+            p.changeVisualShape(
+                body, link, rgbaColor=(0, 0, 0, 0), physicsClientId=client
+            )
+
+
+def _save_topdown(env: Any, state: Any, profile: dict[str, Any], out: Path) -> None:
+    """Write an overhead PNG of the live env's current state, robot hidden.
+
+    The snapshot is a convenience for judging placement quality from above, so a
+    capture failure is reported and otherwise ignored. Hiding the robot is
+    permanent for this env instance, which the caller discards after the capture.
+    """
+    # pylint: disable=broad-exception-caught,import-outside-toplevel,protected-access
+    try:
+        from pybullet_helpers.camera import capture_image
+
+        backend = getattr(env, "_current_backend", None)
+        inner = (backend if backend is not None else env)._object_centric_env
+        _hide_robot(inner)
+        kwargs = {k: v for k, v in profile.items() if k != "center"}
+        center = profile["center"]
+        if center in set(state.get_object_names()):
+            target = state.get_object_pose(center).position
+        else:
+            # Fall back to the table surface; table_pose sits at the slab's center.
+            table = inner.config.table_pose.position
+            target = (table[0], table[1], table[2] + inner.config.table_half_extents[2])
+        kwargs["camera_target"] = tuple(float(v) for v in target)
+        iio.imwrite(out, capture_image(inner.physics_client_id, **kwargs))
+    except Exception as e:
+        print(
+            f"top-down capture failed for {out}: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
 
 
 def _eval_seeds(run: RunInfo) -> list[int]:
@@ -1529,6 +1620,7 @@ class Job:
     message: str = ""
     gif_url: Optional[str] = None
     gif_path: Optional[str] = None  # on-disk path, for copyable references
+    topdown_url: Optional[str] = None  # overhead end-state snapshot, when captured
     current: int = 0
     total: int = 0
     created_at: float = field(default_factory=time.time)
@@ -2138,7 +2230,7 @@ def _render_worker() -> None:
                                 append_frame(frame)
                                 n_frames += 1
 
-                            replay, _, _ = run_episode(
+                            replay, _, final_state = run_episode(
                                 env,
                                 cast(Any, _ActionPlayback(recorder.actions)),
                                 eval_seeds[i],
@@ -2160,6 +2252,9 @@ def _render_worker() -> None:
                             f"{replay['num_steps']}",
                             file=sys.stderr,
                         )
+                    profile = _topdown_profile(env_override or run.environment)
+                    if profile is not None:
+                        _save_topdown(env, final_state, profile, _topdown_path(out))
                     capped = (
                         render_steps < max_steps
                         and metrics["num_steps"] >= render_steps
@@ -2205,11 +2300,12 @@ def _render_worker() -> None:
                 kind = "eval" if target == "HEAD" else "history"
                 key = i if target == "HEAD" else target
                 envq = f"&env={env_override}" if env_override else ""
-                job.gif_url = (
-                    f"/api/gif?run={run_id}&kind={kind}"
-                    f"&key={key}&i={i}{envq}&t={int(time.time())}"
-                )
+                query = f"run={run_id}&kind={kind}&key={key}&i={i}{envq}"
+                stamp = int(time.time())
+                job.gif_url = f"/api/gif?{query}&t={stamp}"
                 job.gif_path = str(out)
+                if _topdown_path(out).exists():
+                    job.topdown_url = f"/api/topdown?{query}&t={stamp}"
         except _Cancelled:
             with _JOBS_LOCK:
                 job.state = "cancelled"
@@ -2358,6 +2454,12 @@ class Handler(BaseHTTPRequestHandler):
             if p is None:
                 return self._err(404, "not rendered")
             return self._send(200, p.read_bytes(), "image/gif")
+        if path == "/api/topdown":
+            p = _gif_from_query(run, q)
+            png = _topdown_path(p) if p is not None else None
+            if png is None or not png.exists():
+                return self._err(404, "not rendered")
+            return self._send(200, png.read_bytes(), "image/png")
         if path == "/api/video":
             p = _gif_from_query(run, q)
             if p is None:
@@ -2494,6 +2596,9 @@ h1{font-size:20px;margin:2px 0 4px}h2{font-size:15px;margin:22px 0 9px;border-bo
 .pair2 .pl{font:9px ui-monospace,Menlo,monospace;color:var(--muted);text-align:center;padding:1px 0 0}
 .ep img{width:100%;display:block;aspect-ratio:1;object-fit:contain;background:#fff}
 .ep .cap{font:11px ui-monospace,Menlo,monospace;color:var(--muted);padding:5px 6px}
+.ep .td{border-top:1px solid var(--line)}
+.ep .td img{aspect-ratio:8/5}
+.ep .td .tdl{font:9px ui-monospace,Menlo,monospace;color:var(--muted);text-align:center;padding:1px 0 2px}
 .hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 button.cp{font:10px ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:5px;margin-left:6px;
   color:var(--muted);vertical-align:1px}
@@ -2611,6 +2716,9 @@ const compact=x=>x==null?"-":x>=1e6?`${(x/1e6).toFixed(1)}m`:x>=1e3?`${(x/1e3).t
 // A gif thumbnail that opens a large, replaying view on click.
 function gifImg(src){return h("img",{loading:"lazy",src,style:"cursor:zoom-in",title:"click to enlarge",
  onclick:()=>openLightbox(src)});}
+// Overhead view of where the episode left the objects, for judging placement.
+function topdownFig(src){return h("div",{class:"td"},gifImg(src),
+ h("div",{class:"tdl"},"end state, top-down"));}
 const FPS=10; // save_video default; frame 0 = initial state, frame k = after step k
 function openLightbox(src){
  const close=()=>{ov.remove();document.removeEventListener("keydown",keys);};
@@ -2856,7 +2964,8 @@ function epCard(run,e,s){
    h("div",{class:"mono"},e.planning_time!=null?`${num(e.planning_time,1)}s search`:"")));}
  else if(e.has_gif){c.append(gifImg(`/api/gif?run=${enc(run)}&kind=eval&key=${e.i}`));
   if(e.gif_preview)c.append(previewControls(run,e,c,"re-preview"),
-   h("button",{class:"fullbtn",onclick:ev=>recordGif(ev,run,"HEAD",e.i,c,true)},"render full"));}
+   h("button",{class:"fullbtn",onclick:ev=>recordGif(ev,run,"HEAD",e.i,c,true)},"render full"));
+  if(e.has_topdown)c.append(topdownFig(`/api/topdown?run=${enc(run)}&kind=eval&key=${e.i}`));}
  else{const ph=h("div",{class:"ph"},previewControls(run,e,c));c.append(ph);}
  // Replay the same policy and episode seed under the paired environment group
  // (matched spawn-range comparison). Opens in the lightbox; the gif persists
@@ -2914,7 +3023,11 @@ async function recordGif(ev,run,target,i,cardEl,full=false,env=null,previewSteps
     if(!oldPreviewCtl)img.after(previewControls(run,cardEl._ep||{i},cardEl,"re-preview"));
     img.after(h("button",{class:"fullbtn",
      onclick:ev2=>recordGif(ev2,run,target,i,cardEl,true)},
-     steps?`render full (${steps}st)`:"render full"));}}
+     steps?`render full (${steps}st)`:"render full"));}
+   const oldTopdown=cardEl.querySelector(".td");if(oldTopdown)oldTopdown.remove();
+   if(s.topdown_url){if(cardEl._ep)cardEl._ep.has_topdown=true;
+    const fig=topdownFig(s.topdown_url),cap=cardEl.querySelector(".cap");
+    if(cap)cap.before(fig);else cardEl.append(fig);}}
   else if(s.state==="error"){clearInterval(poll);btn.disabled=false;btn.textContent="retry";
    status.style.color="var(--no)";}
   else if(s.state==="cancelled"){clearInterval(poll);status.remove();btn.disabled=false;
