@@ -40,14 +40,17 @@ import json
 import logging
 import os
 import secrets
+import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import _thread
 import numpy as np
 from gymnasium.spaces import Box, Space
 from relational_structs.spaces import ObjectCentricStateSpace
@@ -248,6 +251,23 @@ def write_env_spaces(
     )
 
 
+def _describe_exit(code: int | None) -> str:
+    """Render a subprocess exit status, naming the signal when it was killed.
+
+    A bare number is not enough to triage this: ``-11`` means the server crashed
+    natively, while a plain non-zero code means it exited on its own.
+    """
+    if code is None:
+        return "is still running"
+    if code < 0:
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = "unknown signal"
+        return f"was killed by {name} ({code})"
+    return f"exited with code {code}"
+
+
 @contextmanager
 def env_server_running(
     env_cfg_json: str, sandbox_dir: Path, *, telemetry: bool = False
@@ -300,6 +320,17 @@ def env_server_running(
             stderr=subprocess.STDOUT,
             env=server_env,
         )
+    # Declared before the try so the finally can always signal shutdown, including
+    # when the server never comes up at all.
+    died = threading.Event()
+    stopping = threading.Event()
+
+    def _died_error() -> RuntimeError:
+        return RuntimeError(
+            f"env server {_describe_exit(proc.returncode)} during the run; "
+            f"see {log_path}"
+        )
+
     try:
         deadline = time.monotonic() + 60
         while not port_file.exists():
@@ -313,10 +344,43 @@ def env_server_running(
             time.sleep(0.1)
         port = int(port_file.read_text(encoding="utf-8"))
         logger.info("env server listening on port %d", port)
+
+        # The server can die mid-run; a native crash on one of its worker threads
+        # will do it. Nothing downstream notices on its own, because the agent just
+        # sees its env calls start failing and keeps working. Checking only after
+        # the session returns means the run burns its entire remaining budget
+        # talking to a dead server and is then discarded anyway, so watch the
+        # process and interrupt the main thread the moment it exits.
+        def _watch_server() -> None:
+            code = proc.wait()
+            if stopping.is_set():
+                return  # our own shutdown below, not a failure
+            died.set()
+            logger.error(
+                "env server %s during the run; see %s", _describe_exit(code), log_path
+            )
+            _thread.interrupt_main()
+
+        threading.Thread(
+            target=_watch_server, name="env-server-watchdog", daemon=True
+        ).start()
+
         yield port, token
+
         if proc.poll() is not None:
-            raise RuntimeError(f"env server died during the run; see {log_path}")
+            raise _died_error()
+    except KeyboardInterrupt:
+        # Tell our own interrupt apart from an operator's Ctrl-C, so a dead server
+        # is not reported as somebody pressing a key. This handler sits on the same
+        # try as the finally below rather than in a nested one, so that the single
+        # try/finally wrapping the yield is the whole story: whatever is thrown in
+        # here -- our interrupt, a real Ctrl-C, or the GeneratorExit a caller raises
+        # by abandoning the block -- reaches the shutdown below by one path.
+        if not died.is_set():
+            raise
+        raise _died_error() from None
     finally:
+        stopping.set()
         if proc.poll() is None:
             proc.terminate()
             try:

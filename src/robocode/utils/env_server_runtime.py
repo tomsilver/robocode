@@ -21,6 +21,7 @@ See :mod:`robocode.utils.env_server` for the wire protocol.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import secrets
@@ -131,6 +132,22 @@ _SET_TAG = "__set__"
 # connection runs in its own ThreadingTCPServer thread, so serialize the
 # matplotlib render across connections. Env stepping stays concurrent.
 _RENDER_LOCK = threading.Lock()
+
+# Each connection builds its own env, and a MuJoCo env owns a render context
+# (kinder's MjRenderContext). That context is released only by ``__del__``: the env's
+# own ``close()`` never reaches it. Left alone it is therefore freed whenever the GC
+# next runs, on whatever thread happens to trigger a collection -- and freeing a CGL
+# context from a thread that does not own it segfaults on macOS, taking the whole
+# server down mid-run:
+#
+#     glDeleteTextures <- mjr_freeContext <- slot_tp_finalize <- gc_collect_main
+#
+# So a connection tears its env down on the thread that built it and forces the
+# collection that runs the finalizer, rather than leaving the timing to chance.
+# Because every connection does this, no env survives its connection, so none is left
+# for a later collection to finalize on an unrelated thread. This lock additionally
+# keeps two threads from building or freeing GL contexts at the same time.
+_ENV_LIFECYCLE_LOCK = threading.Lock()
 
 
 class _HandleRegistry:
@@ -280,10 +297,11 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
 
     def handle(self) -> None:
         logger.info("New connection from %s", self.client_address)
-        env = instantiate(OmegaConf.create(self.server.env_config))
-        # Reset once so get_state/set_state/render work before the client
-        # issues its own reset (mirrors the MCP server's env setup).
-        env.reset(seed=0)
+        with _ENV_LIFECYCLE_LOCK:
+            env = instantiate(OmegaConf.create(self.server.env_config))
+            # Reset once so get_state/set_state/render work before the client
+            # issues its own reset (mirrors the MCP server's env setup).
+            env.reset(seed=0)
         # Per-connection handle table backing the remote-object proxy (used only
         # by the devectorize/vectorize/getattr/call commands).
         registry = _HandleRegistry()
@@ -320,8 +338,16 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
                     _log_agent_op(request, payload, telemetry_state)
                 self.wfile.write(json.dumps(payload).encode("utf-8") + b"\n")
         finally:
+            # Drop everything holding the env before collecting, so the collection
+            # below actually finalizes it here. See _ENV_LIFECYCLE_LOCK.
             registry.clear()
-            env.close()
+            with _ENV_LIFECYCLE_LOCK:
+                try:
+                    env.close()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning("env.close() failed", exc_info=True)
+                del env
+                gc.collect()
             logger.info("Connection from %s closed", self.client_address)
 
 
