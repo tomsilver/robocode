@@ -1,0 +1,4 @@
+# Hand-written reference policy for the configured environment. Dispatches on the
+# Hydra environment choice name; see ORACLE_TARGETS for which environments have one.
+# An oracle is a solvability check and a comparison row, not a scored method.
+_target_: robocode.approaches.oracle_approach.build_oracle_approach

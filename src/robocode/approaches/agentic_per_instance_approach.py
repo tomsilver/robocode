@@ -15,7 +15,7 @@ from typing import Any
 
 from robocode.approaches.agentic_base import GeneratedProgramApproach
 from robocode.approaches.base_approach import InstanceResult
-from robocode.environments.variable_object_count_env import VariableObjectCountEnv
+from robocode.environments.variable_count import VariableCountEnv
 from robocode.utils.episode import run_episode_with_timeout
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ class AgenticPerInstanceApproach(GeneratedProgramApproach):
         self._generated = None
         episode_max_steps = (
             env.max_steps_for_count(count)
-            if count is not None and isinstance(env, VariableObjectCountEnv)
+            if count is not None and isinstance(env, VariableCountEnv)
             else self._max_steps
         )
         if max_steps is not None:
