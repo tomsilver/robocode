@@ -73,3 +73,33 @@ def test_step_and_state_roundtrip(env: PR2PackedVariableCountEnv) -> None:
     env.set_state(saved)
     restored = env._to_box(env.get_state(), count)
     assert np.allclose(restored, env._to_box(saved, count), atol=1e-5)
+
+
+def test_description_never_names_the_evaluation_counts(
+    env: PR2PackedVariableCountEnv,
+) -> None:
+    """The card must read the same whatever counts are configured.
+
+    Which counts an approach is scored on -- and how far past the design range the
+    held-out ones go -- is the experimenter's to know. An earlier version of this
+    description interpolated ``eval_counts`` straight into the agent's prompt.
+    """
+    other = PR2PackedVariableCountEnv(design_counts=[1], eval_counts=[1, 7])
+    try:
+        for description, alternative in (
+            (env.env_description, other.env_description),
+            (env.env_description_blackbox, other.env_description_blackbox),
+        ):
+            assert description == alternative
+            for count in (2, 3, 7):
+                assert f"{count} blocks" not in description
+            assert "sweep" not in description.lower()
+            # Stripping the counts must not take the card with it: a conditional
+            # around the title once swallowed the whole body through implicit
+            # string concatenation, leaving the agent a one-line prompt.
+            assert "must pick up every block" in description
+            assert "delta base rotation" in description
+            assert "-1 per step" in description
+            assert "ObjectCentricState" in description
+    finally:
+        other.close()

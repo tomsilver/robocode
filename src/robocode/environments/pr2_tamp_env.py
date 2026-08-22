@@ -299,9 +299,37 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
                 index += 1
         return "\n".join(rows)
 
-    def _describe(self, include_access: bool) -> str:
-        description = (
-            f"# PR2Packed-b{self._num_blocks}\n\n"
+    def _describe(self, include_access: bool, count_invariant: bool = False) -> str:
+        """Render the environment card.
+
+        With *count_invariant*, every mention of this instance's block count is left
+        out. The variable-count wrapper builds its card from one backend, and naming
+        that backend's count -- or any count -- would tell an agent about the evaluation
+        sweep, which is the experimenter's to know, not the agent's.
+        """
+        variant = (
+            f"A variable number of blocks, each {BLOCK_WIDTH:.2f}m square and "
+            f"{BLOCK_HEIGHT:.2f}m tall"
+            if count_invariant
+            else f"{self._num_blocks} blocks, each {BLOCK_WIDTH:.2f}m square and "
+            f"{BLOCK_HEIGHT:.2f}m tall"
+        )
+        observation_section = (
+            ""
+            if count_invariant
+            else (
+                f"## Observation Space\n\n"
+                f"`Box(-inf, inf, ({self._obs_dim},), float32)`. The "
+                f"entries correspond to the following object features:\n\n"
+                f"{self._observation_table()}\n\n"
+            )
+        )
+        title = (
+            "# PR2Packed\n\n"
+            if count_invariant
+            else (f"# PR2Packed-b{self._num_blocks}\n\n")
+        )
+        description = title + (
             f"A PR2 robot must pick up every block from the table and place it on "
             f"the green plate. This is the `packed` task and motion planning "
             f"benchmark: the blocks start scattered on the table at random "
@@ -309,13 +337,9 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             f"packed together, and reaching a block may require driving the base as "
             f"well as moving the arm.\n\n"
             f"## Variant\n\n"
-            f"{self._num_blocks} blocks, each {BLOCK_WIDTH:.2f}m square and "
-            f"{BLOCK_HEIGHT:.2f}m tall, on a plate {PLATE_WIDTH:.2f}m square. Only "
+            f"{variant}, on a plate {PLATE_WIDTH:.2f}m square. Only "
             f"the left arm is controllable; the right arm is tucked.\n\n"
-            f"## Observation Space\n\n"
-            f"`Box(-inf, inf, ({self._obs_dim},), float32)`. The "
-            f"entries correspond to the following object features:\n\n"
-            f"{self._observation_table()}\n\n"
+            f"{observation_section}"
             f"`grasp_active` on the robot is 1.0 while a block is held, and the "
             f"block's own `grasp_active` marks which one. `grasp_tf` is the pose of "
             f"the held block in the gripper's tool frame, and is all zeros when "
@@ -359,30 +383,36 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         if not include_access:
             return description
         return description + (
-            f"## Example Usage\n\n"
-            f"```python\n"
-            f"import numpy as np\n"
-            f"from robocode.environments.pr2_tamp_env import PR2PackedEnv\n\n"
-            f"env = PR2PackedEnv(num_blocks={self._num_blocks})\n"
-            f"obs, info = env.reset(seed=0)\n"
-            f"print(obs.shape)  # ({self._obs_dim},)\n\n"
-            f"# Take a random action\n"
-            f"action = env.action_space.sample()\n"
-            f"next_obs, reward, terminated, truncated, info = env.step(action)\n\n"
-            f"# Save and restore state\n"
-            f"saved = env.get_state()\n"
-            f"env.step(env.action_space.sample())\n"
-            f"env.set_state(saved)  # restores to the saved state\n"
-            f"```\n\n"
-            f"`obs` and `action` are numpy arrays matching the tables above.\n\n"
-            f"## Source Code\n\n"
-            f"- `robocode/environments/pr2_tamp_env.py` \u2014 `step()` transition "
-            f"dynamics, grasping, collision handling, and the goal check\n"
-            f"- `robocode/environments/pr2_tamp_scenes.py` \u2014 the scene: block, "
-            f"plate, and table geometry, and the initial-placement sampler\n"
-            f"- The underlying kinematics and collision helpers live in the "
-            f"`pybullet_tools` package, re-exported by "
-            f"`robocode/environments/ss_pybullet.py`\n"
+            "## Example Usage\n\n"
+            "```python\n"
+            "import numpy as np\n"
+            "from robocode.environments.pr2_tamp_env import PR2PackedEnv\n\n"
+            + (
+                "env = PR2PackedEnv(num_blocks=<count of your choice>)\n"
+                if count_invariant
+                else f"env = PR2PackedEnv(num_blocks={self._num_blocks})\n"
+            )
+            + (
+                "obs, info = env.reset(seed=0)\n"
+                "# Take a random action\n"
+                "action = env.action_space.sample()\n"
+                "next_obs, reward, terminated, truncated, info = env.step(action)"
+                "\n\n"
+                "# Save and restore state\n"
+                "saved = env.get_state()\n"
+                "env.step(env.action_space.sample())\n"
+                "env.set_state(saved)  # restores to the saved state\n"
+                "```\n\n"
+                "`obs` and `action` are numpy arrays matching the tables above.\n\n"
+                "## Source Code\n\n"
+                "- `robocode/environments/pr2_tamp_env.py` \u2014 `step()` transition "
+                "dynamics, grasping, collision handling, and the goal check\n"
+                "- `robocode/environments/pr2_tamp_scenes.py` \u2014 the scene: block, "
+                "plate, and table geometry, and the initial-placement sampler\n"
+                "- The underlying kinematics and collision helpers live in the "
+                "`pybullet_tools` package, re-exported by "
+                "`robocode/environments/ss_pybullet.py`\n"
+            )
         )
 
     # ------------------------------------------------------------------ helpers

@@ -269,27 +269,29 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
         return self._describe(include_access=False)
 
     def _describe(self, include_access: bool) -> str:
+        """Render a card that reads the same whatever counts are configured.
+
+        Neither the design counts nor the evaluation sweep appear anywhere: which
+        counts an approach is scored on, and how far past the design range they go,
+        is the experimenter's to know. The backend card is therefore requested in
+        count-invariant form, and nothing here interpolates a count.
+        """
+        # pylint: disable=protected-access
         reference = self._backend_for(max(self._design_counts))
-        base = (
-            reference.env_description
-            if include_access
-            else (reference.env_description_blackbox)
-        )
-        # Replace the fixed-count observation section's framing: the object-centric
-        # view is variable-length, so the Box index table does not apply.
-        schema_lines = []
-        for typ, features in TYPE_FEATURES.items():
-            schema_lines.append(f"- `{typ.name}`: {', '.join(features)}")
-        counts = ", ".join(str(c) for c in sorted(set(self._eval_counts)))
+        base = reference._describe(include_access=include_access, count_invariant=True)
+        schema_lines = [
+            f"- `{typ.name}`: {', '.join(features)}"
+            for typ, features in TYPE_FEATURES.items()
+        ]
         return (
             f"{base}\n"
             f"## Variable Object Count\n\n"
-            f"The number of blocks changes between episodes; evaluation sweeps "
-            f"{counts}. Observations are therefore object-centric rather than a "
-            f"fixed-length vector: each is an `ObjectCentricState` holding one "
-            f"`robot`, the `table` and `plate` surfaces, and `block0`..`blockN-1`.\n\n"
-            f"Feature names per type (the same quantities the table above lists):\n\n"
+            f"The number of blocks changes between episodes, so observations are "
+            f"object-centric rather than a fixed-length vector: each is an "
+            f"`ObjectCentricState` holding one `robot`, the `table` and `plate` "
+            f"surfaces, and `block0`..`blockN-1`.\n\n"
+            f"Feature names per type:\n\n"
             + "\n".join(schema_lines)
             + "\n\nIterate the state's objects rather than indexing fixed offsets, so "
-            "one program handles every count.\n"
+            "one program handles any number of blocks.\n"
         )
