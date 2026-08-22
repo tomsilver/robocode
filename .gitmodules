@@ -10,3 +10,6 @@
 [submodule "third-party/kinder-baselines"]
 	path = third-party/kinder-baselines
 	url = https://github.com/Princeton-Robot-Planning-and-Learning/kinder-baselines
+[submodule "third-party/ss-pybullet"]
+	path = third-party/ss-pybullet
+	url = https://github.com/caelan/ss-pybullet

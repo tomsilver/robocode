@@ -1,0 +1,5 @@
+# PDDLStream's `packed` benchmark: a PR2 must place every block on the plate.
+# The 3/4/5-block variants match the object counts swept in the LLM-PDDLStream
+# paper, so results here line up with its `packed -n` conditions.
+_target_: robocode.environments.pr2_tamp_env.PR2PackedEnv
+num_blocks: 5

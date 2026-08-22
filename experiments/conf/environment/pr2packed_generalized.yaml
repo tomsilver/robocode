@@ -1,0 +1,6 @@
+# PDDLStream's `packed` with a varying block count. design_counts are what an approach
+# is built against; eval_counts sweeps those plus held-out larger instances, matching
+# the `packed -n 3/4/5` sweep in the LLM-PDDLStream paper.
+_target_: robocode.environments.pr2_tamp_variable_count_env.PR2PackedVariableCountEnv
+design_counts: [1, 2, 3]
+eval_counts: [1, 2, 3, 4, 5]

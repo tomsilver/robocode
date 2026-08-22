@@ -36,8 +36,8 @@ from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 from relational_structs import Object, ObjectCentricState
 
-from robocode.environments.base_env import BaseEnv
 from robocode.environments.mujoco_gl import configure_gl_backend
+from robocode.environments.variable_count import VariableCountEnv
 from robocode.utils.bilevel import build_sesame_models
 
 
@@ -54,7 +54,7 @@ def _load_constant_object_env_class(path: str) -> type[ConstantObjectKinDEREnv]:
     return cls
 
 
-class VariableObjectCountEnv(BaseEnv[ObjectCentricState, NDArray[Any]]):
+class VariableObjectCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]]):
     """A robocode env that varies the object count per reset (object-centric obs)."""
 
     # This wrapper drives the object-centric env that kinder exposes under each

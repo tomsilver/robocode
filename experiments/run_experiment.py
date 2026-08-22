@@ -35,7 +35,7 @@ import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
-from robocode.environments.variable_object_count_env import VariableObjectCountEnv
+from robocode.environments.variable_count import VariableCountEnv
 from robocode.experiment_protocol import EXPERIMENT_ID_PATTERN, validate_eval_seed
 from robocode.primitives import build_primitives
 from robocode.utils.approach_history import get_snapshots, record_episodes
@@ -173,7 +173,7 @@ def _main(cfg: DictConfig) -> float:
     # solve-rate-vs-count curve can be reported. Held-out counts reach the env only
     # here, pinned per episode; unpinned resets stay in the design range.
     eval_counts: list[int] | None = None
-    if isinstance(env, VariableObjectCountEnv):
+    if isinstance(env, VariableCountEnv):
         count_pool = list(env.eval_counts)
         eval_counts = [count_pool[i % len(count_pool)] for i in range(num_eval)]
 
@@ -237,7 +237,7 @@ def _main(cfg: DictConfig) -> float:
             count = eval_counts[i] if eval_counts is not None else None
             episode_max_steps = (
                 env.max_steps_for_count(count)
-                if count is not None and isinstance(env, VariableObjectCountEnv)
+                if count is not None and isinstance(env, VariableCountEnv)
                 else cfg.max_steps
             )
             try:
@@ -300,7 +300,7 @@ def _main(cfg: DictConfig) -> float:
             results["by_count"] = by_count
             results["largest_count_all_solved"] = largest_all
             results["largest_count_any_solved"] = largest_any
-    if isinstance(env, VariableObjectCountEnv):
+    if isinstance(env, VariableCountEnv):
         count_regimes = summarize_count_regimes(results["by_count"], env.design_counts)
         results["count_regimes"] = count_regimes
         results["design_count_solve_rate"] = count_regimes["design"]["solve_rate"]

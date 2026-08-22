@@ -205,6 +205,7 @@ def _build_apptainer_cmd(
     firewall_domains: list[str],
     agent_cmd: list[str],
     extra_binds: list[str] | None = None,
+    ss_pybullet_abs: str | None = None,
 ) -> list[str]:
     """Assemble the full ``apptainer exec`` command line.
 
@@ -257,6 +258,8 @@ def _build_apptainer_cmd(
             "--bind",
             f"{kinder_baselines_abs}:/robocode/third-party/kinder-baselines",
         ]
+    if ss_pybullet_abs is not None:
+        cmd += ["--bind", f"{ss_pybullet_abs}:/robocode/third-party/ss-pybullet:ro"]
     for bind in extra_binds or []:
         cmd += ["--bind", bind]
     cmd += [
@@ -298,6 +301,7 @@ async def run_agent_in_apptainer_sandbox(
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
+            ss_pybullet,
         ),
         _build_apptainer_auth_args(backend_name) as (auth_args, auth_env),
     ):
@@ -339,6 +343,9 @@ async def run_agent_in_apptainer_sandbox(
             sandbox_abs=sandbox_abs,
             src_abs=str(filtered_src.resolve()),
             kindergarden_abs=str(filtered_kindergarden.resolve()),
+            ss_pybullet_abs=(
+                str(ss_pybullet.resolve()) if ss_pybullet is not None else None
+            ),
             kinder_baselines_abs=(
                 str(filtered_kinder_baselines.resolve())
                 if filtered_kinder_baselines is not None
@@ -438,6 +445,7 @@ def run_genplan_in_apptainer(
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
+            ss_pybullet,
         ),
         _build_apptainer_auth_args(auth_backend) as (auth_args, auth_env),
     ):
@@ -454,6 +462,12 @@ def run_genplan_in_apptainer(
         # entrypoint to `uv sync --extra bilevel` (mirrors _docker_run_prefix).
         bilevel_env: list[str] = []
         bilevel_bind: list[str] = []
+        ss_pybullet_bind: list[str] = []
+        if ss_pybullet is not None:
+            ss_pybullet_bind = [
+                "--bind",
+                f"{ss_pybullet.resolve()}:/robocode/third-party/ss-pybullet:ro",
+            ]
         if filtered_kinder_baselines is not None:
             bilevel_env = ["--env", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
             bilevel_bind = [
@@ -474,6 +488,7 @@ def run_genplan_in_apptainer(
             f"{filtered_src.resolve()}:/robocode/src",
             "--bind",
             f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
+            *ss_pybullet_bind,
             *bilevel_bind,
             str(sif_path),
             "/usr/local/bin/entrypoint.sh",

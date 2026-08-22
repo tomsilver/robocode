@@ -201,9 +201,9 @@ def _filtered_repo_mounts(
     keep_primitives: bool = False,
     blackbox: bool = False,
     include_bilevel: bool = False,
-) -> Iterator[tuple[Path, Path, Path | None]]:
+) -> Iterator[tuple[Path, Path, Path | None, Path | None]]:
     """Yield filtered copies of ``src/``, ``kindergarden/``, and optionally ``kinder-
-    baselines/`` to bind-mount.
+    baselines/`` and ``ss-pybullet/`` to bind-mount.
 
     ``src`` is copied without ``oracles/`` (and without ``primitives/`` unless
     *keep_primitives*); ``kindergarden`` without tests/docs/demos (demos hold
@@ -211,8 +211,15 @@ def _filtered_repo_mounts(
     environment source (``robocode/environments/``, ``kinder/envs/``) is also
     excluded. With *include_bilevel*, the two kinder-baselines subpackages
     are also copied (for the ``bilevel_models`` primitive); otherwise the third
-    yielded value is ``None`` and no bilevel source reaches the sandbox. The
-    copies live in a temp dir that is removed on exit.
+    yielded value is ``None`` and no bilevel source reaches the sandbox.
+
+    ``ss-pybullet`` backs the PR2 TAMP environments, which import ``pybullet_tools``
+    off ``sys.path`` rather than as an installed package, so the sandbox cannot
+    import them without it. It is bind-mounted in place rather than copied (it is
+    ~400MB, almost all robot meshes) and only outside blackbox mode, where the agent
+    reaches the environment through env_server and must not see its internals; the
+    fourth yielded value is then ``None``. The copies live in a temp dir that is
+    removed on exit.
     """
     repo_root = _find_repo_root()
     kindergarden = repo_root / "third-party" / "kindergarden"
@@ -225,6 +232,12 @@ def _filtered_repo_mounts(
     if include_bilevel and not kinder_baselines.exists():
         raise RuntimeError(
             f"kinder-baselines not found at {kinder_baselines}; "
+            "run: git submodule update --init --recursive"
+        )
+    ss_pybullet = repo_root / "third-party" / "ss-pybullet"
+    if not blackbox and not (ss_pybullet / "pybullet_tools").is_dir():
+        raise RuntimeError(
+            f"ss-pybullet not found at {ss_pybullet}; "
             "run: git submodule update --init --recursive"
         )
     tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
@@ -244,7 +257,12 @@ def _filtered_repo_mounts(
         if include_bilevel:
             filtered_kinder_baselines = Path(tmp_dir) / "kinder-baselines"
             _copy_kinder_baselines(kinder_baselines, filtered_kinder_baselines)
-        yield filtered_src, filtered_kindergarden, filtered_kinder_baselines
+        yield (
+            filtered_src,
+            filtered_kindergarden,
+            filtered_kinder_baselines,
+            None if blackbox else ss_pybullet,
+        )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -270,6 +288,7 @@ def _docker_run_prefix(
     firewall_domains: list[str],
     env_args: list[str] | None = None,
     map_host_gateway: bool = False,
+    ss_pybullet: Path | None = None,
     extra_volumes: list[str] | None = None,
 ) -> list[str]:
     """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
@@ -323,6 +342,11 @@ def _docker_run_prefix(
             f"{filtered_kinder_baselines.resolve()}"
             ":/robocode/third-party/kinder-baselines",
         ]
+    if ss_pybullet is not None:
+        cmd += [
+            "-v",
+            f"{ss_pybullet.resolve()}:/robocode/third-party/ss-pybullet:ro",
+        ]
     for volume in extra_volumes or []:
         cmd += ["-v", volume]
     cmd += ["-w", "/sandbox", image]
@@ -359,6 +383,7 @@ def run_genplan_in_docker(
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
+            ss_pybullet,
         ),
         _build_docker_auth_args(auth_backend) as (auth_args, auth_env),
     ):
@@ -377,6 +402,7 @@ def run_genplan_in_docker(
             filtered_kinder_baselines,
             auth_args,
             firewall_domains,
+            ss_pybullet=ss_pybullet,
         ) + [DOCKER_PYTHON, "-m", "robocode.approaches.genplan_driver"]
         logger.info("Starting genplan Docker container %s", container_name)
         subprocess.run(
@@ -584,6 +610,7 @@ async def run_agent_in_docker_sandbox(
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
+            ss_pybullet,
         ),
         _build_docker_auth_args(backend_name) as (auth_args, auth_env),
     ):
@@ -615,6 +642,7 @@ async def run_agent_in_docker_sandbox(
             filtered_kinder_baselines,
             auth_args,
             firewall_domains,
+            ss_pybullet=ss_pybullet,
             extra_volumes=session_volumes + tel_volumes,
             env_args=[
                 "-e",
