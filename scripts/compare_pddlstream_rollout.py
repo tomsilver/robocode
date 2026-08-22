@@ -62,10 +62,13 @@ TOL = 1e-9
 # --------------------------------------------------------------------------
 
 
-def _run_ours(counts: list[int], episodes: int, steps: int, policy: str) -> dict:
+def _run_ours(
+    counts: list[int], episodes: int, steps: int, policy: str, render_dir: str | None
+) -> dict:
     """Roll out in our environment and record states plus our own predicates."""
     import numpy as np
 
+    from robocode.environments import pr2_tamp_env as _env_mod
     from robocode.environments.pr2_tamp_env import PR2PackedEnv
     from robocode.environments.ss_pybullet import (
         get_aabb,
@@ -155,7 +158,23 @@ def _run_ours(counts: list[int], episodes: int, steps: int, policy: str) -> dict
             env.plate,
         )
 
-    out: dict[str, Any] = {"scene": {}, "episodes": []}
+    out: dict[str, Any] = {
+        "scene": {},
+        "episodes": [],
+        # The stock side renders with exactly this camera, so any visual difference
+        # is the world differing, not the viewpoint. Read from the environment
+        # module rather than restated here, so the two can never drift apart.
+        # pylint: disable=protected-access
+        "camera": {
+            "eye": list(_env_mod._CAMERA_EYE),
+            "target": list(_env_mod._CAMERA_TARGET),
+            "fov": _env_mod._CAMERA_FOV_DEGREES,
+            "near": _env_mod._CAMERA_NEAR,
+            "far": _env_mod._CAMERA_FAR,
+            "width": _env_mod._RENDER_WIDTH,
+            "height": _env_mod._RENDER_HEIGHT,
+        },
+    }
 
     # Scene check: build the vendored scene directly at a fixed numpy seed, which is
     # exactly how stock `packed` is driven. It cannot go through `reset()`, because
@@ -200,6 +219,11 @@ def _run_ours(counts: list[int], episodes: int, steps: int, policy: str) -> dict
 
                 frames = [snapshot(env)]
                 actions = []
+                shots = []
+                if render_dir:
+                    shots.append(
+                        _save(env.render(), render_dir, "ours", len(out["episodes"]), 0)
+                    )
                 for _ in range(steps):
                     if approach is not None:
                         action = approach.step()
@@ -210,10 +234,26 @@ def _run_ours(counts: list[int], episodes: int, steps: int, policy: str) -> dict
                         approach.update(obs, float(reward), term or trunc, info)
                     actions.append([float(a) for a in action])
                     frames.append(snapshot(env))
+                    if render_dir:
+                        shots.append(
+                            _save(
+                                env.render(),
+                                render_dir,
+                                "ours",
+                                len(out["episodes"]),
+                                len(frames) - 1,
+                            )
+                        )
                     if term or trunc:
                         break
                 out["episodes"].append(
-                    {"count": count, "seed": seed, "actions": actions, "frames": frames}
+                    {
+                        "count": count,
+                        "seed": seed,
+                        "actions": actions,
+                        "frames": frames,
+                        "shots": shots,
+                    }
                 )
         finally:
             env.close()
@@ -351,21 +391,114 @@ def _run_stock(payload: dict) -> dict:
                     for b in get_bodies()
                 }
                 results["scene"][str(count)] = snap
-            for episode in payload["episodes"]:
+            for index, episode in enumerate(payload["episodes"]):
                 if episode["count"] != count:
                     continue
-                frames = []
-                for frame in episode["frames"]:
+                frames, shots = [], []
+                for step, frame in enumerate(episode["frames"]):
                     restore(scene, frame)
                     frames.append(evaluate(scene))
+                    if payload.get("render_dir"):
+                        shots.append(
+                            _save(
+                                _shoot(client, payload["camera"]),
+                                payload["render_dir"],
+                                "stock",
+                                index,
+                                step,
+                            )
+                        )
                 results["episodes"].append(
-                    {"count": count, "seed": episode["seed"], "frames": frames}
+                    {
+                        "count": count,
+                        "seed": episode["seed"],
+                        "frames": frames,
+                        "shots": shots,
+                    }
                 )
         finally:
             set_client(client)
             disconnect()
 
     return results
+
+
+def _save(frame: Any, render_dir: str, side: str, episode: int, step: int) -> str:
+    """Write one RGB frame and return its path."""
+    import imageio.v3 as iio
+    import numpy as np
+
+    out = Path(render_dir) / side
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"ep{episode:02d}_f{step:04d}.png"
+    iio.imwrite(path, np.asarray(frame, dtype="uint8"))
+    return str(path)
+
+
+def _shoot(client: int, camera: dict) -> Any:
+    """Render the stock scene through our environment's camera."""
+    import numpy as np
+    import pybullet as pb
+
+    view = pb.computeViewMatrix(
+        camera["eye"], camera["target"], [0, 0, 1], physicsClientId=client
+    )
+    projection = pb.computeProjectionMatrixFOV(
+        camera["fov"],
+        camera["width"] / camera["height"],
+        camera["near"],
+        camera["far"],
+        physicsClientId=client,
+    )
+    _, _, rgba, _, _ = pb.getCameraImage(
+        camera["width"],
+        camera["height"],
+        viewMatrix=view,
+        projectionMatrix=projection,
+        renderer=pb.ER_TINY_RENDERER,
+        shadow=False,
+        physicsClientId=client,
+    )
+    return np.asarray(rgba, dtype="uint8").reshape(
+        camera["height"], camera["width"], 4
+    )[:, :, :3]
+
+
+def _contact_sheet(ours: dict, stock: dict, render_dir: str) -> list[str]:
+    """Build one side-by-side GIF per episode, with a per-frame pixel difference."""
+    import imageio.v3 as iio
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    made = []
+    for index, (a, b) in enumerate(zip(ours["episodes"], stock["episodes"])):
+        if not a.get("shots") or not b.get("shots"):
+            continue
+        panels, worst = [], 0.0
+        for left_path, right_path in zip(a["shots"], b["shots"]):
+            left = np.asarray(Image.open(left_path).convert("RGB"))
+            right = np.asarray(Image.open(right_path).convert("RGB"))
+            delta = np.abs(left.astype(int) - right.astype(int))
+            worst = max(worst, float(delta.max()))
+            gap = 8
+            sheet = Image.new(
+                "RGB", (left.shape[1] * 2 + gap, left.shape[0] + 26), "white"
+            )
+            sheet.paste(Image.fromarray(left), (0, 26))
+            sheet.paste(Image.fromarray(right), (left.shape[1] + gap, 26))
+            draw = ImageDraw.Draw(sheet)
+            draw.text((8, 8), "ours (PR2PackedEnv)", fill=(0, 0, 0))
+            draw.text((left.shape[1] + gap + 8, 8), "stock PDDLStream", fill=(0, 0, 0))
+            draw.text(
+                (left.shape[1] - 120, 8),
+                f"max pixel diff {int(delta.max())}",
+                fill=(180, 0, 0) if delta.max() else (0, 130, 0),
+            )
+            panels.append(np.asarray(sheet))
+        path = Path(render_dir) / f"compare_ep{index:02d}_count{a['count']}.gif"
+        iio.imwrite(path, panels, extension=".gif", loop=0, fps=8)
+        made.append(f"{path}  (frames={len(panels)}, max pixel diff={int(worst)})")
+    return made
 
 
 # --------------------------------------------------------------------------
@@ -399,7 +532,9 @@ def _diff(ours: Any, stock: Any, path: str, out: list[str]) -> None:
 
 def _child(mode: str, payload_path: str | None, out_path: str, args: Any) -> int:
     if mode == "ours":
-        result = _run_ours(args.counts, args.episodes, args.steps, args.policy)
+        result = _run_ours(
+            args.counts, args.episodes, args.steps, args.policy, args.render
+        )
     else:
         assert payload_path is not None
         result = _run_stock(json.loads(Path(payload_path).read_text(encoding="utf-8")))
@@ -417,6 +552,7 @@ def main() -> int:
     parser.add_argument(
         "--mode", choices=["compare", "ours", "stock"], default="compare"
     )
+    parser.add_argument("--render", help="directory for side-by-side frames and GIFs")
     parser.add_argument("--payload")
     parser.add_argument("--out")
     args = parser.parse_args()
@@ -432,7 +568,7 @@ def main() -> int:
     ours_path, stock_path = tmp / "ours.json", tmp / "stock.json"
     base = [
         sys.executable,
-        __file__,
+        str(Path(__file__).resolve()),
         "--counts",
         *map(str, args.counts),
         "--episodes",
@@ -442,9 +578,16 @@ def main() -> int:
         "--policy",
         args.policy,
     ]
+    if args.render:
+        Path(args.render).mkdir(parents=True, exist_ok=True)
+        base += ["--render", str(Path(args.render).resolve())]
 
     print(f"rolling out in our environment ({args.policy} policy)...")
     subprocess.run(base + ["--mode", "ours", "--out", str(ours_path)], check=True)
+    if args.render:
+        payload = json.loads(ours_path.read_text(encoding="utf-8"))
+        payload["render_dir"] = str(Path(args.render).resolve())
+        ours_path.write_text(json.dumps(payload), encoding="utf-8")
     print("replaying those states in the stock PDDLStream tree...")
     subprocess.run(
         base
@@ -454,6 +597,9 @@ def main() -> int:
     )
 
     ours = json.loads(ours_path.read_text(encoding="utf-8"))
+    if args.render:
+        ours["render_dir"] = str(Path(args.render).resolve())
+        ours_path.write_text(json.dumps(ours), encoding="utf-8")
     stock = json.loads(stock_path.read_text(encoding="utf-8"))
 
     failures: list[str] = []
@@ -483,6 +629,10 @@ def main() -> int:
         if len(failures) > 40:
             print(f"  ... and {len(failures) - 40} more")
         return 1
+    if args.render:
+        print("\nside-by-side renders:")
+        for line in _contact_sheet(ours, stock, str(Path(args.render).resolve())):
+            print("  " + line)
     print("\nOK: stock PDDLStream agrees with our environment at every state.")
     return 0
 
