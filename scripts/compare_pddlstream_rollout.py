@@ -560,8 +560,17 @@ def main() -> int:
     if args.mode != "compare":
         return _child(args.mode, args.payload, args.out, args)
 
-    if not (STOCK_TREE / "examples" / "pybullet" / "tamp" / "problems.py").exists():
-        print(f"stock PDDLStream tree not found at {STOCK_TREE}", file=sys.stderr)
+    utils = STOCK_TREE / "examples" / "pybullet" / "utils" / "pybullet_tools"
+    if not (STOCK_TREE / "examples" / "pybullet" / "tamp" / "problems.py").exists() or (
+        not utils.is_dir()
+    ):
+        print(
+            "The stock PDDLStream tree is pinned as a submodule but is not cloned by "
+            "default (its own nested submodule duplicates ss-pybullet, ~590MB).\n"
+            "Check it out with:\n"
+            "  git submodule update --init --recursive third-party/pddlstream",
+            file=sys.stderr,
+        )
         return 2
 
     tmp = Path(tempfile.mkdtemp(prefix="pddlstream-compare-"))

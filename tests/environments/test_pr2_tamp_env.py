@@ -94,8 +94,11 @@ def test_pr2_packed_grasp_carry_place(env: PR2PackedEnv) -> None:
     assert np.isclose(after[0] - before[0], 0.15, atol=1e-3)
 
     # Releasing over the plate places it there, and the goal needs every block.
+    # Cells are a block-width apart plus clearance, and squared up with the plate:
+    # a block still carrying its random table yaw has a wider axis-aligned footprint,
+    # and two of those at this pitch interpenetrate, which the drop now refuses.
     for i, held in enumerate(env._blocks):
-        sp.set_point(held, sp.Point(x=0.06 * i - 0.03, y=0.0, z=1.1))
+        sp.set_pose(held, ((0.085 * i - 0.0425, 0.0, 1.1), (0.0, 0.0, 0.0, 1.0)))
         env._attachment = sp.create_attachment(env._robot, env._tool_link, held)
         obs, _, terminated, _, _ = env.step(_OPEN)
         assert obs[11] == 0.0
@@ -162,3 +165,102 @@ def test_pr2_packed_concurrent_envs_do_not_interfere() -> None:
     finally:
         for env in envs:
             env.close()
+
+
+def test_pr2_packed_refuses_to_stack_blocks(env: PR2PackedEnv) -> None:
+    """Releasing a block into one already on the plate is refused, not accepted.
+
+    ``is_placement`` is a per-block test, so without this a policy could drop every
+    block over one point and satisfy it N times over with N interpenetrating blocks,
+    defeating the packing the benchmark is about.
+    """
+    # pylint: disable=protected-access
+    env.reset(seed=0)
+    sp.set_client(env._client)
+    for index, block in enumerate(env._blocks):
+        tool = sp.get_link_pose(env._robot, env._tool_link)
+        sp.set_pose(block, sp.multiply(tool, ((0.05, 0.0, 0.0), (0, 0, 0, 1))))
+        obs, _, _, _, _ = env.step(_CLOSE)
+        assert obs[11] == 1.0, "the gripper should have closed around the block"
+        # Aim every block at the same point on the plate.
+        sp.set_point(block, sp.Point(x=0.0, y=0.0, z=1.1))
+        env._attachment = sp.create_attachment(env._robot, env._tool_link, block)
+        obs, _, terminated, _, _ = env.step(_OPEN)
+        if index == 0:
+            assert obs[11] == 0.0, "the first block has a clear plate to land on"
+        else:
+            assert obs[11] == 1.0, "a drop onto an occupied pose must be refused"
+        assert not terminated
+
+
+def test_pr2_packed_grasp_needs_the_gripper_around_the_block(
+    env: PR2PackedEnv,
+) -> None:
+    """Hovering above a block is not a grasp, however close the tool frame is."""
+    # pylint: disable=protected-access
+    env.reset(seed=0)
+    sp.set_client(env._client)
+    block = env._blocks[0]
+    tool = sp.get_link_pose(env._robot, env._tool_link)
+    # Well inside the grasp radius, but the fingers cannot reach past the block top.
+    hovering = 0.074
+    sp.set_pose(block, sp.multiply(tool, ((hovering, 0.0, 0.0), (0, 0, 0, 1))))
+    assert hovering < env._grasp_radius
+    obs, _, _, _, _ = env.step(_CLOSE)
+    assert obs[11] == 0.0, "a hover should not grasp"
+    # Brought properly between the fingers, the same block is grasped.
+    sp.set_pose(block, sp.multiply(tool, ((0.05, 0.0, 0.0), (0, 0, 0, 1))))
+    obs, _, _, _, _ = env.step(_CLOSE)
+    assert obs[11] == 1.0
+
+
+def test_pr2_packed_does_not_disturb_the_global_numpy_rng() -> None:
+    """Placement sampling draws from the global legacy RNG but must restore it.
+
+    That RNG is shared with approaches and anything else in the process, so an
+    environment reseeding it as a side effect of construction or reset would make
+    unrelated code's sampling depend on how many episodes had been run.
+    """
+
+    def keys() -> list[int]:
+        """The first few words of the global legacy RNG's key."""
+        # legacy=True returns the MT19937 tuple; the annotation says dict.
+        state: Any = np.random.get_state()
+        return list(state[1][:8])
+
+    env = PR2PackedEnv(num_blocks=2)
+    try:
+        np.random.seed(1234)
+        expected = keys()
+        env.reset(seed=7)
+        env.reset(seed=8)
+        assert keys() == expected
+
+        np.random.seed(99)
+        expected = keys()
+        other = PR2PackedEnv(num_blocks=2)
+        other.close()
+        assert keys() == expected
+    finally:
+        env.close()
+
+
+def test_pr2_packed_instances_stay_reproducible(env: PR2PackedEnv) -> None:
+    """Restoring the global RNG must not cost per-seed reproducibility."""
+    first, _ = env.reset(seed=5)
+    again, _ = env.reset(seed=5)
+    other, _ = env.reset(seed=6)
+    assert np.array_equal(first, again)
+    assert not np.array_equal(first, other)
+
+
+def test_pr2_packed_client_context_is_reentrant(env: PR2PackedEnv) -> None:
+    """The public client guard is the lock the env's own methods take."""
+    env.reset(seed=0)
+    with env.client() as client:
+        with env.client() as inner:
+            assert inner == client
+        # Env methods are callable from inside it, which a non-reentrant lock
+        # would deadlock on.
+        env.step(_NOOP)
+        assert sp.get_pose(env.blocks[0]) is not None

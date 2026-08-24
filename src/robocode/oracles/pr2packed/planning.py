@@ -78,7 +78,11 @@ def shortest(delta: NDArray[Any], circular: NDArray[Any]) -> NDArray[Any]:
 
 
 def collides(env: PR2PackedEnv, held: int | None = None) -> bool:
-    """The environment's own collision test, for validating a candidate config."""
+    """The environment's own collision test, for validating a candidate config.
+
+    Callers already hold ``env.client()``; the lock is reentrant, so the outermost
+    planning call is what actually establishes the critical section.
+    """
     for body in [env.robot] + ([held] if held is not None else []):
         if any(pairwise_collision(body, o) for o in env.obstacles):
             return True
@@ -95,7 +99,10 @@ def arm_ik(
     held: int | None = None,
     held_pose: Any = None,
 ) -> NDArray[Any] | None:
-    """An arm config putting the tool at *tool_target*, or None if infeasible."""
+    """An arm config putting the tool at *tool_target*, or None if infeasible.
+
+    Callers hold ``env.client()``; the lock is reentrant.
+    """
     restore_arm = get_joint_positions(env.robot, env.arm_joints)
     restore_held = get_pose(held) if held is not None else None
     try:
@@ -140,7 +147,10 @@ def path_is_free(
     path: list[NDArray[Any]],
     attachment: Attachment | None = None,
 ) -> bool:
-    """Validate *path* against the environment's collision model."""
+    """Validate *path* against the environment's collision model.
+
+    Callers hold ``env.client()``; the lock is reentrant.
+    """
     restore = get_joint_positions(env.robot, joints)
     held = attachment.child if attachment else None
     restore_held = get_pose(held) if held is not None else None
@@ -174,11 +184,11 @@ def motion(
     circular = (
         env.base_circular if list(joints) == list(env.base_joints) else env.arm_circular
     )
-    start = np.array(get_joint_positions(env.robot, joints))
-    obstacles = list(env.obstacles) + [
-        b for b in env.blocks if attachment is None or b != attachment.child
-    ]
-    with WorldSaver():
+    with env.client(), WorldSaver():
+        start = np.array(get_joint_positions(env.robot, joints))
+        obstacles = list(env.obstacles) + [
+            b for b in env.blocks if attachment is None or b != attachment.child
+        ]
         direct = interpolate(start, target, circular)
         if path_is_free(env, joints, direct, attachment):
             return direct
@@ -215,10 +225,10 @@ def plan_pick(
     draw one from a ring around the target and keep it if arm IK succeeds there for
     the grasp, the lift, and the release.
     """
-    block_pose = get_pose(block)
-    grasps = list(get_top_grasps(block, grasp_length=0.0))
-    lift_pose = (tuple(np.array(block_pose[0]) + [0, 0, APPROACH_Z]), block_pose[1])
-    with WorldSaver():
+    with env.client(), WorldSaver():
+        block_pose = get_pose(block)
+        grasps = list(get_top_grasps(block, grasp_length=0.0))
+        lift_pose = (tuple(np.array(block_pose[0]) + [0, 0, APPROACH_Z]), block_pose[1])
         for _ in range(tries):
             radius, theta = rng.uniform(0.40, 0.85), rng.uniform(-np.pi, np.pi)
             bx = block_pose[0][0] + radius * np.cos(theta)

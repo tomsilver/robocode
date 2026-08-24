@@ -13,3 +13,12 @@
 [submodule "third-party/ss-pybullet"]
 	path = third-party/ss-pybullet
 	url = https://github.com/caelan/ss-pybullet
+[submodule "third-party/pddlstream"]
+	path = third-party/pddlstream
+	url = https://github.com/caelan/pddlstream
+	# Pinned so the differential test is reproducible, but not cloned by default:
+	# its own nested submodule is a second copy of ss-pybullet at the same commit
+	# we already vendor, ~590MB for a test nobody needs to run to use the repo.
+	# Opt in with:
+	#   git submodule update --init --recursive third-party/pddlstream
+	update = none

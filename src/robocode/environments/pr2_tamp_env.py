@@ -22,6 +22,8 @@ matches the kinder envs, and it matches how PDDLStream itself evaluates ``packed
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, SupportsFloat, cast
 
 import numpy as np
@@ -58,9 +60,11 @@ from robocode.environments.ss_pybullet import (
     get_joint_positions,
     get_link_pose,
     get_pose,
+    invert,
     is_circular,
     is_placement,
     link_from_name,
+    multiply,
     open_arm,
     pairwise_collision,
     set_client,
@@ -89,6 +93,13 @@ _GRIPPER_THRESHOLD = 0.5
 # the time, reading as "not placed". Settling a hair above keeps a released block
 # visually flush while staying robustly inside that tolerance.
 _SETTLE_EPSILON = 1e-4
+
+# A grasp requires the fingers to close around the block rather than merely near it.
+# +x of the tool frame is the approach direction, so a top grasp puts the block's
+# centre one half-height along it; beyond that the fingers cannot reach past the
+# block's top face. The tolerance absorbs the slack of arriving by delta actions.
+_MAX_GRASP_APPROACH = BLOCK_HEIGHT / 2 + 0.01
+_GRASP_APPROACH_TOLERANCE = 0.01
 
 _ROBOT_FEATURES = 19
 _SURFACE_FEATURES = 10
@@ -129,8 +140,14 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         with _CLIENT_LOCK:
             self._client = connect(use_gui=False)
             set_client(self._client)
-            with HideOutput():
-                self._problem, handles = build_packed_scene(self._num_blocks)
+            # Building the scene samples placements from the process-global legacy
+            # RNG too; put it back for the same reason reset() does.
+            entropy = np.random.get_state()
+            try:
+                with HideOutput():
+                    self._problem, handles = build_packed_scene(self._num_blocks)
+            finally:
+                np.random.set_state(entropy)
             self._robot: int = handles["robot"]
             self._blocks: list[int] = handles["blocks"]
             self._table: int = handles["table"]
@@ -181,6 +198,20 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             dtype=np.float32,
         )
         super().__init__()
+
+    @contextmanager
+    def client(self) -> Iterator[int]:
+        """Hold this environment's physics client for the duration of the block.
+
+        pybullet_tools addresses PyBullet through a module-global ``CLIENT``, so any
+        code calling it against the handles below -- the oracle, or a program an agent
+        writes -- must hold this, or a second environment in the same process can
+        rebind that global underneath it mid-computation. The environment's own
+        methods take it internally; this is the same lock, and it is reentrant.
+        """
+        with _CLIENT_LOCK:
+            set_client(self._client)
+            yield self._client
 
     # -------------------------------------------------------- scene accessors
 
@@ -255,7 +286,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     @property
     def env_description(self) -> str:
         """Markdown description of this environment for an agent."""
-        return self._describe(include_access=True)
+        return self.describe(include_access=True)
 
     @property
     def env_description_blackbox(self) -> str:
@@ -264,7 +295,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         Omits the direct-import example and the source-code pointers; a blackbox agent
         has access to neither and reaches the environment only through env_client.
         """
-        return self._describe(include_access=False)
+        return self.describe(include_access=False)
 
     def _observation_table(self) -> str:
         rows = [
@@ -299,7 +330,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
                 index += 1
         return "\n".join(rows)
 
-    def _describe(self, include_access: bool, count_invariant: bool = False) -> str:
+    def describe(self, include_access: bool, count_invariant: bool = False) -> str:
         """Render the environment card.
 
         With *count_invariant*, every mention of this instance's block count is left
@@ -411,7 +442,16 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
                 "plate, and table geometry, and the initial-placement sampler\n"
                 "- The underlying kinematics and collision helpers live in the "
                 "`pybullet_tools` package, re-exported by "
-                "`robocode/environments/ss_pybullet.py`\n"
+                "`robocode/environments/ss_pybullet.py`\n\n"
+                "`pybullet_tools` addresses PyBullet through a module-global client "
+                "handle. If you call it directly against `env.robot`, `env.blocks` "
+                "and the other handles above, do it inside `with env.client():` -- "
+                "otherwise another environment in the same process can rebind that "
+                "global underneath you mid-computation:\n\n"
+                "```python\n"
+                "with env.client():\n"
+                "    ...  # pybullet_tools calls against env.robot, env.blocks, ...\n"
+                "```\n"
             )
         )
 
@@ -466,8 +506,26 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         return np.array(features, dtype=np.float32)
 
     def _goal_reached(self) -> bool:
-        return all(
+        """Every block resting on the plate, and no two blocks overlapping.
+
+        The non-overlap clause is what makes this the ``packed`` task. ``is_placement``
+        is a per-block centre-in-AABB-plus-height test, so without it a policy that
+        released every block over one point would end with N interpenetrating blocks
+        that each satisfy it, and score a solve for defeating the premise of the
+        benchmark -- the plate being small enough to force a packing.
+        """
+        if not all(
             is_placement(block, surface) for block, surface in self._problem.goal_on
+        ):
+            return False
+        return not self._blocks_overlap()
+
+    def _blocks_overlap(self) -> bool:
+        """True if any two blocks interpenetrate."""
+        return any(
+            pairwise_collision(a, b)
+            for i, a in enumerate(self._blocks)
+            for b in self._blocks[i + 1 :]
         )
 
     def _in_collision(self) -> bool:
@@ -484,8 +542,37 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
                     return True
         return False
 
-    def _settle(self, block: int) -> None:
-        """Drop *block* onto the highest surface it is over, else onto the floor."""
+    def _settle(self, block: int) -> bool:
+        """Drop *block* onto the highest surface it is over, else onto the floor.
+
+        Returns whether the drop was accepted. A settled pose that interpenetrates an
+        already-placed block, or a fixed body, is refused and the block is left where
+        it was: releasing is how a block reaches the plate, so an unchecked drop is a
+        free way to stack blocks inside one another.
+        """
+        original = get_pose(block)
+        if not self._try_settle(block):
+            set_pose(block, original)
+            return False
+        if self._settled_pose_blocked(block):
+            set_pose(block, original)
+            return False
+        return True
+
+    def _settled_pose_blocked(self, block: int) -> bool:
+        """True if *block* at its current pose overlaps another body."""
+        for other in self._obstacles:
+            if pairwise_collision(block, other):
+                return True
+        return any(
+            pairwise_collision(block, other) for other in self._blocks if other != block
+        )
+
+    def _try_settle(self, block: int) -> bool:
+        """Move *block* down onto whatever it is over.
+
+        Always succeeds today.
+        """
         point, quat = get_pose(block)
         candidates = sorted(
             (self._plate, self._table),
@@ -506,17 +593,32 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
                         z=stable_z(block, surface) + _SETTLE_EPSILON,
                     ),
                 )
-                return
+                return True
         set_point(
             block, Point(x=point[0], y=point[1], z=BLOCK_HEIGHT / 2 + _SETTLE_EPSILON)
         )
+        return True
 
     def _grasp_candidate(self) -> int | None:
-        tool_point = np.array(get_link_pose(self._robot, self._tool_link)[0])
+        """The block the gripper is closed around, if any.
+
+        Distance to the tool frame alone is not enough: a gripper hovering above a
+        block is within any usable radius of it while its fingers cannot reach past
+        the block's top face. The block's centre is therefore required to lie between
+        the fingers laterally, and no further along the approach axis than the block's
+        own half-height, which is where the fingers stop.
+        """
+        tool = get_link_pose(self._robot, self._tool_link)
         best_block: int | None = None
         best_distance = self._grasp_radius
         for block in self._blocks:
-            distance = float(np.linalg.norm(np.array(get_pose(block)[0]) - tool_point))
+            offset = np.array(multiply(invert(tool), get_pose(block))[0])
+            approach, lateral = offset[0], offset[1:]
+            if not -_GRASP_APPROACH_TOLERANCE <= approach <= _MAX_GRASP_APPROACH:
+                continue
+            if np.max(np.abs(lateral)) > BLOCK_WIDTH / 2:
+                continue
+            distance = float(np.linalg.norm(offset))
             if distance <= best_distance:
                 best_distance = distance
                 best_block = block
@@ -532,17 +634,24 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             set_joint_positions(self._robot, self._base_joints, [-1.0, 0.0, 0.0])
             set_joint_positions(self._robot, self._arm_joints, self._initial_arm_conf)
             open_arm(self._robot, ARM)
-            # sample_placement draws from the global numpy RNG, so seed it from the
-            # episode's generator to keep instances reproducible per eval seed.
-            for _ in range(self._max_placement_resets):
-                np.random.seed(int(self.np_random.integers(0, 2**31 - 1)))
-                if resample_block_placements(self._blocks, self._table):
-                    break
-            else:
-                raise RuntimeError(
-                    f"Could not place {self._num_blocks} blocks on the table after "
-                    f"{self._max_placement_resets} attempts"
-                )
+            # sample_placement draws from the process-global legacy numpy RNG, so it
+            # has to be seeded from the episode's generator to keep instances
+            # reproducible per eval seed. That global is shared with approaches and
+            # anything else in this process, so its state is put back afterwards:
+            # resetting an environment should not silently reseed its caller.
+            entropy = np.random.get_state()
+            try:
+                for _ in range(self._max_placement_resets):
+                    np.random.seed(int(self.np_random.integers(0, 2**31 - 1)))
+                    if resample_block_placements(self._blocks, self._table):
+                        break
+                else:
+                    raise RuntimeError(
+                        f"Could not place {self._num_blocks} blocks on the table "
+                        f"after {self._max_placement_resets} attempts"
+                    )
+            finally:
+                np.random.set_state(entropy)
             self._current_obs = self._get_obs()
         return self._current_obs, {}
 
@@ -587,9 +696,11 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             elif gripper > _GRIPPER_THRESHOLD:
                 if self._attachment is not None:
                     released = self._attachment.child
-                    self._attachment = None
-                    self._settle(released)
-                open_arm(self._robot, ARM)
+                    if self._settle(released):
+                        self._attachment = None
+                        open_arm(self._robot, ARM)
+                else:
+                    open_arm(self._robot, ARM)
 
             terminated = self._goal_reached()
             self._current_obs = self._get_obs()

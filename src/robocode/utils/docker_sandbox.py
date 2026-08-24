@@ -220,6 +220,17 @@ def _filtered_repo_mounts(
     reaches the environment through env_server and must not see its internals; the
     fourth yielded value is then ``None``. The copies live in a temp dir that is
     removed on exit.
+
+    Note that ss-pybullet is mounted WHOLE, unlike ``src/``, which is filtered to
+    strip ``oracles/``. That is deliberate but worth knowing when reading a
+    ``pr2packed`` result: at the pinned commit it ships
+    ``pybullet_tools/pr2_primitives.py``, whose ``get_grasp_gen`` /
+    ``get_stable_gen`` / ``get_ir_sampler`` / ``get_ik_fn`` / ``get_ik_ir_gen`` /
+    ``get_motion_gen`` are inverse reachability, arm IK and collision-free motion
+    generation for this exact robot -- close to the structure of the reference oracle.
+    Filtering them out is not an option, because the environment's own kinematics
+    import from the same package; a PR2 result is therefore a
+    compose-the-provided-primitives result, not a derive-them-from-scratch one.
     """
     repo_root = _find_repo_root()
     kindergarden = repo_root / "third-party" / "kindergarden"
@@ -234,11 +245,17 @@ def _filtered_repo_mounts(
             f"kinder-baselines not found at {kinder_baselines}; "
             "run: git submodule update --init --recursive"
         )
+    # Only the PR2 TAMP environments need this, so a missing checkout is not fatal:
+    # raising here would break every kinder run on a tree that simply has not
+    # re-run install.sh since the submodule was added. The environment raises a clear
+    # ImportError inside the sandbox if it is actually needed and absent.
     ss_pybullet = repo_root / "third-party" / "ss-pybullet"
     if not blackbox and not (ss_pybullet / "pybullet_tools").is_dir():
-        raise RuntimeError(
-            f"ss-pybullet not found at {ss_pybullet}; "
-            "run: git submodule update --init --recursive"
+        logger.warning(
+            "ss-pybullet is not checked out at %s, so the PR2 TAMP environments will "
+            "not import in the sandbox. Run `bash install.sh` (or `git submodule "
+            "update --init --recursive`) if you are using them.",
+            ss_pybullet,
         )
     tmp_dir = tempfile.mkdtemp(prefix="robocode-mount-")
     filtered_src = Path(tmp_dir) / "src"
@@ -261,7 +278,11 @@ def _filtered_repo_mounts(
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
-            None if blackbox else ss_pybullet,
+            (
+                None
+                if blackbox or not (ss_pybullet / "pybullet_tools").is_dir()
+                else ss_pybullet
+            ),
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

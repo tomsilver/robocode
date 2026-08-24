@@ -113,6 +113,8 @@ def test_sandbox_env_config_replaces_count_ranges(tmp_path: Path) -> None:
     assert written["_target_"] == "pkg.mod:Env"
     assert written["design_counts"] == [1]
     assert written["eval_counts"] == [1]
+    # And the file says so, so a reader does not take the values at face value.
+    assert "placeholder" in written["__placeholder__"].lower()
 
 
 def test_sandbox_env_config_leaves_fixed_count_configs_alone(tmp_path: Path) -> None:

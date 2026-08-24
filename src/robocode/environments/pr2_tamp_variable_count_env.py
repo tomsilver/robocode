@@ -111,7 +111,14 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
     # -- backends & counts ---------------------------------------------------
 
     def _backend_for(self, count: int) -> PR2PackedEnv:
-        """Return (building and caching on first use) the backend for a given count."""
+        """Return (building and caching on first use) the backend for a given count.
+
+        Each backend holds a live PyBullet client with its own PR2 loaded, and they
+        are kept until :meth:`close`, so a full sweep costs one client and one PR2 URDF
+        per configured count -- five for the default config. They are cached rather
+        than rebuilt because loading the PR2 dominates a reset, and evaluation
+        interleaves counts episode by episode.
+        """
         backend = self._backends.get(count)
         if backend is None:
             if count > 9:
@@ -278,7 +285,7 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
         """
         # pylint: disable=protected-access
         reference = self._backend_for(max(self._design_counts))
-        base = reference._describe(include_access=include_access, count_invariant=True)
+        base = reference.describe(include_access=include_access, count_invariant=True)
         schema_lines = [
             f"- `{typ.name}`: {', '.join(features)}"
             for typ, features in TYPE_FEATURES.items()

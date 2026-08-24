@@ -14,8 +14,11 @@ different paths loads two copies of the module, and its ``CLIENT``/``CLIENTS``
 globals then disagree about which physics client is live.
 """
 
-# The sys.path bootstrap below must run before the pybullet_tools imports, so
-# those imports cannot sit at the top of the module.
+# The sys.path bootstrap below must run before the pybullet_tools imports, so those
+# imports cannot sit at the top of the module. Moving the bootstrap into a separate
+# module imported first does not help: isort sorts `pybullet_tools` ahead of
+# `robocode`, so it hoists the real imports above the bootstrap again, and `isort:
+# skip` only pins the marked line rather than the ones around it.
 # pylint: disable=wrong-import-position
 
 from __future__ import annotations

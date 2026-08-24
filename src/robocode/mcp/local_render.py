@@ -63,6 +63,8 @@ def _build_env(env_config: dict[str, Any]) -> Any:
     the real evaluation counts never reach the container.
     """
     logger.info("Building environment from config")
+    # The note the sandbox writer leaves for a reader of the file is not a kwarg.
+    env_config = {k: v for k, v in env_config.items() if not k.startswith("__")}
     cfg = OmegaConf.create(env_config)
     env = instantiate(cfg)
     env.reset(seed=0)

@@ -1018,3 +1018,22 @@ def test_filtered_repo_mounts_blackbox_omits_ss_pybullet() -> None:
     """A blackbox agent reaches the env through env_server and must not see it."""
     with _filtered_repo_mounts(blackbox=True) as (_src, _kg, _kb, ss_pybullet):
         assert ss_pybullet is None
+
+
+def test_filtered_repo_mounts_tolerates_missing_ss_pybullet(monkeypatch) -> None:
+    """A checkout without the submodule still runs; only the PR2 envs need it.
+
+    Raising here would break every kinder run on a tree that has not re-run install.sh
+    since the submodule was added.
+    """
+    real_is_dir = Path.is_dir
+
+    def missing(self: Path) -> bool:
+        if self.name == "pybullet_tools":
+            return False
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", missing)
+    with _filtered_repo_mounts() as (src, _kg, _kb, ss_pybullet):
+        assert ss_pybullet is None
+        assert src.exists()

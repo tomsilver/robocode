@@ -195,6 +195,21 @@ the nearest block rigidly to the tool frame, and a motion that would put the rob
 held block in collision is rejected. Reward is -1 per step and the episode terminates once
 every block rests on the plate.
 
+**Verifying against stock PDDLStream.** `scripts/compare_pddlstream_rollout.py` rolls
+episodes in our environment and replays every state visited into a scene built from
+stock `examples.pybullet.tamp.problems.packed`, comparing the stock library's own
+collision / placement / kinematics results against ours, and optionally rendering the
+two side by side. The stock tree is pinned as a submodule but **not cloned by
+default** — its nested submodule is a second copy of ss-pybullet at the commit we
+already vendor (~590MB). Opt in with:
+
+```bash
+git submodule update --init --recursive third-party/pddlstream
+python scripts/compare_pddlstream_rollout.py --policy oracle --render /tmp/cmp
+```
+
+Exit code 0 means every recorded value agreed to 1e-9; 1 prints a per-value diff.
+
 **Oracle.** Run it with `approach=oracle`:
 
 ```bash
