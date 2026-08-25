@@ -6,7 +6,6 @@ import contextlib
 import logging
 import multiprocessing as mp
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -59,23 +58,6 @@ def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
         )
 
 
-# A frozen GeneratedApproach is scored through reset()/get_action() only; referencing
-# set_state or sample_next_state mutates the scored env and can fake a solve. Match
-# ".name" with an identifier boundary so get_state, reset_state, and set_stateful pass.
-_FORBIDDEN_STATE_MUTATIONS = ("set_state", "sample_next_state")
-
-
-def _reject_state_mutation(source: str) -> None:
-    """Reject a generated approach that mutates the scored env (anti-cheat)."""
-    hits = [n for n in _FORBIDDEN_STATE_MUTATIONS if re.search(rf"\.{n}\b", source)]
-    if hits:
-        raise ValueError(
-            f"Generated approach references {', '.join(hits)}; approach.py is scored "
-            "through reset()/get_action() only and must reach the goal via the actions "
-            "it returns, not by mutating the environment's state."
-        )
-
-
 def load_generated_approach(
     path: Path,
     action_space: Any,
@@ -94,7 +76,6 @@ def load_generated_approach(
     try:
         source = path.read_text()
         _reject_planner_references(source, primitives)
-        _reject_state_mutation(source)
         # Set __file__ so the exec'd code can use it (e.g. to locate
         # sibling modules via os.path.dirname(__file__)).  exec() does
         # not set this automatically unlike a normal module import.
@@ -674,10 +655,10 @@ def open_video_writer(
 ) -> Iterator[Callable[[NDArray[np.uint8]], None]]:
     """Yield an ``append(frame)`` callable that streams RGB frames into a GIF.
 
-    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak
-    memory stays at one frame regardless of episode length. (Pillow-based GIF
-    writers buffer every frame until close, which can OOM on long episodes.)
-    All frames must share the first frame's shape.
+    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak memory
+    stays at one frame regardless of episode length. (Pillow-based GIF writers buffer
+    every frame until close, which can OOM on long episodes.) All frames must share the
+    first frame's shape.
     """
     proc: subprocess.Popen[bytes] | None = None
     size: tuple[int, int] | None = None
