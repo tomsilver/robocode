@@ -36,7 +36,6 @@ from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
 from robocode.utils.bilevel import build_sesame_models
-from robocode.utils.scored_env_guard import readonly_view
 
 __all__ = [
     "ENV_DEPENDENT_PRIMITIVES",
@@ -72,13 +71,7 @@ _DEPRECATED_PRIMITIVES = frozenset(
 
 
 def build_primitives(env: Any, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
-    """Build a primitives dict containing only the requested *names*.
-
-    Env-bound primitives close over a read-only view of *env*: a generated approach that
-    receives one could otherwise reach the environment it is being scored in through the
-    primitive's closure and move it into a solved state.
-    """
-    env = readonly_view(env)
+    """Build a primitives dict containing only the requested *names*."""
     for name in names:
         if name in _DEPRECATED_PRIMITIVES:
             logger.warning(

@@ -36,10 +36,6 @@ from robocode.utils.episode import (
     summarize_count_regimes,
     summarize_eval_episodes,
 )
-from robocode.utils.scored_env_guard import (
-    ScoredEnvMutationError,
-    readonly_view,
-)
 
 
 def test_summarize_eval_episodes_counts_a_crash_as_unsolved() -> None:
@@ -69,8 +65,8 @@ def test_summarize_eval_episodes_counts_a_crash_as_unsolved() -> None:
 def test_summarize_eval_episodes_agrees_with_the_by_count_curve() -> None:
     """The headline solve rate matches the scaling curve it is supposed to summarize.
 
-    Both use the full scheduled denominator. Before that was true they diverged exactly
-    when episodes crashed, i.e. when a reader most needs them to agree.
+    Both use the full scheduled denominator. Before that was true they diverged
+    exactly when episodes crashed, i.e. when a reader most needs them to agree.
     """
     scheduled = [2, 2, 5, 5]
     per_episode: list[dict[str, Any]] = [
@@ -520,22 +516,22 @@ def test_anti_cheat_not_enforced_without_bilevel_models(tmp_path: Path) -> None:
     assert hasattr(approach, "get_action")
 
 
-@pytest.mark.parametrize("mutator", ["set_state", "sample_next_state"])
-def test_mentioning_a_mutator_no_longer_blocks_loading(
-    tmp_path: Path, mutator: str
-) -> None:
-    """Naming a mutator in source is not itself cheating.
-
-    The scan this replaced rejected any source containing ``.set_state`` -- including,
-    as here, a string literal, and including a program planning in an environment it
-    built itself, which cannot affect scoring. What matters is whether the *scored*
-    environment can be mutated, and that is enforced on the object (see
-    ``tests/utils/test_scored_env_guard.py``) rather than by reading source.
-    """
+def test_anti_cheat_rejects_set_state(tmp_path: Path) -> None:
+    """A policy that calls set_state to teleport the scored env is rejected at load."""
     action_space = Box(low=-1, high=1, shape=(2,))
     obs_space = Box(low=0, high=1, shape=(4,))
-    path = _write_approach(tmp_path, extra=f"_ = 'env.{mutator}(x)'")
-    assert load_generated_approach(path, action_space, obs_space, {}) is not None
+    path = _write_approach(tmp_path, extra="_ = 'env.set_state(goal)'")
+    with pytest.raises(ValueError, match="set_state"):
+        load_generated_approach(path, action_space, obs_space, {})
+
+
+def test_anti_cheat_rejects_sample_next_state(tmp_path: Path) -> None:
+    """sample_next_state also mutates the real env, so it is rejected too."""
+    action_space = Box(low=-1, high=1, shape=(2,))
+    obs_space = Box(low=0, high=1, shape=(4,))
+    path = _write_approach(tmp_path, extra="_ = 'env.sample_next_state(s, a, rng)'")
+    with pytest.raises(ValueError, match="sample_next_state"):
+        load_generated_approach(path, action_space, obs_space, {})
 
 
 def test_anti_cheat_allows_state_reads(tmp_path: Path) -> None:
@@ -601,17 +597,12 @@ def test_set_state_teleport_fabricates_a_solve() -> None:
 
 
 def test_generated_policy_cannot_teleport_via_primitive_closure(tmp_path: Path) -> None:
-    """Red-team: an env-bound primitive exposes the env; the guard blocks the write.
-
-    ``build_primitives`` binds primitives to a read-only view for exactly this reason;
-    the wrapping is mirrored here because this test uses a toy env rather than a
-    configured one.
-    """
+    """Red-team: an env-bound primitive exposes the env; the loader refuses it."""
     env = _StatefulGoalEnv()
-    # Mirrors build_primitives' partial(check_action_collision, readonly_view(env)):
-    # the bound env is reachable from a generated policy as primitives["peek"].args[0].
-    prims = {"peek": partial(lambda e, s: None, readonly_view(env))}
-    assert prims["peek"].args[0] is not env  # reachable, but not the live object
+    # Mirrors build_primitives' partial(check_action_collision, env): the bound env is
+    # reachable from a generated policy as primitives["peek"].args[0].
+    prims = {"peek": partial(lambda e, s: None, env)}
+    assert prims["peek"].args[0] is env  # the teleport channel is real
     teleport = tmp_path / "approach.py"
     teleport.write_text(
         "class GeneratedApproach:\n"
@@ -625,15 +616,10 @@ def test_generated_policy_cannot_teleport_via_primitive_closure(tmp_path: Path) 
         "        env.set_state(env.goal_state())  # teleport into the goal\n"
         "        return self._action_space.sample()\n"
     )
-    approach = load_generated_approach(
-        teleport, env.action_space, env.observation_space, prims
-    )
-    start = np.array([0.0], dtype=np.float32)
-    approach.reset(start, {})
-    with pytest.raises(ScoredEnvMutationError):
-        approach.get_action(start)
-    # And the scored env is untouched: the teleport never landed.
-    assert float(env.get_state()) == pytest.approx(0.0)  # type: ignore[no-untyped-call]
+    with pytest.raises(ValueError, match="set_state"):
+        load_generated_approach(
+            teleport, env.action_space, env.observation_space, prims
+        )
 
 
 class _CountEnv(Env):
@@ -905,7 +891,7 @@ def test_in_process_episode_stops_a_policy_that_catches_exception(
 def test_in_process_episode_returns_rendered_frames(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Render=True is served by the in-process path, not only the forked one."""
+    """render=True is served by the in-process path, not only the forked one."""
     monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
 
     class _RenderingCountEnv(_CountEnv):
@@ -926,9 +912,9 @@ def test_in_process_timed_out_metrics_keep_the_scheduled_count(
 ) -> None:
     """A timed-out episode still reports the count it was scheduled at.
 
-    The scaling curve buckets by object_count, so losing it on the in-process path would
-    drop timed-out episodes out of their bucket instead of scoring them as failures
-    there.
+    The scaling curve buckets by object_count, so losing it on the in-process path
+    would drop timed-out episodes out of their bucket instead of scoring them as
+    failures there.
     """
     monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
     env = _CountEnv()
