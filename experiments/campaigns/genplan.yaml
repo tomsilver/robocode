@@ -1,0 +1,29 @@
+# LLM-GenPlan baseline (Silver et al. 2023, arXiv:2305.11014).
+#
+# Non-agentic: the model is shown the environment source in its prompt but has
+# no tools. The scaffold -- not the model -- runs the generated policy on the
+# training tasks and re-prompts with structured error feedback.
+#
+# max_debug_attempts follows the paper (1 initial implementation + at most 4
+# debug attempts). max_budget_usd is raised from the config default of 5.0 to
+# the 20.0 the agentic conditions were allowed, so cost is a safety ceiling
+# rather than the thing that truncates the loop: with both set, whichever binds
+# first stops it, and at 5.0 the dollar cap could silently end a run before the
+# 4 debug attempts were used.
+name: genplan
+matrix:
+  environment:
+    - motion2d_generalized
+    - obstruction2d_generalized
+    - clutteredretrieval2d_generalized
+    - clutteredstorage2d_generalized
+    - stickbutton2d_generalized
+    - pushpullhook2d
+  approach: [llm_genplan]
+  primitive_level: [none]
+  approach/completion: [cli_opus5]
+  approach.max_debug_attempts: [4]
+  approach.max_budget_usd: [20.0]
+  num_eval_tasks: [100]
+  eval_timeout: [60]
+replicate_seeds: [42, 24, 424, 444, 222]
