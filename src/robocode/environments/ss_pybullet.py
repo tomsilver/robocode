@@ -88,6 +88,7 @@ from pybullet_tools.utils import (  # noqa: E402
     disconnect,
     get_aabb,
     get_bodies,
+    get_client,
     get_joint_limits,
     get_joint_positions,
     get_link_pose,
@@ -110,6 +111,7 @@ from pybullet_tools.utils import (  # noqa: E402
 )
 
 __all__ = [
+    "get_client",
     "multiply",
     "invert",
     "sub_inverse_kinematics",

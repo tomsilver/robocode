@@ -190,10 +190,14 @@ the results carry `by_count` and a design/held-out `count_regimes` split. The ki
 The action space matches kinder's 3D mobile-manipulation envs exactly — `Box(11,)` of
 delta base pose, delta arm joints, and gripper open/close — so approaches and prompts
 written against `obstruction3d` and friends transfer without a new interface to learn.
-Dynamics are kinematic: joints are set rather than servoed, closing the gripper attaches
-the nearest block rigidly to the tool frame, and a motion that would put the robot or a
-held block in collision is rejected. Reward is -1 per step and the episode terminates once
-every block rests on the plate.
+Dynamics are kinematic: joints are set rather than servoed, and a motion that would put
+the robot or a held block in collision is rejected. Closing the gripper attaches a block
+rigidly to the tool frame, but only when the fingers are actually around it — hovering
+above a block does not grasp it. Opening drops the held block straight down, and the drop
+is refused if it would land overlapping something, leaving the block held. Reward is -1
+per step and the episode terminates once every block rests on the plate **and no two
+blocks overlap**: the plate is small enough to force a packing, so dropping them all at
+one spot does not count.
 
 **Verifying against stock PDDLStream.** `scripts/compare_pddlstream_rollout.py` rolls
 episodes in our environment and replays every state visited into a scene built from

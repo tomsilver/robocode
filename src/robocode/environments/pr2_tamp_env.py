@@ -54,6 +54,7 @@ from robocode.environments.ss_pybullet import (
     disconnect,
     get_aabb,
     get_arm_joints,
+    get_client,
     get_gripper_joints,
     get_group_joints,
     get_joint_limits,
@@ -98,8 +99,8 @@ _SETTLE_EPSILON = 1e-4
 # +x of the tool frame is the approach direction, so a top grasp puts the block's
 # centre one half-height along it; beyond that the fingers cannot reach past the
 # block's top face. The tolerance absorbs the slack of arriving by delta actions.
-_MAX_GRASP_APPROACH = BLOCK_HEIGHT / 2 + 0.01
 _GRASP_APPROACH_TOLERANCE = 0.01
+_MAX_GRASP_APPROACH = BLOCK_HEIGHT / 2 + _GRASP_APPROACH_TOLERANCE
 
 _ROBOT_FEATURES = 19
 _SURFACE_FEATURES = 10
@@ -208,10 +209,19 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         writes -- must hold this, or a second environment in the same process can
         rebind that global underneath it mid-computation. The environment's own
         methods take it internally; this is the same lock, and it is reentrant.
+
+        The previous binding is restored on exit. The lock is reentrant and global to
+        the process, so one thread can legitimately be inside two environments'
+        guards at once; without restoring, the outer one would silently continue
+        against the inner one's simulation after the inner block ended.
         """
         with _CLIENT_LOCK:
+            previous = get_client()
             set_client(self._client)
-            yield self._client
+            try:
+                yield self._client
+            finally:
+                set_client(previous)
 
     # -------------------------------------------------------- scene accessors
 
@@ -220,6 +230,11 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     # motion planning at all; exposing them here keeps that out of the private
     # attributes. None of them let a policy change the state -- the environment is
     # still driven through step().
+
+    @property
+    def client_id(self) -> int:
+        """PyBullet client this environment's scene lives in."""
+        return self._client
 
     @property
     def robot(self) -> int:
@@ -394,11 +409,21 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             f"| 9 | delta joint 7 |\n"
             f"| 10 | gripper open/close |\n\n"
             f"The open / close logic is: <-0.5 is close, >0.5 is open, and otherwise "
-            f"no change. Closing the gripper grasps the nearest block whose centre is "
-            f"within {self._grasp_radius:.2f}m of the gripper's tool frame, and the "
-            f"block is then held rigidly until the gripper opens. Opening the gripper "
-            f"drops the held block onto whichever surface it is above (the plate if "
-            f"it is over the plate, otherwise the table, otherwise the floor).\n\n"
+            f"no change.\n\n"
+            f"**Closing** grasps a block only if the gripper is actually around one: "
+            f"the block's centre must be between the fingers (within "
+            f"{BLOCK_WIDTH / 2:.3f}m of the tool frame laterally) and no further than "
+            f"{_MAX_GRASP_APPROACH:.2f}m along the approach axis, which is where the "
+            f"fingers stop. Hovering above a block does not grasp it, however close "
+            f"the tool frame is -- you have to bring the fingers down around it. The "
+            f"nearest qualifying block is taken, and held rigidly until the gripper "
+            f"opens. Check `grasp_active` to see whether a grasp took.\n\n"
+            f"**Opening** drops the held block straight down onto whichever surface "
+            f"it is above (the plate if it is over the plate, otherwise the table, "
+            f"otherwise the floor). The drop is REFUSED if the block would land "
+            f"overlapping another block or a fixed body: the block stays held and the "
+            f"gripper stays closed, so `grasp_active` remains 1. Move somewhere clear "
+            f"and open again.\n\n"
             f"Base and arm targets are clipped to the robot's joint limits, except "
             f"for base rotation (index 2) and the two continuous arm roll joints "
             f"(indices 7 and 9), which wrap around at +/-pi. Dynamics "
@@ -407,9 +432,11 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             f"rejected, leaving the robot where it was. The gripper command on that "
             f"same step still applies.\n\n"
             f"## Reward\n\n"
-            f"-1 per step. The episode terminates when every block rests on the "
-            f"plate, so the return is the negated number of steps taken and a better "
-            f"policy is a shorter one.\n\n"
+            f"-1 per step. The episode terminates when every block rests on the plate "
+            f"AND no two blocks overlap -- the plate is small enough that they have to "
+            f"be packed, so dropping them all at one spot does not count. The return "
+            f"is the negated number of steps taken, so a better policy is a shorter "
+            f"one.\n\n"
         )
         if not include_access:
             return description
@@ -628,8 +655,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
 
     def reset(self, *args: Any, **kwargs: Any) -> tuple[NDArray[Any], dict[str, Any]]:
         super().reset(*args, **kwargs)
-        with _CLIENT_LOCK:
-            set_client(self._client)
+        with self.client():
             self._attachment = None
             set_joint_positions(self._robot, self._base_joints, [-1.0, 0.0, 0.0])
             set_joint_positions(self._robot, self._arm_joints, self._initial_arm_conf)
@@ -659,8 +685,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         self, action: NDArray[Any]
     ) -> tuple[NDArray[Any], SupportsFloat, bool, bool, dict[str, Any]]:
         action = np.asarray(action, dtype=np.float32)
-        with _CLIENT_LOCK:
-            set_client(self._client)
+        with self.client():
             base_conf = np.array(get_joint_positions(self._robot, self._base_joints))
             arm_conf = np.array(get_joint_positions(self._robot, self._arm_joints))
             held_pose = (
@@ -712,8 +737,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
 
     def set_state(self, state: NDArray[Any]) -> None:
         state = np.asarray(state, dtype=np.float32)
-        with _CLIENT_LOCK:
-            set_client(self._client)
+        with self.client():
             set_joint_positions(self._robot, self._base_joints, state[0:3])
             set_joint_positions(self._robot, self._arm_joints, state[3:10])
             set_joint_positions(
@@ -749,8 +773,7 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         # get_image defaults it to 60.0. The projection is then built from
         # degrees(60) = 3438 degrees, which renders a fisheye horizon with the scene a
         # few pixels across and no error raised.
-        with _CLIENT_LOCK:
-            set_client(self._client)
+        with self.client():
             view = p.computeViewMatrix(
                 _CAMERA_EYE, _CAMERA_TARGET, [0, 0, 1], physicsClientId=self._client
             )
@@ -780,6 +803,8 @@ class PR2PackedEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         return cast(RenderFrame, frame)
 
     def close(self) -> None:
+        # Not routed through client(): disconnect invalidates the id, so there is
+        # nothing coherent to restore it to afterwards.
         with _CLIENT_LOCK:
             set_client(self._client)
             disconnect()

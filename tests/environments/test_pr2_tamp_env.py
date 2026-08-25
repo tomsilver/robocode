@@ -264,3 +264,45 @@ def test_pr2_packed_client_context_is_reentrant(env: PR2PackedEnv) -> None:
         # would deadlock on.
         env.step(_NOOP)
         assert sp.get_pose(env.blocks[0]) is not None
+
+
+def test_card_describes_the_actual_grasp_release_and_goal(env: PR2PackedEnv) -> None:
+    """The card is the specification evaluated agents work from.
+
+    Every clause here corresponds to a rule the environment enforces and a test above
+    that pins it. An agent that trusts a stale card writes a close-while-hovering
+    grasp and never sees ``grasp_active`` reach 1.
+    """
+    for description in (env.env_description, env.env_description_blackbox):
+        # Grasping needs the fingers around the block, not just proximity.
+        assert "Hovering above a block does not grasp it" in description
+        assert "of the gripper's tool frame" not in description
+        # A drop can be refused, and the card has to say how that shows up.
+        assert "REFUSED" in description
+        assert "grasp_active` remains 1" in description
+        # The goal is a packing, not N centres over the plate.
+        assert "no two blocks overlap" in description
+
+
+def test_client_guard_restores_the_previous_binding() -> None:
+    """Leaving one env's guard must not leave the global bound to another's client.
+
+    The lock is reentrant and global to the process, so a thread can be inside two envs'
+    guards at once; without restoring, the outer one would silently continue against the
+    inner one's simulation.
+    """
+    first = PR2PackedEnv(num_blocks=1)
+    second = PR2PackedEnv(num_blocks=1)
+    try:
+        first.reset(seed=0)
+        second.reset(seed=0)
+        with first.client():
+            # A call on another env rebinds the global; the guard has to put it back.
+            second.step(np.zeros(11, dtype=np.float32))
+            assert sp.get_client() == first.client_id
+            with second.client():
+                assert sp.get_client() == second.client_id
+            assert sp.get_client() == first.client_id
+    finally:
+        first.close()
+        second.close()
