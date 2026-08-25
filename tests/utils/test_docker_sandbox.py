@@ -172,7 +172,7 @@ def test_find_repo_root_has_pyproject() -> None:
 
 def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
     """Blackbox mounts contain no environment source anywhere."""
-    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _, _ss):
         assert not (src / "robocode" / "environments").exists()
         assert not (src / "robocode" / "oracles").exists()
         assert not (kindergarden / "src" / "kinder" / "envs").exists()
@@ -184,34 +184,39 @@ def test_filtered_repo_mounts_blackbox_excludes_env_source() -> None:
 
 
 def test_filtered_repo_mounts_default_excludes_demos() -> None:
-    """demos/ holds recorded solution trajectories; no mode may mount it."""
-    with _filtered_repo_mounts() as (_, kindergarden, _tmp):
+    """Demos/ holds recorded solution trajectories; no mode may mount it."""
+    with _filtered_repo_mounts() as (_, kindergarden, _tmp, _ss):
         assert not (kindergarden / "demos").exists()
 
 
 def test_filtered_repo_mounts_default_keeps_package_skeleton() -> None:
     """The demos exclusion must not take the installable skeleton with it."""
-    with _filtered_repo_mounts() as (_, kindergarden, _tmp):
+    with _filtered_repo_mounts() as (_, kindergarden, _tmp, _ss):
         assert (kindergarden / "pyproject.toml").exists()
         assert (kindergarden / "src" / "kinder" / "envs").exists()
 
 
 def test_filtered_repo_mounts_default_keeps_env_source() -> None:
     """Non-blackbox mounts keep the environment source."""
-    with _filtered_repo_mounts() as (src, kindergarden, _):
+    with _filtered_repo_mounts() as (src, kindergarden, _, _ss):
         assert (src / "robocode" / "environments").exists()
         assert (kindergarden / "src" / "kinder" / "envs").exists()
 
 
 def test_filtered_repo_mounts_excludes_bilevel_by_default() -> None:
     """Without include_bilevel, no kinder-baselines source is prepared (models OFF)."""
-    with _filtered_repo_mounts() as (_src, _kg, kinder_baselines):
+    with _filtered_repo_mounts() as (_src, _kg, kinder_baselines, _ss):
         assert kinder_baselines is None
 
 
 def test_filtered_repo_mounts_includes_bilevel_when_requested() -> None:
     """With include_bilevel, only the two depended-on subpackages are copied."""
-    with _filtered_repo_mounts(include_bilevel=True) as (_src, _kg, kinder_baselines):
+    with _filtered_repo_mounts(include_bilevel=True) as (
+        _src,
+        _kg,
+        kinder_baselines,
+        _ss,
+    ):
         assert kinder_baselines is not None
         assert (
             kinder_baselines / "kinder-bilevel-planning" / "pyproject.toml"
@@ -416,7 +421,7 @@ def test_is_local_model() -> None:
 @requires_docker
 def test_container_blackbox_no_env_source(tmp_path: Path) -> None:
     """With blackbox mounts, uv sync still works but env code is gone."""
-    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
+    with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _, _ss):
         result = subprocess.run(
             [
                 "docker",
@@ -505,7 +510,7 @@ def test_container_models_off_red_team(tmp_path: Path) -> None:
     run (base sync, no kinder-baselines mount). None may recover the models, while
     `robocode.utils` (holding the lazy builder) stays importable.
     """
-    with _filtered_repo_mounts() as (src, kindergarden, kinder_baselines):
+    with _filtered_repo_mounts() as (src, kindergarden, kinder_baselines, _ss):
         assert kinder_baselines is None
         result = subprocess.run(
             [
@@ -571,7 +576,7 @@ def test_container_blackbox_render_proxy(tmp_path: Path) -> None:
             )
         )
         env.close()
-        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _, _ss):
             result = subprocess.run(
                 [
                     "docker",
@@ -649,7 +654,7 @@ def test_container_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> Non
             )
         )
         env.close()
-        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _):
+        with _filtered_repo_mounts(blackbox=True) as (src, kindergarden, _, _ss):
             result = subprocess.run(
                 [
                     "docker",
@@ -994,3 +999,41 @@ def test_telemetry_docker_args(tmp_path: Path) -> None:
     # run id is the run's output dir name, not the constant "sandbox".
     assert "ROBOCODE_RUN_ID=run" in env_args
     assert (sb.parent / "telemetry").is_dir()
+
+
+def test_filtered_repo_mounts_includes_ss_pybullet() -> None:
+    """Whitebox sandboxes need ss-pybullet: the PR2 envs import pybullet_tools from it.
+
+    It is imported off sys.path rather than installed, so without this mount the
+    sandbox raises ImportError the moment it touches a PR2 TAMP environment.
+    """
+    with _filtered_repo_mounts() as (_src, _kg, _kb, ss_pybullet):
+        assert ss_pybullet is not None
+        assert (ss_pybullet / "pybullet_tools" / "utils.py").exists()
+        # The PR2 URDF the scene loads lives here too.
+        assert (ss_pybullet / "models").is_dir()
+
+
+def test_filtered_repo_mounts_blackbox_omits_ss_pybullet() -> None:
+    """A blackbox agent reaches the env through env_server and must not see it."""
+    with _filtered_repo_mounts(blackbox=True) as (_src, _kg, _kb, ss_pybullet):
+        assert ss_pybullet is None
+
+
+def test_filtered_repo_mounts_tolerates_missing_ss_pybullet(monkeypatch) -> None:
+    """A checkout without the submodule still runs; only the PR2 envs need it.
+
+    Raising here would break every kinder run on a tree that has not re-run install.sh
+    since the submodule was added.
+    """
+    real_is_dir = Path.is_dir
+
+    def missing(self: Path) -> bool:
+        if self.name == "pybullet_tools":
+            return False
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", missing)
+    with _filtered_repo_mounts() as (src, _kg, _kb, ss_pybullet):
+        assert ss_pybullet is None
+        assert src.exists()

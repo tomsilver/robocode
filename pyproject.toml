@@ -107,6 +107,7 @@ module = [
     "matplotlib.*",
     "pybullet.*",
     "pybullet_helpers.*",
+    "pybullet_tools.*",
     "pybullet_utils.*",
     "libero.*",
     "mujoco.*",

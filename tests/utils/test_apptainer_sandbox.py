@@ -168,7 +168,9 @@ def test_genplan_cmd_adds_containall(
 
     monkeypatch.setattr(
         "robocode.utils.apptainer_sandbox._filtered_repo_mounts",
-        lambda **_kwargs: nullcontext((filtered_src, filtered_kindergarden, None)),
+        lambda **_kwargs: nullcontext(
+            (filtered_src, filtered_kindergarden, None, None)
+        ),
     )
     monkeypatch.setattr(
         "robocode.utils.apptainer_sandbox._build_apptainer_auth_args",

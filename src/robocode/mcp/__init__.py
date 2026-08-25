@@ -240,16 +240,35 @@ def mcp_tool_cli_names(tool_names: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(f"mcp__{MCP_SERVER_NAME}__{t}" for t in tool_names)
 
 
-# Count-range fields are dropped from the sandbox copy; the render server
-# re-inserts a placeholder (see local_render._build_env).
+# Count-range fields name the evaluation protocol, including the held-out counts, so
+# they must not reach the sandbox. They are replaced rather than dropped: a
+# variable-count env requires them to construct, and substituting here keeps that
+# working for any such env instead of only the ones whose config carries a
+# particular key. The render tools pin the real count per call.
 _COUNT_RANGE_KEYS = ("design_counts", "eval_counts")
+# Deliberately not a count anyone would configure: the sandbox copy must be
+# constructible without implying an evaluation protocol. A plausible-looking value
+# would read to an agent as "you are evaluated at this count".
+_PLACEHOLDER_COUNTS = [1]
+_PLACEHOLDER_MARKER = "__placeholder__"
 
 
 def _write_sandbox_env_config(source: Path, dest: Path) -> None:
     """Write the env config the in-sandbox render server instantiates."""
     config = json.loads(source.read_text(encoding="utf-8"))
+    substituted = False
     for key in _COUNT_RANGE_KEYS:
-        config.pop(key, None)
+        if key in config:
+            config[key] = list(_PLACEHOLDER_COUNTS)
+            substituted = True
+    if substituted:
+        # Say so in the file itself, so a whitebox agent reading it sees a
+        # placeholder rather than concluding it is evaluated at this count.
+        config[_PLACEHOLDER_MARKER] = (
+            "design_counts/eval_counts are placeholders. The real evaluation counts "
+            "are deliberately not available in the sandbox; do not read anything "
+            "into the values here."
+        )
     dest.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 

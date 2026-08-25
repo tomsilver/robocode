@@ -163,6 +163,92 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 
 > **Realistic 3D backgrounds (optional):** dynamic3d / TidyBot envs (e.g. `ConstrainedCupboard3D`) render on a plain white background by default. For the realistic room scene (floor/wall textures), download the MimicLabs assets once (~1 GB, gitignored): `python third-party/kindergarden/scripts/download_mimiclabs_assets.py`, then set `scene_bg: mimiclabs-lab2` in the env config (already set for `constrainedcupboard3d_easy`).
 
+### PR2 TAMP (continuous, ss-pybullet)
+
+PDDLStream's [`packed`](https://github.com/caelan/pddlstream) benchmark, re-exposed as a
+closed-loop gymnasium environment: a PR2 must pick every block off the table and place it
+on a green plate. The scene and goal are carried over verbatim so instances line up with
+the `packed -n` conditions in the [LLM-PDDLStream](https://github.com/jorge-a-mendez/llm-pddlstream)
+paper, but the PDDL domain, the stream samplers, and the planner are deliberately left
+behind: robocode's approaches synthesize their own task and motion planning.
+
+| Config | Blocks | Observation |
+|---|---|---|
+| `pr2packed_easy` | 3 | `Box(72,)` |
+| `pr2packed_medium` | 4 | `Box(83,)` |
+| `pr2packed_hard` | 5 | `Box(94,)` |
+| `pr2packed_generalized` | 1-5 (varies per reset) | `ObjectCentricState` |
+
+`pr2packed_generalized` is the generalization axis: it keeps one backend per count and
+returns object-centric observations, so a single frozen program spans every instance
+size. It implements `VariableCountEnv` (`src/robocode/environments/variable_count.py`),
+the shared contract the runner's count-sweep lifecycle keys off — `design_counts` are
+what an approach is built against, `eval_counts` adds held-out larger instances, and
+the results carry `by_count` and a design/held-out `count_regimes` split. The kinder
+`VariableObjectCountEnv` implements the same contract.
+
+The action space matches kinder's 3D mobile-manipulation envs exactly — `Box(11,)` of
+delta base pose, delta arm joints, and gripper open/close — so approaches and prompts
+written against `obstruction3d` and friends transfer without a new interface to learn.
+Dynamics are kinematic: joints are set rather than servoed, and a motion that would put
+the robot or a held block in collision is rejected. Closing the gripper attaches a block
+rigidly to the tool frame, but only when the fingers are actually around it — hovering
+above a block does not grasp it. Opening drops the held block straight down, and the drop
+is refused if it would land overlapping something, leaving the block held. Reward is -1
+per step and the episode terminates once every block rests on the plate **and no two
+blocks overlap**: the plate is small enough to force a packing, so dropping them all at
+one spot does not count.
+
+**Verifying against stock PDDLStream.** `scripts/compare_pddlstream_rollout.py` rolls
+episodes in our environment and replays every state visited into a scene built from
+stock `examples.pybullet.tamp.problems.packed`, comparing the stock library's own
+collision / placement / kinematics results against ours, and optionally rendering the
+two side by side. The stock tree is pinned as a submodule but **not cloned by
+default** — its nested submodule is a second copy of ss-pybullet at the commit we
+already vendor (~590MB). Opt in with:
+
+```bash
+git submodule update --init --recursive third-party/pddlstream
+python scripts/compare_pddlstream_rollout.py --policy oracle --render /tmp/cmp
+```
+
+Exit code 0 means every recorded value agreed to 1e-9; 1 prints a per-value diff.
+
+**Oracle.** Run it with `approach=oracle`:
+
+```bash
+python experiments/run_experiment.py approach=oracle environment=pr2packed_generalized \
+    eval_seed="$EVAL_SEED"
+```
+
+`approach=oracle` dispatches on the environment choice name
+(`robocode.approaches.oracle_approach.ORACLE_TARGETS`), so it also runs the existing
+kinder oracles (`obstruction2d_medium`, `clutteredstorage2d_medium`,
+`stickbutton2d_medium`, `pushpullhook2d`). An oracle is a solvability check and a
+reference row to compare synthesized approaches against, not a scored method.
+
+`robocode.oracles.pr2packed` is a reference TAMP policy: for each block it
+samples a base pose that can reach both the block and a free plate cell (inverse
+reachability), solves arm IK there, plans collision-free joint paths, and tracks them
+with the environment's bounded delta actions, resampling a block's plan when a stage
+fails. It exists to confirm the task is solvable — it solves 60/60 episodes across
+3/4/5 blocks (means of 136/185/237 steps), comfortably inside `max_steps_for_count`.
+`tests/oracles/pr2packed/` is that check.
+
+Every candidate configuration and path is validated against the environment's own
+collision test rather than the planner's, because ss-pybullet configures the two
+separately and a path the planner accepts is not automatically one the environment
+will execute.
+
+Geometry, grasping, and collision checking come from
+[ss-pybullet](https://github.com/caelan/ss-pybullet), vendored as a submodule under
+`third-party/ss-pybullet/` along with its own nested
+[motion-planners](https://github.com/caelan/motion-planners) submodule. Neither ships
+packaging metadata, so they are imported off `sys.path` by
+`robocode/environments/ss_pybullet.py` rather than installed by `uv`; `install.sh` already
+runs `git submodule update --init --recursive`, which is all the setup they need. Nothing
+here requires a FastDownward build, because nothing here runs the PDDLStream planner.
+
 ### LIBERO-PRO (manipulation benchmark, optional extra)
 
 [LIBERO-PRO](https://github.com/uynitsuj/LIBERO-PRO) is a Franka tabletop manipulation benchmark (~80 task suites covering goal / spatial / object / 10-task mixes plus OOD and perturbation variants) built on MuJoCo via robosuite. It is vendored as a submodule under `third-party/LIBERO-PRO/` and gated behind the optional `libero` extra — it is **not** installed by default because it pins old upstreams (`robosuite==1.4.0`, `gym==0.25.2`, `robomimic==0.2.0`, `bddl==1.0.1`) and drags in a CUDA-enabled torch.
