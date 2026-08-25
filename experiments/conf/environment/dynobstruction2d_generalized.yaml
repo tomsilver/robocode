@@ -1,0 +1,8 @@
+# Dynamic Obstruction2D with a variable obstruction count. Design counts cover
+# the smaller registered variants; the largest registered variant is held out.
+_target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
+constant_object_env_path: kinder.envs.dynamic2d.dyn_obstruction2d:DynObstruction2DEnv
+count_kwarg: num_obstructions
+count_object_prefix: obstruction
+design_counts: [0, 1, 2]
+eval_counts: [0, 1, 2, 3]
