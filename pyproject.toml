@@ -73,6 +73,12 @@ where = ["src"]
 [tool.setuptools.package-data]
 robocode = ["py.typed"]
 
+[tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: opt-in live tests requiring external services and potentially paid model calls",
+]
+
 [tool.black]
 line-length = 88
 target-version = ["py311"]

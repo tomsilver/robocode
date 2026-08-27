@@ -1,8 +1,21 @@
-"""Tests for the shared LLM client helpers (cost estimation)."""
+"""LLM helpers and opt-in Docker Claude tool-isolation tests.
 
+Run with pytest tests/utils/test_llm.py -m integration. These tests make paid
+model calls using existing Claude authentication and a harmless MCP server.
+"""
+
+import json
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
+
+import pytest
 from omegaconf import DictConfig
 
+from robocode.utils.docker_sandbox import DOCKER_PYTHON, run_genplan_in_docker
 from robocode.utils.llm.base import pricing_from_cfg, usage_cost
+from robocode.utils.llm.cli_client import ClaudeCLIClient
 
 
 def test_usage_cost_from_list_prices():
@@ -22,3 +35,137 @@ def test_pricing_from_cfg():
     assert pricing_from_cfg(DictConfig({"output_cost_per_mtok": 25.0})) == (0.0, 25.0)
     # Neither set -> unpriced (cost stays unknown, e.g. local vLLM/Ollama).
     assert pricing_from_cfg(DictConfig({"model": "x"})) is None
+
+
+def test_cli_denies_all_tools(monkeypatch):
+    """The plain completion client blocks built-in and MCP tools explicitly."""
+
+    def fake_run(args, **kwargs):
+        assert args[args.index("--tools") + 1] == ""
+        assert args[args.index("--disallowedTools") + 1] == "*"
+        assert kwargs["input"] == "USER: hello"
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps({"result": "world", "total_cost_usd": 0.01}), ""
+        )
+
+    monkeypatch.setattr("robocode.utils.llm.cli_client.subprocess.run", fake_run)
+    reply = ClaudeCLIClient(DictConfig({"model": "test-model"})).complete(
+        [{"role": "user", "content": "hello"}]
+    )
+    assert reply.text == "world"
+    assert reply.cost_usd == 0.01
+
+
+def _create_mcp_tool(sandbox_dir: Path) -> str:
+    """Write the Docker MCP server/config and return its secret test token."""
+    # A harmless tool returns a token the model cannot know without invoking it.
+    token = uuid.uuid4().hex
+    shutil.copyfile(
+        Path(__file__).parent / "fixtures" / "claude_mcp_server.py",
+        sandbox_dir / "server.py",
+    )
+    (sandbox_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "probe": {
+                        "command": DOCKER_PYTHON,
+                        "args": ["/sandbox/server.py", token],
+                    }
+                }
+            }
+        )
+    )
+
+    return token
+
+
+def _parse_claude_output(transcript_path: Path) -> tuple[dict, dict]:
+    """Return the CLI initialization and final result from a JSONL transcript."""
+    events = [json.loads(line) for line in transcript_path.read_text().splitlines()]
+    init = next(
+        e for e in events if e.get("type") == "system" and e.get("subtype") == "init"
+    )
+    final = next(e for e in reversed(events) if e.get("type") == "result")
+    return init, final
+
+
+@pytest.mark.integration
+def test_docker_claude_calls_mcp_without_deny_flag(tmp_path, monkeypatch):
+    """Without deny-all, sandboxed Claude invokes the configured MCP tool."""
+    if shutil.which("docker") is None:
+        pytest.skip("Docker is not installed")
+
+    token = _create_mcp_tool(tmp_path)
+
+    # Execute the real completion wrapper inside the image, recording CLI events.
+    shutil.copyfile(
+        Path(__file__).parent / "fixtures" / "claude_mcp_probe.py",
+        tmp_path / "probe.py",
+    )
+
+    # Keep the production auth, mounts, entrypoint, firewall and privilege drop.
+    # Replace only the training driver with the diagnostic script.
+    tmp_path.chmod(0o777)  # The container's unprivileged node user writes artifacts.
+    real_run = subprocess.run
+
+    def launch_probe(args, **kwargs):
+        if args[:2] == ["docker", "run"]:
+            assert args[-3:] == [
+                DOCKER_PYTHON,
+                "-m",
+                "robocode.approaches.genplan_driver",
+            ]
+            args = [
+                *args[:-3],
+                DOCKER_PYTHON,
+                "/sandbox/probe.py",
+                "--without-deny-flag",
+            ]
+        return real_run(args, check=kwargs.pop("check", True), **kwargs)
+
+    monkeypatch.setattr("robocode.utils.docker_sandbox.subprocess.run", launch_probe)
+    run_genplan_in_docker(tmp_path, {"provider": "cli"}, timeout=600)
+
+    init, final = _parse_claude_output(tmp_path / "transcript.jsonl")
+    assert "mcp__probe__probe_token" in init["tools"]
+    assert (tmp_path / "calls.txt").read_text().splitlines()
+    assert token in final["result"]
+
+
+@pytest.mark.integration
+def test_docker_claude_blocks_mcp_with_deny_flag(tmp_path, monkeypatch):
+    """With deny-all, sandboxed Claude cannot invoke the configured MCP tool."""
+    if shutil.which("docker") is None:
+        pytest.skip("Docker is not installed")
+
+    token = _create_mcp_tool(tmp_path)
+
+    # Execute the real completion wrapper inside the image, recording CLI events.
+    shutil.copyfile(
+        Path(__file__).parent / "fixtures" / "claude_mcp_probe.py",
+        tmp_path / "probe.py",
+    )
+
+    # Keep the production auth, mounts, entrypoint, firewall and privilege drop.
+    # Replace only the training driver with the diagnostic script.
+    tmp_path.chmod(0o777)  # The container's unprivileged node user writes artifacts.
+    real_run = subprocess.run
+
+    def launch_probe(args, **kwargs):
+        if args[:2] == ["docker", "run"]:
+            assert args[-3:] == [
+                DOCKER_PYTHON,
+                "-m",
+                "robocode.approaches.genplan_driver",
+            ]
+            args = [*args[:-3], DOCKER_PYTHON, "/sandbox/probe.py"]
+        return real_run(args, check=kwargs.pop("check", True), **kwargs)
+
+    monkeypatch.setattr("robocode.utils.docker_sandbox.subprocess.run", launch_probe)
+    run_genplan_in_docker(tmp_path, {"provider": "cli"}, timeout=600)
+
+    init, final = _parse_claude_output(tmp_path / "transcript.jsonl")
+    assert init["tools"] == []
+    assert not (tmp_path / "calls.txt").exists()
+    assert token not in final["result"]

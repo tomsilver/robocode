@@ -45,6 +45,9 @@ class ClaudeCLIClient:
             self._model,
             "--tools",
             "",
+            # --tools only controls built-ins; deny MCP tools as well.
+            "--disallowedTools",
+            "*",
             "--system-prompt",
             "",
             "--exclude-dynamic-system-prompt-sections",
