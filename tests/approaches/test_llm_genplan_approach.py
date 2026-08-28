@@ -1,20 +1,25 @@
 """Tests for llm_genplan_approach.py."""
 
+import inspect
 import json
+from pathlib import Path
 
 import hydra
 import numpy as np
 import pytest
 from gymnasium import Env
 from gymnasium.spaces import Box
+from kinder.envs.dynamic2d.base_env import ObjectCentricDynamic2DRobotEnv
 from omegaconf import DictConfig, OmegaConf
 from relational_structs import Type
 from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode.approaches.llm_genplan_approach import (
     LLMGenPlanApproach,
+    _gather_env_source,
     _parse_python_code,
 )
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.llm import LLMResponse, create_llm_client
 
 
@@ -462,3 +467,37 @@ def test_first_attempt_runs_even_if_cot_exhausts_budget(tmp_path):
     assert (
         "class GeneratedApproach" in (tmp_path / "sandbox" / "approach.py").read_text()
     )
+
+
+@pytest.mark.parametrize(
+    "module_name, class_name",
+    [
+        ("dyn_obstruction2d", "DynObstruction2DEnv"),
+        ("dyn_pushpullhook2d", "DynPushPullHook2DEnv"),
+    ],
+)
+def test_generalized_source_includes_underlying_mechanics(module_name, class_name):
+    """Source text includes the dynamic backend and its physics/goal dependencies."""
+    env = VariableObjectCountEnv(
+        constant_object_env_path=f"kinder.envs.dynamic2d.{module_name}:{class_name}",
+        count_kwarg="num_obstructions",
+        count_object_prefix="obstruction",
+        design_counts=[0, 1],
+        eval_counts=[0, 1, 2],
+    )
+    try:
+        source = _gather_env_source(env)
+        backend_cls = hydra.utils.get_class(
+            f"kinder.envs.dynamic2d.{module_name}.{class_name}"
+        )
+        # Check entire files, not names that might merely appear in wrapper text.
+        for cls in (
+            VariableObjectCountEnv,
+            backend_cls,
+            ObjectCentricDynamic2DRobotEnv,
+        ):
+            path = inspect.getsourcefile(cls)
+            assert path is not None
+            assert Path(path).read_text(encoding="utf-8") in source
+    finally:
+        env.close()

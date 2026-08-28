@@ -432,10 +432,11 @@ def _gather_env_source(env: gymnasium.Env) -> str:
     """Best-effort bundle of the env's local source (robocode + kinder)."""
     files: list[Path] = []
     for obj, package in _source_targets(env):
-        source_file = inspect.getsourcefile(type(obj))
+        cls = obj if inspect.isclass(obj) else type(obj)
+        source_file = inspect.getsourcefile(cls)
         assert source_file is not None
         src = Path(source_file)
-        root = src.parents[len(type(obj).__module__.split(".")) - 1]
+        root = src.parents[len(cls.__module__.split(".")) - 1]
         files.extend(collect_local_deps(src, root, package))
     seen: set[Path] = set()
     blocks: list[str] = []
@@ -453,6 +454,13 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
     underlying = getattr(env, "_kinder_env", None)
     if underlying is not None:
         targets.append((underlying, type(underlying).__module__.split(".")[0]))
+    # VariableObjectCountEnv loads its backend dynamically, so following the
+    # wrapper's imports cannot discover the actual environment implementation.
+    # Inspect the loaded class without constructing or resetting a backend (and
+    # without exposing held-out counts or evaluation states).
+    env_cls = getattr(env, "_env_cls", None)
+    if env_cls is not None:
+        targets.append((env_cls, env_cls.__module__.split(".")[0]))
     return targets
 
 
