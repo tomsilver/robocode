@@ -163,8 +163,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     "role": "user",
                     "content": (
                         f"{context}\n\nThere is a simple strategy for solving "
-                        "all instances of this environment without using "
-                        f"search. {interface_spec}"
+                        f"all instances of this environment. {interface_spec}"
                     ),
                 }
             )
