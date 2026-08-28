@@ -61,15 +61,22 @@ class ClaudeCLIClient:
             )
         )
         # Prompt via stdin, not argv: it can exceed the OS per-arg limit (128KB).
-        result = subprocess.run(
-            args,
-            env=env,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=self._timeout_s,
-        )
+        try:
+            result = subprocess.run(
+                args,
+                env=env,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=self._timeout_s,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Claude exited with status {exc.returncode}.\n"
+                f"stdout: {exc.stdout or '(empty)'}\n"
+                f"stderr: {exc.stderr or '(empty)'}"
+            ) from exc
         data = json.loads(result.stdout)
         return LLMResponse(text=data["result"], cost_usd=data.get("total_cost_usd"))
 

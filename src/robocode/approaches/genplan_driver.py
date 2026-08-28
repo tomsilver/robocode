@@ -10,6 +10,7 @@ is the non-agentic analog of the agent CLI that the agentic approach runs. The
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,14 @@ _SANDBOX = Path("/sandbox")
 
 def main() -> None:
     """Reconstruct the approach from the sandbox config and run its train loop."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(_SANDBOX / "genplan.log", encoding="utf-8"),
+        ],
+    )
     cfg = json.loads((_SANDBOX / "genplan_config.json").read_text(encoding="utf-8"))
     env_cfg = OmegaConf.create(cfg["environment"])
     env = hydra.utils.instantiate(env_cfg)
@@ -58,7 +67,21 @@ def main() -> None:
         approach = LLMGenPlanApproach(
             *args, max_debug_attempts=cfg["max_debug_attempts"], **common
         )
-    approach.train()
+    logging.getLogger(__name__).info(
+        "Starting %s replicate %s; budget=$%s; training tasks=%s",
+        cfg.get("approach", "genplan"),
+        cfg["seed"],
+        cfg["max_budget_usd"],
+        cfg["num_train_tasks"],
+    )
+    try:
+        approach.train()
+    except Exception:
+        logging.getLogger(__name__).exception("GenPlan training failed")
+        raise
+    logging.getLogger(__name__).info(
+        "Training finished; returning policy for evaluation"
+    )
     # The host approach reads these back; the container is the only place the
     # accumulated API cost and generation count exist.
     (_SANDBOX / "cost.json").write_text(

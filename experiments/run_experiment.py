@@ -231,9 +231,13 @@ def _main(cfg: DictConfig) -> float:
             )
 
         # Evaluate on held-out episodes.
+        logger.info(
+            "Training complete; starting %d held-out evaluation episodes", num_eval
+        )
         render = cfg.render_videos
         per_episode: list[dict[str, Any]] = []
         for i, s in enumerate(eval_seeds):
+            logger.info("Evaluating episode %d/%d", i + 1, num_eval)
             count = eval_counts[i] if eval_counts is not None else None
             episode_max_steps = (
                 env.max_steps_for_count(count)
@@ -272,6 +276,13 @@ def _main(cfg: DictConfig) -> float:
                 )
                 continue
             per_episode.append(episode_result)
+            logger.info(
+                "Episode %d/%d: solved=%s, steps=%s",
+                i + 1,
+                num_eval,
+                episode_result["solved"],
+                episode_result["num_steps"],
+            )
             if frames:
                 video_dir = output_dir / "videos"
                 video_dir.mkdir(exist_ok=True)

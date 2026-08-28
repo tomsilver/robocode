@@ -296,6 +296,36 @@ def test_debug_loop_fixes_broken_policy(tmp_path):
     assert terminated
 
 
+def test_genplan_logs_progress_and_saves_feedback(tmp_path, caplog):
+    """Generation, validation, cost and failure feedback remain inspectable."""
+    caplog.set_level("INFO")
+    approach = _make_approach(_ToyEnv(), _FakeClient([_BROKEN, _FIXED]), tmp_path)
+    approach.train()
+    assert "Requesting impl0" in caplog.text
+    assert "Received impl0" in caplog.text
+    assert "Validating impl0" in caplog.text
+    assert "All 2 training tasks solved" in caplog.text
+    assert "total cost=0.02" in caplog.text
+    feedback = json.loads((tmp_path / "sandbox/impl0_feedback.json").read_text())
+    assert feedback["error_type"] == "not-solved"
+
+
+def test_genplan_saves_failed_request(tmp_path, monkeypatch, caplog):
+    """A failing completion leaves the attempted prompt and error on disk."""
+    client = _FakeClient([])
+
+    def fail(messages):
+        assert (tmp_path / "sandbox/impl0_prompt.txt").exists()
+        raise RuntimeError("session limit reached")
+
+    monkeypatch.setattr(client, "complete", fail)
+    approach = _make_approach(_ToyEnv(), client, tmp_path)
+    with pytest.raises(RuntimeError, match="session limit reached"):
+        approach.train()
+    assert "Request impl0 failed" in caplog.text
+    assert (tmp_path / "sandbox/impl0_error.txt").read_text() == "session limit reached"
+
+
 def test_docker_cost_readback(tmp_path, monkeypatch):
     """With use_docker, the cost written by the container is read back."""
     env = _ToyEnv()

@@ -14,6 +14,7 @@ import inspect
 import json
 import logging
 import re
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -283,7 +284,12 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             if t == 0:
                 self._assert_loop_bounded()
 
+            logger.info("Validating impl%d on %d training tasks", t, len(seeds))
+            started = time.monotonic()
             failure = self._validate(approach_path, seeds)
+            logger.info(
+                "Validation impl%d finished in %.1fs", t, time.monotonic() - started
+            )
             if failure is None:
                 logger.info(
                     "All %d training tasks solved at attempt %d",
@@ -293,8 +299,19 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 self.num_generations = t + 1
                 return
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
+            (sandbox_dir / f"impl{t}_feedback.json").write_text(
+                json.dumps(failure, indent=2), encoding="utf-8"
+            )
+            logger.info("Feedback: %s", failure["feedback"].splitlines()[0])
             t += 1
             if not self._within_budget(t):
+                logger.info(
+                    "Refinement stopped at budget/attempt limit: %d generations; "
+                    "reported cost=%s, budget=%s",
+                    t,
+                    self.total_cost_usd,
+                    self._max_budget_usd,
+                )
                 break
             messages.append(
                 {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
@@ -334,11 +351,34 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
 
     def _complete(self, messages: list[dict[str, str]], sandbox: Path, tag: str) -> str:
         assert self._client is not None
-        result: LLMResponse = self._client.complete(messages)
+        (sandbox / f"{tag}_prompt.txt").write_text(
+            messages[-1]["content"], encoding="utf-8"
+        )
+        logger.info(
+            "Requesting %s; reported cost=%s, budget=%s",
+            tag,
+            self.total_cost_usd,
+            self._max_budget_usd,
+        )
+        started = time.monotonic()
+        try:
+            result: LLMResponse = self._client.complete(messages)
+        except Exception as exc:
+            (sandbox / f"{tag}_error.txt").write_text(str(exc), encoding="utf-8")
+            logger.exception(
+                "Request %s failed after %.1fs", tag, time.monotonic() - started
+            )
+            raise
         if result.cost_usd is not None:
             self.total_cost_usd = (self.total_cost_usd or 0.0) + result.cost_usd
-        (sandbox / f"{tag}_prompt.txt").write_text(messages[-1]["content"])
         (sandbox / f"{tag}_response.txt").write_text(result.text)
+        logger.info(
+            "Received %s in %.1fs; call cost=%s, total cost=%s",
+            tag,
+            time.monotonic() - started,
+            result.cost_usd,
+            self.total_cost_usd,
+        )
         return result.text
 
     # -------------------------------------------------------------- validation
