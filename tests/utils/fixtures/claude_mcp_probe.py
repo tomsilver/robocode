@@ -32,14 +32,10 @@ def main() -> None:
         args.extend(
             [
                 "--verbose",
-                "--strict-mcp-config",
                 "--mcp-config",
                 "/sandbox/mcp.json",
                 "--allowedTools",
                 "mcp__probe__probe_token",
-                "--setting-sources",
-                "",
-                "--no-session-persistence",
                 "--max-budget-usd",
                 "1.0",
             ]
