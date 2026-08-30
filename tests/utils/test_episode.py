@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import _thread
 import math
 import multiprocessing as mp
 import signal
@@ -14,7 +15,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
-import _thread
 import imageio.v3 as iio
 import numpy as np
 import pytest
@@ -36,10 +36,7 @@ from robocode.utils.episode import (
     summarize_count_regimes,
     summarize_eval_episodes,
 )
-from robocode.utils.scored_env_guard import (
-    ScoredEnvMutationError,
-    readonly_view,
-)
+from robocode.utils.scored_env_guard import ScoredEnvMutationError, readonly_view
 
 
 def test_summarize_eval_episodes_counts_a_crash_as_unsolved() -> None:

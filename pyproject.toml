@@ -86,6 +86,9 @@ target-version = ["py311"]
 [tool.isort]
 py_version = 311
 profile = "black"
+# isort 7 classifies `_thread` as third-party and isort 9 as stdlib; CI floats to the
+# latest, so pin the classification rather than let the two rewrite each other.
+extra_standard_library = ["_thread"]
 multi_line_output = 2
 skip_glob = ["venv/*", ".venv/*"]
 split_on_trailing_comma = true
