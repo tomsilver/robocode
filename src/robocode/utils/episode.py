@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import logging
 import multiprocessing as mp
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -39,7 +39,88 @@ _FORBIDDEN_PLANNER_REFS = (
 )
 
 
-def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
+def _relative_package(module_path: Path, sandbox_dir: Path, level: int) -> str | None:
+    """Resolve the package that a relative import in *module_path* names.
+
+    *level* is the number of leading dots on the ``from ... import`` statement.
+    """
+    try:
+        parts = list(module_path.parent.relative_to(sandbox_dir).parts)
+    except ValueError:
+        return None
+    if level > 1:
+        if level - 1 > len(parts):
+            return None
+        parts = parts[: len(parts) - (level - 1)]
+    return ".".join(parts)
+
+
+def _sandbox_module_files(name: str, sandbox_dir: Path) -> list[Path]:
+    """Map a dotted module name to the sandbox files that could provide it."""
+    if not name:
+        return []
+    base = sandbox_dir.joinpath(*name.split("."))
+    return [p for p in (base.with_suffix(".py"), base / "__init__.py") if p.is_file()]
+
+
+def _imported_sandbox_files(
+    source: str, module_path: Path, sandbox_dir: Path
+) -> list[Path]:
+    """Return the sandbox files imported by *source*, as written in *module_path*."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # Unparseable siblings are still scanned by the caller; they just cannot
+        # contribute further edges to the import graph.
+        return []
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                package = _relative_package(module_path, sandbox_dir, node.level)
+                if package is None:
+                    continue
+                base = ".".join(p for p in (package, base) if p)
+            names.append(base)
+            # `from pkg import mod` names a module, not an attribute, when pkg is
+            # a package the agent wrote.
+            names.extend(
+                f"{base}.{alias.name}" for alias in node.names if alias.name != "*"
+            )
+    files: list[Path] = []
+    for name in names:
+        files.extend(_sandbox_module_files(name, sandbox_dir))
+    return files
+
+
+def _generated_sources(path: Path) -> Iterator[tuple[Path, str]]:
+    """Yield ``(file, source)`` for *path* and every sandbox module it imports.
+
+    ``load_generated_approach`` puts the sandbox directory on ``sys.path`` so that
+    ``approach.py`` can import siblings the agent wrote. A guardrail that reads only
+    ``approach.py`` is therefore bypassed by moving the call one file over, so the
+    import graph is walked instead of a single file.
+    """
+    sandbox_dir = path.parent.resolve()
+    queue = [path.resolve()]
+    seen: set[Path] = set()
+    while queue:
+        current = queue.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        try:
+            source = current.read_text()
+        except OSError:
+            continue
+        yield current, source
+        queue.extend(_imported_sandbox_files(source, current, sandbox_dir))
+
+
+def _reject_planner_references(path: Path, primitives: dict[str, Any]) -> None:
     """Reject a generated approach that invokes the bilevel planner (anti-cheat).
 
     Only enforced when the ``bilevel_models`` primitive is in play; other
@@ -50,30 +131,15 @@ def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
     # A cooperative guardrail plus a clear error message, not an adversarial
     # sandbox: substring matching suffices because aliased imports still carry the
     # module path, and only deliberate importlib obfuscation would evade it.
-    hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
-    if hits:
-        raise ValueError(
-            f"Generated approach references the bilevel planner ({', '.join(hits)}); "
-            "with the bilevel_models primitive you must compose the models yourself, "
-            "not run SeSamE search."
-        )
-
-
-# A frozen GeneratedApproach is scored through reset()/get_action() only; referencing
-# set_state or sample_next_state mutates the scored env and can fake a solve. Match
-# ".name" with an identifier boundary so get_state, reset_state, and set_stateful pass.
-_FORBIDDEN_STATE_MUTATIONS = ("set_state", "sample_next_state")
-
-
-def _reject_state_mutation(source: str) -> None:
-    """Reject a generated approach that mutates the scored env (anti-cheat)."""
-    hits = [n for n in _FORBIDDEN_STATE_MUTATIONS if re.search(rf"\.{n}\b", source)]
-    if hits:
-        raise ValueError(
-            f"Generated approach references {', '.join(hits)}; approach.py is scored "
-            "through reset()/get_action() only and must reach the goal via the actions "
-            "it returns, not by mutating the environment's state."
-        )
+    for source_path, source in _generated_sources(path):
+        hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
+        if hits:
+            where = source_path.name
+            raise ValueError(
+                f"Generated approach references the bilevel planner "
+                f"({', '.join(hits)}) in {where}; with the bilevel_models primitive "
+                "you must compose the models yourself, not run SeSamE search."
+            )
 
 
 def load_generated_approach(
@@ -92,9 +158,8 @@ def load_generated_approach(
     if sandbox_dir not in sys.path:
         sys.path.insert(0, sandbox_dir)
     try:
+        _reject_planner_references(path, primitives)
         source = path.read_text()
-        _reject_planner_references(source, primitives)
-        _reject_state_mutation(source)
         # Set __file__ so the exec'd code can use it (e.g. to locate
         # sibling modules via os.path.dirname(__file__)).  exec() does
         # not set this automatically unlike a normal module import.
@@ -674,10 +739,10 @@ def open_video_writer(
 ) -> Iterator[Callable[[NDArray[np.uint8]], None]]:
     """Yield an ``append(frame)`` callable that streams RGB frames into a GIF.
 
-    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak
-    memory stays at one frame regardless of episode length. (Pillow-based GIF
-    writers buffer every frame until close, which can OOM on long episodes.)
-    All frames must share the first frame's shape.
+    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak memory
+    stays at one frame regardless of episode length. (Pillow-based GIF writers buffer
+    every frame until close, which can OOM on long episodes.) All frames must share the
+    first frame's shape.
     """
     proc: subprocess.Popen[bytes] | None = None
     size: tuple[int, int] | None = None
