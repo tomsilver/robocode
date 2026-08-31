@@ -280,6 +280,18 @@ def _classify_episode(
         generated = load_generated_approach(
             approach_path, action_space, observation_space, primitives
         )
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {
+            "solved": False,
+            "total_reward": 0.0,
+            "num_steps": 0,
+            "error_type": "policy-load-error",
+            "feedback": (
+                f"On the task with seed {seed}, the submitted module could not be "
+                "loaded as a GeneratedApproach policy:\n" + traceback.format_exc()
+            ),
+        }
+    try:
         policy = _ValidationPolicy(
             generated, action_space, observation_space, primitives
         )
