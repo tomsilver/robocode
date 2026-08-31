@@ -14,8 +14,10 @@ from omegaconf import DictConfig, OmegaConf
 from relational_structs import Type
 from relational_structs.spaces import ObjectCentricStateSpace
 
+from robocode import prompts
 from robocode.approaches.llm_genplan_approach import (
     LLMGenPlanApproach,
+    _check_submission_compiles,
     _gather_env_source,
     _parse_python_code,
 )
@@ -121,6 +123,30 @@ def test_parse_python_code_recovers_truncated_block():
     """A response cut off mid-block (no closing fence) still yields the code."""
     response = f"Here is the approach:\n```python\n{_FULL_APPROACH}"
     assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_genplan_submission_contract_treats_commentary_as_python_comments():
+    """The code prompt explains exactly how generated text will be consumed."""
+    prompt = prompts.genplan_interface_spec()
+    assert "compiled as Python source, not read as prose" in prompt
+    assert "commentary, put it inside the code block as Python comments" in prompt
+    assert "complete module" in prompt
+
+
+def test_submission_checker_compiles_without_executing(tmp_path):
+    """A valid module passes even if executing it would raise an exception."""
+    source = "# commentary is allowed\nraise RuntimeError('do not execute me')"
+    assert _check_submission_compiles(source, tmp_path / "approach.py") is None
+
+
+def test_submission_checker_reports_compiler_failure(tmp_path):
+    """Prose-like invalid source becomes explicit submission feedback."""
+    failure = _check_submission_compiles(
+        "This response is prose — not Python.", tmp_path / "approach.py"
+    )
+    assert failure is not None
+    assert failure["error_type"] == "submission-not-compilable"
+    assert "SyntaxError" in failure["feedback"]
 
 
 # A generalized (variable-count) env whose held-out eval counts strictly extend the
@@ -301,6 +327,32 @@ def test_debug_loop_fixes_broken_policy(tmp_path):
     assert terminated
 
 
+def test_noncompilable_submission_preserves_previous_policy(tmp_path):
+    """Narrative output consumes an attempt without replacing executable code."""
+
+    class _CheckingClient(_FakeClient):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.last_prompt = ""
+
+        def complete(self, messages):
+            if len(self.calls) == 2:
+                assert (tmp_path / "sandbox" / "approach.py").read_text() == (
+                    _parse_python_code(_BROKEN)
+                )
+            self.last_prompt = messages[-1]["content"]
+            return super().complete(messages)
+
+    client = _CheckingClient([_BROKEN, "This is prose — not code.", _FIXED])
+    approach = _make_approach(_ToyEnv(), client, tmp_path)
+    approach.train()
+
+    failure = json.loads((tmp_path / "sandbox/impl1_feedback.json").read_text())
+    assert failure["error_type"] == "submission-not-compilable"
+    assert "compiled as Python source, not read as prose" in client.last_prompt
+    assert approach.num_generations == 3
+
+
 def test_genplan_logs_progress_and_saves_feedback(tmp_path, caplog):
     """Generation, validation, cost and failure feedback remain inspectable."""
     caplog.set_level("INFO")
@@ -319,7 +371,7 @@ def test_genplan_saves_failed_request(tmp_path, monkeypatch, caplog):
     """A failing completion leaves the attempted prompt and error on disk."""
     client = _FakeClient([])
 
-    def fail(messages):
+    def fail(_messages):
         assert (tmp_path / "sandbox/impl0_prompt.txt").exists()
         raise RuntimeError("session limit reached")
 

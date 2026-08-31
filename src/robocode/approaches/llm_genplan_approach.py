@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -278,17 +279,25 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         while True:
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
-            # Overwrite, don't accumulate: each response is a full class.
-            approach_path.write_text(_parse_python_code(response))
             if t == 0:
                 self._assert_loop_bounded()
 
-            logger.info("Validating impl%d on %d training tasks", t, len(seeds))
-            started = time.monotonic()
-            failure = self._validate(approach_path, seeds)
-            logger.info(
-                "Validation impl%d finished in %.1fs", t, time.monotonic() - started
-            )
+            candidate = _parse_python_code(response)
+            failure = _check_submission_compiles(candidate, approach_path)
+            if failure is None:
+                # Promote only compilable submissions. Each response is a complete
+                # module, so a valid candidate replaces rather than accumulates code.
+                approach_path.write_text(candidate)
+                logger.info("Validating impl%d on %d training tasks", t, len(seeds))
+                started = time.monotonic()
+                failure = self._validate(approach_path, seeds)
+                logger.info(
+                    "Validation impl%d finished in %.1fs",
+                    t,
+                    time.monotonic() - started,
+                )
+            else:
+                logger.info("Submission impl%d did not compile", t)
             if failure is None:
                 logger.info(
                     "All %d training tasks solved at attempt %d",
@@ -313,7 +322,15 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 )
                 break
             messages.append(
-                {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
+                {
+                    "role": "user",
+                    "content": (
+                        f"{failure['feedback']}\n\n"
+                        "Fix the reported issue and submit the corrected complete "
+                        "module.\n\n"
+                        f"{prompts.GENPLAN_SUBMISSION_CONTRACT}"
+                    ),
+                }
             )
         self.num_generations = t  # budget/step cap reached without solving
 
@@ -425,6 +442,24 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             action: _ActType = self._generated.get_action(self._last_state)
             return action
         return self._action_space.sample()
+
+
+def _check_submission_compiles(
+    source: str, approach_path: Path
+) -> dict[str, str] | None:
+    """Compile a submission without executing it; return actionable feedback."""
+    try:
+        compile(source, str(approach_path), "exec")
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {
+            "error_type": "submission-not-compilable",
+            "feedback": (
+                "The submitted response could not be compiled as Python source, so "
+                "it was not installed and the previous policy, if any, was preserved. "
+                "The compiler reported:\n" + traceback.format_exc()
+            ),
+        }
+    return None
 
 
 def _gather_env_source(env: gymnasium.Env) -> str:
