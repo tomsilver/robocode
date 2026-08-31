@@ -70,8 +70,8 @@ def test_cli_failure_exposes_diagnostics(monkeypatch):
     assert "resets 4:50am" in str(error.value)
 
 
-@pytest.fixture
-def cli_calls(monkeypatch):
+@pytest.fixture(name="cli_calls")
+def _record_cli_calls(monkeypatch):
     """Record requests and return a distinct session ID for each fake call."""
     calls = []
 
@@ -159,7 +159,7 @@ def test_cli_failed_resume_discards_session(cli_calls, monkeypatch):
 def test_cli_error_result_not_saved_as_session(monkeypatch):
     """An error envelope is not a successful model response."""
 
-    def fake_run(args, **kwargs):
+    def fake_run(args, **_kwargs):
         return subprocess.CompletedProcess(
             args, 0, json.dumps({"is_error": True, "result": "limit reached"}), ""
         )
