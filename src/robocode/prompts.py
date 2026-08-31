@@ -725,8 +725,16 @@ class GeneratedApproach:
 
 {state_description} `get_action` is \
 called every step and must return an action inside the action space. The class \
-may keep internal state between calls (e.g. a precomputed plan). Return ONLY \
-the code block; do not write tests or explanations."""
+may keep internal state between calls (e.g. a precomputed plan).
+
+{submission_contract}"""
+
+GENPLAN_SUBMISSION_CONTRACT = """\
+Your response is an automated code submission: it will be extracted and compiled \
+as Python source, not read as prose. Return exactly one Python code block containing \
+the complete module, including all imports, helpers, and `GeneratedApproach`. If you \
+want to include commentary, put it inside the code block as Python comments. Do not \
+write prose outside the code block or return a partial edit."""
 
 # A fixed-count env hands the policy a flat vector; a variable-count (generalized)
 # env hands it an ObjectCentricState, spelled out by OBJECT_CENTRIC_STATE_NOTE.
@@ -737,7 +745,8 @@ _GENPLAN_OBJECT_CENTRIC_STATE = (
 )
 
 GENPLAN_INTERFACE_SPEC = _GENPLAN_INTERFACE_SPEC_TEMPLATE.format(
-    state_description=_GENPLAN_VECTOR_STATE
+    state_description=_GENPLAN_VECTOR_STATE,
+    submission_contract=GENPLAN_SUBMISSION_CONTRACT,
 )
 
 
@@ -751,7 +760,8 @@ def genplan_interface_spec(object_centric: bool = False) -> str:
         return GENPLAN_INTERFACE_SPEC
     return (
         _GENPLAN_INTERFACE_SPEC_TEMPLATE.format(
-            state_description=_GENPLAN_OBJECT_CENTRIC_STATE
+            state_description=_GENPLAN_OBJECT_CENTRIC_STATE,
+            submission_contract=GENPLAN_SUBMISSION_CONTRACT,
         )
         + OBJECT_CENTRIC_STATE_NOTE
     )
