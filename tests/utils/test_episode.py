@@ -608,61 +608,24 @@ def test_anti_cheat_allows_state_reads(tmp_path: Path) -> None:
     assert hasattr(approach, "get_action")
 
 
-class _StatefulGoalEnv(Env):
-    """Toy env with get_state/set_state; step terminates once position reaches 5.0.
-
-    Honest play needs ~50 steps of +0.1; a teleport to the goal state solves in one.
-    """
-
-    def __init__(self) -> None:
-        self.observation_space = Box(0.0, 10.0, shape=(1,), dtype=np.float32)
-        self.action_space = Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
-        self._pos = 0.0
-
-    def reset(self, *, seed=None, options=None):
-        super().reset(seed=seed)
-        self._pos = 0.0
-        return np.array([self._pos], dtype=np.float32), {}
-
-    def step(self, action):
-        del action
-        self._pos = min(10.0, self._pos + 0.1)
-        obs = np.array([self._pos], dtype=np.float32)
-        return obs, 0.0, self._pos >= 5.0, False, {}
-
-    def get_state(self):
-        """Snapshot the current position."""
-        return np.array([self._pos], dtype=np.float32)
-
-    def set_state(self, state):
-        """Restore the position from a snapshot."""
-        self._pos = float(state[0])
-
-    def goal_state(self):
-        """A state sitting at the goal position (5.0)."""
-        return np.array([5.0], dtype=np.float32)
-
-    def render(self):
-        return None
-
-
-def test_set_state_teleport_fabricates_a_solve() -> None:
+def test_set_state_teleport_fabricates_a_solve(goal_env: Any) -> None:
     """Red-team: teleporting into the goal state fakes a one-step solve."""
-    env: Any = _StatefulGoalEnv()
-    env.reset(seed=0)
+    env: Any = goal_env
     env.set_state(env.goal_state())
     _, _, terminated, _, _ = env.step(env.action_space.sample())
     assert terminated  # a policy that could set_state would score solved doing nothing
 
 
-def test_generated_policy_cannot_teleport_via_primitive_closure(tmp_path: Path) -> None:
+def test_generated_policy_cannot_teleport_via_primitive_closure(
+    tmp_path: Path, goal_env: Any
+) -> None:
     """Red-team: an env-bound primitive exposes the env; the guard blocks the write.
 
     ``build_primitives`` binds primitives to a read-only view for exactly this reason;
     the wrapping is mirrored here because this test uses a toy env rather than a
     configured one.
     """
-    env = _StatefulGoalEnv()
+    env = goal_env
     # Mirrors build_primitives' partial(check_action_collision, readonly_view(env)):
     # the bound env is reachable from a generated policy as primitives["peek"].args[0].
     prims = {"peek": partial(lambda e, s: None, readonly_view(env))}
