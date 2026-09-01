@@ -146,6 +146,50 @@ def test_hydra_defaults_are_canonicalized_for_ids_metadata_and_commands() -> Non
     assert "eval_timeout=60" in command
 
 
+def test_strict_blackbox_is_a_tracked_access_condition() -> None:
+    """Strict and legacy blackbox runs cannot collapse to the same tracker row."""
+    legacy = _config(**{"approach.blackbox": True})
+    strict = _config(
+        **{
+            "approach.blackbox": True,
+            "approach.blackbox_runtime": "strict",
+        }
+    )
+    legacy_row = generate.tracker_row(legacy, eval_seed=_TEST_EVAL_SEED)
+    strict_row = generate.tracker_row(strict, eval_seed=_TEST_EVAL_SEED)
+    assert legacy_row["Access"] == "blackbox"
+    assert strict_row["Access"] == "strict-blackbox"
+    assert legacy_row["Experiment ID"] != strict_row["Experiment ID"]
+    assert "approach.blackbox_runtime=strict" in shlex.split(strict_row["Command"])
+
+
+@pytest.mark.parametrize(
+    ("updates", "reason"),
+    [
+        (
+            {"approach.blackbox_runtime": "strict"},
+            "requires blackbox access",
+        ),
+        (
+            {
+                "approach.blackbox": True,
+                "approach.blackbox_runtime": "strict",
+                "primitive_level": "low_level",
+            },
+            "requires primitive_level=none",
+        ),
+    ],
+)
+def test_tracker_rejects_invalid_strict_blackbox_cells(
+    updates: dict[str, Any], reason: str
+) -> None:
+    """Campaign generation excludes strict cells with leaked capabilities."""
+    canonical = generate.canonicalize_config(_config(**updates))
+    valid, actual_reason = generate.is_valid_experiment(canonical)
+    assert not valid
+    assert actual_reason is not None and reason in actual_reason
+
+
 def test_equivalent_integer_and_float_timeouts_share_an_id() -> None:
     """YAML numeric spelling does not create duplicate executable conditions."""
     integer = _config(eval_timeout=60)

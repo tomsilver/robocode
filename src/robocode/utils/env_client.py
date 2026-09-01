@@ -17,6 +17,10 @@ source code::
 Each call to ``make_env()`` creates a fresh, independent environment
 instance on the server, so parallel test scripts are safe.
 
+The list above is the legacy blackbox interface. When ``env_spaces.json`` has
+``"strict": true``, only reset, step, close, and generic space metadata are
+supported; the host server rejects every helper command independently.
+
 NOTE: ``approach.py`` must NOT import this module. It is evaluated by a
 separate harness that calls it directly with real observations; this client
 is only for test and exploration scripts.
@@ -439,6 +443,11 @@ class BlackboxEnv:
         self._object_centric = obs_spec.get("type") == "ObjectCentric"
         if self._object_centric:
             self.observation_space: Any = _ObjectCentricObservationSpace(obs_spec)
+        elif meta.get("strict", False):
+            # Strict blackbox exposes only generic array metadata. In particular,
+            # do not attach the host-backed devectorize/vectorize helpers that make
+            # the legacy blackbox convenient but confound the isolation ablation.
+            self.observation_space = SpaceInfo(obs_spec)
         else:
             self.observation_space = _BlackboxObservationSpace(obs_spec, self)
         self.action_space = SpaceInfo(meta["action_space"])

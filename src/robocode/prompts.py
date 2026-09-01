@@ -168,6 +168,51 @@ evaluated against the real environment by a separate harness that calls \
 ONLY in test and exploration scripts.\
 """
 
+_STRICT_BLACKBOX_INTERACTION_SPEC_VECTOR = """\
+The environment is a STRICT BLACK BOX. No environment, simulator, robotics, or \
+geometry code is installed or mounted. Interact with it only through \
+`env_client.py`:
+
+```python
+from env_client import make_env
+
+env = make_env()
+obs, info = env.reset(seed=0)
+obs, reward, terminated, truncated, info = env.step(action)
+env.close()
+```
+
+Only `reset` and `step` are available. `env.observation_space` and \
+`env.action_space` expose generic `shape`, `low`, `high`, `dtype`, and \
+`sample()` metadata. There are no primitives, state snapshots, render tools, \
+devectorization helpers, kinematics, collision checkers, or environment-specific \
+libraries. The frozen policy is evaluated in the same generic image with no \
+network. It may import only the Python standard library, NumPy, SciPy, and sibling \
+files that you write.
+
+CRITICAL: `approach.py` itself must NOT import `env_client`; use it only in test \
+and exploration scripts.\
+"""
+
+_STRICT_BLACKBOX_INTERACTION_SPEC_OBJECT_CENTRIC = """\
+The environment is a STRICT BLACK BOX. No environment, simulator, robotics, or \
+geometry code is installed or mounted. Interact with it only through \
+`env_client.py` using `make_env()`, `reset(seed=...)`, `step(action)`, and `close()`.
+
+Only `reset` and `step` are available. Observations are generic object-centric \
+values whose object count may vary. Read them with `get_objects(type)`, \
+`get_object_names()`, `get_object_from_name(name)`, and `get(obj, feature)`; space \
+types and feature names are exposed through `env.observation_space.types`, \
+`.type_features`, and `.get_type(name)`. There are no primitives, state snapshots, \
+render tools, kinematics, collision checkers, or environment-specific libraries. \
+The frozen policy is evaluated in the same generic image with no network. It may \
+import only the Python standard library, NumPy, SciPy, and sibling files that you \
+write.
+
+CRITICAL: `approach.py` itself must NOT import `env_client`; use it only in test \
+and exploration scripts.\
+"""
+
 # Obs-model-specific slots for the black-box spec: a fixed-length vector (default) or
 # a variable-count ObjectCentricState. The vector fillers reproduce the original spec
 # verbatim; the object-centric fillers describe the object-centric client API instead.
@@ -895,6 +940,7 @@ def build_agentic_prompt(
     env_description: str | None,
     per_instance_seed: int | None = None,
     object_centric: bool = False,
+    strict_blackbox: bool = False,
 ) -> str:
     """Compose the monolithic-approach task prompt.
 
@@ -914,8 +960,16 @@ def build_agentic_prompt(
         return _AGENTIC_BLACKBOX.format(
             scaffold_intro=_scaffold_intro("an approach", blackbox=True),
             env_description_section=_env_description_section(env_description),
-            blackbox_interaction_spec=blackbox_interaction_spec(
-                object_centric=object_centric, set_state_note=""
+            blackbox_interaction_spec=(
+                (
+                    _STRICT_BLACKBOX_INTERACTION_SPEC_OBJECT_CENTRIC
+                    if object_centric
+                    else _STRICT_BLACKBOX_INTERACTION_SPEC_VECTOR
+                )
+                if strict_blackbox
+                else blackbox_interaction_spec(
+                    object_centric=object_centric, set_state_note=""
+                )
             ),
             geometry_prompt=geometry_prompt,
             interface_spec=interface_spec,

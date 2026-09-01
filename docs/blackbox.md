@@ -7,13 +7,46 @@ reward structure, and termination conditions *empirically* by driving a live
 environment instance that runs on the **host**, reachable only through a narrow
 JSON-over-TCP protocol.
 
-The container never sees environment source, oracles, or solution primitives,
-and the protocol is JSON-only (no pickle), so a compromised agent cannot
-deserialize arbitrary host objects.
+The container never sees environment source or oracles, and the protocol is
+JSON-only (no pickle), so a compromised agent cannot deserialize arbitrary host
+objects. The legacy profile may still expose installed generic/robotics
+dependencies and explicitly configured helpers; the strict profile removes that
+additional surface.
 
 Blackbox mode is enabled per approach with the `blackbox: true` config flag
-(default `false`) and requires `env_cfg` to be set. It is supported by both
-`AgenticApproach` and `AgenticCDLApproach`.
+(default `false`) and requires `env_cfg` to be set. There are two runtime
+profiles:
+
+- `approach.blackbox_runtime=legacy` (default) preserves the existing setup. It
+  withholds environment source but keeps RoboCode's dependency environment and
+  optional helper/primitive proxies, and evaluates the frozen policy in the host
+  process. This is useful for reproducing existing runs.
+- `approach.blackbox_runtime=strict` is the dependency-clean ablation. It uses a
+  separate image containing only the Python standard library, NumPy, and SciPy;
+  mounts no RoboCode, KinDER, simulator, robotics, geometry, or planning code;
+  exposes only `reset` and `step`; and evaluates the frozen policy in the same
+  image with `--network=none`. It is supported by `AgenticApproach` and
+  `AgenticPerInstanceApproach`, requires Docker, `primitive_level=none`, and
+  `mcp_tools=[]`.
+
+Build both images before a strict run:
+
+```bash
+bash docker/build.sh
+bash docker/build_strict_blackbox.sh
+```
+
+Then run, for example:
+
+```bash
+python experiments/run_experiment.py \
+  approach=agentic environment=motion2d_easy primitive_level=none \
+  approach.blackbox=true approach.blackbox_runtime=strict mcp_tools=[] \
+  eval_seed="$EVAL_SEED"
+```
+
+The rest of this document describes the richer legacy protocol except where a
+strict-mode difference is called out.
 
 ## The two processes
 
@@ -43,12 +76,17 @@ source frames leak to the agent.
 
 ### Sandbox client
 
-`utils/env_client.py` is copied into the sandbox as an init file. Its
+`utils/env_client.py` is copied into the sandbox as an init file. In legacy mode its
 `make_env()` reads `env_spaces.json`, opens a TCP socket, and returns a gym-like
 `BlackboxEnv` exposing `reset`, `step`, `get_state`, `set_state`,
 `check_action_collision`, `make_primitives`, `render_state`, `render_policy`,
 and `close`. Test scripts import it. **`approach.py` must not import it**,
 since the generated approach has to run later without the server.
+
+In strict mode the client exposes only `reset`, `step`, `close`, and generic space
+metadata. The server independently enforces this boundary: direct requests for
+`get_state`, `set_state`, rendering, devectorization/vectorization, collision
+checking, or remote primitive calls are rejected.
 
 `make_primitives()` rebuilds the same `primitives` dict the eval harness passes
 to `GeneratedApproach`: env-dependent primitives (currently just
@@ -201,6 +239,15 @@ makes blackbox meaningful differs:
   logs a warning when `blackbox` is combined with the `local` backend. Use it
   only for quick local iteration, not for results that depend on the agent not
   having read the source. Use `docker` or `apptainer` for enforced isolation.
+
+Strict mode is Docker-only. During synthesis the strict image gets one writable
+mount (`/sandbox`) and the firewall allows the model provider plus only the exact
+host TCP port of the environment server; GitHub, SSH, package registries, and other
+host ports are not allowed. During evaluation, the sandbox is mounted read-only,
+the container root is read-only, all Linux capabilities are dropped, and networking
+is disabled. Consequently an approach that imports `pybullet_helpers`,
+`tomsgeoms2d`, `robocode`, `kinder`, or another undeclared dependency fails inside
+the scored container instead of silently succeeding from the host environment.
 
 ## MCP render tools in blackbox
 

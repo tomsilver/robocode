@@ -34,6 +34,7 @@ _PREFERRED_DIMENSIONS = (
     "approach",
     "primitive_level",
     "approach.blackbox",
+    "approach.blackbox_runtime",
     "approach/backend",
     "approach/completion",
     "eval_timeout",
@@ -171,6 +172,20 @@ def _canonicalize_with_hydra(
     else:
         values.pop("approach.blackbox", None)
 
+    if "blackbox_runtime" in cfg.approach and (
+        values.get("approach.blackbox") is True
+        or "approach.blackbox_runtime" in config.values
+    ):
+        runtime = cfg.approach.blackbox_runtime
+        if runtime not in ("legacy", "strict"):
+            raise ValueError(
+                "Hydra must compose approach.blackbox_runtime to 'legacy' or "
+                f"'strict', got {runtime!r}"
+            )
+        values["approach.blackbox_runtime"] = str(runtime)
+    else:
+        values.pop("approach.blackbox_runtime", None)
+
     eval_timeout = cfg.get("eval_timeout")
     if (
         not isinstance(eval_timeout, (int, float))
@@ -232,6 +247,8 @@ def _experiment_id(
         value = config.values[key]
         if key == "approach.blackbox":
             labels.append("blackbox" if value is True else "whitebox")
+        elif key == "approach.blackbox_runtime":
+            labels.append(f"bb_{_slug(value)}")
         elif key == "eval_timeout":
             labels.append(f"timeout_{_slug(value)}s")
         else:
@@ -283,7 +300,10 @@ def _tracker_row(
     blackbox = config.values.get("approach.blackbox")
     access = ""
     if isinstance(blackbox, bool):
-        access = "blackbox" if blackbox else "whitebox"
+        if blackbox and config.values.get("approach.blackbox_runtime") == "strict":
+            access = "strict-blackbox"
+        else:
+            access = "blackbox" if blackbox else "whitebox"
     row = {column: "" for column in ALL_COLUMNS}
     row.update(
         {

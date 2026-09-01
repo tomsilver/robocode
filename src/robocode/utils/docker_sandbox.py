@@ -47,7 +47,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -77,6 +77,10 @@ from robocode.utils.sandbox import (
     _stream_result_to_sandbox_result,
     agent_stdin,
 )
+from robocode.utils.strict_blackbox_policy import (
+    STRICT_BLACKBOX_IMAGE,
+    STRICT_BLACKBOX_PYTHON,
+)
 from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,46 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
+
+
+def _strict_docker_run_prefix(
+    container_name: str,
+    image: str,
+    sandbox_dir: Path,
+    auth_args: list[str],
+    firewall_domains: list[str],
+    env_server_port: int,
+    *,
+    env_args: list[str] | None = None,
+    extra_volumes: list[str] | None = None,
+) -> list[str]:
+    """Build a strict-blackbox launch with no project or dependency mounts."""
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--name",
+        container_name,
+        "--cap-add=NET_ADMIN",
+        "--cap-add=NET_RAW",
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "-e",
+        f"ROBOCODE_FIREWALL_HOST_PORT={env_server_port}",
+        *(env_args or []),
+    ]
+    if firewall_domains:
+        cmd += [
+            "-e",
+            f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
+        ]
+    cmd += auth_args
+    cmd += ["-v", f"{sandbox_dir.resolve()}:/sandbox"]
+    for volume in extra_volumes or []:
+        cmd += ["-v", volume]
+    cmd += ["-w", "/sandbox", image]
+    return cmd
 
 
 def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
@@ -483,6 +527,8 @@ class DockerSandboxConfig(SandboxConfig):
     """
 
     docker_image: str = _DEFAULT_IMAGE
+    strict_blackbox_image: str = STRICT_BLACKBOX_IMAGE
+    blackbox_runtime: str = "legacy"
     # The container reaches host-loopback services (env server, local model
     # server) via the gateway, mapped to this name by --add-host.
     local_model_host: str = "host.docker.internal"
@@ -617,17 +663,30 @@ async def run_agent_in_docker_sandbox(
         requested output file; ``success=False`` with an ``error`` otherwise.
     """
     backend_name = backend.name
+    strict_blackbox = config.blackbox_runtime == "strict"
+    if strict_blackbox:
+        if not config.blackbox:
+            raise ValueError("strict blackbox Docker runtime requires blackbox=True")
+        if config.primitive_names:
+            raise ValueError("strict blackbox Docker runtime cannot copy primitives")
+        if config.mcp_tools:
+            raise ValueError("strict blackbox Docker runtime cannot start MCP tools")
 
     _setup_sandbox_dir(config)
 
     sandbox_abs = str(config.sandbox_dir.resolve())
     container_name = f"robocode-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with (
-        _filtered_repo_mounts(
+    mounts = (
+        nullcontext((None, None, None, None))
+        if strict_blackbox
+        else _filtered_repo_mounts(
             blackbox=config.blackbox,
             include_bilevel="bilevel_models" in config.primitive_names,
-        ) as (
+        )
+    )
+    with (
+        mounts as (
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
@@ -654,38 +713,56 @@ async def run_agent_in_docker_sandbox(
             session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
         tel_volumes, tel_env_args = _telemetry_docker(config)
-        docker_cmd = _docker_run_prefix(
-            container_name,
-            config.docker_image,
-            config.sandbox_dir,
-            filtered_src,
-            filtered_kindergarden,
-            filtered_kinder_baselines,
-            auth_args,
-            firewall_domains,
-            ss_pybullet=ss_pybullet,
-            extra_volumes=session_volumes + tel_volumes,
-            env_args=[
-                "-e",
-                f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
-                "-e",
-                f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
-                # Wait for the render MCP server to connect before the CLI
-                # snapshots its tools, else render tools race and can vanish.
-                "-e",
-                f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
-                # Headless container has no GPU, so mujoco's Dynamic3D offscreen
-                # renderer must use OSMesa (software); EGL device displays fail.
-                "-e",
-                "MUJOCO_GL=osmesa",
-                "-e",
-                "PYOPENGL_PLATFORM=osmesa",
-            ]
-            + tel_env_args,
-            # Map the host gateway for blackbox (env server) and local model
-            # runs (ollama/vLLM on the host), which both reach host loopback.
-            map_host_gateway=config.blackbox or _is_local_model(config.model),
-        )
+        common_env_args = [
+            "-e",
+            f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
+            "-e",
+            f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+            # Wait for the render MCP server to connect before the CLI
+            # snapshots its tools, else render tools race and can vanish.
+            "-e",
+            f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
+            # Headless container has no GPU, so mujoco's Dynamic3D offscreen
+            # renderer must use OSMesa (software); EGL device displays fail.
+            "-e",
+            "MUJOCO_GL=osmesa",
+            "-e",
+            "PYOPENGL_PLATFORM=osmesa",
+        ] + tel_env_args
+        if strict_blackbox:
+            metadata = json.loads(
+                (config.sandbox_dir / "env_spaces.json").read_text(encoding="utf-8")
+            )
+            docker_cmd = _strict_docker_run_prefix(
+                container_name,
+                config.strict_blackbox_image,
+                config.sandbox_dir,
+                auth_args,
+                firewall_domains,
+                int(metadata["port"]),
+                extra_volumes=session_volumes,
+                env_args=common_env_args,
+            )
+            docker_python = STRICT_BLACKBOX_PYTHON
+        else:
+            assert filtered_src is not None and filtered_kindergarden is not None
+            docker_cmd = _docker_run_prefix(
+                container_name,
+                config.docker_image,
+                config.sandbox_dir,
+                filtered_src,
+                filtered_kindergarden,
+                filtered_kinder_baselines,
+                auth_args,
+                firewall_domains,
+                ss_pybullet=ss_pybullet,
+                extra_volumes=session_volumes + tel_volumes,
+                env_args=common_env_args,
+                # Map the host gateway for blackbox (env server) and local model
+                # runs (ollama/vLLM on the host), which both reach host loopback.
+                map_host_gateway=config.blackbox or _is_local_model(config.model),
+            )
+            docker_python = DOCKER_PYTHON
 
         # Build the agent CLI command. Use the http MCP transport: the render
         # server is started and health-checked BELOW, before the CLI, so its
@@ -693,7 +770,7 @@ async def run_agent_in_docker_sandbox(
         # server can still be importing then and its tools register too late).
         agent_cmd = backend.build_cli_cmd(
             config,
-            mcp_python_cmd=DOCKER_PYTHON,
+            mcp_python_cmd=docker_python,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
@@ -708,7 +785,7 @@ async def run_agent_in_docker_sandbox(
         # AFTER build_cli_cmd so .mcp/mcp_config.json exists for conversion.
         backend.setup_sandbox_files(
             config,
-            docker_python=DOCKER_PYTHON,
+            docker_python=docker_python,
             primitive_names=config.primitive_names,
         )
         _initial_commit(config.sandbox_dir)
@@ -718,7 +795,7 @@ async def run_agent_in_docker_sandbox(
         logger.info(
             "Starting Docker sandbox: container=%s image=%s sandbox=%s",
             container_name,
-            config.docker_image,
+            (config.strict_blackbox_image if strict_blackbox else config.docker_image),
             sandbox_abs,
         )
         logger.info("System prompt:\n%s", config.system_prompt)

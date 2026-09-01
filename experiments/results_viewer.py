@@ -86,8 +86,8 @@ class RunInfo:
     # Short label for the synthesis model (e.g. "opus-5"); None when the run has
     # no LLM backend.
     model: Optional[str] = None
-    # "whitebox" when the agent could read the environment source, "blackbox" when it
-    # could not; None for approaches with no such setting.
+    # "whitebox" when source was visible, "blackbox" for legacy source-hidden
+    # access, and "strict-blackbox" for dependency-clean isolation.
     env_access: Optional[str] = None
 
 
@@ -255,11 +255,25 @@ def _env_access(hydra_dir: Path) -> Optional[str]:
     """
     cfg = hydra_dir / "config.yaml"
     if cfg.exists():
-        m = re.search(r"^\s+blackbox:\s*(\S+)\s*$", cfg.read_text(), re.MULTILINE)
+        text = cfg.read_text()
+        m = re.search(r"^\s+blackbox:\s*(\S+)\s*$", text, re.MULTILINE)
         if m is not None:
-            return _ACCESS_LABELS.get(m.group(1).strip("'\"").lower())
-    raw = _parse_overrides(hydra_dir).get("approach.blackbox")
-    return _ACCESS_LABELS.get(raw.strip("'\"").lower()) if raw else None
+            access = _ACCESS_LABELS.get(m.group(1).strip("'\"").lower())
+            runtime = re.search(
+                r"^\s+blackbox_runtime:\s*(\S+)\s*$", text, re.MULTILINE
+            )
+            if access == "blackbox" and runtime is not None:
+                if runtime.group(1).strip("'\"").lower() == "strict":
+                    return "strict-blackbox"
+            return access
+    overrides = _parse_overrides(hydra_dir)
+    raw = overrides.get("approach.blackbox")
+    access = _ACCESS_LABELS.get(raw.strip("'\"").lower()) if raw else None
+    if access == "blackbox":
+        runtime_override = overrides.get("approach.blackbox_runtime", "legacy")
+        if runtime_override.strip("'\"").lower() == "strict":
+            return "strict-blackbox"
+    return access
 
 
 # Environment pairs that sample the same task family from different spawn ranges;
@@ -2597,9 +2611,10 @@ function modelColor(m){if(!m)return null;if(MODEL_COLORS[m])return MODEL_COLORS[
 function modelDot(m){return h("span",{class:"dot",style:`background:${modelColor(m)}`});}
 function modelPill(m){return m?h("span",{class:"pill",
  style:`color:${modelColor(m)};border-color:${modelColor(m)}`},m):"";}
-// blackbox = the agent could not read the environment source during synthesis.
+// strict-blackbox also removes domain dependencies and helper APIs.
 function accessPill(a){return a?h("span",{class:"pill",
- title:a==="blackbox"?"agent could not read the environment source"
+ title:a==="strict-blackbox"?"agent saw only reset/step and generic numerical packages"
+  :a==="blackbox"?"agent could not read the environment source"
   :"agent could read the environment source"},a):"";}
 
 // Runs surviving every active filter except the named facet, which is the pool a

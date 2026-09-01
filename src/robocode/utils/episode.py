@@ -335,7 +335,7 @@ def run_episode_with_timeout(
     Where forking cannot carry the env, the rollout runs in this process instead and
     is bounded the same way; :func:`_run_episode_in_process` covers what that costs.
     """
-    if not _EPISODE_FORK_SAFE:
+    if not _EPISODE_FORK_SAFE or getattr(approach, "requires_in_process_eval", False):
         return _run_episode_in_process(
             env,
             approach,

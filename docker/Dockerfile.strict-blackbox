@@ -1,0 +1,62 @@
+# Generic coding/evaluation image for the strict blackbox ablation.
+#
+# Deliberately never copies pyproject.toml, uv.lock, RoboCode, KinDER, simulator
+# code, or robotics/geometry packages. Generated policies get only Python's
+# standard library plus pinned NumPy/SciPy.
+FROM node:22
+
+ARG CLAUDE_CODE_VERSION=latest
+ARG OPENCODE_VERSION=latest
+ARG USER_UID=1000
+ARG USER_GID=1000
+
+RUN if [ "$USER_GID" != "1000" ] && ! getent group "$USER_GID" >/dev/null; then \
+        groupmod --gid "$USER_GID" node; \
+    fi \
+    && if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
+        usermod --uid "$USER_UID" --gid "$USER_GID" node; \
+    fi
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        aggregate \
+        curl \
+        dnsutils \
+        git \
+        iproute2 \
+        ipset \
+        iptables \
+        jq \
+        python3.11 \
+        python3.11-venv \
+        ripgrep \
+        util-linux \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3.11 -m venv /opt/robocode-strict \
+    && /opt/robocode-strict/bin/pip install --no-cache-dir \
+        numpy==1.26.4 scipy==1.14.0
+
+RUN mkdir -p /usr/local/share/npm-global \
+    && chown -R node:node /usr/local/share
+ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
+ENV PATH="$PATH:/usr/local/share/npm-global/bin:/opt/robocode-strict/bin"
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    && npm install -g opencode-ai@${OPENCODE_VERSION}
+
+COPY docker/init-firewall.sh /usr/local/bin/init-firewall.sh
+COPY docker/strict-blackbox-entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY src/robocode/utils/strict_blackbox_runtime.py /opt/strict_blackbox_runtime.py
+RUN chmod 0755 /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
+    && mkdir -p /home/node/.claude /home/node/.local/state \
+        /home/node/.local/share/opencode \
+    && chown -R node:node /home/node/.claude /home/node/.local
+
+ENV DEVCONTAINER=true
+ENV CLAUDE_CONFIG_DIR=/home/node/.claude
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV ROBOCODE_FIREWALL_STRICT=1
+
+USER root
+WORKDIR /sandbox
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

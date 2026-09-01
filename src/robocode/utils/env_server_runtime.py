@@ -282,12 +282,18 @@ class _EnvServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def __init__(
-        self, env_config: dict[str, Any], token: str, sandbox_dir: Path
+        self,
+        env_config: dict[str, Any],
+        token: str,
+        sandbox_dir: Path,
+        *,
+        strict: bool = False,
     ) -> None:
         super().__init__(("0.0.0.0", 0), _EnvRequestHandler)
         self.env_config = env_config
         self.token = token
         self.sandbox_dir = sandbox_dir
+        self.strict = strict
 
 
 class _EnvRequestHandler(socketserver.StreamRequestHandler):
@@ -328,7 +334,13 @@ class _EnvRequestHandler(socketserver.StreamRequestHandler):
                 # broad catch is intentional: any failure the agent triggers
                 # must reach its test script as a message.
                 try:
-                    payload = _dispatch(env, request, self.server.sandbox_dir, registry)
+                    payload = _dispatch(
+                        env,
+                        request,
+                        self.server.sandbox_dir,
+                        registry,
+                        strict=self.server.strict,
+                    )
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logger.error(
                         "Request %s failed:\n%s", request, traceback.format_exc()
@@ -394,6 +406,8 @@ def _dispatch(
     request: dict[str, Any],
     sandbox_dir: Path,
     registry: _HandleRegistry,
+    *,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Execute one decoded request against the env and encode the reply."""
     cmd = request["cmd"]
@@ -409,6 +423,11 @@ def _dispatch(
             "truncated": bool(truncated),
             "info": encode(info),
         }
+    if strict:
+        raise ValueError(
+            f"Command {cmd!r} is unavailable in strict blackbox mode; "
+            "only reset and step are exposed"
+        )
     if cmd == "get_state":
         return {"state": encode(env.get_state())}
     if cmd == "set_state":
@@ -507,6 +526,11 @@ def main() -> None:
         "--env-config", required=True, help="Path to JSON file with Hydra env config"
     )
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Expose only the generic reset/step blackbox API",
+    )
+    parser.add_argument(
         "--token", required=True, help="Auth token required on every request"
     )
     parser.add_argument(
@@ -527,7 +551,9 @@ def main() -> None:
     serialize_space(env.action_space)
     env.close()
 
-    server = _EnvServer(env_config, args.token, Path(args.sandbox_dir))
+    server = _EnvServer(
+        env_config, args.token, Path(args.sandbox_dir), strict=args.strict
+    )
     port = server.server_address[1]
     Path(args.port_file).write_text(str(port), encoding="utf-8")
     logger.info("Serving env %s on port %d", env_config.get("_target_"), port)
