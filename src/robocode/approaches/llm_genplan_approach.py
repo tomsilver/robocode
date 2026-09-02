@@ -163,8 +163,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     "role": "user",
                     "content": (
                         f"{context}\n\nThere is a simple strategy for solving "
-                        "all instances of this environment without using "
-                        f"search. {interface_spec}"
+                        f"all instances of this environment. {interface_spec}"
                     ),
                 }
             )
@@ -432,10 +431,11 @@ def _gather_env_source(env: gymnasium.Env) -> str:
     """Best-effort bundle of the env's local source (robocode + kinder)."""
     files: list[Path] = []
     for obj, package in _source_targets(env):
-        source_file = inspect.getsourcefile(type(obj))
+        cls = obj if inspect.isclass(obj) else type(obj)
+        source_file = inspect.getsourcefile(cls)
         assert source_file is not None
         src = Path(source_file)
-        root = src.parents[len(type(obj).__module__.split(".")) - 1]
+        root = src.parents[len(cls.__module__.split(".")) - 1]
         files.extend(collect_local_deps(src, root, package))
     seen: set[Path] = set()
     blocks: list[str] = []
@@ -453,6 +453,28 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
     underlying = getattr(env, "_kinder_env", None)
     if underlying is not None:
         targets.append((underlying, type(underlying).__module__.split(".")[0]))
+    # Dynamic-wrapper special case: VariableObjectCountEnv selects its real backend
+    # class from configuration and stores it in _env_cls. No static import points
+    # from the wrapper to that selected class, so ordinary import traversal finds
+    # only the wrapper. Register the class explicitly; merely reading this class
+    # reference does not construct/reset a backend or expose held-out tasks.
+    # Example walkthrough:
+    # 1. A VariableObjectCountEnv configured for Dynamic 2D stores the selected
+    #    DynObstruction2DEnv class in env._env_cls.
+    # 2. getattr below retrieves DynObstruction2DEnv itself; it does not call the
+    #    class, create a Dynamic 2D instance, or choose an object count/task.
+    # 3. Its module is "kinder.envs.dynamic2d.dyn_obstruction2d", so splitting at
+    #    the first dot produces the allowed package root "kinder".
+    # 4. Appending (DynObstruction2DEnv, "kinder") tells source discovery to include
+    #    that implementation and follow only its kinder imports.
+    # Read the configured backend class when this env is such a wrapper; ordinary
+    # environments do not define _env_cls and therefore return None.
+    env_cls = getattr(env, "_env_cls", None)
+    # Skip the dynamic-wrapper special case for ordinary environments.
+    if env_cls is not None:
+        # Scan the selected backend's source, restricting recursive import discovery
+        # to the backend's top-level package (for example, "kinder").
+        targets.append((env_cls, env_cls.__module__.split(".")[0]))
     return targets
 
 
