@@ -41,13 +41,18 @@ def _config(**updates: Any) -> Any:
 
 
 def test_sample_campaign_expansion_and_constraint(tmp_path: Path) -> None:
-    """The sample campaign yields five rows and excludes one invalid matrix cell."""
+    """The sample campaign yields four rows and excludes two invalid matrix cells."""
     rows, excluded = generate.generate_rows(
         [_sample_campaign(tmp_path)], eval_seed=_TEST_EVAL_SEED
     )
-    assert len(rows) == 5
-    assert len(excluded) == 1
-    assert excluded[0][1] == "bilevel_models unavailable under blackbox"
+    assert len(rows) == 4
+    # Blackbox excludes both env-bound primitive levels: bilevel has no host proxy at
+    # all, and low_level's check_action_collision would let the program read the env
+    # out of the primitive's closure at eval time.
+    assert sorted(reason for _, reason, _ in excluded) == [
+        "bilevel_models unavailable under blackbox",
+        "env-bound primitives unavailable under blackbox",
+    ]
     assert all(row["Replicate Seeds"] == "[42, 24]" for row in rows)
     assert all(row["Evaluation Seed"] == str(_TEST_EVAL_SEED) for row in rows)
     assert all("replicate_seed=42,24" in row["Command"] for row in rows)

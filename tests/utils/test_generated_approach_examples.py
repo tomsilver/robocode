@@ -164,7 +164,10 @@ READS_THE_SCORED_ENV = '''
     """Pull the scored env out of a primitive's closure and read it.
 
     Reads, geometry handles and collision queries all pass through the read-only
-    view: only the mutators are withheld.
+    view: only the mutators are withheld. That is deliberate under whitebox, where
+    the agent has the env source anyway. Under blackbox it would hand the program
+    what the mode exists to withhold, so `build_primitives` refuses to grant an
+    env-bound primitive there at all -- this program cannot arise in that mode.
     """
 
     import numpy as np
@@ -421,7 +424,12 @@ def test_naming_a_mutator_in_a_string_is_not_cheating(
 
 
 def test_reading_the_scored_env_is_allowed(tmp_path: Path, goal_env: Any) -> None:
-    """Only the mutators are withheld; a program may still look at the env."""
+    """Only the mutators are withheld; a program may still look at the env.
+
+    Whitebox only. Blackbox never reaches this state: the env-bound primitive that makes
+    the env reachable is refused when the primitives are built, so there is no closure
+    to read the env out of (see tests/primitives/test_bilevel_models.py).
+    """
     approach = _load(
         _sandbox(tmp_path, READS_THE_SCORED_ENV),
         goal_env,

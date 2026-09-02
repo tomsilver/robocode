@@ -138,3 +138,23 @@ def test_variable_count_symbolic_layer() -> None:
         "PlaceOnTable",
         "PlaceOnTarget",
     }
+
+
+def test_blackbox_refuses_env_bound_primitives() -> None:
+    """A black-box program must not be able to read the env it is scored in.
+
+    Env-bound primitives close over the live env, and the read-only view passes reads
+    through, so granting one under blackbox would hand the program the environment the
+    mode exists to withhold. Refused rather than served unsafely.
+    """
+    env = _obstruction_env()
+    with pytest.raises(ValueError, match="black-box"):
+        build_primitives(env, ["check_action_collision"], blackbox=True)
+    with pytest.raises(ValueError, match="black-box"):
+        build_primitives(env, ["bilevel_models"], blackbox=True)
+
+
+def test_blackbox_allows_generic_primitives() -> None:
+    """Generic primitives carry no env, so blackbox is free to grant them."""
+    env = _obstruction_env()
+    assert "BiRRT" in build_primitives(env, ["BiRRT"], blackbox=True)
