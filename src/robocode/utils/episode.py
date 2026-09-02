@@ -96,7 +96,9 @@ def load_generated_approach(
     without domain dependencies cannot pick them up from the host at scoring time.
     """
     if strict_imports:
-        check_strict_imports(path)
+        # sys.modules wins over sys.path.  Reject a local module that would be
+        # silently replaced by an already-loaded host module during scoring.
+        check_strict_imports(path, reject_cached_siblings=True)
     sandbox_dir = str(path.parent.resolve())
     if sandbox_dir not in sys.path:
         sys.path.insert(0, sandbox_dir)

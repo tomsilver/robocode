@@ -215,6 +215,10 @@ def test_strict_imports_accept_stdlib_allowed_packages_and_siblings(
             {"approach.py": "import helper\n", "helper.py": "from kinder import x\n"},
             "helper.py:1: import kinder",
         ),
+        (
+            {"approach.py": "import helper, robocode\n", "helper.py": "K = 1\n"},
+            "approach.py:1: import robocode",
+        ),
         ({"approach.py": "import importlib\n"}, "import importlib"),
         ({"approach.py": "m = __import__('os')\n"}, "approach.py:1: __import__"),
         ({"approach.py": "from env_client import make_env\n"}, "import env_client"),
@@ -239,4 +243,22 @@ def test_loader_runs_the_strict_check_before_exec(tmp_path: Path) -> None:
     )
     space = Box(-1.0, 1.0, (2,), dtype=np.float32)
     with pytest.raises(StrictImportError):
+        load_generated_approach(entry, space, space, {}, strict_imports=True)
+
+
+def test_strict_loader_rejects_sibling_that_shadows_cached_host_module(
+    tmp_path: Path,
+) -> None:
+    """A sibling cannot disguise a host module already present in sys.modules."""
+    _write(tmp_path, "robocode.py", "LOCAL = True\n")
+    entry = _write(
+        tmp_path,
+        "approach.py",
+        "import robocode\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, *args, **kwargs):\n"
+        "        assert robocode.LOCAL\n",
+    )
+    space = Box(-1.0, 1.0, (2,), dtype=np.float32)
+    with pytest.raises(StrictImportError, match="cached host module robocode"):
         load_generated_approach(entry, space, space, {}, strict_imports=True)
