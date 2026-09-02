@@ -1632,6 +1632,20 @@ def _purge_sandbox_modules() -> None:
         del sys.modules[name]
 
 
+def _close_env(env: Any) -> None:
+    """Release a replay env's resources at the end of the job that built it.
+
+    PyBullet DIRECT clients and their meshes are held per environment instance, so
+    an env that outlives its job keeps growing the server's memory footprint.
+    """
+    if env is None:
+        return
+    try:
+        env.close()
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f"env close failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+
 def _jsonable(value: Any) -> Any:
     """Convert numpy-ish metric values without importing numpy in the server."""
     if hasattr(value, "item"):
@@ -1756,6 +1770,7 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
     for snapshot in versions:
         version = snapshot["version"]
         records: dict[int, dict[str, Any]] = {}
+        env: Any = None
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 _export_snapshot(
@@ -1850,6 +1865,8 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
             with _JOBS_LOCK:
                 job.current += len(final_per_episode)
                 job.message = f"v{version} could not load"
+        finally:
+            _close_env(env)
         _record_history_episodes(run, version, records)
 
 
@@ -1873,6 +1890,7 @@ def _render_worker() -> None:
         replay_seed: Optional[int] = None
         replay_count: Optional[int] = None
         completion_message = "rendered"
+        env: Any = None
         with _JOBS_LOCK:
             job = JOBS[job_id]
             job.state = "running"
@@ -2149,6 +2167,7 @@ def _render_worker() -> None:
                     },
                 )
         finally:
+            _close_env(env)
             _RENDER_Q.task_done()
 
 
