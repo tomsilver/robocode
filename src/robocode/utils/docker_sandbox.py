@@ -87,6 +87,11 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
 
+# A $20 Opus GenPlan run can take longer than an hour. Keep one shared limit for
+# Docker and Apptainer so the selected container backend does not change whether
+# the configured model budget can be exhausted.
+GENPLAN_CONTAINER_TIMEOUT_S: float = 10 * 60 * 60
+
 
 def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
     """(extra volumes, env args) enabling telemetry for a whitebox docker run.
@@ -378,7 +383,7 @@ def run_genplan_in_docker(
     sandbox_dir: Path,
     completion_cfg: dict[str, Any],
     image: str = _DEFAULT_IMAGE,
-    timeout: float = 3600.0,
+    timeout: float = GENPLAN_CONTAINER_TIMEOUT_S,
     include_bilevel: bool = False,
 ) -> None:
     """Run the whole LLM-GenPlan loop inside one sandbox container.
@@ -426,13 +431,25 @@ def run_genplan_in_docker(
             ss_pybullet=ss_pybullet,
         ) + [DOCKER_PYTHON, "-m", "robocode.approaches.genplan_driver"]
         logger.info("Starting genplan Docker container %s", container_name)
-        subprocess.run(
-            docker_cmd,
-            env={**os.environ, **auth_env},
-            stdin=subprocess.DEVNULL,
-            check=True,
-            timeout=timeout,
-        )
+        try:
+            subprocess.run(
+                docker_cmd,
+                env={**os.environ, **auth_env},
+                stdin=subprocess.DEVNULL,
+                check=True,
+                timeout=timeout,
+            )
+        except BaseException:
+            # A timeout kills the attached Docker client, not necessarily the named
+            # container. Remove it explicitly so an abandoned run cannot keep
+            # spending model budget or writing into the sandbox directory.
+            subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            raise
 
 
 def _copy_src(
