@@ -378,7 +378,7 @@ def run_genplan_in_docker(
     sandbox_dir: Path,
     completion_cfg: dict[str, Any],
     image: str = _DEFAULT_IMAGE,
-    timeout: float = 3600.0,
+    timeout: float = 10 * 60 * 60,
     include_bilevel: bool = False,
 ) -> None:
     """Run the whole LLM-GenPlan loop inside one sandbox container.
