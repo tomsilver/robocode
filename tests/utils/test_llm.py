@@ -116,6 +116,178 @@ def test_cli_failure_exposes_diagnostics(monkeypatch):
     assert "resets 4:50am" in str(error.value)
 
 
+def test_cli_retries_server_error(monkeypatch):
+    """A transient Claude API 5xx is retried with the same completion request."""
+    calls = 0
+
+    def fail_twice_then_succeed(args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise subprocess.CalledProcessError(
+                1,
+                args,
+                output=json.dumps(
+                    {
+                        "is_error": True,
+                        "api_error_status": 500,
+                        "result": "API Error: 500 Internal server error",
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps({"result": "recovered"}), ""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail_twice_then_succeed)
+    client = ClaudeCLIClient(
+        DictConfig(
+            {
+                "model": "test",
+                "retry_wait_min_s": 0,
+                "retry_wait_max_s": 0,
+            }
+        )
+    )
+    assert client.complete([{"role": "user", "content": "hello"}]).text == "recovered"
+    assert calls == 3
+
+
+def test_cli_waits_for_session_limit_reset(monkeypatch):
+    """A zero-cost session limit sleeps until reset and repeats the request."""
+    calls = 0
+
+    def rate_limit_then_succeed(args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.CalledProcessError(
+                1,
+                args,
+                output=json.dumps(
+                    {
+                        "is_error": True,
+                        "api_error_status": 429,
+                        "total_cost_usd": 0,
+                        "result": (
+                            "You've hit your session limit · resets 8:20am (UTC)"
+                        ),
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps({"result": "recovered"}), ""
+        )
+
+    waited_for: list[str] = []
+    monkeypatch.setattr(subprocess, "run", rate_limit_then_succeed)
+    monkeypatch.setattr(
+        "robocode.utils.rate_limit.wait_for_rate_limit_reset", waited_for.append
+    )
+
+    client = ClaudeCLIClient(DictConfig({"model": "test"}))
+    assert client.complete([{"role": "user", "content": "hello"}]).text == "recovered"
+    assert waited_for == ["You've hit your session limit · resets 8:20am (UTC)"]
+    assert calls == 2
+
+
+def test_cli_session_limit_retry_preserves_resume(monkeypatch):
+    """A rejected follow-up still resumes its established Claude conversation."""
+    calls: list[tuple[list[str], str]] = []
+
+    def rate_limit_follow_up(args, **kwargs):
+        calls.append((args, kwargs["input"]))
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps({"result": "first reply", "session_id": "session-1"}),
+                "",
+            )
+        if len(calls) == 2:
+            raise subprocess.CalledProcessError(
+                1,
+                args,
+                output=json.dumps(
+                    {
+                        "is_error": True,
+                        "api_error_status": 429,
+                        "total_cost_usd": 0,
+                        "result": "Session limit reached; resets 8:20am (UTC)",
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps({"result": "second reply"}), ""
+        )
+
+    monkeypatch.setattr(subprocess, "run", rate_limit_follow_up)
+    monkeypatch.setattr(
+        "robocode.utils.rate_limit.wait_for_rate_limit_reset", lambda _message: None
+    )
+    client = ClaudeCLIClient(DictConfig({"model": "test"}))
+    first = [{"role": "user", "content": "first prompt"}]
+    assert client.complete(first).text == "first reply"
+    follow_up = first + [
+        {"role": "assistant", "content": "first reply"},
+        {"role": "user", "content": "next prompt"},
+    ]
+
+    assert client.complete(follow_up).text == "second reply"
+    for args, prompt in calls[1:]:
+        assert args[args.index("--resume") + 1] == "session-1"
+        assert prompt == "next prompt"
+
+
+def test_cli_does_not_retry_nonserver_error(monkeypatch):
+    """A non-5xx CLI failure is returned immediately rather than retried."""
+    calls = 0
+
+    def fail(args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise subprocess.CalledProcessError(
+            1,
+            args,
+            output=json.dumps({"is_error": True, "api_error_status": 400}),
+            stderr="bad request",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="bad request"):
+        ClaudeCLIClient(DictConfig({"model": "test"})).complete([])
+    assert calls == 1
+
+
+def test_cli_does_not_retry_charged_server_error(monkeypatch):
+    """A failed request with reported spend is not duplicated automatically."""
+    calls = 0
+
+    def fail(args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise subprocess.CalledProcessError(
+            1,
+            args,
+            output=json.dumps(
+                {
+                    "is_error": True,
+                    "api_error_status": 500,
+                    "total_cost_usd": 0.25,
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="api_error_status"):
+        ClaudeCLIClient(DictConfig({"model": "test"})).complete([])
+    assert calls == 1
+
+
 @pytest.fixture(name="cli_calls")
 def _record_cli_calls(monkeypatch):
     """Record requests and return a distinct session ID for each fake call."""
