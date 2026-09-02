@@ -77,7 +77,7 @@ from robocode.utils.sandbox import (
     _stream_result_to_sandbox_result,
     agent_stdin,
 )
-from robocode.utils.strict_blackbox_policy import (
+from robocode.utils.strict_blackbox import (
     STRICT_BLACKBOX_IMAGE,
     STRICT_BLACKBOX_PYTHON,
 )
@@ -90,46 +90,6 @@ DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
-
-
-def _strict_docker_run_prefix(
-    container_name: str,
-    image: str,
-    sandbox_dir: Path,
-    auth_args: list[str],
-    firewall_domains: list[str],
-    env_server_port: int,
-    *,
-    env_args: list[str] | None = None,
-    extra_volumes: list[str] | None = None,
-) -> list[str]:
-    """Build a strict-blackbox launch with no project or dependency mounts."""
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "-i",
-        "--name",
-        container_name,
-        "--cap-add=NET_ADMIN",
-        "--cap-add=NET_RAW",
-        "--add-host",
-        "host.docker.internal:host-gateway",
-        "-e",
-        f"ROBOCODE_FIREWALL_HOST_PORT={env_server_port}",
-        *(env_args or []),
-    ]
-    if firewall_domains:
-        cmd += [
-            "-e",
-            f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
-        ]
-    cmd += auth_args
-    cmd += ["-v", f"{sandbox_dir.resolve()}:/sandbox"]
-    for volume in extra_volumes or []:
-        cmd += ["-v", volume]
-    cmd += ["-w", "/sandbox", image]
-    return cmd
 
 
 def _telemetry_docker(config: SandboxConfig) -> tuple[list[str], list[str]]:
@@ -346,8 +306,8 @@ def _docker_run_prefix(
     container_name: str,
     image: str,
     sandbox_dir: Path,
-    filtered_src: Path,
-    filtered_kindergarden: Path,
+    filtered_src: Path | None,
+    filtered_kindergarden: Path | None,
     filtered_kinder_baselines: Path | None,
     auth_args: list[str],
     firewall_domains: list[str],
@@ -355,6 +315,7 @@ def _docker_run_prefix(
     map_host_gateway: bool = False,
     ss_pybullet: Path | None = None,
     extra_volumes: list[str] | None = None,
+    env_server_port: int | None = None,
 ) -> list[str]:
     """Build the shared ``docker run`` prefix: caps, env, auth, mounts, image.
 
@@ -363,6 +324,10 @@ def _docker_run_prefix(
     gateway so the container can reach host-loopback services: the blackbox
     env server and/or a local model server (ollama/vLLM). The name is built
     into Docker Desktop but needs ``--add-host`` on Linux.
+
+    A strict blackbox launch passes ``None`` for the repo mounts, since its image
+    holds no project code, and *env_server_port*, which the image's firewall
+    reads to admit only that host port beyond the model provider.
     """
     cmd = [
         "docker",
@@ -381,6 +346,8 @@ def _docker_run_prefix(
         # Reaching a host service also depends on the unconditional host /24
         # allow rule in docker/init-firewall.sh (default-deny otherwise).
         cmd += ["--add-host", "host.docker.internal:host-gateway"]
+    if env_server_port is not None:
+        cmd += ["-e", f"ROBOCODE_FIREWALL_HOST_PORT={env_server_port}"]
     if firewall_domains:
         cmd += [
             "-e",
@@ -393,14 +360,14 @@ def _docker_run_prefix(
     # the models, so a "models OFF" agent is not conditioned by them.
     if filtered_kinder_baselines is not None:
         cmd += ["-e", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
-    cmd += [
-        "-v",
-        f"{sandbox_dir.resolve()}:/sandbox",
-        "-v",
-        f"{filtered_src.resolve()}:/robocode/src",
-        "-v",
-        f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
-    ]
+    cmd += ["-v", f"{sandbox_dir.resolve()}:/sandbox"]
+    if filtered_src is not None:
+        cmd += ["-v", f"{filtered_src.resolve()}:/robocode/src"]
+    if filtered_kindergarden is not None:
+        cmd += [
+            "-v",
+            f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
+        ]
     if filtered_kinder_baselines is not None:
         cmd += [
             "-v",
@@ -527,8 +494,9 @@ class DockerSandboxConfig(SandboxConfig):
     """
 
     docker_image: str = _DEFAULT_IMAGE
+    # Strict blackbox runs use the dependency-clean image instead of docker_image.
     strict_blackbox_image: str = STRICT_BLACKBOX_IMAGE
-    blackbox_runtime: str = "legacy"
+    blackbox_strict: bool = False
     # The container reaches host-loopback services (env server, local model
     # server) via the gateway, mapped to this name by --add-host.
     local_model_host: str = "host.docker.internal"
@@ -663,7 +631,7 @@ async def run_agent_in_docker_sandbox(
         requested output file; ``success=False`` with an ``error`` otherwise.
     """
     backend_name = backend.name
-    strict_blackbox = config.blackbox_runtime == "strict"
+    strict_blackbox = config.blackbox_strict
     if strict_blackbox:
         if not config.blackbox:
             raise ValueError("strict blackbox Docker runtime requires blackbox=True")
@@ -713,56 +681,50 @@ async def run_agent_in_docker_sandbox(
             session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
 
         tel_volumes, tel_env_args = _telemetry_docker(config)
-        common_env_args = [
-            "-e",
-            f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
-            "-e",
-            f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
-            # Wait for the render MCP server to connect before the CLI
-            # snapshots its tools, else render tools race and can vanish.
-            "-e",
-            f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
-            # Headless container has no GPU, so mujoco's Dynamic3D offscreen
-            # renderer must use OSMesa (software); EGL device displays fail.
-            "-e",
-            "MUJOCO_GL=osmesa",
-            "-e",
-            "PYOPENGL_PLATFORM=osmesa",
-        ] + tel_env_args
+        env_server_port: int | None = None
         if strict_blackbox:
+            # The strict firewall admits exactly one host port: the env server's.
             metadata = json.loads(
                 (config.sandbox_dir / "env_spaces.json").read_text(encoding="utf-8")
             )
-            docker_cmd = _strict_docker_run_prefix(
-                container_name,
-                config.strict_blackbox_image,
-                config.sandbox_dir,
-                auth_args,
-                firewall_domains,
-                int(metadata["port"]),
-                extra_volumes=session_volumes,
-                env_args=common_env_args,
-            )
-            docker_python = STRICT_BLACKBOX_PYTHON
-        else:
-            assert filtered_src is not None and filtered_kindergarden is not None
-            docker_cmd = _docker_run_prefix(
-                container_name,
-                config.docker_image,
-                config.sandbox_dir,
-                filtered_src,
-                filtered_kindergarden,
-                filtered_kinder_baselines,
-                auth_args,
-                firewall_domains,
-                ss_pybullet=ss_pybullet,
-                extra_volumes=session_volumes + tel_volumes,
-                env_args=common_env_args,
-                # Map the host gateway for blackbox (env server) and local model
-                # runs (ollama/vLLM on the host), which both reach host loopback.
-                map_host_gateway=config.blackbox or _is_local_model(config.model),
-            )
-            docker_python = DOCKER_PYTHON
+            env_server_port = int(metadata["port"])
+        docker_image = (
+            config.strict_blackbox_image if strict_blackbox else config.docker_image
+        )
+        docker_python = STRICT_BLACKBOX_PYTHON if strict_blackbox else DOCKER_PYTHON
+        docker_cmd = _docker_run_prefix(
+            container_name,
+            docker_image,
+            config.sandbox_dir,
+            filtered_src,
+            filtered_kindergarden,
+            filtered_kinder_baselines,
+            auth_args,
+            firewall_domains,
+            ss_pybullet=ss_pybullet,
+            extra_volumes=session_volumes + tel_volumes,
+            env_args=[
+                "-e",
+                f"CLAUDE_CODE_MAX_OUTPUT_TOKENS={config.max_output_tokens}",
+                "-e",
+                f"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE={config.autocompact_pct}",
+                # Wait for the render MCP server to connect before the CLI
+                # snapshots its tools, else render tools race and can vanish.
+                "-e",
+                f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
+                # Headless container has no GPU, so mujoco's Dynamic3D offscreen
+                # renderer must use OSMesa (software); EGL device displays fail.
+                "-e",
+                "MUJOCO_GL=osmesa",
+                "-e",
+                "PYOPENGL_PLATFORM=osmesa",
+            ]
+            + tel_env_args,
+            # Map the host gateway for blackbox (env server) and local model
+            # runs (ollama/vLLM on the host), which both reach host loopback.
+            map_host_gateway=config.blackbox or _is_local_model(config.model),
+            env_server_port=env_server_port,
+        )
 
         # Build the agent CLI command. Use the http MCP transport: the render
         # server is started and health-checked BELOW, before the CLI, so its
@@ -795,7 +757,7 @@ async def run_agent_in_docker_sandbox(
         logger.info(
             "Starting Docker sandbox: container=%s image=%s sandbox=%s",
             container_name,
-            (config.strict_blackbox_image if strict_blackbox else config.docker_image),
+            docker_image,
             sandbox_abs,
         )
         logger.info("System prompt:\n%s", config.system_prompt)

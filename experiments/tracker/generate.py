@@ -34,7 +34,7 @@ _PREFERRED_DIMENSIONS = (
     "approach",
     "primitive_level",
     "approach.blackbox",
-    "approach.blackbox_runtime",
+    "approach.blackbox_strict",
     "approach/backend",
     "approach/completion",
     "eval_timeout",
@@ -172,19 +172,17 @@ def _canonicalize_with_hydra(
     else:
         values.pop("approach.blackbox", None)
 
-    if "blackbox_runtime" in cfg.approach and (
-        values.get("approach.blackbox") is True
-        or "approach.blackbox_runtime" in config.values
-    ):
-        runtime = cfg.approach.blackbox_runtime
-        if runtime not in ("legacy", "strict"):
-            raise ValueError(
-                "Hydra must compose approach.blackbox_runtime to 'legacy' or "
-                f"'strict', got {runtime!r}"
-            )
-        values["approach.blackbox_runtime"] = str(runtime)
+    # The strict flag is tracked only when set: an off default must not perturb
+    # the IDs of conditions recorded before the flag existed.
+    strict = cfg.approach.get("blackbox_strict", False)
+    if not isinstance(strict, bool):
+        raise ValueError(
+            f"Hydra must compose approach.blackbox_strict to a boolean, got {strict!r}"
+        )
+    if strict:
+        values["approach.blackbox_strict"] = True
     else:
-        values.pop("approach.blackbox_runtime", None)
+        values.pop("approach.blackbox_strict", None)
 
     eval_timeout = cfg.get("eval_timeout")
     if (
@@ -247,8 +245,8 @@ def _experiment_id(
         value = config.values[key]
         if key == "approach.blackbox":
             labels.append("blackbox" if value is True else "whitebox")
-        elif key == "approach.blackbox_runtime":
-            labels.append(f"bb_{_slug(value)}")
+        elif key == "approach.blackbox_strict":
+            labels.append("strict")
         elif key == "eval_timeout":
             labels.append(f"timeout_{_slug(value)}s")
         else:
@@ -260,6 +258,10 @@ def _experiment_id(
     composed.pop("hydra", None)
     for key in _PROTOCOL_CONFIG_KEYS:
         composed.pop(key, None)
+    # Same rule as the canonical values: the off default stays out of the digest.
+    approach_cfg = composed.get("approach")
+    if isinstance(approach_cfg, dict) and not approach_cfg.get("blackbox_strict"):
+        approach_cfg.pop("blackbox_strict", None)
     payload = {
         "config": composed,
         "replicate_seeds": sorted(config.replicate_seeds),
@@ -300,7 +302,7 @@ def _tracker_row(
     blackbox = config.values.get("approach.blackbox")
     access = ""
     if isinstance(blackbox, bool):
-        if blackbox and config.values.get("approach.blackbox_runtime") == "strict":
+        if blackbox and config.values.get("approach.blackbox_strict") is True:
             access = "strict-blackbox"
         else:
             access = "blackbox" if blackbox else "whitebox"

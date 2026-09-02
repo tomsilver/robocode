@@ -86,8 +86,8 @@ class RunInfo:
     # Short label for the synthesis model (e.g. "opus-5"); None when the run has
     # no LLM backend.
     model: Optional[str] = None
-    # "whitebox" when source was visible, "blackbox" for legacy source-hidden
-    # access, and "strict-blackbox" for dependency-clean isolation.
+    # "whitebox" when source was visible, "blackbox" when it was hidden, and
+    # "strict-blackbox" when the agent also had no domain dependencies or helpers.
     env_access: Optional[str] = None
 
 
@@ -259,19 +259,17 @@ def _env_access(hydra_dir: Path) -> Optional[str]:
         m = re.search(r"^\s+blackbox:\s*(\S+)\s*$", text, re.MULTILINE)
         if m is not None:
             access = _ACCESS_LABELS.get(m.group(1).strip("'\"").lower())
-            runtime = re.search(
-                r"^\s+blackbox_runtime:\s*(\S+)\s*$", text, re.MULTILINE
-            )
-            if access == "blackbox" and runtime is not None:
-                if runtime.group(1).strip("'\"").lower() == "strict":
+            strict = re.search(r"^\s+blackbox_strict:\s*(\S+)\s*$", text, re.MULTILINE)
+            if access == "blackbox" and strict is not None:
+                if strict.group(1).strip("'\"").lower() == "true":
                     return "strict-blackbox"
             return access
     overrides = _parse_overrides(hydra_dir)
     raw = overrides.get("approach.blackbox")
     access = _ACCESS_LABELS.get(raw.strip("'\"").lower()) if raw else None
     if access == "blackbox":
-        runtime_override = overrides.get("approach.blackbox_runtime", "legacy")
-        if runtime_override.strip("'\"").lower() == "strict":
+        strict_override = overrides.get("approach.blackbox_strict", "false")
+        if strict_override.strip("'\"").lower() == "true":
             return "strict-blackbox"
     return access
 

@@ -3,7 +3,7 @@
 # Based on the official Claude Code devcontainer:
 #   https://github.com/anthropics/claude-code/tree/main/.devcontainer
 #
-# Adds Python 3.11 + uv on top of the official node:22 base.
+# Adds Python 3.11 + uv on top of the official node:20 base.
 #
 # PyPI deps are pre-installed into .venv during build, but src/ and
 # third-party/kindergarden/ are DELETED from the image after install — they
@@ -22,7 +22,7 @@
 #   -v <kindergarden>:/robocode/third-party/kindergarden:ro  (tests stripped)
 #   -v <kinder-baselines>:/robocode/third-party/kinder-baselines:ro  (2 pkgs)
 
-FROM node:22
+FROM node:20
 
 ARG TZ
 ENV TZ="$TZ"

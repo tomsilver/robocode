@@ -147,33 +147,44 @@ def test_hydra_defaults_are_canonicalized_for_ids_metadata_and_commands() -> Non
 
 
 def test_strict_blackbox_is_a_tracked_access_condition() -> None:
-    """Strict and legacy blackbox runs cannot collapse to the same tracker row."""
-    legacy = _config(**{"approach.blackbox": True})
-    strict = _config(
-        **{
-            "approach.blackbox": True,
-            "approach.blackbox_runtime": "strict",
-        }
-    )
-    legacy_row = generate.tracker_row(legacy, eval_seed=_TEST_EVAL_SEED)
+    """Strict and plain blackbox runs cannot collapse to the same tracker row."""
+    plain = _config(**{"approach.blackbox": True})
+    strict = _config(**{"approach.blackbox": True, "approach.blackbox_strict": True})
+    plain_row = generate.tracker_row(plain, eval_seed=_TEST_EVAL_SEED)
     strict_row = generate.tracker_row(strict, eval_seed=_TEST_EVAL_SEED)
-    assert legacy_row["Access"] == "blackbox"
+    assert plain_row["Access"] == "blackbox"
     assert strict_row["Access"] == "strict-blackbox"
-    assert legacy_row["Experiment ID"] != strict_row["Experiment ID"]
-    assert "approach.blackbox_runtime=strict" in shlex.split(strict_row["Command"])
+    assert plain_row["Experiment ID"] != strict_row["Experiment ID"]
+    assert "__strict__" in strict_row["Experiment ID"]
+    assert "approach.blackbox_strict=true" in shlex.split(strict_row["Command"])
+
+
+def test_strict_flag_off_leaves_experiment_ids_unchanged() -> None:
+    """An explicit ``blackbox_strict=false`` is the default and must not fork IDs."""
+    for blackbox in (True, False):
+        implicit = _config(**{"approach.blackbox": blackbox})
+        explicit = _config(
+            **{"approach.blackbox": blackbox, "approach.blackbox_strict": False}
+        )
+        implicit_id = generate.experiment_id(implicit, eval_seed=_TEST_EVAL_SEED)
+        explicit_id = generate.experiment_id(explicit, eval_seed=_TEST_EVAL_SEED)
+        assert implicit_id == explicit_id
+        assert "strict" not in implicit_id
+        canonical = generate.canonicalize_config(explicit)
+        assert "approach.blackbox_strict" not in canonical.values
 
 
 @pytest.mark.parametrize(
     ("updates", "reason"),
     [
         (
-            {"approach.blackbox_runtime": "strict"},
+            {"approach.blackbox_strict": True},
             "requires blackbox access",
         ),
         (
             {
                 "approach.blackbox": True,
-                "approach.blackbox_runtime": "strict",
+                "approach.blackbox_strict": True,
                 "primitive_level": "low_level",
             },
             "requires primitive_level=none",

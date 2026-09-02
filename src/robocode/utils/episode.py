@@ -23,6 +23,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.strict_blackbox import check_strict_imports
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +82,21 @@ def load_generated_approach(
     action_space: Any,
     observation_space: Any,
     primitives: dict[str, Any],
+    *,
+    strict_imports: bool = False,
 ) -> Any:
     """Load a ``GeneratedApproach`` class from the given file.
 
     Temporarily adds the parent directory of *path* to ``sys.path`` so that
     ``approach.py`` can import sibling modules written by the agent, then
     removes it to avoid polluting the global import path.
+
+    With ``strict_imports`` (strict blackbox), the program and its sibling modules
+    are first checked against :func:`check_strict_imports`, so a program written
+    without domain dependencies cannot pick them up from the host at scoring time.
     """
+    if strict_imports:
+        check_strict_imports(path)
     sandbox_dir = str(path.parent.resolve())
     if sandbox_dir not in sys.path:
         sys.path.insert(0, sandbox_dir)
@@ -335,7 +344,7 @@ def run_episode_with_timeout(
     Where forking cannot carry the env, the rollout runs in this process instead and
     is bounded the same way; :func:`_run_episode_in_process` covers what that costs.
     """
-    if not _EPISODE_FORK_SAFE or getattr(approach, "requires_in_process_eval", False):
+    if not _EPISODE_FORK_SAFE:
         return _run_episode_in_process(
             env,
             approach,

@@ -46,7 +46,7 @@ from robocode.utils.sandbox_types import (
     SandboxResult,
     resolve_container_backend,
 )
-from robocode.utils.strict_blackbox_policy import StrictBlackboxPolicy
+from robocode.utils.strict_blackbox import STRICT_BLACKBOX_PYTHON
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
         blackbox: bool = False,
-        blackbox_runtime: str = "legacy",
+        blackbox_strict: bool = False,
         telemetry: bool = False,
         env_cfg: str | None = None,
         max_steps: int | None = None,
@@ -109,13 +109,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._blackbox = blackbox
-        if blackbox_runtime not in ("legacy", "strict"):
-            raise ValueError(
-                f"Invalid blackbox_runtime {blackbox_runtime!r}; expected "
-                "'legacy' or 'strict'"
-            )
-        self._blackbox_runtime = blackbox_runtime
-        self._strict_blackbox = blackbox_runtime == "strict"
+        self._blackbox_strict = blackbox_strict
         self._telemetry = telemetry
         # A variable-count env hands the program an ObjectCentricState (not a vector);
         # the prompt then documents the object-centric API instead of vector/devectorize.
@@ -135,28 +129,21 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                     "the OS sandbox cannot prevent reading env source from "
                     "the host filesystem"
                 )
-        if self._strict_blackbox:
+        if blackbox_strict:
             if not blackbox:
-                raise ValueError("blackbox_runtime=strict requires blackbox=true")
+                raise ValueError("blackbox_strict requires blackbox=true")
             if self._container_backend != "docker":
-                raise ValueError(
-                    "blackbox_runtime=strict requires container_backend=docker"
-                )
+                raise ValueError("blackbox_strict requires container_backend=docker")
             if self._primitives:
                 raise ValueError(
-                    "blackbox_runtime=strict exposes no primitives; configure "
-                    "primitives=[]"
+                    "blackbox_strict exposes no primitives; configure primitives=[]"
                 )
             if self._mcp_tools:
-                raise ValueError("blackbox_runtime=strict exposes no MCP/render tools")
+                raise ValueError("blackbox_strict exposes no MCP/render tools")
             if self._model.split("/", 1)[0] in ("ollama", "vllm"):
                 raise ValueError(
-                    "blackbox_runtime=strict does not expose host-side model servers"
+                    "blackbox_strict does not expose host-side model servers"
                 )
-            # The generated policy is already isolated from native crashes and
-            # dependency leakage by Docker. Avoid forking a process that owns its
-            # stdin/stdout transport to that container during evaluation.
-            self.requires_in_process_eval = True
         self._generated: Any = None
         self.total_cost_usd: float | None = None
         self.generation_metrics: GenerationMetrics | None = None
@@ -189,11 +176,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         )
 
         python_exe = (
-            (
-                "/opt/robocode-strict/bin/python"
-                if self._strict_blackbox
-                else DOCKER_PYTHON
-            )
+            (STRICT_BLACKBOX_PYTHON if self._blackbox_strict else DOCKER_PYTHON)
             if self._container_backend != "local"
             else sys.executable
         )
@@ -219,7 +202,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             env_description=env_description,
             per_instance_seed=per_instance_seed,
             object_centric=self._object_centric,
-            strict_blackbox=self._strict_blackbox,
+            blackbox_strict=self._blackbox_strict,
         )
 
         system_prompt = prompts.build_system_prompt(
@@ -278,7 +261,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
                 telemetry=self._telemetry,
-                blackbox_runtime=self._blackbox_runtime,
+                blackbox_strict=self._blackbox_strict,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         elif self._container_backend == "apptainer":
@@ -333,7 +316,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                             self._env_cfg,
                             sandbox_dir,
                             telemetry=self._telemetry,
-                            strict=self._strict_blackbox,
+                            strict=self._blackbox_strict,
                         )
                     )
                     write_env_spaces(
@@ -347,7 +330,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                         primitives_manifest=blackbox_primitive_manifest(
                             list(self._primitives)
                         ),
-                        strict=self._strict_blackbox,
+                        strict=self._blackbox_strict,
                     )
                 result = run_with_rate_limit_retry(
                     docker_config,
@@ -362,16 +345,13 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
 
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""
-        if self._strict_blackbox:
-            self._generated = StrictBlackboxPolicy(
-                path,
-                action_space=serialize_space(self._action_space),
-                observation_space=serialize_space(self._state_space),
-            )
-        else:
-            self._generated = load_generated_approach(
-                path, self._action_space, self._state_space, self._primitives
-            )
+        self._generated = load_generated_approach(
+            path,
+            self._action_space,
+            self._state_space,
+            self._primitives,
+            strict_imports=self._blackbox_strict,
+        )
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:
         """Start a new episode."""

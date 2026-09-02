@@ -1,11 +1,8 @@
-"""Tests for the dependency-clean strict blackbox runtime."""
+"""Tests for the strict blackbox variant: config, prompt, server, and imports."""
 
 from __future__ import annotations
 
 import io
-import json
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +12,11 @@ from gymnasium.spaces import Box
 
 from robocode.approaches.agentic_approach import AgenticApproach
 from robocode.utils.backends import DEFAULT_BACKEND_CFG
-from robocode.utils.docker_sandbox import _strict_docker_run_prefix
-from robocode.utils.env_client import BlackboxEnv, SpaceInfo
+from robocode.utils.docker_sandbox import _docker_run_prefix
+from robocode.utils.env_client import BlackboxEnv, SpaceInfo, _BlackboxObservationSpace
 from robocode.utils.env_server_runtime import _dispatch, _HandleRegistry
+from robocode.utils.episode import load_generated_approach
+from robocode.utils.strict_blackbox import StrictImportError, check_strict_imports
 
 _ENV_CFG = '{"_target_": "unused.ForValidation"}'
 
@@ -58,33 +57,35 @@ class _DummyEnv:
         return np.zeros(1, dtype=np.float32)
 
 
-def _strict_approach(**kwargs: Any) -> AgenticApproach:
+def _strict_args(**overrides: Any) -> dict[str, Any]:
     space = Box(-1.0, 1.0, (2,), dtype=np.float32)
-    return AgenticApproach(
-        action_space=space,
-        observation_space=space,
-        seed=0,
-        primitives={},
-        backend=DEFAULT_BACKEND_CFG,
-        container_backend="docker",
-        blackbox=True,
-        blackbox_runtime="strict",
-        env_cfg=_ENV_CFG,
-        mcp_tools=(),
-        **kwargs,
-    )
+    args: dict[str, Any] = {
+        "action_space": space,
+        "observation_space": space,
+        "seed": 0,
+        "primitives": {},
+        "backend": DEFAULT_BACKEND_CFG,
+        "container_backend": "docker",
+        "blackbox": True,
+        "blackbox_strict": True,
+        "env_cfg": _ENV_CFG,
+        "mcp_tools": (),
+    }
+    args.update(overrides)
+    return args
 
 
-def test_strict_blackbox_configuration_and_prompt() -> None:
-    """Strict mode advertises only its generic, containerized surface."""
-    approach = _strict_approach()
+def test_strict_blackbox_prompt_describes_only_the_generic_surface() -> None:
+    """Strict mode advertises reset/step, the allowlist, and the strict python."""
+    approach = AgenticApproach(**_strict_args())
     prompt, _, _ = approach._build_agentic_prompts()  # pylint: disable=protected-access
-    assert approach.requires_in_process_eval
     assert "STRICT BLACK BOX" in prompt
     assert "Only `reset` and `step` are available" in prompt
     assert "NumPy, SciPy" in prompt
-    assert "devectorization helpers" in prompt
+    assert "checked against that list" in prompt
     assert "/opt/robocode-strict/bin/python" in prompt
+    assert "set_state" not in prompt
+    assert "make_primitives" not in prompt
 
 
 @pytest.mark.parametrize(
@@ -100,22 +101,8 @@ def test_strict_blackbox_rejects_capability_leaks(
     overrides: dict[str, Any], message: str
 ) -> None:
     """Strict mode fails fast when a conflicting capability is configured."""
-    space = Box(-1.0, 1.0, (2,), dtype=np.float32)
-    args: dict[str, Any] = {
-        "action_space": space,
-        "observation_space": space,
-        "seed": 0,
-        "primitives": {},
-        "backend": DEFAULT_BACKEND_CFG,
-        "container_backend": "docker",
-        "blackbox": True,
-        "blackbox_runtime": "strict",
-        "env_cfg": _ENV_CFG,
-        "mcp_tools": (),
-    }
-    args.update(overrides)
     with pytest.raises(ValueError, match=message):
-        AgenticApproach(**args)
+        AgenticApproach(**_strict_args(**overrides))
 
 
 def test_strict_server_allows_only_reset_and_step(tmp_path: Path) -> None:
@@ -160,77 +147,96 @@ def test_strict_client_uses_plain_space_metadata(
             "port": 0,
         }
     )
-    assert type(client.observation_space) is SpaceInfo
+    assert isinstance(client.observation_space, SpaceInfo)
+    assert not isinstance(client.observation_space, _BlackboxObservationSpace)
     assert not hasattr(client.observation_space, "devectorize")
     client._file.close()  # pylint: disable=protected-access
     client._sock.close()  # pylint: disable=protected-access
 
 
 def test_strict_docker_launch_has_no_project_mounts(tmp_path: Path) -> None:
-    """The synthesis launch mounts only the agent's working directory."""
-    command = _strict_docker_run_prefix(
+    """A strict launch mounts only the sandbox and names the env-server port."""
+    command = _docker_run_prefix(
         "strict-test",
         "strict-image",
         tmp_path,
+        None,
+        None,
+        None,
         [],
         [],
-        43210,
+        map_host_gateway=True,
+        env_server_port=43210,
     )
     joined = " ".join(command)
     assert f"{tmp_path.resolve()}:/sandbox" in joined
     assert "ROBOCODE_FIREWALL_HOST_PORT=43210" in command
+    assert "host.docker.internal:host-gateway" in command
     assert "/robocode/src" not in joined
     assert "kindergarden" not in joined
     assert "ss-pybullet" not in joined
 
 
-def test_generic_policy_worker_protocol(tmp_path: Path) -> None:
-    """The standalone worker handles the lifecycle and tagged arrays."""
-    (tmp_path / "approach.py").write_text(
-        "import numpy as np\n"
-        "class GeneratedApproach:\n"
-        "    def __init__(self, action_space, observation_space, primitives):\n"
-        "        assert primitives == {}\n"
-        "        self.low = action_space.low\n"
-        "    def reset(self, state, info):\n"
-        "        self.bias = state[0]\n"
-        "    def get_action(self, state):\n"
-        "        return np.asarray([self.bias + state[0]], dtype=np.float32)\n",
-        encoding="utf-8",
-    )
-    worker = (
-        Path(__file__).parents[2]
-        / "src"
-        / "robocode"
-        / "utils"
-        / "strict_blackbox_runtime.py"
-    )
-    box = {
-        "type": "Box",
-        "shape": [1],
-        "low": [-1.0],
-        "high": [1.0],
-        "dtype": "float32",
-    }
-    proc = subprocess.Popen(
-        [sys.executable, str(worker), "--policy", str(tmp_path / "approach.py")],
-        cwd=tmp_path,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    assert proc.stdin is not None and proc.stdout is not None
+def _write(root: Path, name: str, source: str) -> Path:
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
+    return path
 
-    def request(payload: dict[str, Any]) -> dict[str, Any]:
-        assert proc.stdin is not None and proc.stdout is not None
-        proc.stdin.write(json.dumps(payload) + "\n")
-        proc.stdin.flush()
-        return json.loads(proc.stdout.readline())
 
-    assert request({"cmd": "init", "action_space": box, "observation_space": box})["ok"]
-    array = {"__ndarray__": [0.25], "dtype": "float32"}
-    assert request({"cmd": "reset", "state": array, "info": {}})["ok"]
-    response = request({"cmd": "get_action", "state": array})
-    assert response["result"]["__ndarray__"] == pytest.approx([0.5])
-    assert request({"cmd": "close"})["ok"]
-    proc.wait(timeout=5)
+def test_strict_imports_accept_stdlib_allowed_packages_and_siblings(
+    tmp_path: Path,
+) -> None:
+    """Stdlib, numpy/scipy, plain and relative sibling imports all pass."""
+    _write(tmp_path, "helper.py", "import math\nfrom scipy import optimize\nK = 1\n")
+    _write(tmp_path, "pkg/__init__.py", "from . import inner\n")
+    _write(tmp_path, "pkg/inner.py", "import json\n")
+    entry = _write(
+        tmp_path,
+        "approach.py",
+        "import numpy as np\nimport helper\nfrom pkg import inner\n"
+        "class GeneratedApproach:\n    pass\n",
+    )
+    assert check_strict_imports(entry) == {"numpy", "scipy"}
+
+
+@pytest.mark.parametrize(
+    ("files", "offender"),
+    [
+        ({"approach.py": "import shapely\n"}, "approach.py:1: import shapely"),
+        (
+            {
+                "approach.py": "def f():\n    try:\n        import pybullet\n"
+                "    except ImportError:\n        pass\n"
+            },
+            "approach.py:3: import pybullet",
+        ),
+        (
+            {"approach.py": "import helper\n", "helper.py": "from kinder import x\n"},
+            "helper.py:1: import kinder",
+        ),
+        ({"approach.py": "import importlib\n"}, "import importlib"),
+        ({"approach.py": "m = __import__('os')\n"}, "approach.py:1: __import__"),
+        ({"approach.py": "from env_client import make_env\n"}, "import env_client"),
+    ],
+)
+def test_strict_imports_reject_everything_else(
+    tmp_path: Path, files: dict[str, str], offender: str
+) -> None:
+    """Nested, sibling-transitive, dynamic, and client imports are all named."""
+    for name, source in files.items():
+        _write(tmp_path, name, source)
+    with pytest.raises(StrictImportError, match=offender):
+        check_strict_imports(tmp_path / "approach.py")
+
+
+def test_loader_runs_the_strict_check_before_exec(tmp_path: Path) -> None:
+    """A strict program with a host-only import never gets executed."""
+    entry = _write(
+        tmp_path,
+        "approach.py",
+        "import robocode\nraise SystemExit('must not run')\n",
+    )
+    space = Box(-1.0, 1.0, (2,), dtype=np.float32)
+    with pytest.raises(StrictImportError):
+        load_generated_approach(entry, space, space, {}, strict_imports=True)
