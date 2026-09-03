@@ -36,6 +36,7 @@ from robocode.primitives import csp as csp_module
 from robocode.primitives.check_action_collision import check_action_collision
 from robocode.primitives.motion_planning import BiRRT
 from robocode.utils.bilevel import build_sesame_models
+from robocode.utils.scored_env_guard import readonly_view
 
 __all__ = [
     "ENV_DEPENDENT_PRIMITIVES",
@@ -70,8 +71,33 @@ _DEPRECATED_PRIMITIVES = frozenset(
 )
 
 
-def build_primitives(env: Any, names: list[str] | tuple[str, ...]) -> dict[str, Any]:
-    """Build a primitives dict containing only the requested *names*."""
+def build_primitives(
+    env: Any, names: list[str] | tuple[str, ...], *, blackbox: bool = False
+) -> dict[str, Any]:
+    """Build a primitives dict containing only the requested *names*.
+
+    Env-bound primitives close over a read-only view of *env*: a generated approach that
+    receives one could otherwise reach the environment it is being scored in through the
+    primitive's closure and move it into a solved state.
+
+    The view stops writes but deliberately passes reads through, which is right under
+    whitebox (the agent has the env source anyway) and wrong under *blackbox*, where the
+    whole point is that the program never sees the env. Reads cannot be closed off
+    in-process -- a closure's contents are reachable whatever the binding looks like --
+    so the combination is refused here rather than served unsafely. Lifting this means
+    proxying env-bound primitives through the env server at eval time, the way
+    ``blackbox_primitive_manifest`` already does for the sandbox.
+    """
+    if blackbox:
+        env_bound = [n for n in names if n in ENV_DEPENDENT_PRIMITIVES]
+        if env_bound:
+            raise ValueError(
+                f"Primitives {', '.join(sorted(env_bound))} are bound to the live "
+                "environment, so a black-box approach granted one could read the "
+                "environment it is being scored in out of the primitive's closure. "
+                "Run these whitebox, or use primitive_level=none."
+            )
+    env = readonly_view(env)
     for name in names:
         if name in _DEPRECATED_PRIMITIVES:
             logger.warning(

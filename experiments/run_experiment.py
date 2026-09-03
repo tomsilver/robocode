@@ -130,7 +130,7 @@ def _main(cfg: DictConfig) -> float:
         desc_path.write_text(description)
         env_description_path = str(desc_path)
 
-    primitives = build_primitives(env, cfg.primitives)
+    primitives = build_primitives(env, cfg.primitives, blackbox=blackbox)
 
     # Write env config for MCP server (if mcp_tools are configured).
     mcp_tools = tuple(cfg.get("mcp_tools", []))

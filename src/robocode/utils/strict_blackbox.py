@@ -104,6 +104,43 @@ def _relative_sibling_files(
     return files
 
 
+def reachable_sibling_files(entry: Path) -> list[Path]:
+    """Every sandbox file reachable from *entry* through sibling imports, plus *entry*.
+
+    ``load_generated_approach`` puts the sandbox directory on ``sys.path`` so that
+    ``approach.py`` can import siblings the agent wrote, which means a check that reads
+    only ``approach.py`` is bypassed by moving the code one file over. Callers that
+    scan program source (the bilevel planner check) walk this instead of a single file.
+
+    Shares the import-resolution helpers with :func:`check_strict_imports` but applies
+    no allowlist: it reports what the program is made of, not whether it is permitted.
+    Unparseable files are yielded without contributing further edges.
+    """
+    root = entry.resolve().parent
+    pending = [entry.resolve()]
+    seen: list[Path] = []
+    visited: set[Path] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        seen.append(path)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            if isinstance(node, ast.ImportFrom) and node.level:
+                pending.extend(_relative_sibling_files(root, path, node) or [])
+                continue
+            for name in _import_names(node):
+                pending.extend(_sibling_files(root, name.split(".", 1)[0]))
+    return seen
+
+
 def _import_names(node: ast.Import | ast.ImportFrom) -> list[str]:
     if isinstance(node, ast.Import):
         return [alias.name for alias in node.names]

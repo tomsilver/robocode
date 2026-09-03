@@ -6,7 +6,6 @@ import contextlib
 import logging
 import multiprocessing as mp
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -24,7 +23,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from robocode.approaches.base_approach import BaseApproach
-from robocode.utils.strict_blackbox import check_strict_imports, module_locations
+from robocode.utils.strict_blackbox import (
+    check_strict_imports,
+    module_locations,
+    reachable_sibling_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ _FORBIDDEN_PLANNER_REFS = (
 )
 
 
-def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
+def _reject_planner_references(path: Path, primitives: dict[str, Any]) -> None:
     """Reject a generated approach that invokes the bilevel planner (anti-cheat).
 
     Only enforced when the ``bilevel_models`` primitive is in play; other
@@ -52,36 +55,22 @@ def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
     # A cooperative guardrail plus a clear error message, not an adversarial
     # sandbox: substring matching suffices because aliased imports still carry the
     # module path, and only deliberate importlib obfuscation would evade it.
-    hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
-    if hits:
-        raise ValueError(
-            f"Generated approach references the bilevel planner ({', '.join(hits)}); "
-            "with the bilevel_models primitive you must compose the models yourself, "
-            "not run SeSamE search."
-        )
+    for source_path in reachable_sibling_files(path):
+        source = source_path.read_text(encoding="utf-8")
+        hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
+        if hits:
+            raise ValueError(
+                f"Generated approach references the bilevel planner "
+                f"({', '.join(hits)}) in {source_path.name}; with the bilevel_models "
+                "primitive you must compose the models yourself, not run SeSamE search."
+            )
 
-
-# A frozen GeneratedApproach is scored through reset()/get_action() only; referencing
-# set_state or sample_next_state mutates the scored env and can fake a solve. Match
-# ".name" with an identifier boundary so get_state, reset_state, and set_stateful pass.
-_FORBIDDEN_STATE_MUTATIONS = ("set_state", "sample_next_state")
 
 # The sibling modules a generated policy imported at load time stay cached while
 # it is active (its methods may import them again) and are removed before the next
 # policy loads, so identically named siblings in per-instance sandboxes cannot
 # collide.
 _LOADED_GENERATED_SIBLINGS: dict[str, ModuleType] = {}
-
-
-def _reject_state_mutation(source: str) -> None:
-    """Reject a generated approach that mutates the scored env (anti-cheat)."""
-    hits = [n for n in _FORBIDDEN_STATE_MUTATIONS if re.search(rf"\.{n}\b", source)]
-    if hits:
-        raise ValueError(
-            f"Generated approach references {', '.join(hits)}; approach.py is scored "
-            "through reset()/get_action() only and must reach the goal via the actions "
-            "it returns, not by mutating the environment's state."
-        )
 
 
 def _evict_loaded_generated_siblings() -> None:
@@ -128,9 +117,8 @@ def load_generated_approach(
         sys.path.insert(0, sandbox_dir)
     modules_before = set(sys.modules)
     try:
+        _reject_planner_references(path, primitives)
         source = path.read_text()
-        _reject_planner_references(source, primitives)
-        _reject_state_mutation(source)
         # Set __file__ so the exec'd code can use it (e.g. to locate
         # sibling modules via os.path.dirname(__file__)).  exec() does
         # not set this automatically unlike a normal module import.
