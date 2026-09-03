@@ -40,6 +40,7 @@ folding it in here would create an import cycle.
 
 from __future__ import annotations
 
+import _thread
 import json
 import logging
 import os
@@ -54,7 +55,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import _thread
 import numpy as np
 from gymnasium.spaces import Box, Space
 from relational_structs.spaces import ObjectCentricStateSpace
