@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import contextlib
 import logging
 import multiprocessing as mp
@@ -15,6 +14,7 @@ import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Iterator
 
 import imageio.v3 as iio
@@ -23,6 +23,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.strict_blackbox import (
+    check_strict_imports,
+    module_locations,
+    reachable_sibling_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,87 +44,6 @@ _FORBIDDEN_PLANNER_REFS = (
 )
 
 
-def _relative_package(module_path: Path, sandbox_dir: Path, level: int) -> str | None:
-    """Resolve the package that a relative import in *module_path* names.
-
-    *level* is the number of leading dots on the ``from ... import`` statement.
-    """
-    try:
-        parts = list(module_path.parent.relative_to(sandbox_dir).parts)
-    except ValueError:
-        return None
-    if level > 1:
-        if level - 1 > len(parts):
-            return None
-        parts = parts[: len(parts) - (level - 1)]
-    return ".".join(parts)
-
-
-def _sandbox_module_files(name: str, sandbox_dir: Path) -> list[Path]:
-    """Map a dotted module name to the sandbox files that could provide it."""
-    if not name:
-        return []
-    base = sandbox_dir.joinpath(*name.split("."))
-    return [p for p in (base.with_suffix(".py"), base / "__init__.py") if p.is_file()]
-
-
-def _imported_sandbox_files(
-    source: str, module_path: Path, sandbox_dir: Path
-) -> list[Path]:
-    """Return the sandbox files imported by *source*, as written in *module_path*."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        # Unparseable siblings are still scanned by the caller; they just cannot
-        # contribute further edges to the import graph.
-        return []
-    names: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            base = node.module or ""
-            if node.level:
-                package = _relative_package(module_path, sandbox_dir, node.level)
-                if package is None:
-                    continue
-                base = ".".join(p for p in (package, base) if p)
-            names.append(base)
-            # `from pkg import mod` names a module, not an attribute, when pkg is
-            # a package the agent wrote.
-            names.extend(
-                f"{base}.{alias.name}" for alias in node.names if alias.name != "*"
-            )
-    files: list[Path] = []
-    for name in names:
-        files.extend(_sandbox_module_files(name, sandbox_dir))
-    return files
-
-
-def _generated_sources(path: Path) -> Iterator[tuple[Path, str]]:
-    """Yield ``(file, source)`` for *path* and every sandbox module it imports.
-
-    ``load_generated_approach`` puts the sandbox directory on ``sys.path`` so that
-    ``approach.py`` can import siblings the agent wrote. A guardrail that reads only
-    ``approach.py`` is therefore bypassed by moving the call one file over, so the
-    import graph is walked instead of a single file.
-    """
-    sandbox_dir = path.parent.resolve()
-    queue = [path.resolve()]
-    seen: set[Path] = set()
-    while queue:
-        current = queue.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        try:
-            source = current.read_text()
-        except OSError:
-            continue
-        yield current, source
-        queue.extend(_imported_sandbox_files(source, current, sandbox_dir))
-
-
 def _reject_planner_references(path: Path, primitives: dict[str, Any]) -> None:
     """Reject a generated approach that invokes the bilevel planner (anti-cheat).
 
@@ -131,15 +55,38 @@ def _reject_planner_references(path: Path, primitives: dict[str, Any]) -> None:
     # A cooperative guardrail plus a clear error message, not an adversarial
     # sandbox: substring matching suffices because aliased imports still carry the
     # module path, and only deliberate importlib obfuscation would evade it.
-    for source_path, source in _generated_sources(path):
+    for source_path in reachable_sibling_files(path):
+        source = source_path.read_text(encoding="utf-8")
         hits = [ref for ref in _FORBIDDEN_PLANNER_REFS if ref in source]
         if hits:
-            where = source_path.name
             raise ValueError(
                 f"Generated approach references the bilevel planner "
-                f"({', '.join(hits)}) in {where}; with the bilevel_models primitive "
-                "you must compose the models yourself, not run SeSamE search."
+                f"({', '.join(hits)}) in {source_path.name}; with the bilevel_models "
+                "primitive you must compose the models yourself, not run SeSamE search."
             )
+
+
+# The sibling modules a generated policy imported at load time stay cached while
+# it is active (its methods may import them again) and are removed before the next
+# policy loads, so identically named siblings in per-instance sandboxes cannot
+# collide.
+_LOADED_GENERATED_SIBLINGS: dict[str, ModuleType] = {}
+
+
+def _evict_loaded_generated_siblings() -> None:
+    """Remove sibling modules retained by the previous generated policy load."""
+    for name, module in _LOADED_GENERATED_SIBLINGS.items():
+        if sys.modules.get(name) is module:
+            del sys.modules[name]
+    _LOADED_GENERATED_SIBLINGS.clear()
+
+
+def _remember_loaded_generated_siblings(root: Path, names: set[str]) -> None:
+    """Remember the newly imported modules among *names* that live under *root*."""
+    for name in names:
+        module = sys.modules[name]
+        if any(loc.is_relative_to(root) for loc in module_locations(module)):
+            _LOADED_GENERATED_SIBLINGS[name] = module
 
 
 def load_generated_approach(
@@ -147,16 +94,28 @@ def load_generated_approach(
     action_space: Any,
     observation_space: Any,
     primitives: dict[str, Any],
+    *,
+    strict_imports: bool = False,
 ) -> Any:
     """Load a ``GeneratedApproach`` class from the given file.
 
     Temporarily adds the parent directory of *path* to ``sys.path`` so that
     ``approach.py`` can import sibling modules written by the agent, then
     removes it to avoid polluting the global import path.
+
+    With ``strict_imports`` (strict blackbox), the program and its sibling modules
+    are first checked against :func:`check_strict_imports`, so a program written
+    without domain dependencies cannot pick them up from the host at scoring time.
     """
+    _evict_loaded_generated_siblings()
+    if strict_imports:
+        # sys.modules wins over sys.path.  Reject a local module that would be
+        # silently replaced by an already-loaded host module during scoring.
+        check_strict_imports(path, reject_cached_siblings=True)
     sandbox_dir = str(path.parent.resolve())
     if sandbox_dir not in sys.path:
         sys.path.insert(0, sandbox_dir)
+    modules_before = set(sys.modules)
     try:
         _reject_planner_references(path, primitives)
         source = path.read_text()
@@ -166,6 +125,9 @@ def load_generated_approach(
         namespace: dict[str, Any] = {"__file__": str(path)}
         exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
     finally:
+        _remember_loaded_generated_siblings(
+            path.parent.resolve(), set(sys.modules) - modules_before
+        )
         sys.path.remove(sandbox_dir)
     cls = namespace["GeneratedApproach"]
     instance = cls(action_space, observation_space, primitives=primitives)

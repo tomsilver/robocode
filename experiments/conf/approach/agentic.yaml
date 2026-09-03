@@ -13,4 +13,5 @@ token_budget_prompt: false
 max_output_tokens: 32768
 autocompact_pct: 80
 blackbox: false  # hide env source; interact via host-side env server
+blackbox_strict: false  # with blackbox: generic image, reset/step only, import allowlist
 telemetry: false  # log the agent's env reset/set_state calls to a JSONL sink

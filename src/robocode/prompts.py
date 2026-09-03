@@ -28,9 +28,11 @@ from robocode.mcp import (
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_STRICT_BLACKBOX,
     mcp_tool_descriptions,
 )
 from robocode.utils.backends import CLAUDE_PROMPT_SUFFIX, OPENCODE_PROMPT_SUFFIX
+from robocode.utils.strict_blackbox import strict_allowlist_description
 
 # ---------------------------------------------------------------------------
 # System prompt fragments (shared by AgenticApproach and AgenticCDLApproach)
@@ -125,13 +127,17 @@ termination conditions, etc.). To locate a module's source file:
 Then read the source to inform your approach.\
 """
 
-# How to interact with the live env server in blackbox mode. Takes
-# {set_state_note}: empty for the monolithic approach, the behavior-precondition
-# note for CDL (the only difference between the two blackbox interaction specs).
+# How to interact with the live env server in blackbox mode. The observation-model
+# slots ({get_state_comment}, {space_metadata}, {obs_conversion}) describe a
+# fixed-length vector or a variable-count ObjectCentricState; {set_state_note} is
+# empty for the monolithic approach and the behavior-precondition note for CDL. The
+# strict blackbox fills the remaining slots with its reduced surface: {strict_note}
+# and {import_rule} are otherwise empty, {snapshot_lines} drops get_state/set_state,
+# and {helpers} replaces the primitives paragraph.
 _BLACKBOX_INTERACTION_SPEC_TEMPLATE = """\
 The environment is a BLACK BOX. You CANNOT read its source code; it is not \
-available anywhere on this machine. A live environment server is running. \
-Interact with it through `env_client.py` in your working directory:
+available anywhere on this machine.{strict_note} A live environment server is \
+running. Interact with it through `env_client.py` in your working directory:
 
 ```python
 from env_client import make_env
@@ -139,13 +145,32 @@ from env_client import make_env
 env = make_env()  # fresh environment instance per call
 obs, info = env.reset(seed=0)
 obs, reward, terminated, truncated, info = env.step(action)
-state = env.get_state(){get_state_comment}
-env.set_state(state)  # restore a snapshot
-env.close()
+{snapshot_lines}env.close()
 ```
 
 {space_metadata}
 
+{helpers}
+
+{obs_conversion}
+
+Parallel test scripts are fine: every `make_env()` call creates an \
+independent environment instance.{set_state_note}{import_rule}
+
+CRITICAL: `approach.py` itself must NOT import `env_client`. It will be \
+evaluated against the real environment by a separate harness that calls \
+`reset(state, info)` and `get_action(state)` directly. Use `env_client` \
+ONLY in test and exploration scripts.\
+"""
+
+# Snapshot lines of the code block above; absent under the strict blackbox.
+_BB_SNAPSHOT_LINES = """\
+state = env.get_state(){get_state_comment}
+env.set_state(state)  # restore a snapshot
+"""
+
+# The {helpers} slot: the primitives proxy, or the strict statement of its absence.
+_BB_PRIMITIVES_HELPER = """\
 `env.make_primitives()` returns the SAME `primitives` dict the evaluation \
 harness passes to `GeneratedApproach.__init__`. Use it in test scripts so \
 they exercise the real primitives (env-dependent ones run on the host):
@@ -155,22 +180,31 @@ from env_client import make_env
 
 env = make_env()
 primitives = env.make_primitives()
-```
-
-{obs_conversion}
-
-Parallel test scripts are fine: every `make_env()` call creates an \
-independent environment instance.{set_state_note}
-
-CRITICAL: `approach.py` itself must NOT import `env_client`. It will be \
-evaluated against the real environment by a separate harness that calls \
-`reset(state, info)` and `get_action(state)` directly. Use `env_client` \
-ONLY in test and exploration scripts.\
+```\
 """
+_STRICT_BB_HELPERS = (
+    "Beyond `reset`, `step`, and `close`, `env` has no `get_state`/`set_state` "
+    "snapshots and no collision checking; `env.make_primitives()` returns an empty "
+    "dict, and the evaluation harness passes that same empty `primitives` to "
+    "`GeneratedApproach.__init__`."
+)
 
-# Obs-model-specific slots for the black-box spec: a fixed-length vector (default) or
-# a variable-count ObjectCentricState. The vector fillers reproduce the original spec
-# verbatim; the object-centric fillers describe the object-centric client API instead.
+# The two strict-only slots.
+_STRICT_BB_NOTE = (
+    " No environment, simulator, robotics, or geometry libraries are installed "
+    "either."
+)
+_STRICT_BB_IMPORT_RULE = (
+    "\n\n`approach.py` may import only "
+    f"{strict_allowlist_description()}. The frozen program is scored on the host, "
+    "and every import reachable from `approach.py` is checked against that list "
+    "first; any other import fails the run before scoring starts."
+)
+
+# Obs-model-specific slots: a fixed-length vector (default) or a variable-count
+# ObjectCentricState. The vector conversion helper is host-backed and withheld under
+# the strict blackbox; the object-centric state is reconstructed locally, so only
+# the mention of get_state changes there.
 _BB_GET_STATE_COMMENT_VECTOR = "  # numpy snapshot of the full environment state"
 _BB_SPACE_METADATA_VECTOR = (
     "`env.observation_space` and `env.action_space` expose `shape`, `low`, "
@@ -187,6 +221,10 @@ _BB_OBS_CONVERSION_VECTOR = (
     "`GeneratedApproach`, so `observation_space.devectorize(obs)` works identically "
     "there, and `approach.py` can use it directly."
 )
+_STRICT_BB_OBS_VECTOR = (
+    "Observations are fixed-length numpy arrays. There is no "
+    "`devectorize`/`vectorize` helper and no feature-name metadata."
+)
 _BB_GET_STATE_COMMENT_OBJECT_CENTRIC = "  # a local ObjectCentricState"
 _BB_SPACE_METADATA_OBJECT_CENTRIC = (
     "`env.observation_space` describes the objects, NOT a vector: `.types` lists the "
@@ -195,8 +233,8 @@ _BB_SPACE_METADATA_OBJECT_CENTRIC = (
     "`high`, `dtype`, and `sample()`. The same metadata is in `env_spaces.json`. "
     "`env.max_steps` is the episode step limit used at evaluation time."
 )
-_BB_OBS_CONVERSION_OBJECT_CENTRIC = (
-    "Observations and `env.get_state()` are `ObjectCentricState` objects (the number "
+_BB_OBS_CONVERSION_OBJECT_CENTRIC_TEMPLATE = (
+    "{subjects} are `ObjectCentricState` objects (the number "
     "of objects VARIES between episodes), not fixed-length arrays. Read a state with "
     "`get_objects(type)`, `get_object_names()`, `get_object_from_name(name)`, and "
     "`get(obj, feature)`; iterate objects via `get_objects(...)`, NOT `for obj in "
@@ -207,28 +245,38 @@ _BB_OBS_CONVERSION_OBJECT_CENTRIC = (
 
 
 def blackbox_interaction_spec(
-    *, object_centric: bool = False, set_state_note: str = ""
+    *, object_centric: bool = False, set_state_note: str = "", strict: bool = False
 ) -> str:
     """The black-box ``env_client`` interaction spec.
 
     For a variable-count env the observation is an ``ObjectCentricState``, so the spec
     describes the object-centric client space and access (no ``devectorize`` / vector
-    layout) rather than a flat numpy observation.
+    layout) rather than a flat numpy observation. ``strict`` keeps the same spec but
+    drops the snapshot, primitives, and conversion helpers and adds the import
+    allowlist of the strict blackbox.
     """
     if object_centric:
-        fillers = {
-            "get_state_comment": _BB_GET_STATE_COMMENT_OBJECT_CENTRIC,
-            "space_metadata": _BB_SPACE_METADATA_OBJECT_CENTRIC,
-            "obs_conversion": _BB_OBS_CONVERSION_OBJECT_CENTRIC,
-        }
+        get_state_comment = _BB_GET_STATE_COMMENT_OBJECT_CENTRIC
+        space_metadata = _BB_SPACE_METADATA_OBJECT_CENTRIC
+        obs_conversion = _BB_OBS_CONVERSION_OBJECT_CENTRIC_TEMPLATE.format(
+            subjects="Observations" if strict else "Observations and `env.get_state()`"
+        )
     else:
-        fillers = {
-            "get_state_comment": _BB_GET_STATE_COMMENT_VECTOR,
-            "space_metadata": _BB_SPACE_METADATA_VECTOR,
-            "obs_conversion": _BB_OBS_CONVERSION_VECTOR,
-        }
+        get_state_comment = _BB_GET_STATE_COMMENT_VECTOR
+        space_metadata = _BB_SPACE_METADATA_VECTOR
+        obs_conversion = _STRICT_BB_OBS_VECTOR if strict else _BB_OBS_CONVERSION_VECTOR
     return _BLACKBOX_INTERACTION_SPEC_TEMPLATE.format(
-        set_state_note=set_state_note, **fillers
+        strict_note=_STRICT_BB_NOTE if strict else "",
+        snapshot_lines=(
+            ""
+            if strict
+            else _BB_SNAPSHOT_LINES.format(get_state_comment=get_state_comment)
+        ),
+        space_metadata=space_metadata,
+        helpers=_STRICT_BB_HELPERS if strict else _BB_PRIMITIVES_HELPER,
+        obs_conversion=obs_conversion,
+        set_state_note=set_state_note,
+        import_rule=_STRICT_BB_IMPORT_RULE if strict else "",
     )
 
 
@@ -779,6 +827,7 @@ def build_system_prompt(
     token_budget: bool = False,
     mcp_tools: tuple[str, ...] = (),
     object_centric: bool = False,
+    blackbox_strict: bool = False,
     per_instance_seed: int | None = None,
     per_instance_count: int | None = None,
 ) -> str:
@@ -812,6 +861,8 @@ def build_system_prompt(
     if mcp_tools:
         if object_centric:
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC
+        elif blackbox_strict:
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_STRICT_BLACKBOX
         elif blackbox:
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
         else:
@@ -852,13 +903,17 @@ def build_mcp_tool_lines(
     backend_name: str,
     blackbox: bool,
     object_centric: bool = False,
+    blackbox_strict: bool = False,
 ) -> str:
     """Return the MCP-tools section appended to the primitives description, or "" when
     no MCP tools are configured."""
     if not mcp_tools:
         return ""
     tool_descs = mcp_tool_descriptions(
-        backend_name, blackbox=blackbox, object_centric=object_centric
+        backend_name,
+        blackbox=blackbox,
+        object_centric=object_centric,
+        strict_blackbox=blackbox_strict,
     )
     lines = [
         "\n\nYou also have MCP tools for visual debugging (they do NOT "
@@ -895,6 +950,7 @@ def build_agentic_prompt(
     env_description: str | None,
     per_instance_seed: int | None = None,
     object_centric: bool = False,
+    blackbox_strict: bool = False,
 ) -> str:
     """Compose the monolithic-approach task prompt.
 
@@ -915,7 +971,9 @@ def build_agentic_prompt(
             scaffold_intro=_scaffold_intro("an approach", blackbox=True),
             env_description_section=_env_description_section(env_description),
             blackbox_interaction_spec=blackbox_interaction_spec(
-                object_centric=object_centric, set_state_note=""
+                object_centric=object_centric,
+                set_state_note="",
+                strict=blackbox_strict,
             ),
             geometry_prompt=geometry_prompt,
             interface_spec=interface_spec,
