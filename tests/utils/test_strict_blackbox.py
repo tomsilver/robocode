@@ -17,6 +17,7 @@ from gymnasium.spaces import Box
 from robocode import prompts
 from robocode.approaches.agentic_approach import AgenticApproach
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
+from robocode.utils.apptainer_sandbox import _DEFAULT_STRICT_SIF
 from robocode.utils.backends import DEFAULT_BACKEND_CFG
 from robocode.utils.docker_sandbox import _docker_run_prefix, _mcp_prestart_wrapper
 from robocode.utils.env_client import BlackboxEnv, SpaceInfo, _BlackboxObservationSpace
@@ -56,6 +57,37 @@ requires_strict_docker = pytest.mark.skipif(
     not _strict_image_available(),
     reason=f"Docker image {_STRICT_IMAGE!r} is unavailable",
 )
+requires_strict_sif = pytest.mark.skipif(
+    shutil.which("apptainer") is None or not _DEFAULT_STRICT_SIF.exists(),
+    reason=f"Apptainer or SIF {_DEFAULT_STRICT_SIF} is unavailable",
+)
+_STRICT_BACKENDS = [
+    pytest.param("docker", marks=requires_strict_docker),
+    pytest.param("apptainer", marks=requires_strict_sif),
+]
+
+
+def _strict_container_run(
+    container_backend: str, python: str, code: str, sandbox: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run *code* with *python* inside the strict image of *container_backend*."""
+    if container_backend == "docker":
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "--add-host",
+            "host.docker.internal:host-gateway",
+        ]
+        if sandbox is not None:
+            cmd += ["-v", f"{sandbox.resolve()}:/sandbox"]
+        cmd += ["--entrypoint", python, _STRICT_IMAGE, "-c", code]
+    else:
+        cmd = ["apptainer", "exec", "--containall", "--cleanenv"]
+        if sandbox is not None:
+            cmd += ["--bind", f"{sandbox.resolve()}:/sandbox"]
+        cmd += [str(_DEFAULT_STRICT_SIF), python, "-c", code]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
 
 
 class _FakeSocket:
@@ -157,7 +189,10 @@ def test_strict_allowlist_description_names_every_allowed_package() -> None:
     ("overrides", "message"),
     [
         ({"blackbox": False}, "requires blackbox=true"),
-        ({"container_backend": "local"}, "requires container_backend=docker"),
+        (
+            {"container_backend": "local"},
+            "requires container_backend=docker or apptainer",
+        ),
         ({"primitives": {"helper": object()}}, "exposes no primitives"),
     ],
 )
@@ -167,6 +202,13 @@ def test_strict_blackbox_rejects_capability_leaks(
     """Strict mode fails fast when a conflicting capability is configured."""
     with pytest.raises(ValueError, match=message):
         AgenticApproach(**_strict_args(**overrides))
+
+
+def test_strict_blackbox_accepts_apptainer() -> None:
+    """Apptainer runs the strict image as a SIF with the same prompt surface."""
+    approach = AgenticApproach(**_strict_args(container_backend="apptainer"))
+    prompt, _, _ = approach._build_agentic_prompts()  # pylint: disable=protected-access
+    assert "/opt/robocode-strict/bin/python" in prompt
 
 
 def test_strict_blackbox_supports_render_tools() -> None:
@@ -277,35 +319,22 @@ def test_strict_mcp_uses_separate_python_environment() -> None:
     assert f"{STRICT_BLACKBOX_PYTHON} -c" in command
 
 
-@requires_strict_docker
-def test_strict_container_keeps_generated_python_dependency_clean() -> None:
+@pytest.mark.parametrize("container_backend", _STRICT_BACKENDS)
+def test_strict_container_keeps_generated_python_dependency_clean(
+    container_backend: str,
+) -> None:
     """The MCP installation must not alter the generated-program interpreter."""
     code = (
         "from importlib.util import find_spec; import numpy, scipy; "
         "assert find_spec('mcp') is None; assert find_spec('robocode') is None"
     )
-    result = subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--entrypoint",
-            STRICT_BLACKBOX_PYTHON,
-            _STRICT_IMAGE,
-            "-c",
-            code,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    result = _strict_container_run(container_backend, STRICT_BLACKBOX_PYTHON, code)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@requires_strict_docker
+@pytest.mark.parametrize("container_backend", _STRICT_BACKENDS)
 def test_strict_container_mcp_renders_state_and_policy_through_host(
-    tmp_path: Path,
+    container_backend: str, tmp_path: Path
 ) -> None:
     """The isolated MCP interpreter can proxy strict renders to the host."""
     sandbox = tmp_path / "sandbox"
@@ -329,7 +358,7 @@ def test_strict_container_mcp_renders_state_and_policy_through_host(
         ):
             write_env_spaces(
                 sandbox,
-                container_backend="docker",
+                container_backend=container_backend,
                 port=port,
                 token=token,
                 observation_space=env.observation_space,
@@ -348,25 +377,8 @@ def test_strict_container_mcp_renders_state_and_policy_through_host(
                 "print(json.dumps({'state': state['result'], "
                 "'policy': policy['result']}))"
             )
-            result = subprocess.run(
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--add-host",
-                    "host.docker.internal:host-gateway",
-                    "--entrypoint",
-                    STRICT_BLACKBOX_MCP_PYTHON,
-                    "-v",
-                    f"{sandbox.resolve()}:/sandbox",
-                    _STRICT_IMAGE,
-                    "-c",
-                    code,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
+            result = _strict_container_run(
+                container_backend, STRICT_BLACKBOX_MCP_PYTHON, code, sandbox=sandbox
             )
     finally:
         env.close()

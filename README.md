@@ -362,7 +362,8 @@ bash docker/build.sh
 ```
 
 The strict blackbox ablation (`approach.blackbox_strict=true`) uses a separate
-dependency-clean image instead; build it with `bash docker/build_strict_blackbox.sh`.
+dependency-clean image instead; build it with `bash docker/build_strict_blackbox.sh`
+(Docker) or `bash docker/build_strict_blackbox_sif.sh` (Apptainer SIF).
 
 ### Using the OS-level sandbox (legacy)
 
@@ -373,6 +374,7 @@ Red team the sandbox:
 python integration_tests/red_team_sandbox.py           # OS-level
 python integration_tests/red_team_sandbox.py --docker  # Docker
 python integration_tests/red_team_sandbox.py --strict-blackbox  # strict blackbox
+python integration_tests/red_team_sandbox.py --apptainer-strict-blackbox  # Apptainer strict
 ```
 
 ## Experiments

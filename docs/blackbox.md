@@ -22,9 +22,10 @@ dependency-clean variant of the same mode, supported by `AgenticApproach` and
 
 - Generated programs use a separate Python environment that contains only the
   standard library, NumPy, and SciPy. No environment, KinDER, simulator, robotics,
-  geometry, or planning code is mounted, so strict mode requires Docker and
-  `primitive_level=none`. Render MCP infrastructure lives in a separate Python
-  environment and cannot expand the generated program's scoring allowlist.
+  geometry, or planning code is mounted, so strict mode requires a container
+  backend (Docker or Apptainer) and `primitive_level=none`. Render MCP
+  infrastructure lives in a separate Python environment and cannot expand the
+  generated program's scoring allowlist.
 - The env server exposes `reset`, `step`, and host-side state rendering. Raw state
   snapshots, devectorization, collision checks, and primitive proxies remain rejected
   regardless of what the client asks for. `render_policy` executes the generated
@@ -38,10 +39,12 @@ dependency-clean variant of the same mode, supported by `AgenticApproach` and
   like every other mode; the check is what keeps a program from picking up at
   scoring time a dependency it never had while it was written.
 
-Build the strict image before a strict run:
+Build the strict image before a strict run (Docker), or its SIF for the Apptainer
+backend:
 
 ```bash
 bash docker/build_strict_blackbox.sh
+bash docker/build_strict_blackbox_sif.sh  # robocode-strict-blackbox.sif
 ```
 
 Then run, for example:
@@ -248,10 +251,15 @@ makes blackbox meaningful differs:
   only for quick local iteration, not for results that depend on the agent not
   having read the source. Use `docker` or `apptainer` for enforced isolation.
 
-Strict mode is Docker-only during synthesis. The strict image gets one writable
-mount (`/sandbox`) and its firewall allows the model provider plus only the exact
-host TCP port of the environment server; GitHub, SSH, package registries, and other
-host ports are not allowed. Scoring needs no container: the import allowlist check
+Strict mode runs under Docker or Apptainer during synthesis. The strict image gets
+one writable mount (`/sandbox`). Under Docker its firewall allows the model provider
+plus only the exact host TCP port of the environment server; GitHub, SSH, package
+registries, and other host ports are not allowed. Under Apptainer the same image runs
+as `robocode-strict-blackbox.sif` with the sandbox as its only mount, but, as in
+legacy blackbox, unprivileged Apptainer cannot install the firewall, so that network
+restriction is not enforced there: the strict ablation then rests on the
+dependency-clean image, the strict env server, and the scoring-time import allowlist.
+Scoring needs no container: the import allowlist check
 runs before the program is loaded, so an approach that imports `pybullet_helpers`,
 `tomsgeoms2d`, `robocode`, `kinder`, or any other undeclared dependency fails the
 run with a message naming the import instead of silently succeeding from the host
@@ -361,6 +369,9 @@ Build the strict image, then run its dedicated live adversarial suite:
 ```bash
 bash docker/build_strict_blackbox.sh
 python integration_tests/red_team_sandbox.py --strict-blackbox
+# Apptainer: the same suite minus the network probe (no firewall there).
+bash docker/build_strict_blackbox_sif.sh
+python integration_tests/red_team_sandbox.py --apptainer-strict-blackbox
 ```
 
 The suite first proves the allowed surface works: the generated-program
