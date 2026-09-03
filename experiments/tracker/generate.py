@@ -172,8 +172,9 @@ def _canonicalize_with_hydra(
     else:
         values.pop("approach.blackbox", None)
 
-    # The strict flag is tracked only when set: an off default must not perturb
-    # the IDs of conditions recorded before the flag existed.
+    # The strict flag is tracked only when set, here and in the digest of
+    # _experiment_id: its off default must not perturb the IDs of conditions
+    # recorded before the flag existed.
     strict = cfg.approach.get("blackbox_strict", False)
     if not isinstance(strict, bool):
         raise ValueError(
@@ -258,10 +259,8 @@ def _experiment_id(
     composed.pop("hydra", None)
     for key in _PROTOCOL_CONFIG_KEYS:
         composed.pop(key, None)
-    # Same rule as the canonical values: the off default stays out of the digest.
-    approach_cfg = composed.get("approach")
-    if isinstance(approach_cfg, dict) and not approach_cfg.get("blackbox_strict"):
-        approach_cfg.pop("blackbox_strict", None)
+    if not composed["approach"].get("blackbox_strict"):
+        composed["approach"].pop("blackbox_strict", None)
     payload = {
         "config": composed,
         "replicate_seeds": sorted(config.replicate_seeds),

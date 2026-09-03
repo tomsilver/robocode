@@ -21,7 +21,7 @@ dependency-clean variant of the same mode, supported by `AgenticApproach` and
 `AgenticPerInstanceApproach`. It changes three things and nothing else:
 
 - Generated programs use a separate Python environment that contains only the
-  standard library, NumPy, and SciPy. No environment, KinDER, simulator, robotics,
+  standard library, NumPy, SciPy, and NetworkX. No environment, KinDER, simulator, robotics,
   geometry, or planning code is mounted, so strict mode requires Docker and
   `primitive_level=none`. Render MCP infrastructure lives in a separate Python
   environment and cannot expand the generated program's scoring allowlist.
@@ -31,8 +31,10 @@ dependency-clean variant of the same mode, supported by `AgenticApproach` and
   program inside the container and sends only its visited observations to the host
   renderer.
 - Before scoring, every import reachable from the frozen `approach.py` through its
-  sibling modules must be the standard library, NumPy, SciPy, or another sibling
-  file (`src/robocode/utils/strict_blackbox.py`). Scoring itself runs on the host
+  sibling modules must be the standard library, NumPy, SciPy, NetworkX, or another
+  sibling file (`src/robocode/utils/strict_blackbox.py`); `importlib`, `runpy`,
+  `__import__`, and `sys.modules` are rejected because they reach modules by name at
+  run time. The agent prompt states the same rule. Scoring itself runs on the host
   like every other mode; the check is what keeps a program from picking up at
   scoring time a dependency it never had while it was written.
 
@@ -362,7 +364,8 @@ python integration_tests/red_team_sandbox.py --strict-blackbox
 ```
 
 The suite first proves the allowed surface works: the generated-program
-interpreter can import NumPy and SciPy and can reset and step the environment.
+interpreter can import NumPy and SciPy and can reset and step the environment, and
+the separate MCP interpreter renders a state through the host.
 It then asks an agent to attack the same configuration used in production and
 fails if any of these boundaries break:
 

@@ -89,6 +89,13 @@ logger = logging.getLogger(__name__)
 # Python interpreter inside the Docker container.
 DOCKER_PYTHON: str = "/robocode/.venv/bin/python"
 
+
+def container_python(blackbox_strict: bool) -> str:
+    """Interpreter the agent's scripts run with: the dependency-clean one under
+    strict."""
+    return STRICT_BLACKBOX_PYTHON if blackbox_strict else DOCKER_PYTHON
+
+
 # Default Docker image name.
 _DEFAULT_IMAGE: str = "robocode-sandbox"
 
@@ -496,7 +503,6 @@ class DockerSandboxConfig(SandboxConfig):
 
     docker_image: str = _DEFAULT_IMAGE
     # Strict blackbox runs use the dependency-clean image instead of docker_image.
-    strict_blackbox_image: str = STRICT_BLACKBOX_IMAGE
     blackbox_strict: bool = False
     # The container reaches host-loopback services (env server, local model
     # server) via the gateway, mapped to this name by --add-host.
@@ -637,11 +643,6 @@ async def run_agent_in_docker_sandbox(
     """
     backend_name = backend.name
     strict_blackbox = config.blackbox_strict
-    if strict_blackbox:
-        if not config.blackbox:
-            raise ValueError("strict blackbox Docker runtime requires blackbox=True")
-        if config.primitive_names:
-            raise ValueError("strict blackbox Docker runtime cannot copy primitives")
 
     _setup_sandbox_dir(config)
 
@@ -691,10 +692,8 @@ async def run_agent_in_docker_sandbox(
                 (config.sandbox_dir / "env_spaces.json").read_text(encoding="utf-8")
             )
             env_server_port = int(metadata["port"])
-        docker_image = (
-            config.strict_blackbox_image if strict_blackbox else config.docker_image
-        )
-        docker_python = STRICT_BLACKBOX_PYTHON if strict_blackbox else DOCKER_PYTHON
+        docker_image = STRICT_BLACKBOX_IMAGE if strict_blackbox else config.docker_image
+        docker_python = container_python(strict_blackbox)
         mcp_python = STRICT_BLACKBOX_MCP_PYTHON if strict_blackbox else docker_python
         docker_cmd = _docker_run_prefix(
             container_name,

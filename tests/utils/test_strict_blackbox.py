@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ import numpy as np
 import pytest
 from gymnasium.spaces import Box
 
+from robocode import prompts
 from robocode.approaches.agentic_approach import AgenticApproach
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.utils.backends import DEFAULT_BACKEND_CFG
@@ -22,10 +24,12 @@ from robocode.utils.env_server import env_server_running, write_env_spaces
 from robocode.utils.env_server_runtime import _dispatch, _HandleRegistry
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.strict_blackbox import (
+    STRICT_ALLOWED_PACKAGES,
     STRICT_BLACKBOX_MCP_PYTHON,
     STRICT_BLACKBOX_PYTHON,
     StrictImportError,
     check_strict_imports,
+    strict_allowlist_description,
 )
 
 _ENV_CFG = '{"_target_": "unused.ForValidation"}'
@@ -37,16 +41,15 @@ _STRICT_IMAGE = "robocode-strict-blackbox"
 
 
 def _strict_image_available() -> bool:
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", _STRICT_IMAGE],
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    if shutil.which("docker") is None:
         return False
+    result = subprocess.run(
+        ["docker", "image", "inspect", _STRICT_IMAGE],
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 requires_strict_docker = pytest.mark.skipif(
@@ -113,13 +116,41 @@ def test_strict_blackbox_prompt_describes_only_the_generic_surface() -> None:
     """Strict mode advertises reset/step, the allowlist, and the strict python."""
     approach = AgenticApproach(**_strict_args())
     prompt, _, _ = approach._build_agentic_prompts()  # pylint: disable=protected-access
-    assert "STRICT BLACK BOX" in prompt
-    assert "Only `reset`, `step`, and state rendering are available" in prompt
-    assert "NumPy, SciPy" in prompt
-    assert "checked against that list" in prompt
+    assert "No environment, simulator, robotics, or geometry libraries" in prompt
+    assert "`env.make_primitives()` returns an empty dict" in prompt
+    assert f"may import only {strict_allowlist_description()}" in prompt
     assert "/opt/robocode-strict/bin/python" in prompt
-    assert "set_state" not in prompt
-    assert "make_primitives" not in prompt
+    assert "env.get_state(" not in prompt
+    assert "env.set_state(" not in prompt
+    assert "devectorize(obs)" not in prompt
+    assert "primitives = env.make_primitives()" not in prompt
+
+
+def test_strict_spec_is_the_blackbox_spec_minus_withheld_helpers() -> None:
+    """Strict and legacy blackbox share one spec; only the withheld surface differs."""
+    for object_centric in (False, True):
+        legacy = prompts.blackbox_interaction_spec(object_centric=object_centric)
+        strict = prompts.blackbox_interaction_spec(
+            object_centric=object_centric, strict=True
+        )
+        for shared in (
+            "The environment is a BLACK BOX.",
+            "obs, reward, terminated, truncated, info = env.step(action)",
+            "Parallel test scripts are fine",
+            "CRITICAL: `approach.py` itself must NOT import `env_client`",
+        ):
+            assert shared in legacy
+            assert shared in strict
+        assert "env.get_state()" in legacy
+        assert "env.get_state()" not in strict
+
+
+def test_strict_allowlist_description_names_every_allowed_package() -> None:
+    """The prose the prompt and the rejection share tracks the allowlist constant."""
+    description = strict_allowlist_description()
+    for package in STRICT_ALLOWED_PACKAGES:
+        assert f"`{package}`" in description
+    assert "`sys.modules`" in description
 
 
 @pytest.mark.parametrize(
@@ -393,13 +424,27 @@ def test_strict_imports_accept_stdlib_allowed_packages_and_siblings(
         ),
         ({"approach.py": "import importlib\n"}, "import importlib"),
         ({"approach.py": "m = __import__('os')\n"}, "approach.py:1: __import__"),
+        (
+            {"approach.py": "import builtins\nbuiltins.__import__('os')\n"},
+            "approach.py:2: __import__",
+        ),
+        (
+            {"approach.py": "import sys\nenv = sys.modules['robocode']\n"},
+            "approach.py:2: sys.modules",
+        ),
+        (
+            {"approach.py": "import sys as s\ns.modules.get('robocode')\n"},
+            "approach.py:2: sys.modules",
+        ),
+        ({"approach.py": "from sys import modules\n"}, "approach.py:1: sys.modules"),
+        ({"approach.py": "from .. import helper\n"}, "relative import above"),
         ({"approach.py": "from env_client import make_env\n"}, "import env_client"),
     ],
 )
 def test_strict_imports_reject_everything_else(
     tmp_path: Path, files: dict[str, str], offender: str
 ) -> None:
-    """Nested, sibling-transitive, dynamic, and client imports are all named."""
+    """Nested, sibling-transitive, dynamic, run-time, and client imports are named."""
     for name, source in files.items():
         _write(tmp_path, name, source)
     with pytest.raises(StrictImportError, match=offender):

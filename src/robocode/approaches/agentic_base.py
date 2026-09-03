@@ -31,7 +31,7 @@ from robocode.primitive_descriptions import format_primitives_description
 from robocode.primitives import blackbox_primitive_manifest
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import create_backend
-from robocode.utils.docker_sandbox import DOCKER_PYTHON, DockerSandboxConfig
+from robocode.utils.docker_sandbox import DockerSandboxConfig, container_python
 from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
     env_server_running,
@@ -46,7 +46,6 @@ from robocode.utils.sandbox_types import (
     SandboxResult,
     resolve_container_backend,
 )
-from robocode.utils.strict_blackbox import STRICT_BLACKBOX_PYTHON
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +174,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         )
 
         python_exe = (
-            (STRICT_BLACKBOX_PYTHON if self._blackbox_strict else DOCKER_PYTHON)
+            container_python(self._blackbox_strict)
             if self._container_backend != "local"
             else sys.executable
         )

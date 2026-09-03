@@ -306,9 +306,10 @@ def test_mcp_tool_descriptions_strict_blackbox_use_observations_only() -> None:
         "render_state"
     ]
     assert "obs.tolist()" in strict
-    assert "get_state" not in strict
-    assert "devectorize" not in strict
-    assert "named feature metadata" in strict
+    assert "no `get_state` snapshot" in strict
+    assert "env.get_state()" not in strict
+    assert "devectorize(obs)" not in strict
+    assert "no named feature metadata" in strict
 
 
 def test_mcp_system_prompt_suffix_blackbox_keeps_devectorize() -> None:

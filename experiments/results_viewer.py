@@ -256,22 +256,27 @@ def _env_access(hydra_dir: Path) -> Optional[str]:
     cfg = hydra_dir / "config.yaml"
     if cfg.exists():
         text = cfg.read_text()
-        m = re.search(r"^\s+blackbox:\s*(\S+)\s*$", text, re.MULTILINE)
-        if m is not None:
-            access = _ACCESS_LABELS.get(m.group(1).strip("'\"").lower())
-            strict = re.search(r"^\s+blackbox_strict:\s*(\S+)\s*$", text, re.MULTILINE)
-            if access == "blackbox" and strict is not None:
-                if strict.group(1).strip("'\"").lower() == "true":
-                    return "strict-blackbox"
-            return access
-    overrides = _parse_overrides(hydra_dir)
-    raw = overrides.get("approach.blackbox")
+        flags = {
+            key: _resolved_flag(text, key) for key in ("blackbox", "blackbox_strict")
+        }
+    else:
+        overrides = _parse_overrides(hydra_dir)
+        flags = {
+            key: overrides.get(f"approach.{key}")
+            for key in ("blackbox", "blackbox_strict")
+        }
+    raw = flags["blackbox"]
     access = _ACCESS_LABELS.get(raw.strip("'\"").lower()) if raw else None
-    if access == "blackbox":
-        strict_override = overrides.get("approach.blackbox_strict", "false")
-        if strict_override.strip("'\"").lower() == "true":
-            return "strict-blackbox"
+    strict = flags["blackbox_strict"]
+    if access == "blackbox" and strict and strict.strip("'\"").lower() == "true":
+        return "strict-blackbox"
     return access
+
+
+def _resolved_flag(config_text: str, key: str) -> Optional[str]:
+    """The raw value of ``key:`` in a resolved Hydra config, or None if absent."""
+    m = re.search(rf"^\s+{key}:\s*(\S+)\s*$", config_text, re.MULTILINE)
+    return m.group(1) if m is not None else None
 
 
 # Environment pairs that sample the same task family from different spawn ranges;
