@@ -338,6 +338,9 @@ Build once from the repo root (rebuild when `pyproject.toml` / `uv.lock` change;
 bash docker/build.sh
 ```
 
+The strict blackbox ablation (`approach.blackbox_strict=true`) uses a separate
+dependency-clean image instead; build it with `bash docker/build_strict_blackbox.sh`.
+
 ### Using the OS-level sandbox (legacy)
 
 The original macOS Seatbelt / Linux bubblewrap sandbox is still available (`container_backend: local` in `agentic.yaml`) but has a known limitation: it restricts filesystem *writes* but allows *reads* of the entire host filesystem.
@@ -431,7 +434,7 @@ By default the agent uses the Claude Code CLI backend and runs in the Docker san
 python experiments/run_experiment.py approach=agentic environment=motion2d_easy eval_seed="$EVAL_SEED"
 ```
 
-Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
+Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. Add `approach.blackbox_strict=true primitive_level=none` to also remove environment dependencies and non-render helper APIs: the generated program uses a generic Python environment with only the standard library, NumPy, SciPy, and NetworkX, can interact through `reset` and `step`, and may use the configured MCP tools to render states. The frozen program is checked against the same import allowlist before scoring. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
 
 To use a different backend/model, override the `approach/backend` config:
 

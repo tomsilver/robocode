@@ -10,8 +10,12 @@
 #   - statsig / sentry   (Claude telemetry)
 #
 # Requires --cap-add=NET_ADMIN --cap-add=NET_RAW on docker run.
+# ROBOCODE_FIREWALL_STRICT=1 additionally removes SSH/GitHub/telemetry and
+# restricts host access to ROBOCODE_FIREWALL_HOST_PORT.
 set -euo pipefail
 IFS=$'\n\t'
+
+STRICT="${ROBOCODE_FIREWALL_STRICT:-0}"
 
 # Extract Docker's internal DNS NAT rules BEFORE flushing anything.
 DOCKER_DNS_RULES=$(iptables-save -t nat | grep "127.0.0.11" || true)
@@ -36,9 +40,12 @@ fi
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A INPUT  -p udp --sport 53 -j ACCEPT
 
-# Allow outbound SSH and established inbound SSH.
-iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT  -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+# Legacy authoring containers may use SSH/GitHub. Strict blackbox containers do
+# not: their only non-provider connection is the one explicit env-server port.
+if [ "$STRICT" != "1" ]; then
+    iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
+    iptables -A INPUT  -p tcp --sport 22 -m state --state ESTABLISHED -j ACCEPT
+fi
 
 # Allow loopback.
 iptables -A INPUT  -i lo -j ACCEPT
@@ -47,20 +54,22 @@ iptables -A OUTPUT -o lo -j ACCEPT
 # Create the allowed-domains ipset (CIDR support).
 ipset create allowed-domains hash:net
 
-# Add GitHub IP ranges (web + api + git).
-gh_ranges=$(curl -s https://api.github.com/meta)
-echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q | while read -r cidr; do
-    if echo "$cidr" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'; then
-        ipset add allowed-domains "$cidr"
-    fi
-done
+if [ "$STRICT" != "1" ]; then
+    # Add GitHub IP ranges (web + api + git).
+    gh_ranges=$(curl -s https://api.github.com/meta)
+    echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q | while read -r cidr; do
+        if echo "$cidr" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'; then
+            ipset add allowed-domains "$cidr"
+        fi
+    done
+fi
 
 # Resolve and add specific domains required by Claude.
-for domain in \
-    "api.anthropic.com" \
-    "sentry.io" \
-    "statsig.anthropic.com" \
-    "statsig.com"; do
+BASE_DOMAINS=("api.anthropic.com")
+if [ "$STRICT" != "1" ]; then
+    BASE_DOMAINS+=("sentry.io" "statsig.anthropic.com" "statsig.com")
+fi
+for domain in "${BASE_DOMAINS[@]}"; do
     ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
     if [ -z "$ips" ]; then
         echo "WARNING: could not resolve $domain" >&2
@@ -95,11 +104,26 @@ if [ -n "${ROBOCODE_FIREWALL_EXTRA_DOMAINS:-}" ]; then
     done
 fi
 
+# Allow a host-side network: the whole /24 both ways, or under the strict
+# firewall only outbound TCP to the env server's port (replies come back through
+# the ESTABLISHED rule below).
+allow_host_network() {
+    if [ "$STRICT" = "1" ]; then
+        iptables -A OUTPUT -p tcp -d "$1" --dport "$ROBOCODE_FIREWALL_HOST_PORT" -j ACCEPT
+    else
+        iptables -A INPUT  -s "$1" -j ACCEPT
+        iptables -A OUTPUT -d "$1" -j ACCEPT
+    fi
+}
+if [ "$STRICT" = "1" ] && ! [[ "${ROBOCODE_FIREWALL_HOST_PORT:-}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: strict firewall requires ROBOCODE_FIREWALL_HOST_PORT" >&2
+    exit 1
+fi
+
 # Allow host network (/24 of the default gateway).
 HOST_IP=$(ip route | grep default | awk '{print $3}' | head -1)
 HOST_NETWORK=$(echo "$HOST_IP" | sed 's/\.[0-9]*$/.0\/24/')
-iptables -A INPUT  -s "$HOST_NETWORK" -j ACCEPT
-iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+allow_host_network "$HOST_NETWORK"
 
 # Also allow the Docker Desktop host, which sits on its own subnet
 # (192.168.65.0/24) rather than the container's default gateway (172.17.0.1), so
@@ -126,8 +150,7 @@ if [ -n "$DOCKER_HOST_IP" ]; then
     # what "already covered" actually means. On Linux the name resolves to the
     # gateway and this correctly adds nothing.
     if [ "$DOCKER_HOST_NETWORK" != "$HOST_NETWORK" ]; then
-        iptables -A INPUT  -s "$DOCKER_HOST_NETWORK" -j ACCEPT
-        iptables -A OUTPUT -d "$DOCKER_HOST_NETWORK" -j ACCEPT
+        allow_host_network "$DOCKER_HOST_NETWORK"
     fi
 fi
 

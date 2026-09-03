@@ -20,6 +20,10 @@ Every request must carry the per-run ``token`` so that other hosts on the
 network cannot drive the environment. Each client connection gets its own
 fresh environment instance, so the agent can run parallel test scripts.
 
+With ``strict=True``, dispatch is reduced to reset, step, and render_state (plus
+close at the connection layer); snapshot, conversion, collision, and primitive
+proxy commands are rejected even if a modified client sends them directly.
+
 Security: the protocol is JSON only, never pickle; unpickling
 agent-controlled bytes on the host would be a sandbox escape. Error replies
 contain only the exception type and message, not the traceback, because
@@ -36,7 +40,6 @@ folding it in here would create an import cycle.
 
 from __future__ import annotations
 
-import _thread
 import json
 import logging
 import os
@@ -51,6 +54,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import _thread
 import numpy as np
 from gymnasium.spaces import Box, Space
 from relational_structs.spaces import ObjectCentricStateSpace
@@ -225,6 +229,7 @@ def write_env_spaces(
     action_space: Space[Any],
     max_steps: int | None,
     primitives_manifest: list[dict[str, Any]] | None = None,
+    strict: bool = False,
 ) -> None:
     """Write ``env_spaces.json``, the metadata the sandbox's env_client reads.
 
@@ -245,6 +250,7 @@ def write_env_spaces(
         "action_space": serialize_space(action_space),
         "max_steps": max_steps,
         "primitives": primitives_manifest or [],
+        "strict": strict,
     }
     (sandbox_dir / "env_spaces.json").write_text(
         json.dumps(meta, indent=2), encoding="utf-8"
@@ -270,7 +276,11 @@ def _describe_exit(code: int | None) -> str:
 
 @contextmanager
 def env_server_running(
-    env_cfg_json: str, sandbox_dir: Path, *, telemetry: bool = False
+    env_cfg_json: str,
+    sandbox_dir: Path,
+    *,
+    telemetry: bool = False,
+    strict: bool = False,
 ) -> Iterator[tuple[int, str]]:
     """Run the env server subprocess for the duration of a sandbox run.
 
@@ -315,6 +325,7 @@ def env_server_running(
                 str(port_file),
                 "--sandbox-dir",
                 str(sandbox_dir.resolve()),
+                *(["--strict"] if strict else []),
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
