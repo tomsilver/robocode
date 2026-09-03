@@ -65,6 +65,12 @@ def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
 # ".name" with an identifier boundary so get_state, reset_state, and set_stateful pass.
 _FORBIDDEN_STATE_MUTATIONS = ("set_state", "sample_next_state")
 
+# A generated policy's top-level sibling imports remain cached after ``exec``.
+# Keep them available while that policy is active (its methods may import them
+# again), but remove those exact module objects before loading the next policy so
+# identically named siblings in per-instance sandboxes cannot collide.
+_LOADED_GENERATED_SIBLINGS: dict[str, Any] = {}
+
 
 def _reject_state_mutation(source: str) -> None:
     """Reject a generated approach that mutates the scored env (anti-cheat)."""
@@ -75,6 +81,27 @@ def _reject_state_mutation(source: str) -> None:
             "through reset()/get_action() only and must reach the goal via the actions "
             "it returns, not by mutating the environment's state."
         )
+
+
+def _evict_loaded_generated_siblings() -> None:
+    """Remove sibling modules retained by the previous generated policy load."""
+    for name, module in _LOADED_GENERATED_SIBLINGS.items():
+        if sys.modules.get(name) is module:
+            del sys.modules[name]
+    _LOADED_GENERATED_SIBLINGS.clear()
+
+
+def _remember_loaded_generated_siblings(root: Path) -> None:
+    """Remember imported modules whose files or package paths live under *root*."""
+    for name, module in list(sys.modules.items()):
+        locations: list[str] = []
+        module_file = getattr(module, "__file__", None)
+        if module_file is not None:
+            locations.append(module_file)
+        module_path = getattr(module, "__path__", ()) or ()
+        locations.extend(str(location) for location in module_path)
+        if any(Path(location).resolve().is_relative_to(root) for location in locations):
+            _LOADED_GENERATED_SIBLINGS[name] = module
 
 
 def load_generated_approach(
@@ -95,6 +122,7 @@ def load_generated_approach(
     are first checked against :func:`check_strict_imports`, so a program written
     without domain dependencies cannot pick them up from the host at scoring time.
     """
+    _evict_loaded_generated_siblings()
     if strict_imports:
         # sys.modules wins over sys.path.  Reject a local module that would be
         # silently replaced by an already-loaded host module during scoring.
@@ -112,6 +140,7 @@ def load_generated_approach(
         namespace: dict[str, Any] = {"__file__": str(path)}
         exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
     finally:
+        _remember_loaded_generated_siblings(path.parent.resolve())
         sys.path.remove(sandbox_dir)
     cls = namespace["GeneratedApproach"]
     instance = cls(action_space, observation_space, primitives=primitives)

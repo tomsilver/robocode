@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -433,3 +434,40 @@ def test_strict_loader_rejects_sibling_that_shadows_cached_host_module(
     space = Box(-1.0, 1.0, (2,), dtype=np.float32)
     with pytest.raises(StrictImportError, match="cached host module robocode"):
         load_generated_approach(entry, space, space, {}, strict_imports=True)
+
+
+def test_strict_loader_isolates_same_named_siblings_between_sandboxes(
+    tmp_path: Path,
+) -> None:
+    """Sequential policies may reuse a sibling name without sharing its module."""
+    entries: list[Path] = []
+    for sandbox_name, value in (("first", 1), ("second", 2)):
+        sandbox = tmp_path / sandbox_name
+        _write(sandbox, "shared_policy_helper.py", f"VALUE = {value}\n")
+        entries.append(
+            _write(
+                sandbox,
+                "approach.py",
+                "import shared_policy_helper\n"
+                "class GeneratedApproach:\n"
+                "    def __init__(self, *args, **kwargs):\n"
+                "        self.value = shared_policy_helper.VALUE\n",
+            )
+        )
+
+    space = Box(-1.0, 1.0, (2,), dtype=np.float32)
+    try:
+        first = load_generated_approach(
+            entries[0], space, space, {}, strict_imports=True
+        )
+        second = load_generated_approach(
+            entries[1], space, space, {}, strict_imports=True
+        )
+
+        assert first.value == 1
+        assert second.value == 2
+        helper = sys.modules["shared_policy_helper"]
+        assert helper.__file__ is not None
+        assert Path(helper.__file__).is_relative_to(tmp_path / "second")
+    finally:
+        sys.modules.pop("shared_policy_helper", None)
