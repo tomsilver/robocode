@@ -97,7 +97,9 @@ def test_render_state_deduplicates_filenames(renders_dir: Path) -> None:
     assert Path(path2).exists()
 
 
-def _write_env_spaces(sandbox: Path, port: int, token: str) -> Path:
+def _write_env_spaces(
+    sandbox: Path, port: int, token: str, *, strict: bool = False
+) -> Path:
     """Write an env_spaces.json mirroring what the blackbox approach writes."""
     env = KinderGeom2DEnv(_ENV_CONFIG["env_id"])
     meta = {
@@ -107,6 +109,7 @@ def _write_env_spaces(sandbox: Path, port: int, token: str) -> Path:
         "observation_space": serialize_space(env.observation_space),
         "action_space": serialize_space(env.action_space),
         "max_steps": 5,
+        "strict": strict,
     }
     env.close()
     path = sandbox / "env_spaces.json"
@@ -167,6 +170,34 @@ def test_blackbox_render_policy_runs_in_sandbox(tmp_path: Path) -> None:
     assert paths
     assert all(Path(p).exists() for p in paths)
     assert all(Path(p).parent == sandbox / "mcp_renders" for p in paths)
+
+
+def test_strict_blackbox_render_tools_proxy_without_snapshots(tmp_path: Path) -> None:
+    """Strict render_policy uses observations while raw get_state remains blocked."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    (sandbox / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    with env_server_running(json.dumps(_ENV_CONFIG), sandbox, strict=True) as (
+        port,
+        token,
+    ):
+        env_spaces = _write_env_spaces(sandbox, port, token, strict=True)
+        srv = build_blackbox_server(["render_state", "render_policy"], env_spaces)
+        state_path = _call_tool(srv, "render_state", {"seed": 2})
+        policy_paths = _call_tool(srv, "render_policy", {"seed": 1, "max_steps": 3})
+    assert Path(state_path).exists()
+    assert policy_paths
+    assert all(Path(path).exists() for path in policy_paths)
 
 
 def test_blackbox_render_policy_honors_approach_dir(tmp_path: Path) -> None:
@@ -267,6 +298,18 @@ def test_mcp_tool_descriptions_blackbox_uses_handle_api() -> None:
         mcp_tool_descriptions("claude", blackbox=True)["render_policy"]
         == mcp_tool_descriptions("claude")["render_policy"]
     )
+
+
+def test_mcp_tool_descriptions_strict_blackbox_use_observations_only() -> None:
+    """Strict rendering must not advertise withheld state/conversion helpers."""
+    strict = mcp_tool_descriptions("claude", blackbox=True, strict_blackbox=True)[
+        "render_state"
+    ]
+    assert "obs.tolist()" in strict
+    assert "no `get_state` snapshot" in strict
+    assert "env.get_state()" not in strict
+    assert "devectorize(obs)" not in strict
+    assert "no named feature metadata" in strict
 
 
 def test_mcp_system_prompt_suffix_blackbox_keeps_devectorize() -> None:

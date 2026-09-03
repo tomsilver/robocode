@@ -31,7 +31,7 @@ from robocode.primitive_descriptions import format_primitives_description
 from robocode.primitives import blackbox_primitive_manifest
 from robocode.utils.apptainer_sandbox import ApptainerSandboxConfig
 from robocode.utils.backends import create_backend
-from robocode.utils.docker_sandbox import DOCKER_PYTHON, DockerSandboxConfig
+from robocode.utils.docker_sandbox import DockerSandboxConfig, container_python
 from robocode.utils.env_server import (
     ENV_CLIENT_SRC,
     env_server_running,
@@ -77,6 +77,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         max_output_tokens: int = 16384,
         autocompact_pct: int = 80,
         blackbox: bool = False,
+        blackbox_strict: bool = False,
         telemetry: bool = False,
         env_cfg: str | None = None,
         max_steps: int | None = None,
@@ -107,6 +108,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._max_output_tokens = max_output_tokens
         self._autocompact_pct = autocompact_pct
         self._blackbox = blackbox
+        self._blackbox_strict = blackbox_strict
         self._telemetry = telemetry
         # A variable-count env hands the program an ObjectCentricState (not a vector);
         # the prompt then documents the object-centric API instead of vector/devectorize.
@@ -125,6 +127,19 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                     "blackbox with the local backend is best-effort only: "
                     "the OS sandbox cannot prevent reading env source from "
                     "the host filesystem"
+                )
+        if blackbox_strict:
+            if not blackbox:
+                raise ValueError("blackbox_strict requires blackbox=true")
+            if self._container_backend != "docker":
+                raise ValueError("blackbox_strict requires container_backend=docker")
+            if self._primitives:
+                raise ValueError(
+                    "blackbox_strict exposes no primitives; configure primitives=[]"
+                )
+            if self._model.split("/", 1)[0] in ("ollama", "vllm"):
+                raise ValueError(
+                    "blackbox_strict does not expose host-side model servers"
                 )
         self._generated: Any = None
         self.total_cost_usd: float | None = None
@@ -155,10 +170,13 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             backend_name=self._backend_cfg["backend"],
             blackbox=self._blackbox,
             object_centric=self._object_centric,
+            blackbox_strict=self._blackbox_strict,
         )
 
         python_exe = (
-            DOCKER_PYTHON if self._container_backend != "local" else sys.executable
+            container_python(self._blackbox_strict)
+            if self._container_backend != "local"
+            else sys.executable
         )
         interface_spec = prompts.build_interface_spec(
             class_interface=prompts.AGENTIC_CLASS_INTERFACE,
@@ -182,6 +200,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             env_description=env_description,
             per_instance_seed=per_instance_seed,
             object_centric=self._object_centric,
+            blackbox_strict=self._blackbox_strict,
         )
 
         system_prompt = prompts.build_system_prompt(
@@ -196,6 +215,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             token_budget=self._token_budget_prompt,
             mcp_tools=self._mcp_tools,
             object_centric=self._object_centric,
+            blackbox_strict=self._blackbox_strict,
             per_instance_seed=per_instance_seed,
             per_instance_count=per_instance_count,
         )
@@ -240,6 +260,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
                 telemetry=self._telemetry,
+                blackbox_strict=self._blackbox_strict,
             )
             sandbox_logger = logging.getLogger("robocode.utils.docker_sandbox")
         elif self._container_backend == "apptainer":
@@ -291,7 +312,10 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                     assert self._env_cfg is not None  # validated in __init__
                     port, token = stack.enter_context(
                         env_server_running(
-                            self._env_cfg, sandbox_dir, telemetry=self._telemetry
+                            self._env_cfg,
+                            sandbox_dir,
+                            telemetry=self._telemetry,
+                            strict=self._blackbox_strict,
                         )
                     )
                     write_env_spaces(
@@ -305,6 +329,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                         primitives_manifest=blackbox_primitive_manifest(
                             list(self._primitives)
                         ),
+                        strict=self._blackbox_strict,
                     )
                 result = run_with_rate_limit_retry(
                     docker_config,
@@ -320,7 +345,11 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
     def _load_generated(self, path: Path) -> None:
         """Load a GeneratedApproach class from the given file."""
         self._generated = load_generated_approach(
-            path, self._action_space, self._state_space, self._primitives
+            path,
+            self._action_space,
+            self._state_space,
+            self._primitives,
+            strict_imports=self._blackbox_strict,
         )
 
     def reset(self, state: _ObsType, info: dict[str, Any]) -> None:

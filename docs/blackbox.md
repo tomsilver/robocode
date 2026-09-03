@@ -7,13 +7,54 @@ reward structure, and termination conditions *empirically* by driving a live
 environment instance that runs on the **host**, reachable only through a narrow
 JSON-over-TCP protocol.
 
-The container never sees environment source, oracles, or solution primitives,
-and the protocol is JSON-only (no pickle), so a compromised agent cannot
-deserialize arbitrary host objects.
+The container never sees environment source or oracles, and the protocol is
+JSON-only (no pickle), so a compromised agent cannot deserialize arbitrary host
+objects. The sandbox does hold RoboCode's installed dependencies and any
+explicitly configured helpers; the strict variant below removes that surface too.
 
 Blackbox mode is enabled per approach with the `blackbox: true` config flag
 (default `false`) and requires `env_cfg` to be set. It is supported by both
 `AgenticApproach` and `AgenticCDLApproach`.
+
+`blackbox_strict: true` (default `false`, requires `blackbox: true`) is the
+dependency-clean variant of the same mode, supported by `AgenticApproach` and
+`AgenticPerInstanceApproach`. It changes three things and nothing else:
+
+- Generated programs use a separate Python environment that contains only the
+  standard library, NumPy, and SciPy. No environment, KinDER, simulator, robotics,
+  geometry, or planning code is mounted, so strict mode requires Docker and
+  `primitive_level=none`. Render MCP infrastructure lives in a separate Python
+  environment and cannot expand the generated program's scoring allowlist.
+- The env server exposes `reset`, `step`, and host-side state rendering. Raw state
+  snapshots, devectorization, collision checks, and primitive proxies remain rejected
+  regardless of what the client asks for. `render_policy` executes the generated
+  program inside the container and sends only its visited observations to the host
+  renderer.
+- Before scoring, every import reachable from the frozen `approach.py` through its
+  sibling modules must be the standard library, NumPy, SciPy, or another sibling
+  file (`src/robocode/utils/strict_blackbox.py`); `importlib`, `runpy`,
+  `__import__`, and `sys.modules` are rejected because they reach modules by name at
+  run time. The agent prompt states the same rule. Scoring itself runs on the host
+  like every other mode; the check is what keeps a program from picking up at
+  scoring time a dependency it never had while it was written.
+
+Build the strict image before a strict run:
+
+```bash
+bash docker/build_strict_blackbox.sh
+```
+
+Then run, for example:
+
+```bash
+python experiments/run_experiment.py \
+  approach=agentic environment=motion2d_easy primitive_level=none \
+  approach.blackbox=true approach.blackbox_strict=true \
+  eval_seed="$EVAL_SEED"
+```
+
+The rest of this document describes the full protocol except where a strict-mode
+difference is called out.
 
 ## The two processes
 
@@ -49,6 +90,11 @@ source frames leak to the agent.
 `check_action_collision`, `make_primitives`, `render_state`, `render_policy`,
 and `close`. Test scripts import it. **`approach.py` must not import it**,
 since the generated approach has to run later without the server.
+
+In strict mode the client exposes only `reset`, `step`, `close`, and generic space
+metadata. The server independently enforces this boundary: direct requests for
+`get_state`, `set_state`, rendering, devectorization/vectorization, collision
+checking, or remote primitive calls are rejected.
 
 `make_primitives()` rebuilds the same `primitives` dict the eval harness passes
 to `GeneratedApproach`: env-dependent primitives (currently just
@@ -202,6 +248,15 @@ makes blackbox meaningful differs:
   only for quick local iteration, not for results that depend on the agent not
   having read the source. Use `docker` or `apptainer` for enforced isolation.
 
+Strict mode is Docker-only during synthesis. The strict image gets one writable
+mount (`/sandbox`) and its firewall allows the model provider plus only the exact
+host TCP port of the environment server; GitHub, SSH, package registries, and other
+host ports are not allowed. Scoring needs no container: the import allowlist check
+runs before the program is loaded, so an approach that imports `pybullet_helpers`,
+`tomsgeoms2d`, `robocode`, `kinder`, or any other undeclared dependency fails the
+run with a message naming the import instead of silently succeeding from the host
+environment.
+
 ## MCP render tools in blackbox
 
 The visual-debug tools (`render_state`, `render_policy`, under the MCP server
@@ -225,6 +280,13 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
   runs the episode **in the container** (it execs the sandbox's `approach.py`
   and steps the env over the protocol), then renders each visited state via
   `render_state`. The host therefore never executes `approach.py`.
+
+Strict blackbox uses that same proxy protocol, but runs the MCP server with a
+separate `/opt/robocode-mcp/bin/python`; the generated-code interpreter remains
+dependency-clean. Its host connection permits `render_state` but still rejects raw
+`get_state` snapshots and all other helpers. Consequently, strict `render_policy`
+renders the observations returned by `reset`/`step` rather than requesting hidden
+state snapshots.
 
 ## Diagram
 

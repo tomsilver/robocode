@@ -34,6 +34,7 @@ _PREFERRED_DIMENSIONS = (
     "approach",
     "primitive_level",
     "approach.blackbox",
+    "approach.blackbox_strict",
     "approach/backend",
     "approach/completion",
     "eval_timeout",
@@ -171,6 +172,19 @@ def _canonicalize_with_hydra(
     else:
         values.pop("approach.blackbox", None)
 
+    # The strict flag is tracked only when set, here and in the digest of
+    # _experiment_id: its off default must not perturb the IDs of conditions
+    # recorded before the flag existed.
+    strict = cfg.approach.get("blackbox_strict", False)
+    if not isinstance(strict, bool):
+        raise ValueError(
+            f"Hydra must compose approach.blackbox_strict to a boolean, got {strict!r}"
+        )
+    if strict:
+        values["approach.blackbox_strict"] = True
+    else:
+        values.pop("approach.blackbox_strict", None)
+
     eval_timeout = cfg.get("eval_timeout")
     if (
         not isinstance(eval_timeout, (int, float))
@@ -232,6 +246,8 @@ def _experiment_id(
         value = config.values[key]
         if key == "approach.blackbox":
             labels.append("blackbox" if value is True else "whitebox")
+        elif key == "approach.blackbox_strict":
+            labels.append("strict")
         elif key == "eval_timeout":
             labels.append(f"timeout_{_slug(value)}s")
         else:
@@ -243,6 +259,8 @@ def _experiment_id(
     composed.pop("hydra", None)
     for key in _PROTOCOL_CONFIG_KEYS:
         composed.pop(key, None)
+    if not composed["approach"].get("blackbox_strict"):
+        composed["approach"].pop("blackbox_strict", None)
     payload = {
         "config": composed,
         "replicate_seeds": sorted(config.replicate_seeds),
@@ -283,7 +301,10 @@ def _tracker_row(
     blackbox = config.values.get("approach.blackbox")
     access = ""
     if isinstance(blackbox, bool):
-        access = "blackbox" if blackbox else "whitebox"
+        if blackbox and config.values.get("approach.blackbox_strict") is True:
+            access = "strict-blackbox"
+        else:
+            access = "blackbox" if blackbox else "whitebox"
     row = {column: "" for column in ALL_COLUMNS}
     row.update(
         {

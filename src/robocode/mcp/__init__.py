@@ -91,22 +91,31 @@ _TOOL_DESC_TEMPLATES: dict[str, str] = {
 # dict-of-arrays form, and there are no constant_objects/type_features to build
 # a state from scratch. The override describes that handle API. render_policy
 # needs no override (it never references devectorize), so it stays shared.
+_RENDER_STATE_DESC_BLACKBOX_HEAD = (
+    "`{render_state}(seed=42, state=None, "
+    'label="")`: renders an environment state as a PNG and returns '
+    "the file path.\n"
+    "  Two modes:\n"
+    "  1. **Reset mode** (default): pass `seed` to render the initial "
+    "state after `env.reset(seed=seed)`.\n"
+    "  2. **Arbitrary state mode**: pass `state` as a flat list of floats "
+    "to render any state you want. `seed` is ignored when `state` is "
+    "provided.\n"
+    "  The optional `label` parameter is included in the output filename "
+    'for easier identification (e.g. label="after_grasp").\n'
+    "  How to get a state list (a flat list of floats):\n"
+    "  - From an existing observation: `obs.tolist()`\n"
+)
+_RENDER_STATE_DESC_BLACKBOX_TAIL = (
+    "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
+    "NOT available inside subagents. Call it yourself, then delegate "
+    "image reading to a subagent: have it Read the PNG, describe the "
+    "scene, and return a concise summary. Delete the file when done."
+)
 _TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
     "render_state": (
-        "`{render_state}(seed=42, state=None, "
-        'label="")`: renders an environment state as a PNG and returns '
-        "the file path.\n"
-        "  Two modes:\n"
-        "  1. **Reset mode** (default): pass `seed` to render the initial "
-        "state after `env.reset(seed=seed)`.\n"
-        "  2. **Arbitrary state mode**: pass `state` as a flat list of floats "
-        "to render any state you want. `seed` is ignored when `state` is "
-        "provided.\n"
-        "  The optional `label` parameter is included in the output filename "
-        'for easier identification (e.g. label="after_grasp").\n'
-        "  How to get a state list (a flat list of floats):\n"
-        "  - From an existing observation: `obs.tolist()`\n"
-        "  - From the live env: `env.get_state().tolist()`\n"
+        _RENDER_STATE_DESC_BLACKBOX_HEAD
+        + "  - From the live env: `env.get_state().tolist()`\n"
         "  - To inspect/modify named features: "
         "`env.observation_space.devectorize(obs)` returns an "
         "`ObjectCentricState` handle; read it with `get_object_names()`, "
@@ -114,11 +123,18 @@ _TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
         "`get(obj, feature)`, modify it with `set(obj, feature, value)`, then "
         "`env.observation_space.vectorize(ocs).tolist()` to convert back.\n"
         "  The features are named, but you must still discover what each one "
-        "means empirically by driving the env.\n"
-        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
-        "NOT available inside subagents. Call it yourself, then delegate "
-        "image reading to a subagent: have it Read the PNG, describe the "
-        "scene, and return a concise summary. Delete the file when done."
+        "means empirically by driving the env.\n" + _RENDER_STATE_DESC_BLACKBOX_TAIL
+    ),
+}
+
+
+# Strict blackbox: the same rendering modes, but the host withholds get_state and
+# the devectorize/vectorize helpers, so an observation is the only ready-made state.
+_TOOL_DESC_TEMPLATES_STRICT_BLACKBOX: dict[str, str] = {
+    "render_state": (
+        _RENDER_STATE_DESC_BLACKBOX_HEAD
+        + "  There is no `get_state` snapshot, no `devectorize`/`vectorize`, and no "
+        "named feature metadata.\n" + _RENDER_STATE_DESC_BLACKBOX_TAIL
     ),
 }
 
@@ -160,14 +176,18 @@ def mcp_tool_name_opencode(tool: str) -> str:
 
 
 def mcp_tool_descriptions(
-    backend_name: str, blackbox: bool = False, object_centric: bool = False
+    backend_name: str,
+    blackbox: bool = False,
+    object_centric: bool = False,
+    strict_blackbox: bool = False,
 ) -> dict[str, str]:
     """Return MCP tool descriptions with backend-specific tool names.
 
     In blackbox mode the render_state description swaps the in-process
     devectorize/vectorize/ObjectCentricState guidance for the host-proxied handle API
     (no constant_objects/type_features), matching what env_client exposes when the
-    sandbox has no env source. For a variable-count (object-centric) env the
+    sandbox has no env source. Strict blackbox replaces that guidance with the
+    observation-only rendering surface. For a variable-count (object-centric) env the
     render_state description drops the flat-vector arbitrary-state mode entirely -- it
     does not apply to a state with a varying number of objects -- taking precedence over
     the blackbox variant.
@@ -179,6 +199,8 @@ def mcp_tool_descriptions(
     templates = dict(_TOOL_DESC_TEMPLATES)
     if blackbox:
         templates.update(_TOOL_DESC_TEMPLATES_BLACKBOX)
+    if strict_blackbox:
+        templates.update(_TOOL_DESC_TEMPLATES_STRICT_BLACKBOX)
     if object_centric:
         templates.update(_TOOL_DESC_TEMPLATES_OBJECT_CENTRIC)
     names = {tool: namer(tool) for tool in templates}
@@ -193,45 +215,55 @@ MCP_TOOL_DESCRIPTIONS: dict[str, str] = mcp_tool_descriptions("claude")
 MCP_TOOL_NAMES: tuple[str, ...] = tuple(MCP_TOOL_DESCRIPTIONS)
 
 # System prompt suffix appended when MCP tools are available.
-MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = (
+_MCP_SUFFIX_HEAD = (
     " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+)
+_MCP_SUFFIX_TAIL = (
+    " CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
+    "called from inside subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a subagent."
+)
+
+
+def _mcp_suffix(state_guidance: str) -> str:
+    """The system-prompt MCP suffix: shared workflow around per-mode state guidance."""
+    return _MCP_SUFFIX_HEAD + state_guidance + _MCP_SUFFIX_TAIL
+
+
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX = _mcp_suffix(
     "You can render arbitrary states by "
     "passing a flat list of floats to render_state's `state` parameter; use "
     "devectorize/vectorize on env.observation_space to construct or modify "
-    "states with named features. "
-    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
-    "called from inside subagents. Always call MCP tools yourself, then "
-    "delegate image reading to a subagent."
+    "states with named features."
 )
 
 # Object-centric variant (variable object count): observations are ObjectCentricStates,
 # not flat vectors, so render_state's arbitrary-state mode does not apply -- only seed
 # mode and render_policy are useful.
-MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC = (
-    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC = _mcp_suffix(
     "This environment's observations are object-centric states (a set of typed "
     "objects), not flat vectors, so render_state's arbitrary-state mode does not "
     "apply. Both render_state and render_policy take an optional object_count to "
-    "pin the number of objects. "
-    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
-    "called from inside subagents. Always call MCP tools yourself, then "
-    "delegate image reading to a subagent."
+    "pin the number of objects."
 )
 
-# Blackbox variant: same workflow and subagent guidance, but devectorize/
-# vectorize are proxied to the host env server and return a remote
-# ObjectCentricState handle (read via get/get_objects, write via set) rather
-# than the in-process dict-of-arrays form.
-MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX = (
-    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+# Blackbox variant: devectorize/vectorize are proxied to the host env server and
+# return a remote ObjectCentricState handle (read via get/get_objects, write via set)
+# rather than the in-process dict-of-arrays form.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX = _mcp_suffix(
     "You can render arbitrary states by "
     "passing a flat list of floats (e.g. from obs.tolist() or "
     "env.get_state().tolist()) to render_state's `state` parameter, or use "
     "env.observation_space.devectorize/vectorize to inspect or modify states "
-    "by named features. "
-    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
-    "called from inside subagents. Always call MCP tools yourself, then "
-    "delegate image reading to a subagent."
+    "by named features."
+)
+
+# Strict-blackbox variant: rendering is available, but the raw snapshot and
+# devectorize/vectorize APIs are withheld.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_STRICT_BLACKBOX = _mcp_suffix(
+    "You can render initial states by seed and existing observations by passing "
+    "obs.tolist() to render_state's `state` parameter. Raw state snapshots, "
+    "devectorize/vectorize, and named feature metadata are unavailable."
 )
 
 
