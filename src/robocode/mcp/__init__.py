@@ -123,6 +123,28 @@ _TOOL_DESC_TEMPLATES_BLACKBOX: dict[str, str] = {
 }
 
 
+# Strict blackbox keeps rendering but withholds get_state and the host-backed
+# devectorize/vectorize helpers. Existing observations can still be rendered.
+_TOOL_DESC_TEMPLATES_STRICT_BLACKBOX: dict[str, str] = {
+    "render_state": (
+        "`{render_state}(seed=42, state=None, "
+        'label="")`: renders an environment state as a PNG and returns '
+        "the file path.\n"
+        "  Two modes:\n"
+        "  1. **Reset mode** (default): pass `seed` to render the initial "
+        "state after `env.reset(seed=seed)`.\n"
+        "  2. **Observation mode**: pass an existing flat observation as "
+        "`state=obs.tolist()`. `seed` is ignored when `state` is provided.\n"
+        "  The optional `label` parameter is included in the output filename.\n"
+        "  Strict blackbox does not expose raw state snapshots, devectorization, "
+        "or named feature metadata; discover the observation layout empirically.\n"
+        "  IMPORTANT: You must call this MCP tool DIRECTLY; MCP tools are "
+        "NOT available inside subagents. Call it yourself, then delegate "
+        "image reading to a subagent. Delete the file when done."
+    ),
+}
+
+
 # Object-centric override (variable object count). The observation is an
 # ObjectCentricState with a varying number of objects, so there is no flat state
 # vector: render_state's arbitrary-state mode (a list of floats) does not apply, and
@@ -160,14 +182,18 @@ def mcp_tool_name_opencode(tool: str) -> str:
 
 
 def mcp_tool_descriptions(
-    backend_name: str, blackbox: bool = False, object_centric: bool = False
+    backend_name: str,
+    blackbox: bool = False,
+    object_centric: bool = False,
+    strict_blackbox: bool = False,
 ) -> dict[str, str]:
     """Return MCP tool descriptions with backend-specific tool names.
 
     In blackbox mode the render_state description swaps the in-process
     devectorize/vectorize/ObjectCentricState guidance for the host-proxied handle API
     (no constant_objects/type_features), matching what env_client exposes when the
-    sandbox has no env source. For a variable-count (object-centric) env the
+    sandbox has no env source. Strict blackbox replaces that guidance with the
+    observation-only rendering surface. For a variable-count (object-centric) env the
     render_state description drops the flat-vector arbitrary-state mode entirely -- it
     does not apply to a state with a varying number of objects -- taking precedence over
     the blackbox variant.
@@ -179,6 +205,8 @@ def mcp_tool_descriptions(
     templates = dict(_TOOL_DESC_TEMPLATES)
     if blackbox:
         templates.update(_TOOL_DESC_TEMPLATES_BLACKBOX)
+    if strict_blackbox:
+        templates.update(_TOOL_DESC_TEMPLATES_STRICT_BLACKBOX)
     if object_centric:
         templates.update(_TOOL_DESC_TEMPLATES_OBJECT_CENTRIC)
     names = {tool: namer(tool) for tool in templates}
@@ -229,6 +257,18 @@ MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX = (
     "env.get_state().tolist()) to render_state's `state` parameter, or use "
     "env.observation_space.devectorize/vectorize to inspect or modify states "
     "by named features. "
+    "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
+    "called from inside subagents. Always call MCP tools yourself, then "
+    "delegate image reading to a subagent."
+)
+
+# Strict-blackbox variant: rendering is available, but the raw snapshot and
+# devectorize/vectorize APIs remain withheld.
+MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_STRICT_BLACKBOX = (
+    " IMPORTANT: You have visual debugging tools (render_state, render_policy). "
+    "You can render initial states by seed and existing flat observations by "
+    "passing obs.tolist() to render_state's `state` parameter. Raw state snapshots, "
+    "devectorize/vectorize, and named feature metadata are unavailable. "
     "CRITICAL: MCP tools are only available to YOU directly, they CANNOT be "
     "called from inside subagents. Always call MCP tools yourself, then "
     "delegate image reading to a subagent."

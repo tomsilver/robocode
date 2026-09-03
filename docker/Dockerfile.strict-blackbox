@@ -1,9 +1,10 @@
 # Generic coding image for the strict blackbox ablation.
 #
-# Deliberately never copies pyproject.toml, uv.lock, RoboCode, KinDER, simulator
-# code, or robotics/geometry packages. The agent gets only Python's standard
-# library plus pinned NumPy/SciPy, and the frozen program is later checked on the
-# host against exactly that allowlist (src/robocode/utils/strict_blackbox.py).
+# Deliberately never copies project metadata, environment/KinDER/simulator code,
+# or robotics/geometry packages. Generated programs use only Python's standard
+# library plus pinned NumPy/SciPy; the frozen program is later checked on the host
+# against exactly that allowlist (src/robocode/utils/strict_blackbox.py). A separate
+# Python environment contains only the generic MCP-to-env-server render proxy.
 FROM node:22
 
 ARG CLAUDE_CODE_VERSION=latest
@@ -44,6 +45,25 @@ ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="$PATH:/usr/local/share/npm-global/bin:/opt/robocode-strict/bin"
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g opencode-ai@${OPENCODE_VERSION}
+
+# Keep MCP infrastructure out of the Python environment used by generated
+# programs. This separate interpreter hosts only the generic blackbox render
+# proxy; a .pth shares NumPy/SciPy from the strict environment so render_policy
+# can execute any approach that obeys the scoring import allowlist.
+RUN python3.11 -m venv /opt/robocode-mcp \
+    && /opt/robocode-mcp/bin/pip install --no-cache-dir "mcp==1.29.0" \
+    && echo "/opt/robocode-strict/lib/python3.11/site-packages" \
+        > /opt/robocode-mcp/lib/python3.11/site-packages/strict-blackbox.pth
+
+# Install only the generic, environment-independent blackbox MCP proxy. No
+# environment, simulator, primitive, rendering, or approach source enters the
+# image; actual pixels are produced by the host env server.
+COPY src/robocode/__init__.py \
+    /opt/robocode-mcp/lib/python3.11/site-packages/robocode/__init__.py
+COPY src/robocode/mcp/__init__.py src/robocode/mcp/server.py \
+    /opt/robocode-mcp/lib/python3.11/site-packages/robocode/mcp/
+COPY src/robocode/utils/__init__.py src/robocode/utils/env_client.py \
+    /opt/robocode-mcp/lib/python3.11/site-packages/robocode/utils/
 
 COPY docker/init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY docker/strict-blackbox-entrypoint.sh /usr/local/bin/entrypoint.sh

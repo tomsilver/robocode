@@ -18,8 +18,8 @@ Each call to ``make_env()`` creates a fresh, independent environment
 instance on the server, so parallel test scripts are safe.
 
 The list above is the legacy blackbox interface. When ``env_spaces.json`` has
-``"strict": true``, only reset, step, close, and generic space metadata are
-supported; the host server rejects every helper command independently.
+``"strict": true``, only reset, step, rendering, close, and generic space metadata
+are supported; the host server rejects every other helper command independently.
 
 NOTE: ``approach.py`` must NOT import this module. It is evaluated by a
 separate harness that calls it directly with real observations; this client
@@ -438,12 +438,13 @@ class BlackboxEnv:
 
     def __init__(self, meta: dict[str, Any], sandbox_root: Any = None) -> None:
         obs_spec = meta["observation_space"]
+        self._strict = bool(meta.get("strict", False))
         # A variable-count env sends object-centric states, reconstructed locally; a
         # fixed-count env sends Box vectors as before.
         self._object_centric = obs_spec.get("type") == "ObjectCentric"
         if self._object_centric:
             self.observation_space: Any = _ObjectCentricObservationSpace(obs_spec)
-        elif meta.get("strict", False):
+        elif self._strict:
             # Strict blackbox exposes only generic array metadata. In particular,
             # do not attach the host-backed devectorize/vectorize helpers that make
             # the legacy blackbox convenient but confound the isolation ablation.
@@ -604,14 +605,17 @@ class BlackboxEnv:
         options = {"object_count": object_count} if object_count is not None else None
         obs, info = self.reset(seed=seed, options=options)
         approach.reset(obs, info)
-        states = [self.get_state()]
+        # Strict mode deliberately withholds raw state snapshots. Its observations
+        # are nevertheless renderable, so use them to visualize a policy without
+        # opening the get_state channel to agent scripts.
+        states = [obs if self._strict else self.get_state()]
         for _ in range(max_steps):
             obs, reward, terminated, truncated, info = self.step(
                 approach.get_action(obs)
             )
             if hasattr(approach, "update"):
                 approach.update(obs, reward, terminated or truncated, info)
-            states.append(self.get_state())
+            states.append(obs if self._strict else self.get_state())
             if terminated or truncated:
                 break
         return [

@@ -138,8 +138,6 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 raise ValueError(
                     "blackbox_strict exposes no primitives; configure primitives=[]"
                 )
-            if self._mcp_tools:
-                raise ValueError("blackbox_strict exposes no MCP/render tools")
             if self._model.split("/", 1)[0] in ("ollama", "vllm"):
                 raise ValueError(
                     "blackbox_strict does not expose host-side model servers"
@@ -173,6 +171,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             backend_name=self._backend_cfg["backend"],
             blackbox=self._blackbox,
             object_centric=self._object_centric,
+            blackbox_strict=self._blackbox_strict,
         )
 
         python_exe = (
@@ -217,6 +216,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
             token_budget=self._token_budget_prompt,
             mcp_tools=self._mcp_tools,
             object_centric=self._object_centric,
+            blackbox_strict=self._blackbox_strict,
             per_instance_seed=per_instance_seed,
             per_instance_count=per_instance_count,
         )

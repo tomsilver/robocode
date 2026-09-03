@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +13,45 @@ import pytest
 from gymnasium.spaces import Box
 
 from robocode.approaches.agentic_approach import AgenticApproach
+from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.utils.backends import DEFAULT_BACKEND_CFG
-from robocode.utils.docker_sandbox import _docker_run_prefix
+from robocode.utils.docker_sandbox import _docker_run_prefix, _mcp_prestart_wrapper
 from robocode.utils.env_client import BlackboxEnv, SpaceInfo, _BlackboxObservationSpace
+from robocode.utils.env_server import env_server_running, write_env_spaces
 from robocode.utils.env_server_runtime import _dispatch, _HandleRegistry
 from robocode.utils.episode import load_generated_approach
-from robocode.utils.strict_blackbox import StrictImportError, check_strict_imports
+from robocode.utils.strict_blackbox import (
+    STRICT_BLACKBOX_MCP_PYTHON,
+    STRICT_BLACKBOX_PYTHON,
+    StrictImportError,
+    check_strict_imports,
+)
 
 _ENV_CFG = '{"_target_": "unused.ForValidation"}'
+_RENDER_ENV_CFG = {
+    "_target_": "robocode.environments.kinder_geom2d_env.KinderGeom2DEnv",
+    "env_id": "kinder/Motion2D-p0-v0",
+}
+_STRICT_IMAGE = "robocode-strict-blackbox"
+
+
+def _strict_image_available() -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", _STRICT_IMAGE],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+requires_strict_docker = pytest.mark.skipif(
+    not _strict_image_available(),
+    reason=f"Docker image {_STRICT_IMAGE!r} is unavailable",
+)
 
 
 class _FakeSocket:
@@ -80,7 +113,7 @@ def test_strict_blackbox_prompt_describes_only_the_generic_surface() -> None:
     approach = AgenticApproach(**_strict_args())
     prompt, _, _ = approach._build_agentic_prompts()  # pylint: disable=protected-access
     assert "STRICT BLACK BOX" in prompt
-    assert "Only `reset` and `step` are available" in prompt
+    assert "Only `reset`, `step`, and state rendering are available" in prompt
     assert "NumPy, SciPy" in prompt
     assert "checked against that list" in prompt
     assert "/opt/robocode-strict/bin/python" in prompt
@@ -94,7 +127,6 @@ def test_strict_blackbox_prompt_describes_only_the_generic_surface() -> None:
         ({"blackbox": False}, "requires blackbox=true"),
         ({"container_backend": "local"}, "requires container_backend=docker"),
         ({"primitives": {"helper": object()}}, "exposes no primitives"),
-        ({"mcp_tools": ("render_state",)}, "exposes no MCP"),
     ],
 )
 def test_strict_blackbox_rejects_capability_leaks(
@@ -105,10 +137,33 @@ def test_strict_blackbox_rejects_capability_leaks(
         AgenticApproach(**_strict_args(**overrides))
 
 
-def test_strict_server_allows_only_reset_and_step(tmp_path: Path) -> None:
+def test_strict_blackbox_supports_render_tools() -> None:
+    """Strict mode advertises rendering without advertising withheld helpers."""
+    approach = AgenticApproach(
+        **_strict_args(mcp_tools=("render_state", "render_policy"))
+    )
+    prompt, system_prompt, _ = (
+        approach._build_agentic_prompts()  # pylint: disable=protected-access
+    )
+    combined = prompt + system_prompt
+    assert "mcp__robocode-tools__render_state" in combined
+    assert "mcp__robocode-tools__render_policy" in combined
+    assert "obs.tolist()" in combined
+    assert "env.get_state" not in combined
+    assert "env.observation_space.devectorize" not in combined
+    assert "devectorize/vectorize to inspect" not in combined
+
+
+def test_strict_server_allows_reset_step_and_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The host rejects helper commands independently of client behavior."""
     env = _DummyEnv()
     registry = _HandleRegistry()
+    monkeypatch.setattr(
+        "robocode.utils.env_server_runtime._render_state",
+        lambda *_args, **_kwargs: "mcp_renders/state.png",
+    )
     reset = _dispatch(env, {"cmd": "reset", "seed": 4}, tmp_path, registry, strict=True)
     assert reset["obs"]["__ndarray__"] == [4.0]
     stepped = _dispatch(
@@ -119,7 +174,11 @@ def test_strict_server_allows_only_reset_and_step(tmp_path: Path) -> None:
         strict=True,
     )
     assert stepped["reward"] == 1.0
-    with pytest.raises(ValueError, match="only reset and step"):
+    rendered = _dispatch(
+        env, {"cmd": "render_state", "seed": 4}, tmp_path, registry, strict=True
+    )
+    assert rendered["path"] == "mcp_renders/state.png"
+    with pytest.raises(ValueError, match="only reset, step, and render_state"):
         _dispatch(env, {"cmd": "get_state"}, tmp_path, registry, strict=True)
 
 
@@ -175,6 +234,118 @@ def test_strict_docker_launch_has_no_project_mounts(tmp_path: Path) -> None:
     assert "/robocode/src" not in joined
     assert "kindergarden" not in joined
     assert "ss-pybullet" not in joined
+
+
+def test_strict_mcp_uses_separate_python_environment() -> None:
+    """MCP startup must not add its dependencies to the generated-code Python."""
+    assert STRICT_BLACKBOX_MCP_PYTHON != STRICT_BLACKBOX_PYTHON
+    command = " ".join(
+        _mcp_prestart_wrapper(["agent"], python_cmd=STRICT_BLACKBOX_PYTHON)
+    )
+    assert f"{STRICT_BLACKBOX_PYTHON} -c" in command
+
+
+@requires_strict_docker
+def test_strict_container_keeps_generated_python_dependency_clean() -> None:
+    """The MCP installation must not alter the generated-program interpreter."""
+    code = (
+        "from importlib.util import find_spec; import numpy, scipy; "
+        "assert find_spec('mcp') is None; assert find_spec('robocode') is None"
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            STRICT_BLACKBOX_PYTHON,
+            _STRICT_IMAGE,
+            "-c",
+            code,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@requires_strict_docker
+def test_strict_container_mcp_renders_state_and_policy_through_host(
+    tmp_path: Path,
+) -> None:
+    """The isolated MCP interpreter can proxy strict renders to the host."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    (sandbox / "approach.py").write_text(
+        "import numpy as np\n"
+        "class GeneratedApproach:\n"
+        "    def __init__(self, action_space, observation_space, primitives):\n"
+        "        self._action_space = action_space\n"
+        "    def reset(self, state, info):\n"
+        "        pass\n"
+        "    def get_action(self, state):\n"
+        "        return np.zeros(self._action_space.shape,"
+        " dtype=self._action_space.dtype)\n"
+    )
+    env = KinderGeom2DEnv(_RENDER_ENV_CFG["env_id"])
+    try:
+        with env_server_running(json.dumps(_RENDER_ENV_CFG), sandbox, strict=True) as (
+            port,
+            token,
+        ):
+            write_env_spaces(
+                sandbox,
+                container_backend="docker",
+                port=port,
+                token=token,
+                observation_space=env.observation_space,
+                action_space=env.action_space,
+                max_steps=5,
+                strict=True,
+            )
+            code = (
+                "import asyncio, json; from pathlib import Path; "
+                "from robocode.mcp.server import build_blackbox_server; "
+                "srv=build_blackbox_server(['render_state','render_policy'], "
+                "Path('/sandbox/env_spaces.json')); "
+                "_,state=asyncio.run(srv.call_tool('render_state', {'seed': 3})); "
+                "_,policy=asyncio.run(srv.call_tool('render_policy', "
+                "{'seed': 3, 'max_steps': 2})); "
+                "print(json.dumps({'state': state['result'], "
+                "'policy': policy['result']}))"
+            )
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--entrypoint",
+                    STRICT_BLACKBOX_MCP_PYTHON,
+                    "-v",
+                    f"{sandbox.resolve()}:/sandbox",
+                    _STRICT_IMAGE,
+                    "-c",
+                    code,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+    finally:
+        env.close()
+    assert result.returncode == 0, result.stdout + result.stderr
+    rendered = json.loads(result.stdout.strip().splitlines()[-1])
+    state_path = Path(rendered["state"])
+    assert state_path.name.startswith("state_seed3")
+    assert (sandbox / "mcp_renders" / state_path.name).exists()
+    assert rendered["policy"]
+    for path in rendered["policy"]:
+        assert (sandbox / "mcp_renders" / Path(path).name).exists()
 
 
 def _write(root: Path, name: str, source: str) -> Path:

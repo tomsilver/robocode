@@ -423,21 +423,6 @@ def _dispatch(
             "truncated": bool(truncated),
             "info": encode(info),
         }
-    if strict:
-        raise ValueError(
-            f"Command {cmd!r} is unavailable in strict blackbox mode; "
-            "only reset and step are exposed"
-        )
-    if cmd == "get_state":
-        return {"state": encode(env.get_state())}
-    if cmd == "set_state":
-        env.set_state(decode(request["state"]))
-        return {"ok": True}
-    if cmd == "check_action_collision":
-        collision = check_action_collision(
-            env, decode(request["state"]), decode(request["action"])
-        )
-        return {"collision": bool(collision)}
     if cmd == "render_state":
         return {
             "path": _render_state(
@@ -449,6 +434,21 @@ def _dispatch(
                 request.get("object_count"),
             )
         }
+    if strict:
+        raise ValueError(
+            f"Command {cmd!r} is unavailable in strict blackbox mode; "
+            "only reset, step, and render_state are exposed"
+        )
+    if cmd == "get_state":
+        return {"state": encode(env.get_state())}
+    if cmd == "set_state":
+        env.set_state(decode(request["state"]))
+        return {"ok": True}
+    if cmd == "check_action_collision":
+        collision = check_action_collision(
+            env, decode(request["state"]), decode(request["action"])
+        )
+        return {"collision": bool(collision)}
     # Remote-object proxy commands. They use the handle-aware encode_ref/
     # decode_ref (NOT the plain encode/decode above) so host-side domain objects
     # can be used from the sandbox by reference.

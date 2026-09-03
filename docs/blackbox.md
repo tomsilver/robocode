@@ -20,13 +20,16 @@ Blackbox mode is enabled per approach with the `blackbox: true` config flag
 dependency-clean variant of the same mode, supported by `AgenticApproach` and
 `AgenticPerInstanceApproach`. It changes three things and nothing else:
 
-- The agent works in a separate image that contains only the Python standard
-  library, NumPy, and SciPy. No RoboCode, KinDER, simulator, robotics, geometry, or
-  planning code is mounted, so it requires Docker, `primitive_level=none`, and
-  `mcp_tools=[]`.
-- The env server exposes only `reset` and `step`. Snapshots, rendering,
-  devectorization, collision checks, and primitive proxies are rejected on the host
-  regardless of what the client asks for.
+- Generated programs use a separate Python environment that contains only the
+  standard library, NumPy, and SciPy. No environment, KinDER, simulator, robotics,
+  geometry, or planning code is mounted, so strict mode requires Docker and
+  `primitive_level=none`. Render MCP infrastructure lives in a separate Python
+  environment and cannot expand the generated program's scoring allowlist.
+- The env server exposes `reset`, `step`, and host-side state rendering. Raw state
+  snapshots, devectorization, collision checks, and primitive proxies remain rejected
+  regardless of what the client asks for. `render_policy` executes the generated
+  program inside the container and sends only its visited observations to the host
+  renderer.
 - Before scoring, every import reachable from the frozen `approach.py` through its
   sibling modules must be the standard library, NumPy, SciPy, or another sibling
   file (`src/robocode/utils/strict_blackbox.py`). Scoring itself runs on the host
@@ -44,7 +47,7 @@ Then run, for example:
 ```bash
 python experiments/run_experiment.py \
   approach=agentic environment=motion2d_easy primitive_level=none \
-  approach.blackbox=true approach.blackbox_strict=true mcp_tools=[] \
+  approach.blackbox=true approach.blackbox_strict=true \
   eval_seed="$EVAL_SEED"
 ```
 
@@ -275,6 +278,13 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
   runs the episode **in the container** (it execs the sandbox's `approach.py`
   and steps the env over the protocol), then renders each visited state via
   `render_state`. The host therefore never executes `approach.py`.
+
+Strict blackbox uses that same proxy protocol, but runs the MCP server with a
+separate `/opt/robocode-mcp/bin/python`; the generated-code interpreter remains
+dependency-clean. Its host connection permits `render_state` but still rejects raw
+`get_state` snapshots and all other helpers. Consequently, strict `render_policy`
+renders the observations returned by `reset`/`step` rather than requesting hidden
+state snapshots.
 
 ## Diagram
 

@@ -79,6 +79,7 @@ from robocode.utils.sandbox import (
 )
 from robocode.utils.strict_blackbox import (
     STRICT_BLACKBOX_IMAGE,
+    STRICT_BLACKBOX_MCP_PYTHON,
     STRICT_BLACKBOX_PYTHON,
 )
 from robocode.utils.telemetry import container_launch
@@ -550,7 +551,11 @@ def _build_docker_auth_args(
         yield docker_args, extra_env
 
 
-def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> list[str]:
+def _mcp_prestart_wrapper(
+    agent_cmd: list[str],
+    port: int = MCP_HTTP_PORT,
+    python_cmd: str = DOCKER_PYTHON,
+) -> list[str]:
     """Wrap *agent_cmd* so the http render server starts and is healthy first.
 
     Returns a container command that starts ``.mcp/<MCP_START_SCRIPT>`` in the
@@ -568,7 +573,7 @@ def _mcp_prestart_wrapper(agent_cmd: list[str], port: int = MCP_HTTP_PORT) -> li
     start_script = f"/sandbox/.mcp/{MCP_START_SCRIPT}"
     server_log = "/sandbox/.mcp/mcp_server.boot.log"
     probe = (
-        f"{DOCKER_PYTHON} -c "
+        f"{python_cmd} -c "
         f'"import socket; socket.create_connection('
         f"('{MCP_HTTP_HOST}', {port}), 0.3).close()\""
     )
@@ -637,8 +642,6 @@ async def run_agent_in_docker_sandbox(
             raise ValueError("strict blackbox Docker runtime requires blackbox=True")
         if config.primitive_names:
             raise ValueError("strict blackbox Docker runtime cannot copy primitives")
-        if config.mcp_tools:
-            raise ValueError("strict blackbox Docker runtime cannot start MCP tools")
 
     _setup_sandbox_dir(config)
 
@@ -692,6 +695,7 @@ async def run_agent_in_docker_sandbox(
             config.strict_blackbox_image if strict_blackbox else config.docker_image
         )
         docker_python = STRICT_BLACKBOX_PYTHON if strict_blackbox else DOCKER_PYTHON
+        mcp_python = STRICT_BLACKBOX_MCP_PYTHON if strict_blackbox else docker_python
         docker_cmd = _docker_run_prefix(
             container_name,
             docker_image,
@@ -732,14 +736,14 @@ async def run_agent_in_docker_sandbox(
         # server can still be importing then and its tools register too late).
         agent_cmd = backend.build_cli_cmd(
             config,
-            mcp_python_cmd=docker_python,
+            mcp_python_cmd=mcp_python,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
             mcp_transport="http",
         )
         if config.mcp_tools:
-            docker_cmd += _mcp_prestart_wrapper(agent_cmd)
+            docker_cmd += _mcp_prestart_wrapper(agent_cmd, python_cmd=docker_python)
         else:
             docker_cmd += agent_cmd
 

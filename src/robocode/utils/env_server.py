@@ -20,8 +20,8 @@ Every request must carry the per-run ``token`` so that other hosts on the
 network cannot drive the environment. Each client connection gets its own
 fresh environment instance, so the agent can run parallel test scripts.
 
-With ``strict=True``, dispatch is reduced to reset and step (plus close at the
-connection layer); snapshot, rendering, conversion, collision, and primitive
+With ``strict=True``, dispatch is reduced to reset, step, and render_state (plus
+close at the connection layer); snapshot, conversion, collision, and primitive
 proxy commands are rejected even if a modified client sends them directly.
 
 Security: the protocol is JSON only, never pickle; unpickling

@@ -2609,9 +2609,9 @@ function modelColor(m){if(!m)return null;if(MODEL_COLORS[m])return MODEL_COLORS[
 function modelDot(m){return h("span",{class:"dot",style:`background:${modelColor(m)}`});}
 function modelPill(m){return m?h("span",{class:"pill",
  style:`color:${modelColor(m)};border-color:${modelColor(m)}`},m):"";}
-// strict-blackbox also removes domain dependencies and helper APIs.
+// strict-blackbox also removes domain dependencies and non-render helper APIs.
 function accessPill(a){return a?h("span",{class:"pill",
- title:a==="strict-blackbox"?"agent saw only reset/step and generic numerical packages"
+ title:a==="strict-blackbox"?"agent saw reset/step, rendering, and generic numerical packages"
   :a==="blackbox"?"agent could not read the environment source"
   :"agent could read the environment source"},a):"";}
 

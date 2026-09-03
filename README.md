@@ -434,7 +434,7 @@ By default the agent uses the Claude Code CLI backend and runs in the Docker san
 python experiments/run_experiment.py approach=agentic environment=motion2d_easy eval_seed="$EVAL_SEED"
 ```
 
-Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. Add `approach.blackbox_strict=true primitive_level=none mcp_tools=[]` to also remove RoboCode/environment dependencies and helper APIs: the agent works in a generic image with only the standard library, NumPy, and SciPy, sees only `reset` and `step`, and the frozen program is checked against that import allowlist before scoring. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
+Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. Add `approach.blackbox_strict=true primitive_level=none` to also remove environment dependencies and non-render helper APIs: the generated program uses a generic Python environment with only the standard library, NumPy, and SciPy, can interact through `reset` and `step`, and may use the configured MCP tools to render states. The frozen program is checked against the same import allowlist before scoring. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
 
 To use a different backend/model, override the `approach/backend` config:
 

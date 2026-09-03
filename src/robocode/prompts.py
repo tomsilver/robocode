@@ -28,6 +28,7 @@ from robocode.mcp import (
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX,
     MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC,
+    MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_STRICT_BLACKBOX,
     mcp_tool_descriptions,
 )
 from robocode.utils.backends import CLAUDE_PROMPT_SUFFIX, OPENCODE_PROMPT_SUFFIX
@@ -223,8 +224,8 @@ obs, reward, terminated, truncated, info = env.step(action)
 env.close()
 ```
 
-Only `reset` and `step` are available. {space_metadata} There are no primitives, \
-state snapshots, render tools, kinematics, collision checkers, or \
+Only `reset`, `step`, and state rendering are available. {space_metadata} There are \
+no primitives, raw state snapshots, kinematics, collision checkers, or \
 environment-specific libraries.
 
 {obs_reading}
@@ -849,6 +850,7 @@ def build_system_prompt(
     token_budget: bool = False,
     mcp_tools: tuple[str, ...] = (),
     object_centric: bool = False,
+    blackbox_strict: bool = False,
     per_instance_seed: int | None = None,
     per_instance_count: int | None = None,
 ) -> str:
@@ -882,6 +884,8 @@ def build_system_prompt(
     if mcp_tools:
         if object_centric:
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_OBJECT_CENTRIC
+        elif blackbox_strict:
+            system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_STRICT_BLACKBOX
         elif blackbox:
             system_prompt += MCP_TOOLS_SYSTEM_PROMPT_SUFFIX_BLACKBOX
         else:
@@ -922,13 +926,17 @@ def build_mcp_tool_lines(
     backend_name: str,
     blackbox: bool,
     object_centric: bool = False,
+    blackbox_strict: bool = False,
 ) -> str:
     """Return the MCP-tools section appended to the primitives description, or "" when
     no MCP tools are configured."""
     if not mcp_tools:
         return ""
     tool_descs = mcp_tool_descriptions(
-        backend_name, blackbox=blackbox, object_centric=object_centric
+        backend_name,
+        blackbox=blackbox,
+        object_centric=object_centric,
+        strict_blackbox=blackbox_strict,
     )
     lines = [
         "\n\nYou also have MCP tools for visual debugging (they do NOT "
