@@ -352,6 +352,39 @@ state snapshots.
   token, per-connection fresh env, and a default-deny firewall. The `local`
   backend is best-effort only.
 
+## Red-teaming strict blackbox
+
+Build the strict image, then run its dedicated live adversarial suite:
+
+```bash
+bash docker/build_strict_blackbox.sh
+python integration_tests/red_team_sandbox.py --strict-blackbox
+```
+
+The suite first proves the allowed surface works: the generated-program
+interpreter can import NumPy and SciPy and can reset and step the environment.
+It then asks an agent to attack the same configuration used in production and
+fails if any of these boundaries break:
+
+- the generated-program interpreter imports RoboCode, KinDER, MCP, Gymnasium,
+  geometry, or simulator packages, or installs a package from the network;
+- the separate MCP interpreter exposes environment, primitive, simulator, or
+  robotics modules;
+- environment source, the host-side canary, or arbitrary Internet content is
+  reachable through filesystem or network probing;
+- withheld client methods or raw protocol commands such as `get_state`,
+  `set_state`, devectorization, remote attribute access, or collision helpers
+  succeed against the strict env server.
+
+This is a live agent test and consumes model budget. The deterministic companion
+coverage in `tests/utils/test_strict_blackbox.py` checks the strict server surface,
+dependency-clean image wiring, import allowlist (including transitive and dynamic
+import attempts), cached-module shadowing, and per-sandbox sibling-module isolation.
+The live suite attacks the synthesis boundary; the deterministic tests exercise the
+host-side scoring gate. That gate is a cooperative methodological guardrail, not a
+hostile-code sandbox, and does not claim to contain deliberately obfuscated Python
+after scoring begins.
+
 ## Threat model and limits
 
 Blackbox mode is a *methodological* constraint first: it stops the agent from
