@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # What the strict image installs beyond the standard library. The prompt, the
 # Dockerfile, and the rejection message all describe exactly this set.
-STRICT_ALLOWED_PACKAGES: frozenset[str] = frozenset({"networkx", "numpy", "scipy"})
+STRICT_ALLOWED_PACKAGES: frozenset[str] = frozenset({"numpy", "scipy"})
 
 # Standard-library modules that import by name at run time.
 _DYNAMIC_IMPORT_MODULES: frozenset[str] = frozenset({"importlib", "runpy"})
