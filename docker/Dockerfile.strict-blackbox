@@ -2,8 +2,8 @@
 #
 # Deliberately never copies project metadata, environment/KinDER/simulator code,
 # or robotics/geometry packages. Generated programs use only Python's standard
-# library plus pinned NumPy/SciPy/NetworkX; the frozen program is later checked on
-# the host against exactly that allowlist (src/robocode/utils/strict_blackbox.py). A separate
+# library plus pinned NumPy/SciPy; the frozen program is later checked on the host
+# against exactly that allowlist (src/robocode/utils/strict_blackbox.py). A separate
 # Python environment contains only the generic MCP-to-env-server render proxy.
 FROM node:22
 
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python3.11 -m venv /opt/robocode-strict \
     && /opt/robocode-strict/bin/pip install --no-cache-dir \
-        numpy==1.26.4 scipy==1.14.0 networkx==3.6.1
+        numpy==1.26.4 scipy==1.14.0
 
 RUN mkdir -p /usr/local/share/npm-global \
     && chown -R node:node /usr/local/share
