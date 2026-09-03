@@ -349,6 +349,7 @@ Red team the sandbox:
 ```bash
 python integration_tests/red_team_sandbox.py           # OS-level
 python integration_tests/red_team_sandbox.py --docker  # Docker
+python integration_tests/red_team_sandbox.py --strict-blackbox  # strict blackbox
 ```
 
 ## Experiments
