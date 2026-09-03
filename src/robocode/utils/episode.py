@@ -15,6 +15,7 @@ import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Iterator
 
 import imageio.v3 as iio
@@ -23,6 +24,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.utils.strict_blackbox import check_strict_imports, module_locations
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,12 @@ def _reject_planner_references(source: str, primitives: dict[str, Any]) -> None:
 # ".name" with an identifier boundary so get_state, reset_state, and set_stateful pass.
 _FORBIDDEN_STATE_MUTATIONS = ("set_state", "sample_next_state")
 
+# The sibling modules a generated policy imported at load time stay cached while
+# it is active (its methods may import them again) and are removed before the next
+# policy loads, so identically named siblings in per-instance sandboxes cannot
+# collide.
+_LOADED_GENERATED_SIBLINGS: dict[str, ModuleType] = {}
+
 
 def _reject_state_mutation(source: str) -> None:
     """Reject a generated approach that mutates the scored env (anti-cheat)."""
@@ -76,21 +84,49 @@ def _reject_state_mutation(source: str) -> None:
         )
 
 
+def _evict_loaded_generated_siblings() -> None:
+    """Remove sibling modules retained by the previous generated policy load."""
+    for name, module in _LOADED_GENERATED_SIBLINGS.items():
+        if sys.modules.get(name) is module:
+            del sys.modules[name]
+    _LOADED_GENERATED_SIBLINGS.clear()
+
+
+def _remember_loaded_generated_siblings(root: Path, names: set[str]) -> None:
+    """Remember the newly imported modules among *names* that live under *root*."""
+    for name in names:
+        module = sys.modules[name]
+        if any(loc.is_relative_to(root) for loc in module_locations(module)):
+            _LOADED_GENERATED_SIBLINGS[name] = module
+
+
 def load_generated_approach(
     path: Path,
     action_space: Any,
     observation_space: Any,
     primitives: dict[str, Any],
+    *,
+    strict_imports: bool = False,
 ) -> Any:
     """Load a ``GeneratedApproach`` class from the given file.
 
     Temporarily adds the parent directory of *path* to ``sys.path`` so that
     ``approach.py`` can import sibling modules written by the agent, then
     removes it to avoid polluting the global import path.
+
+    With ``strict_imports`` (strict blackbox), the program and its sibling modules
+    are first checked against :func:`check_strict_imports`, so a program written
+    without domain dependencies cannot pick them up from the host at scoring time.
     """
+    _evict_loaded_generated_siblings()
+    if strict_imports:
+        # sys.modules wins over sys.path.  Reject a local module that would be
+        # silently replaced by an already-loaded host module during scoring.
+        check_strict_imports(path, reject_cached_siblings=True)
     sandbox_dir = str(path.parent.resolve())
     if sandbox_dir not in sys.path:
         sys.path.insert(0, sandbox_dir)
+    modules_before = set(sys.modules)
     try:
         source = path.read_text()
         _reject_planner_references(source, primitives)
@@ -101,6 +137,9 @@ def load_generated_approach(
         namespace: dict[str, Any] = {"__file__": str(path)}
         exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
     finally:
+        _remember_loaded_generated_siblings(
+            path.parent.resolve(), set(sys.modules) - modules_before
+        )
         sys.path.remove(sandbox_dir)
     cls = namespace["GeneratedApproach"]
     instance = cls(action_space, observation_space, primitives=primitives)
@@ -674,10 +713,10 @@ def open_video_writer(
 ) -> Iterator[Callable[[NDArray[np.uint8]], None]]:
     """Yield an ``append(frame)`` callable that streams RGB frames into a GIF.
 
-    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak
-    memory stays at one frame regardless of episode length. (Pillow-based GIF
-    writers buffer every frame until close, which can OOM on long episodes.)
-    All frames must share the first frame's shape.
+    Frames are piped to an ffmpeg subprocess and encoded as they arrive, so peak memory
+    stays at one frame regardless of episode length. (Pillow-based GIF writers buffer
+    every frame until close, which can OOM on long episodes.) All frames must share the
+    first frame's shape.
     """
     proc: subprocess.Popen[bytes] | None = None
     size: tuple[int, int] | None = None
