@@ -14,9 +14,16 @@ optional ``pddlstream`` extra, which compiles FastDownward on install.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import os
+import tempfile
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pybullet as p
 from kinder.envs.kinematic3d.packing3d import ObjectCentricPacking3DEnv
 from kinder.envs.kinematic3d.utils import (
     Kinematic3DRobotActionSpace,
@@ -37,6 +44,27 @@ PACKING3D_ENV_PATH = "kinder.envs.kinematic3d.packing3d:Packing3DEnv"
 Plan = list[tuple[str, tuple[Any, ...]]]
 ActionCallback = Callable[[NDArray[np.float32]], None]
 
+# PDDLStream writes FastDownward inputs and outputs below fixed paths relative to the
+# process working directory. Serialize the temporary cwd swap for callers that happen
+# to plan from multiple threads in one process; separate Hydra processes remain fully
+# independent because each receives its own temporary directory.
+_PLANNING_CWD_LOCK = threading.Lock()
+
+
+@contextmanager
+def _isolated_planning_cwd(parent: Path) -> Iterator[None]:
+    """Run one PDDLStream call in an automatically cleaned private directory."""
+    parent.mkdir(parents=True, exist_ok=True)
+    parent = parent.resolve()
+    with tempfile.TemporaryDirectory(prefix=".pddlstream-", dir=parent) as tmp:
+        with _PLANNING_CWD_LOCK:
+            previous = Path.cwd()
+            os.chdir(tmp)
+            try:
+                yield
+            finally:
+                os.chdir(previous)
+
 
 class StopExecution(Exception):
     """Raised by an action callback to end plan execution early."""
@@ -53,7 +81,14 @@ class Packing3DPDDLStreamPlanner:
 
     def close(self) -> None:
         """Release the twin's PyBullet client."""
-        self._sim.close()
+        physics_client_id = self._sim.physics_client_id
+        try:
+            self._sim.close()
+        finally:
+            # Kinder's original kinematic3d environments currently inherit Gym's
+            # no-op close(), so explicitly release their DIRECT connection.
+            if p.isConnected(physics_client_id):
+                p.disconnect(physicsClientId=physics_client_id)
 
     def state(self) -> Any:
         """The twin's current object-centric state."""
@@ -63,16 +98,24 @@ class Packing3DPDDLStreamPlanner:
         """Put the twin in *state* (the evaluated env's object-centric observation)."""
         self._sim.set_state(state)
 
-    def plan(self, state: Any, max_time: float) -> Plan | None:
+    def plan(
+        self, state: Any, max_time: float, *, seed: int, output_dir: Path
+    ) -> Plan | None:
         """Solve the instance in *state* with PDDLStream's adaptive algorithm.
 
-        Planning scratch-mutates the twin, so call :meth:`sync` before executing.
+        Resetting the twin with the episode seed advances its RNG exactly as the
+        evaluated backend's reset did. Restoring *state* afterwards guarantees that
+        planning still starts from the evaluated observation, including triangle
+        origins. Planning scratch-mutates the twin, so call :meth:`sync` before
+        executing.
         """
         # pylint: disable=import-outside-toplevel
         from kinder_pddlstream_planning.packing3d.run import plan_packing3d
 
+        self._sim.reset(seed=seed)
         self.sync(state)
-        return plan_packing3d(self._sim, state, max_time=max_time)
+        with _isolated_planning_cwd(output_dir):
+            return plan_packing3d(self._sim, state, max_time=max_time)
 
     def execute(self, plan: Plan, on_action: ActionCallback) -> None:
         """Replay *plan* on the twin, calling *on_action* with each clipped action.

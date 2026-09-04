@@ -48,8 +48,6 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         super().__init__(action_space, observation_space, seed, primitives, **kwargs)
         self._max_steps = max_steps
         self._eval_timeout = eval_timeout
-        # The twin sim bakes in the part count, so keep one planner per count.
-        self._planners: dict[int, Packing3DPDDLStreamPlanner] = {}
 
     def train(self) -> None:
         # Per-instance approaches solve each seed via solve_instance; the runner
@@ -72,9 +70,7 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
                 "PDDLStreamPlanningApproach supports the variable-count Packing3D "
                 f"env only, got {type(env).__name__} with count {count!r}"
             )
-        if count not in self._planners:
-            self._planners[count] = Packing3DPDDLStreamPlanner(num_parts=count)
-        return self._planners[count]
+        return Packing3DPDDLStreamPlanner(num_parts=count)
 
     def solve_instance(
         self,
@@ -95,8 +91,35 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         always 0.0 and every seed is attempted. ``count`` pins the instance's part
         count so the planner faces the same instance as the generalized program.
         """
-        del budget_usd, output_subdir
+        del budget_usd
         planner = self._planner_for(env, count)
+        try:
+            return self._solve_with_planner(
+                planner=planner,
+                env=env,
+                seed=seed,
+                output_subdir=output_subdir,
+                render=render,
+                count=count,
+                max_steps=max_steps,
+                progress_callback=progress_callback,
+            )
+        finally:
+            planner.close()
+
+    def _solve_with_planner(
+        self,
+        *,
+        planner: Packing3DPDDLStreamPlanner,
+        env: Any,
+        seed: int,
+        output_subdir: Path,
+        render: bool,
+        count: int | None,
+        max_steps: int | None,
+        progress_callback: Callable[[str, int, int], None] | None,
+    ) -> InstanceResult:
+        """Implement one attempt while :meth:`solve_instance` owns twin cleanup."""
         obs, _ = env.reset(seed=seed, options={"object_count": count})
 
         frames: list[Any] = []
@@ -113,7 +136,12 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         if progress_callback is not None:
             progress_callback("planning", 0, 0)
         plan_start = time.perf_counter()
-        plan = planner.plan(obs, max_time=self._eval_timeout)
+        plan = planner.plan(
+            obs,
+            max_time=self._eval_timeout,
+            seed=seed,
+            output_dir=output_subdir,
+        )
         planning_time = time.perf_counter() - plan_start
         count_extra = {"object_count": count}
 

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
+from typing import Any
 
+import numpy as np
+import pybullet as p
 import pytest
 
 pytest.importorskip("pddlstream")
@@ -77,6 +81,82 @@ def test_no_plan_within_timeout_is_unsolved_not_crashed(tmp_path: Path) -> None:
     assert result.crashed is False
     assert result.extras["plan_found"] is False
     assert result.extras["plan_length"] == 0
+
+
+def test_planning_matches_episode_rng_and_isolates_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Planning gets the evaluated reset's RNG state and a private scratch cwd."""
+    env = _make_env()
+    approach = _make_approach(env, timeout=1.0)
+    observed: list[tuple[float, float, Path]] = []
+
+    def _fake_plan(sim: Any, state: Any, max_time: float) -> None:
+        del state, max_time
+        # pylint: disable=protected-access
+        backend = env._current_backend
+        assert backend is not None
+        eval_rng = backend._object_centric_env.np_random
+        # pylint: enable=protected-access
+        expected_rng = np.random.default_rng()
+        expected_rng.bit_generator.state = copy.deepcopy(eval_rng.bit_generator.state)
+        cwd = Path.cwd()
+        observed.append((sim.np_random.uniform(), expected_rng.uniform(), cwd))
+        Path("temp").mkdir()
+        Path("statistics").mkdir()
+
+    monkeypatch.setattr(
+        "kinder_pddlstream_planning.packing3d.run.plan_packing3d", _fake_plan
+    )
+    try:
+        for _ in range(2):
+            result = approach.solve_instance(
+                env=env,
+                seed=123,
+                budget_usd=0.0,
+                output_subdir=tmp_path / "instance",
+                count=1,
+            )
+            assert result.extras["plan_found"] is False
+    finally:
+        env.close()
+
+    assert len(observed) == 2
+    assert observed[0][0] == observed[0][1]
+    assert observed[1][0] == observed[1][1]
+    assert observed[0][0] == observed[1][0]
+    assert all(cwd.parent == tmp_path / "instance" for _, _, cwd in observed)
+    assert all(not cwd.exists() for _, _, cwd in observed)
+
+
+def test_twin_client_is_closed_after_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every return path disconnects the per-instance twin's PyBullet client."""
+    env = _make_env()
+    approach = _make_approach(env, timeout=1.0)
+    client_ids: list[int] = []
+
+    def _fake_plan(sim: Any, state: Any, max_time: float) -> None:
+        del state, max_time
+        client_ids.append(sim.physics_client_id)
+        assert p.isConnected(sim.physics_client_id)
+
+    monkeypatch.setattr(
+        "kinder_pddlstream_planning.packing3d.run.plan_packing3d", _fake_plan
+    )
+    try:
+        approach.solve_instance(
+            env=env,
+            seed=0,
+            budget_usd=0.0,
+            output_subdir=tmp_path,
+            count=1,
+        )
+        assert len(client_ids) == 1
+        assert not p.isConnected(client_ids[0])
+    finally:
+        env.close()
 
 
 def test_other_envs_are_refused() -> None:
