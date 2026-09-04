@@ -56,6 +56,20 @@ def test_cli_denies_all_tools(monkeypatch):
     assert reply.cost_usd == 0.01
 
 
+def test_cli_failure_exposes_diagnostics(monkeypatch):
+    """Captured CLI errors include the actual reason rather than only exit 1."""
+
+    def fail(args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, args, output="Session limit reached", stderr="resets 4:50am (UTC)"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="Session limit reached") as error:
+        ClaudeCLIClient(DictConfig({"model": "test"})).complete([])
+    assert "resets 4:50am" in str(error.value)
+
+
 def _create_mcp_tool(sandbox_dir: Path) -> str:
     """Write the Docker MCP server/config and return its secret test token."""
     # A harmless tool returns a token the model cannot know without invoking it.
