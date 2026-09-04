@@ -61,6 +61,7 @@ from robocode.utils.claude_auth import (
     sandbox_claude_session_store,
     throwaway_claude_config,
 )
+from robocode.utils.codex_auth import sandbox_codex_sessions, throwaway_codex_home
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     _filtered_repo_mounts,
@@ -155,6 +156,12 @@ def _build_apptainer_auth_args(
                 )
                 claude_copy = stack.enter_context(throwaway_claude_config())
                 apptainer_args += ["--bind", f"{claude_copy}:/home/node/.claude"]
+        elif backend_name == "codex":
+            if os.environ.get("CODEX_API_KEY"):
+                extra_env["APPTAINERENV_CODEX_API_KEY"] = os.environ["CODEX_API_KEY"]
+            else:
+                codex_home = stack.enter_context(throwaway_codex_home())
+                apptainer_args += ["--bind", f"{codex_home}:/home/node/.codex"]
         else:
             opencode_data = Path.home() / ".local" / "share" / "opencode"
             if opencode_data.exists():
@@ -306,9 +313,11 @@ async def run_agent_in_apptainer_sandbox(
         _build_apptainer_auth_args(backend_name) as (auth_args, auth_env),
     ):
         firewall_domains: list[str] = []
-        if backend_name == "opencode":
+        if backend_name in {"opencode", "codex"}:
             firewall_domains = firewall_domains_for_provider(
-                provider_from_model(config.model)
+                "codex"
+                if backend_name == "codex"
+                else provider_from_model(config.model)
             )
 
         # Apptainer shares the host network namespace (even with --containall and
@@ -336,6 +345,9 @@ async def run_agent_in_apptainer_sandbox(
         if backend_name == "claude":
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_binds = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
+        elif backend_name == "codex":
+            sessions_dir = sandbox_codex_sessions(config.sandbox_dir)
+            session_binds = [f"{sessions_dir.resolve()}:/home/node/.codex/sessions"]
 
         tel_binds, tel_env = _telemetry_apptainer(config)
         apptainer_cmd = _build_apptainer_cmd(

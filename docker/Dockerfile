@@ -3,7 +3,7 @@
 # Based on the official Claude Code devcontainer:
 #   https://github.com/anthropics/claude-code/tree/main/.devcontainer
 #
-# Adds Python 3.11 + uv on top of the official node:20 base.
+# Adds Python 3.11 + uv on top of the official node:22 base.
 #
 # PyPI deps are pre-installed into .venv during build, but src/ and
 # third-party/kindergarden/ are DELETED from the image after install — they
@@ -22,13 +22,14 @@
 #   -v <kindergarden>:/robocode/third-party/kindergarden:ro  (tests stripped)
 #   -v <kinder-baselines>:/robocode/third-party/kinder-baselines:ro  (2 pkgs)
 
-FROM node:20
+FROM node:22
 
 ARG TZ
 ENV TZ="$TZ"
 
 ARG CLAUDE_CODE_VERSION=latest
 ARG OPENCODE_VERSION=latest
+ARG CODEX_VERSION=latest
 
 # Remap the node user's UID/GID to match the host's at build time so that
 # bind-mounted host files (e.g. ~/.claude) are readable inside the container
@@ -100,7 +101,8 @@ ENV PATH="$PATH:/usr/local/share/npm-global/bin"
 # Claude Code CLI
 # ---------------------------------------------------------------------------
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && npm install -g opencode-ai@${OPENCODE_VERSION}
+    && npm install -g opencode-ai@${OPENCODE_VERSION} \
+    && npm install -g @openai/codex@${CODEX_VERSION}
 
 # ---------------------------------------------------------------------------
 # Firewall script — the root entrypoint runs this before permanently dropping
@@ -113,9 +115,11 @@ RUN chmod 0755 /usr/local/bin/init-firewall.sh
 # Config/data directories for the node user
 # ---------------------------------------------------------------------------
 RUN mkdir -p /home/node/.claude \
+    && mkdir -p /home/node/.codex \
     && mkdir -p /home/node/.local/state \
     && mkdir -p /home/node/.local/share/opencode \
     && chown -R node:node /home/node/.claude \
+    && chown -R node:node /home/node/.codex \
     && chown -R node:node /home/node/.local
 
 # ---------------------------------------------------------------------------
@@ -155,6 +159,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # ---------------------------------------------------------------------------
 ENV DEVCONTAINER=true
 ENV CLAUDE_CONFIG_DIR=/home/node/.claude
+ENV CODEX_HOME=/home/node/.codex
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 
 # The entrypoint needs NET_ADMIN while it initializes iptables. It permanently

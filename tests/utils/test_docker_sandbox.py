@@ -354,6 +354,14 @@ def test_claude_auth_mount_excludes_host_state(tmp_path: Path, monkeypatch) -> N
     assert not copied.exists()
 
 
+def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_API_KEY", "sk-test-value")
+
+    with _build_docker_auth_args("codex") as (args, env):
+        assert args == ["-e", "CODEX_API_KEY"]
+        assert env == {"CODEX_API_KEY": "sk-test-value"}
+
+
 # A fake claude that runs inside the container: the counter lives in /sandbox
 # (bind-mounted, bounds the loop) and the marker in the mounted session store
 # ($HOME/.claude/projects), so the marker being visible on the second container

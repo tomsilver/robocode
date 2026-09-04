@@ -68,6 +68,7 @@ from robocode.utils.claude_auth import (
     sandbox_claude_session_store,
     throwaway_claude_config,
 )
+from robocode.utils.codex_auth import sandbox_codex_sessions, throwaway_codex_home
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -519,6 +520,7 @@ def _build_docker_auth_args(
     writable, throwaway config containing only copied credentials. The CLI
     cannot read the operator's history or memory, and its writes and token
     refreshes are discarded when this context exits.
+    For Codex: a credentials-only home plus an isolated persistent session mount.
     For OpenCode: ~/.local/share/opencode bind-mount + API key passthrough.
     """
     docker_args: list[str] = []
@@ -537,6 +539,13 @@ def _build_docker_auth_args(
                 )
                 claude_copy = stack.enter_context(throwaway_claude_config())
                 docker_args += ["-v", f"{claude_copy}:/home/node/.claude"]
+        elif backend_name == "codex":
+            if os.environ.get("CODEX_API_KEY"):
+                docker_args += ["-e", "CODEX_API_KEY"]
+                extra_env["CODEX_API_KEY"] = os.environ["CODEX_API_KEY"]
+            else:
+                codex_home = stack.enter_context(throwaway_codex_home())
+                docker_args += ["-v", f"{codex_home}:/home/node/.codex"]
         else:
             # OpenCode: bind-mount auth store and pass through API key env vars.
             opencode_data = Path.home() / ".local" / "share" / "opencode"
@@ -668,9 +677,11 @@ async def run_agent_in_docker_sandbox(
     ):
         # --- Firewall extra domains ---
         firewall_domains: list[str] = []
-        if backend_name == "opencode":
+        if backend_name in {"opencode", "codex"}:
             firewall_domains = firewall_domains_for_provider(
-                provider_from_model(config.model)
+                "codex"
+                if backend_name == "codex"
+                else provider_from_model(config.model)
             )
             # OpenCode also needs access to its own telemetry/update servers.
             # firewall_domains.append("registry.npmjs.org")
@@ -683,6 +694,9 @@ async def run_agent_in_docker_sandbox(
         if backend_name == "claude":
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_volumes = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
+        elif backend_name == "codex":
+            sessions_dir = sandbox_codex_sessions(config.sandbox_dir)
+            session_volumes = [f"{sessions_dir.resolve()}:/home/node/.codex/sessions"]
 
         tel_volumes, tel_env_args = _telemetry_docker(config)
         env_server_port: int | None = None
@@ -780,11 +794,19 @@ async def run_agent_in_docker_sandbox(
                 text=True,
             )
 
-            stream = backend.parse_stream(
-                proc,
-                stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
-                stderr_file=stderr_file,
-            )
+            try:
+                stream = backend.parse_stream(
+                    proc,
+                    stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
+                    stderr_file=stderr_file,
+                )
+            finally:
+                subprocess.run(
+                    ["docker", "rm", "-f", container_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
         wall_time_s = time.monotonic() - wall_start
 
         logger.info(

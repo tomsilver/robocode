@@ -9,6 +9,7 @@ FROM node:22
 
 ARG CLAUDE_CODE_VERSION=latest
 ARG OPENCODE_VERSION=latest
+ARG CODEX_VERSION=latest
 ARG USER_UID=1000
 ARG USER_GID=1000
 
@@ -44,7 +45,8 @@ RUN mkdir -p /usr/local/share/npm-global \
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
 ENV PATH="$PATH:/usr/local/share/npm-global/bin:/opt/robocode-strict/bin"
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && npm install -g opencode-ai@${OPENCODE_VERSION}
+    && npm install -g opencode-ai@${OPENCODE_VERSION} \
+    && npm install -g @openai/codex@${CODEX_VERSION}
 
 # Keep MCP infrastructure out of the Python environment used by generated
 # programs. This separate interpreter hosts only the generic blackbox render
@@ -69,11 +71,12 @@ COPY docker/init-firewall.sh /usr/local/bin/init-firewall.sh
 COPY docker/strict-blackbox-entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/init-firewall.sh /usr/local/bin/entrypoint.sh \
     && mkdir -p /home/node/.claude /home/node/.local/state \
-        /home/node/.local/share/opencode \
-    && chown -R node:node /home/node/.claude /home/node/.local
+        /home/node/.local/share/opencode /home/node/.codex \
+    && chown -R node:node /home/node/.claude /home/node/.codex /home/node/.local
 
 ENV DEVCONTAINER=true
 ENV CLAUDE_CONFIG_DIR=/home/node/.claude
+ENV CODEX_HOME=/home/node/.codex
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 ENV ROBOCODE_FIREWALL_STRICT=1
 

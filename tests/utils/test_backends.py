@@ -13,6 +13,7 @@ from omegaconf import DictConfig
 
 from robocode.utils.backends import (
     DEFAULT_BACKEND_CFG,
+    DEFAULT_CODEX_CFG,
     DEFAULT_OPENCODE_CFG,
     PROVIDERS,
     create_backend,
@@ -24,6 +25,7 @@ from robocode.utils.backends.claude import (
     ClaudeBackend,
     _tool_timing_category,
 )
+from robocode.utils.backends.codex import CodexBackend
 from robocode.utils.backends.opencode import OpenCodeBackend
 from robocode.utils.sandbox import SandboxConfig
 from robocode.utils.sandbox_types import AGENT_PROMPT_DIR
@@ -48,6 +50,10 @@ class TestCreateBackend:
         backend = create_backend(cfg)
         assert isinstance(backend, OpenCodeBackend)
 
+    def test_create_codex_backend(self) -> None:
+        """create_backend returns a CodexBackend for 'codex'."""
+        assert isinstance(create_backend(DEFAULT_CODEX_CFG), CodexBackend)
+
     def test_unknown_backend_raises(self) -> None:
         """Unknown backend name raises ValueError."""
         cfg = DictConfig({"backend": "unknown_llm", "model": "x"})
@@ -58,6 +64,7 @@ class TestCreateBackend:
         """Both backends have the required methods."""
         for cfg in (
             DEFAULT_BACKEND_CFG,
+            DEFAULT_CODEX_CFG,
             DictConfig({"backend": "opencode", "model": "openai/gpt-4o"}),
         ):
             backend = create_backend(cfg)
@@ -65,6 +72,176 @@ class TestCreateBackend:
             assert hasattr(backend, "build_env")
             assert hasattr(backend, "setup_sandbox_files")
             assert hasattr(backend, "parse_stream")
+
+
+# ---------------------------------------------------------------------------
+# CodexBackend
+# ---------------------------------------------------------------------------
+
+
+class TestCodexBackend:
+    """Tests for Codex command construction and JSONL parsing."""
+
+    def test_command_uses_stdin_and_reasoning_effort(self, tmp_path: Path) -> None:
+        config = SandboxConfig(
+            sandbox_dir=tmp_path, prompt="write approach.py", model="gpt-5.6-sol"
+        )
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        command = backend.build_cli_cmd(config)
+        assert command[:2] == ["codex", "exec"]
+        assert command[-1] == "-"
+        assert "write approach.py" not in command
+        assert 'model_reasoning_effort="medium"' in command
+        assert backend.stdin_text(config) == "write approach.py"
+
+    def test_resume_uses_isolated_last_session(self, tmp_path: Path) -> None:
+        config = SandboxConfig(sandbox_dir=tmp_path, resume_previous_session=True)
+        command = CodexBackend(DEFAULT_CODEX_CFG).build_cli_cmd(config)
+        assert command[:3] == ["codex", "exec", "resume"]
+        assert "--last" in command
+        assert "--all" in command
+
+    def test_resume_cost_excludes_previous_session_usage(self, tmp_path: Path) -> None:
+        session_dir = tmp_path / ".agent_sessions" / "codex"
+        session_dir.mkdir(parents=True)
+        session = session_dir / "rollout.jsonl"
+
+        def token_event(input_tokens: int) -> str:
+            return json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {"total_token_usage": {"input_tokens": input_tokens}},
+                    },
+                }
+            )
+
+        session.write_text(token_event(1_000_000) + "\n")
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(
+            SandboxConfig(sandbox_dir=tmp_path, resume_previous_session=True)
+        )
+        with session.open("a") as file:
+            file.write(token_event(1_000_100) + "\n")
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter([json.dumps({"type": "turn.completed"}) + "\n"])
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+
+        assert backend.parse_stream(proc).total_cost == pytest.approx(0.0004)
+
+    def test_mcp_http_config(self, tmp_path: Path) -> None:
+        sandbox = tmp_path / "sandbox"
+        sandbox.mkdir()
+        (tmp_path / "env_config.json").write_text("{}")
+        config = SandboxConfig(
+            sandbox_dir=sandbox,
+            mcp_tools=("render_state",),
+        )
+        command = CodexBackend(DEFAULT_CODEX_CFG).build_cli_cmd(
+            config,
+            mcp_python_cmd="python",
+            mcp_env_config_path="/sandbox/.mcp/env_config.json",
+            mcp_transport="http",
+            mcp_port=8799,
+        )
+        assert 'mcp_servers.robocode-tools.url="http://127.0.0.1:8799/mcp"' in command
+
+    def test_agents_md_contains_system_and_sandbox_instructions(
+        self, tmp_path: Path
+    ) -> None:
+        config = SandboxConfig(sandbox_dir=tmp_path, system_prompt="Solve the task.")
+        CodexBackend(DEFAULT_CODEX_CFG).setup_sandbox_files(
+            config, docker_python="/robocode/.venv/bin/python"
+        )
+        text = (tmp_path / "AGENTS.md").read_text()
+        assert "Solve the task." in text
+        assert "/robocode/.venv/bin/python" in text
+
+    def test_parse_usage_and_tools(self, tmp_path: Path) -> None:
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=0))
+        events = [
+            {"type": "item.started", "item": {"type": "command_execution"}},
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "done"},
+            },
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 600,
+                    "output_tokens": 100,
+                },
+            },
+        ]
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter(json.dumps(event) + "\n" for event in events)
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+        result = backend.parse_stream(proc)
+        assert result.num_turns == 1
+        assert result.num_tool_calls == 1
+        assert result.input_tokens == 400
+        assert result.cache_read_tokens == 600
+        assert result.output_tokens == 100
+        assert result.total_cost == pytest.approx(0.00384)
+
+    def test_transient_transport_fallback_is_not_an_error(self, tmp_path: Path) -> None:
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=0))
+        events = [
+            {"type": "error", "message": "Reconnecting... 2/5"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "error",
+                    "message": "Falling back from WebSockets to HTTPS transport.",
+                },
+            },
+            {"type": "turn.completed", "usage": {}},
+        ]
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter(json.dumps(event) + "\n" for event in events)
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+        assert not backend.parse_stream(proc).is_error
+
+    def test_live_session_usage_enforces_budget(self, tmp_path: Path) -> None:
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=1))
+        session_dir = tmp_path / ".agent_sessions" / "codex" / "2026" / "09"
+        session_dir.mkdir(parents=True)
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 1_000_000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                    }
+                },
+            },
+        }
+        (session_dir / "rollout.jsonl").write_text(json.dumps(event) + "\n")
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter([json.dumps({"type": "thread.started"}) + "\n"])
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+
+        result = backend.parse_stream(proc)
+
+        proc.kill.assert_called_once()
+        assert result.is_error
+        assert result.total_cost == pytest.approx(4.0)
 
 
 # ---------------------------------------------------------------------------

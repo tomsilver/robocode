@@ -256,6 +256,14 @@ def test_opencode_auth_passes_api_keys(monkeypatch) -> None:  # type: ignore
         assert not any("sk-test-value" in a for a in args)
 
 
+def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:  # type: ignore
+    monkeypatch.setenv("CODEX_API_KEY", "sk-test-value")
+
+    with _build_apptainer_auth_args("codex") as (args, env):
+        assert not args
+        assert env == {"APPTAINERENV_CODEX_API_KEY": "sk-test-value"}
+
+
 def test_claude_auth_uses_env_token(monkeypatch) -> None:  # type: ignore
     """CLAUDE_CODE_OAUTH_TOKEN is forwarded via APPTAINERENV_, never on argv."""
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
