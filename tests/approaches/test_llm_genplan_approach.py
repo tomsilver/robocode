@@ -14,8 +14,10 @@ from omegaconf import DictConfig, OmegaConf
 from relational_structs import Type
 from relational_structs.spaces import ObjectCentricStateSpace
 
+from robocode import prompts
 from robocode.approaches.llm_genplan_approach import (
     LLMGenPlanApproach,
+    _check_submission_compiles,
     _gather_env_source,
     _parse_python_code,
 )
@@ -121,6 +123,30 @@ def test_parse_python_code_recovers_truncated_block():
     """A response cut off mid-block (no closing fence) still yields the code."""
     response = f"Here is the approach:\n```python\n{_FULL_APPROACH}"
     assert _parse_python_code(response) == _FULL_APPROACH.strip()
+
+
+def test_genplan_submission_contract_treats_commentary_as_python_comments():
+    """The code prompt explains exactly how generated text will be consumed."""
+    prompt = prompts.genplan_interface_spec()
+    assert "compiled as Python source, not read as prose" in prompt
+    assert "commentary, put it inside the code block as Python comments" in prompt
+    assert "complete module" in prompt
+
+
+def test_submission_checker_compiles_without_executing(tmp_path):
+    """A valid module passes even if executing it would raise an exception."""
+    source = "# commentary is allowed\nraise RuntimeError('do not execute me')"
+    assert _check_submission_compiles(source, tmp_path / "approach.py") is None
+
+
+def test_submission_checker_reports_compiler_failure(tmp_path):
+    """Prose-like invalid source becomes explicit submission feedback."""
+    failure = _check_submission_compiles(
+        "This response is prose — not Python.", tmp_path / "approach.py"
+    )
+    assert failure is not None
+    assert failure["error_type"] == "submission-not-compilable"
+    assert "SyntaxError" in failure["feedback"]
 
 
 # A generalized (variable-count) env whose held-out eval counts strictly extend the
@@ -299,6 +325,79 @@ def test_debug_loop_fixes_broken_policy(tmp_path):
         if terminated:
             break
     assert terminated
+
+
+def test_noncompilable_submission_is_reported_for_correction(tmp_path):
+    """Narrative output becomes feedback and Claude can submit corrected code."""
+
+    class _CheckingClient(_FakeClient):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.last_prompt = ""
+
+        def complete(self, messages):
+            self.last_prompt = messages[-1]["content"]
+            return super().complete(messages)
+
+    client = _CheckingClient([_BROKEN, "This is prose — not code.", _FIXED])
+    approach = _make_approach(_ToyEnv(), client, tmp_path)
+    approach.train()
+
+    failure = json.loads((tmp_path / "sandbox/impl1_feedback.json").read_text())
+    assert failure["error_type"] == "submission-not-compilable"
+    assert "compiled as Python source, not read as prose" in client.last_prompt
+    assert approach.num_generations == 3
+
+
+def test_unloadable_final_submission_reports_best_and_final(tmp_path):
+    """An unusable final answer is retained while the best policy stays runnable."""
+    client = _FakeClient([_BROKEN, "```python\nvalue = 1\n```"])
+    approach = _make_approach(_ToyEnv(), client, tmp_path)
+    approach._max_debug_attempts = 1  # pylint: disable=protected-access
+
+    approach.train()
+
+    sandbox = tmp_path / "sandbox"
+    assert sandbox.joinpath("approach.py").read_text() == _parse_python_code(_BROKEN)
+    assert sandbox.joinpath("impl0_candidate.py").read_text() == _parse_python_code(
+        _BROKEN
+    )
+    assert sandbox.joinpath("impl1_candidate.py").read_text() == "value = 1"
+    best = json.loads(sandbox.joinpath("best_score.json").read_text())
+    final = json.loads(sandbox.joinpath("final_score.json").read_text())
+    assert best["generation"] == 0
+    assert best["score"]["num_completed"] == 2
+    assert final == {"generation": 1, "score": None, "error_type": "policy-load-error"}
+    assert json.loads(sandbox.joinpath("impl0_score.json").read_text()) == {
+        "generation": 0,
+        "score": best["score"],
+        "error_type": "not-solved",
+    }
+    assert json.loads(sandbox.joinpath("impl1_score.json").read_text()) == final
+    failure = json.loads((tmp_path / "sandbox/impl1_feedback.json").read_text())
+    assert failure["error_type"] == "policy-load-error"
+
+
+def test_worse_final_policy_does_not_replace_best_policy(tmp_path):
+    """A loadable regression is saved as final but is not selected for evaluation."""
+    crashing = _BROKEN.replace(
+        "return np.array([0.0], dtype=np.float32)", "raise RuntimeError('boom')"
+    )
+    client = _FakeClient([_BROKEN, crashing])
+    approach = _make_approach(_ToyEnv(), client, tmp_path)
+    approach._max_debug_attempts = 1  # pylint: disable=protected-access
+
+    approach.train()
+
+    sandbox = tmp_path / "sandbox"
+    assert sandbox.joinpath("approach.py").read_text() == _parse_python_code(_BROKEN)
+    assert sandbox.joinpath("impl1_candidate.py").read_text() == _parse_python_code(
+        crashing
+    )
+    final = json.loads(sandbox.joinpath("final_score.json").read_text())
+    assert final["generation"] == 1
+    assert final["score"]["num_completed"] == 0
+    assert final["error_type"] == "python-exception"
 
 
 def test_genplan_logs_progress_and_saves_feedback(tmp_path, caplog):
