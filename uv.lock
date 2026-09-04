@@ -1286,6 +1286,37 @@ requires-dist = [
 provides-extras = ["prpl-kinematics", "develop"]
 
 [[package]]
+name = "kinder-pddlstream-planning"
+version = "0.1.0"
+source = { editable = "third-party/kinder-baselines/kinder-pddlstream-planning" }
+dependencies = [
+    { name = "kinder-models" },
+    { name = "kindergarden" },
+    { name = "numpy" },
+    { name = "pddlstream" },
+    { name = "pillow" },
+    { name = "pybullet-helpers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'develop'" },
+    { name = "docformatter", marker = "extra == 'develop'" },
+    { name = "isort", marker = "extra == 'develop'" },
+    { name = "kinder-models", specifier = ">=0.1.0" },
+    { name = "kindergarden", specifier = ">=0.1.0" },
+    { name = "mypy", marker = "extra == 'develop'" },
+    { name = "numpy" },
+    { name = "pddlstream", git = "https://github.com/Princeton-Robot-Planning-and-Learning/pddlstream.git?rev=5919a844b8c947acdb49bedb6e8b2b93e6a70c0c" },
+    { name = "pillow" },
+    { name = "pybullet-helpers", specifier = ">=0.0.1" },
+    { name = "pylint", marker = "extra == 'develop'", specifier = ">=2.14.5" },
+    { name = "pytest", marker = "extra == 'develop'", specifier = ">=7.2.2,<9.1" },
+    { name = "pytest-pylint", marker = "extra == 'develop'", specifier = ">=0.18.0" },
+]
+provides-extras = ["develop"]
+
+[[package]]
 name = "kindergarden"
 version = "0.2.4"
 source = { editable = "third-party/kindergarden" }
@@ -2122,6 +2153,14 @@ wheels = [
 ]
 
 [[package]]
+name = "pddlstream"
+version = "0.2.0"
+source = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/pddlstream.git?rev=5919a844b8c947acdb49bedb6e8b2b93e6a70c0c#5919a844b8c947acdb49bedb6e8b2b93e6a70c0c" }
+dependencies = [
+    { name = "numpy" },
+]
+
+[[package]]
 name = "pillow"
 version = "11.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2860,6 +2899,10 @@ libero = [
     { name = "robomimic" },
     { name = "robosuite" },
 ]
+pddlstream = [
+    { name = "kinder-pddlstream-planning" },
+    { name = "pddlstream" },
+]
 tracker = [
     { name = "gspread" },
 ]
@@ -2883,6 +2926,7 @@ requires-dist = [
     { name = "isort", marker = "extra == 'develop'" },
     { name = "kinder-bilevel-planning", marker = "extra == 'bilevel'", editable = "third-party/kinder-baselines/kinder-bilevel-planning" },
     { name = "kinder-models", marker = "extra == 'bilevel'", editable = "third-party/kinder-baselines/kinder-models" },
+    { name = "kinder-pddlstream-planning", marker = "extra == 'pddlstream'", editable = "third-party/kinder-baselines/kinder-pddlstream-planning" },
     { name = "kindergarden", editable = "third-party/kindergarden" },
     { name = "libero", marker = "extra == 'libero'", editable = "third-party/LIBERO-PRO" },
     { name = "matplotlib" },
@@ -2894,6 +2938,7 @@ requires-dist = [
     { name = "openai" },
     { name = "pandas" },
     { name = "pandas-stubs" },
+    { name = "pddlstream", marker = "extra == 'pddlstream'", git = "https://github.com/Princeton-Robot-Planning-and-Learning/pddlstream?rev=5919a844b8c947acdb49bedb6e8b2b93e6a70c0c" },
     { name = "pybullet-arm64", specifier = ">=3.2.8" },
     { name = "pylint", marker = "extra == 'develop'", specifier = ">=2.14.5" },
     { name = "pytest", marker = "extra == 'develop'", specifier = ">=7.2.2,<9.1" },
@@ -2905,7 +2950,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'develop'" },
     { name = "types-shapely" },
 ]
-provides-extras = ["bilevel", "tracker", "develop", "libero"]
+provides-extras = ["bilevel", "pddlstream", "tracker", "develop", "libero"]
 
 [[package]]
 name = "robomimic"

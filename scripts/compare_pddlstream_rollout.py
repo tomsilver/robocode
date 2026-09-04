@@ -32,6 +32,10 @@ Usage::
     python scripts/compare_pddlstream_rollout.py --counts 3 5 --episodes 3
 """
 
+# mypy: disable-error-code="import-untyped"
+# The stock PDDLStream tree imported in _run_stock is untyped, and the pddlstream wheel
+# ships an `examples` package of its own, so mypy sees installed-but-untyped modules.
+
 from __future__ import annotations
 
 import argparse
@@ -270,6 +274,7 @@ def _run_stock(payload: dict) -> dict:
     sys.path.insert(0, str(STOCK_TREE))
     sys.path.insert(0, str(STOCK_TREE / "examples" / "pybullet" / "utils" / "motion"))
     import numpy as np
+
     from examples.pybullet.tamp.problems import packed
     from examples.pybullet.utils.pybullet_tools.pr2_utils import (
         PR2_TOOL_FRAMES,
