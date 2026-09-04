@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, urlparse
 
 import imageio.v3 as iio
 import imageio_ffmpeg
+import yaml
 
 from experiments import drive_results
 
@@ -193,6 +194,20 @@ def _variant_marker(run_dir: Path) -> dict[str, Any]:
 def _policy_dir(run: RunInfo) -> Path:
     """The run dir whose sandbox/ holds the policy this run evaluated."""
     return SCAN.root / run.policy_source if run.policy_source else run.path
+
+
+def _loads_generated_policy(run: RunInfo) -> bool:
+    """Whether replaying this run needs a sandbox holding a generated approach.py.
+
+    Approaches that synthesize a program declare ``load_dir`` so a replay can point
+    them back at the sandbox they wrote. Hand-written policies (oracle, random,
+    bilevel planning) reconstruct themselves from the environment name and have no
+    sandbox, so requiring one would refuse to render them at all.
+    """
+    config = REPO_ROOT / "experiments" / "conf" / "approach" / f"{run.approach}.yaml"
+    if not config.exists():
+        return True
+    return "load_dir" in (yaml.safe_load(config.read_text(encoding="utf-8")) or {})
 
 
 def _environment_of_dir(run_dir: Path) -> Optional[str]:
@@ -2090,6 +2105,7 @@ def _render_worker() -> None:
             policy_dir = _policy_dir(run)
             if (
                 not run.per_instance
+                and _loads_generated_policy(run)
                 and not (policy_dir / "sandbox" / "approach.py").exists()
             ):
                 raise RuntimeError(
