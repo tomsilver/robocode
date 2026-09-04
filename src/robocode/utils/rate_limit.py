@@ -112,6 +112,23 @@ def seconds_until_reset(
     return min(wait, _MAX_WAIT_SECS)
 
 
+def wait_for_rate_limit_reset(reset_message: str) -> None:
+    """Sleep until Claude's reported usage reset, including a short grace period."""
+    reset_hour, reset_minute, is_utc = parse_reset_time(reset_message)
+    wait_secs = seconds_until_reset(reset_hour, is_utc, reset_minute)
+    logger.warning(
+        "Rate-limited (%s). Sleeping %.1f hours for reset at %02d:%02d %s "
+        "(plus 5-minute grace) ...",
+        reset_message,
+        wait_secs / 3600,
+        reset_hour,
+        reset_minute,
+        "UTC" if is_utc else "local",
+    )
+    time.sleep(wait_secs)
+    logger.info("Woke up after rate-limit sleep; retrying...")
+
+
 def _fold_retry_metrics(
     result: SandboxResult,
     aborted_tokens: int,
@@ -319,22 +336,7 @@ def run_with_rate_limit_retry(
 
         if rate_limited:
             assert result.rate_limit_reset is not None
-            reset_hour, reset_minute, is_utc = parse_reset_time(result.rate_limit_reset)
-            wait_secs = seconds_until_reset(reset_hour, is_utc, reset_minute)
-            hours = wait_secs / 3600
-            logger.warning(
-                "Rate-limited (%s). Sleeping %.1f hours for reset at %02d:%02d %s "
-                "(plus 5-minute grace) ...",
-                result.error,
-                hours,
-                reset_hour,
-                reset_minute,
-                "UTC" if is_utc else "local",
-            )
-            time.sleep(wait_secs)
-            logger.info(
-                "Woke up after rate-limit sleep, resuming with remaining budget..."
-            )
+            wait_for_rate_limit_reset(result.rate_limit_reset)
             resume_prompt = active.prompt
         else:
             output_token_retries += 1

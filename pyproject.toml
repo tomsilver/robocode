@@ -27,6 +27,7 @@ dependencies = [
    "mcp[cli]>=1.27,<2",
    "anthropic",
    "openai",
+   "tenacity",
 ]
 
 [project.optional-dependencies]
