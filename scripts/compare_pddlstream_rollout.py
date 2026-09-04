@@ -274,7 +274,6 @@ def _run_stock(payload: dict) -> dict:
     sys.path.insert(0, str(STOCK_TREE))
     sys.path.insert(0, str(STOCK_TREE / "examples" / "pybullet" / "utils" / "motion"))
     import numpy as np
-
     from examples.pybullet.tamp.problems import packed
     from examples.pybullet.utils.pybullet_tools.pr2_utils import (
         PR2_TOOL_FRAMES,
