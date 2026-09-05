@@ -783,6 +783,42 @@ def test_run_episode_with_timeout_kills_slow_policy() -> None:
     assert final_state is None
 
 
+class _SlowResetCountEnv(_CountEnv):
+    """A ``_CountEnv`` whose reset takes longer than the eval budget under test."""
+
+    def reset(self, *, seed=None, options=None):
+        time.sleep(0.8)
+        return super().reset(seed=seed, options=options)
+
+
+class _SlowResetForkUnsafeCountEnv(_SlowResetCountEnv):
+    """The slow-reset env on the in-process path."""
+
+    eval_fork_safe = False
+
+
+@pytest.mark.parametrize("env_cls", [_SlowResetCountEnv, _SlowResetForkUnsafeCountEnv])
+def test_run_episode_with_timeout_excludes_env_reset(env_cls: type) -> None:
+    """Resetting the environment is the harness's cost, not charged to the policy."""
+    env = env_cls()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5
+    )
+    assert metrics["solved"]
+    assert not metrics.get("timed_out")
+
+
+def test_run_episode_uses_a_provided_initial_observation() -> None:
+    """With ``initial`` given, run_episode does not reset the env again."""
+    env = _CountEnv()
+    initial = env.reset(seed=0)  # type: ignore[no-untyped-call]
+    env.reset = lambda **_kwargs: pytest.fail("must not reset")  # type: ignore
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode(env, approach, seed=0, max_steps=10, initial=initial)
+    assert metrics["solved"]
+
+
 class _ForkUnsafeCountEnv(_CountEnv):
     """A ``_CountEnv`` that, like a MuJoCo env, must not be evaluated in a fork."""
 

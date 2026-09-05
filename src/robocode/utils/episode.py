@@ -135,6 +135,15 @@ def load_generated_approach(
     return instance
 
 
+def reset_for_episode(
+    env: Any, seed: int, count: int | None
+) -> tuple[Any, dict[str, Any]]:
+    """Reset *env* for an eval episode, pinning the object count when given."""
+    if count is not None:
+        return env.reset(seed=seed, options={"object_count": count})
+    return env.reset(seed=seed)
+
+
 def run_episode(
     env: Any,
     approach: BaseApproach,
@@ -144,6 +153,7 @@ def run_episode(
     count: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     frame_sink: Callable[[NDArray[np.uint8]], None] | None = None,
+    initial: tuple[Any, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
     """Run a single evaluation episode; return metrics, frames, final state.
 
@@ -151,11 +161,12 @@ def run_episode(
     ``reset(options={"object_count": count})``); ``None`` leaves the env to sample.
     ``frame_sink`` receives each rendered frame as it is captured and the returned
     frame list stays empty; long episodes then need only one frame in memory.
+    ``initial`` is the ``(state, info)`` of a reset the caller already performed
+    (see :func:`reset_for_episode`), in which case the env is not reset again.
     """
-    if count is not None:
-        state, info = env.reset(seed=seed, options={"object_count": count})
-    else:
-        state, info = env.reset(seed=seed)
+    if initial is None:
+        initial = reset_for_episode(env, seed, count)
+    state, info = initial
     approach.reset(state, info)
 
     frames: list[NDArray[np.uint8]] = []
@@ -299,6 +310,7 @@ def _run_episode_in_process(
     this process down instead of one worker. That is the deliberate trade: on macOS
     the alternative is not a safer rollout but no rollout at all.
     """
+    initial = reset_for_episode(env, seed, count)
     deadline = time.monotonic() + timeout
 
     def _abort_if_overrun(_step: int, _total: int) -> None:
@@ -315,6 +327,7 @@ def _run_episode_in_process(
                 render=render,
                 count=count,
                 progress_callback=_abort_if_overrun,
+                initial=initial,
             )
     except EpisodeTimeout:
         return _timed_out_metrics(count), [], None
@@ -365,10 +378,12 @@ def run_episode_with_timeout(
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
     """Run one eval episode under a hard per-instance wall-clock ``timeout``.
 
-    The rollout runs in a forked worker (inheriting the live env and approach) so a
-    hung or too-slow policy can be killed; on overrun it is scored unsolved
-    (``metrics["timed_out"]``). A worker that dies before reporting (policy
-    exception, OOM, native crash) re-raises here.
+    The environment is reset first, outside the budget: building or resetting a
+    simulator is the harness's cost, not the policy's. The clock then covers the
+    policy's own reset plus the rollout, which runs in a forked worker (inheriting
+    the live, already reset env and the approach) so a hung or too-slow policy can
+    be killed; on overrun it is scored unsolved (``metrics["timed_out"]``). A worker
+    that dies before reporting (policy exception, OOM, native crash) re-raises here.
 
     Where forking cannot carry the env (see :func:`_fork_safe`), the rollout runs in
     this process instead and is bounded the same way; :func:`_run_episode_in_process`
@@ -385,13 +400,14 @@ def run_episode_with_timeout(
             count=count,
         )
 
+    initial = reset_for_episode(env, seed, count)
     ctx = mp.get_context("fork")  # fork: the worker inherits the live env + approach
     with ctx.Manager() as manager:
         result = manager.dict()
         outcome, exitcode = run_in_forked_worker(
             ctx,
             _timed_episode_worker,
-            (env, approach, seed, max_steps, render, count, result),
+            (env, approach, seed, max_steps, render, count, initial, result),
             timeout,
         )
         if outcome == "timeout":
@@ -415,6 +431,7 @@ def _timed_episode_worker(
     max_steps: int,
     render: bool,
     count: int | None,
+    initial: tuple[Any, dict[str, Any]],
     result: Any,
 ) -> None:
     """Run one episode in a subprocess and stash its outcome in ``result``.
@@ -425,7 +442,7 @@ def _timed_episode_worker(
     """
     try:
         metrics, frames, final_state = run_episode(
-            env, approach, seed, max_steps, render=render, count=count
+            env, approach, seed, max_steps, render=render, count=count, initial=initial
         )
         result["frames"] = frames
         result["final_state"] = final_state
