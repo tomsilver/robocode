@@ -40,7 +40,7 @@ class SandboxConfig:
     prompt: str = ""
     output_filename: str = ""
     model: str = "sonnet"
-    max_budget_usd: float = 5.0
+    max_budget_usd: float = 20.0
     max_turns: int = 0  # 0 = unlimited
     system_prompt: str = ""
     mcp_tools: tuple[str, ...] = ()
@@ -99,13 +99,13 @@ class GenerationMetrics:
     model_usage: dict[str, Any] = field(default_factory=dict)
     # Retryable interruptions. The loop resumes with only the remaining budget;
     # rate limits wait for the usage window, output-token overflows retry
-    # immediately, and oversized prompts first run /compact. Keep discarded
-    # attempts separate from final-attempt metrics so affected generations can
-    # be identified and excluded in analysis. The main fields above describe
-    # the final attempt only.
+    # immediately, oversized prompts first run /compact, and incomplete Codex
+    # training resumes immediately. Keep prior-attempt metrics separate from the
+    # final attempt so affected generations can be identified in analysis.
     rate_limit_retries: int = 0
     output_token_retries: int = 0
     prompt_too_long_retries: int = 0
+    unconfirmed_solution_retries: int = 0
     aborted_tokens: int = 0
     aborted_cost_usd: float = 0.0
 
@@ -145,6 +145,7 @@ class GenerationMetrics:
             "gen_rate_limit_retries": self.rate_limit_retries,
             "gen_output_token_retries": self.output_token_retries,
             "gen_prompt_too_long_retries": self.prompt_too_long_retries,
+            "gen_unconfirmed_solution_retries": self.unconfirmed_solution_retries,
             "gen_aborted_tokens": self.aborted_tokens,
             "gen_aborted_cost_usd": self.aborted_cost_usd,
         }
@@ -161,6 +162,7 @@ class SandboxResult:
     rate_limit_reset: str | None = None  # e.g. "3am" from usage limit message
     output_token_limit_hit: bool = False
     prompt_too_long_hit: bool = False
+    unconfirmed_solution: bool = False
     generation_metrics: GenerationMetrics | None = None
 
 
@@ -175,6 +177,7 @@ class _StreamParseResult:
     rate_limit_reset: str | None = None  # e.g. "3am" parsed from usage message
     output_token_limit_hit: bool = False
     prompt_too_long_hit: bool = False
+    unconfirmed_solution: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0

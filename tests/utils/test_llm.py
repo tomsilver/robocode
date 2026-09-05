@@ -1,7 +1,7 @@
 """LLM helpers and opt-in Docker Claude tool-isolation tests.
 
-Run with pytest tests/utils/test_llm.py -m integration. These tests make paid
-model calls using existing Claude authentication and a harmless MCP server.
+Run with pytest tests/utils/test_llm.py -m integration. These tests make paid model
+calls using existing Claude authentication and a harmless MCP server.
 """
 
 import json

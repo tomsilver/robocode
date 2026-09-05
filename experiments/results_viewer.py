@@ -823,10 +823,10 @@ def _topdown_path(gif: Path) -> Path:
 def _hide_robot(env: Any) -> None:
     """Make the robot and its attached visualization bodies invisible.
 
-    An episode usually ends with the arm parked over the target region, where it
-    would hide the very placement the overhead shot is meant to show. Scene objects
-    stay visible, a still-grasped one included: a part left hanging in mid-air is
-    part of the end state.
+    An episode usually ends with the arm parked over the target region, where it would
+    hide the very placement the overhead shot is meant to show. Scene objects stay
+    visible, a still-grasped one included: a part left hanging in mid-air is part of the
+    end state.
     """
     # pylint: disable=import-outside-toplevel
     import pybullet as p
@@ -855,9 +855,9 @@ def _hide_robot(env: Any) -> None:
 def _save_topdown(env: Any, state: Any, profile: dict[str, Any], out: Path) -> None:
     """Write an overhead PNG of the live env's current state, robot hidden.
 
-    The snapshot is a convenience for judging placement quality from above, so a
-    capture failure is reported and otherwise ignored. Hiding the robot is
-    permanent for this env instance, which the caller discards after the capture.
+    The snapshot is a convenience for judging placement quality from above, so a capture
+    failure is reported and otherwise ignored. Hiding the robot is permanent for this
+    env instance, which the caller discards after the capture.
     """
     # pylint: disable=broad-exception-caught,import-outside-toplevel,protected-access
     try:
@@ -1759,8 +1759,8 @@ def _purge_sandbox_modules() -> None:
 def _close_env(env: Any) -> None:
     """Release a replay env's resources at the end of the job that built it.
 
-    PyBullet DIRECT clients and their meshes are held per environment instance, so
-    an env that outlives its job keeps growing the server's memory footprint.
+    PyBullet DIRECT clients and their meshes are held per environment instance, so an
+    env that outlives its job keeps growing the server's memory footprint.
     """
     if env is None:
         return
@@ -1997,9 +1997,9 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
 class _ActionRecorder:
     """Approach wrapper that keeps the action tape of a rollout.
 
-    Frame capture and GIF encoding add seconds per rollout, which changes what a
-    policy reading the wall clock does. A replay therefore runs the real policy
-    once with rendering off, and renders the recorded tape in a second pass.
+    Frame capture and GIF encoding add seconds per rollout, which changes what a policy
+    reading the wall clock does. A replay therefore runs the real policy once with
+    rendering off, and renders the recorded tape in a second pass.
     """
 
     def __init__(self, approach: Any) -> None:

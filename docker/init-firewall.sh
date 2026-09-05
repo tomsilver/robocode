@@ -77,7 +77,7 @@ for domain in "${BASE_DOMAINS[@]}"; do
     fi
     while IFS= read -r ip; do
         if [ -n "$ip" ] && echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-            ipset add allowed-domains "$ip"
+            ipset add allowed-domains "$ip" -exist
         fi
     done <<< "$ips"
 done
@@ -98,7 +98,7 @@ if [ -n "${ROBOCODE_FIREWALL_EXTRA_DOMAINS:-}" ]; then
         fi
         while IFS= read -r ip; do
             if [ -n "$ip" ] && echo "$ip" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-                ipset add allowed-domains "$ip"
+                ipset add allowed-domains "$ip" -exist
             fi
         done <<< "$ips"
     done

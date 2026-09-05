@@ -62,7 +62,7 @@ class AgenticCDLApproach(BaseApproach[_ObsType, _ActType]):
         primitives: dict[str, Callable[..., Any]],
         backend: DictConfig,  # Hydra backend config (backend name, model, etc.)
         env_description_path: str | None = None,
-        max_budget_usd: float = 5.0,
+        max_budget_usd: float = 20.0,
         max_turns: int = 0,
         output_dir: str = ".",
         load_dir: str | None = None,

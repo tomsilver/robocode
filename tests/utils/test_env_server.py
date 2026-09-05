@@ -718,8 +718,8 @@ def test_log_agent_op_records_only_dispatched_ops(
 ) -> None:
     """Blackbox dispatch logging records agent reset/step/set_state only.
 
-    Server-internal ops (the init reset, render save/restore) never reach this
-    function, so they cannot pollute the stream; the episode latch dedups.
+    Server-internal ops (the init reset, render save/restore) never reach this function,
+    so they cannot pollute the stream; the episode latch dedups.
     """
     sink = tmp_path / "events.jsonl"
     monkeypatch.setenv("ROBOCODE_TELEMETRY", str(sink))

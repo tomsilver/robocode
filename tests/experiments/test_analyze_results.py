@@ -119,9 +119,9 @@ def test_boolean_flags_average_instead_of_splitting_a_condition(tmp_path: Path) 
     """Replicates that differ only on a run flag still aggregate into one row.
 
     Left as bools these columns are not a numeric dtype, so aggregate_results treats
-    them as grouping keys and emits one row per flag value -- two replicates of the
-    same condition stop being averaged together precisely because one of them hit a
-    limit or lost episodes to crashes.
+    them as grouping keys and emits one row per flag value -- two replicates of the same
+    condition stop being averaged together precisely because one of them hit a limit or
+    lost episodes to crashes.
     """
     _write_run(
         tmp_path / "a",

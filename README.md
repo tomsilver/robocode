@@ -36,6 +36,7 @@ The following tools are **not** installed by `install.sh` / `uv sync` and must b
 |---|---|---|
 | [Ollama](https://ollama.com/) | Local model serving (Claude + Ollama, OpenCode + Ollama) | `curl -fsSL https://ollama.com/install.sh \| sh` |
 | [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | `claude` backend (default) | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| [Codex CLI](https://developers.openai.com/codex/cli/) | `codex` backend | `npm install -g @openai/codex@latest` |
 | [OpenCode CLI](https://opencode.ai) | `opencode` backend (multi-provider) | `curl -fsSL https://opencode.ai/install \| bash` |
 | [vLLM](https://docs.vllm.ai/) | Serving models via OpenAI-compatible API | `pip install vllm` (in a separate env) |
 | [Docker](https://www.docker.com/) | Docker sandbox (recommended for isolation) | See [Docker docs](https://docs.docker.com/get-docker/) |
@@ -48,7 +49,7 @@ ollama pull gemma4:31b
 
 ### Agent backend setup
 
-The agentic approach supports two backends: **Claude Code CLI** (default) and **OpenCode** (for GPT, Gemini, open-source models via vLLM/Ollama, etc.).
+The agentic approach supports three backends: **Claude Code CLI** (default), **Codex CLI**, and **OpenCode** (for GPT, Gemini, open-source models via vLLM/Ollama, etc.).
 
 #### Claude Code CLI (default)
 
@@ -70,6 +71,20 @@ The `model` parameter in `agentic.yaml` takes a full model ID. Override per-run 
 | `claude_haiku45` | `claude-haiku-4-5-20251001` |
 
 See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude/models/overview) for the full list.
+
+#### Codex CLI
+
+[Codex CLI](https://developers.openai.com/codex/cli/) runs OpenAI coding models directly. Install it with `npm install -g @openai/codex@latest` (it is also pre-installed in both Docker images), then authenticate with either `codex login` or a `CODEX_API_KEY` environment variable.
+
+Use the `codex_gpt6` preset for GPT-6 Astra with medium reasoning:
+
+```bash
+python experiments/run_experiment.py approach=agentic \
+    approach/backend=codex_gpt6 environment=motion2d_generalized \
+    replicate_seed=0 eval_seed="$EVAL_SEED"
+```
+
+With login-file authentication, Docker and Apptainer copy only `auth.json` into a throwaway Codex home. Host `config.toml`, `AGENTS.md`, skills, and session history are not mounted. Each fresh experiment starts with an empty sandbox-local session directory; only an automatic retry of that same experiment can resume it.
 
 #### OpenCode (multi-provider)
 
@@ -304,7 +319,7 @@ The agent runs inside a Docker container (`robocode-sandbox`) that provides full
 |---|---|
 | Filesystem | Docker bind-mount: agent can only write to `/sandbox` (the run's output dir) |
 | Network | `init-firewall.sh` whitelists API endpoints for the configured provider (Anthropic, OpenAI, Google, etc.), GitHub IPs, and telemetry; blocks everything else via iptables. Extra domains are passed via `ROBOCODE_FIREWALL_EXTRA_DOMAINS`. |
-| Write hook | Claude backend: `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox`. OpenCode backend: `"permission": "allow"` in `opencode.json` (Docker provides the isolation). |
+| Write hook | Claude backend: `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox`. Codex and OpenCode rely on the enclosing Docker filesystem boundary. |
 
 The Apptainer backend (`container_backend=apptainer`, for HPC clusters with no Docker daemon) keeps the same filesystem isolation but has **no network firewall**: unprivileged Apptainer cannot grant `CAP_NET_ADMIN`, so `init-firewall.sh` is skipped and generated code runs with unrestricted network egress. Use Docker where the iptables allowlist matters.
 
@@ -316,6 +331,14 @@ The Apptainer backend (`container_backend=apptainer`, for HPC clusters with no D
 | `/sandbox/primitives/` | Source files from `src/robocode/primitives/` (read reference) |
 | `/robocode/.venv/bin/python` | Python 3.11 with all robocode dependencies pre-installed |
 | `/robocode/third-party/kindergarden/` | The kinder env package, bind-mounted read-only from the host submodule |
+
+### Whitebox and blackbox Docker modes
+
+| Mode | Required overrides | Image and visibility |
+|---|---|---|
+| Whitebox (default) | none | `robocode-sandbox`; filtered robocode and environment source are readable |
+| Blackbox | `approach.blackbox=true` | `robocode-sandbox`; environment source is removed and interaction goes through the host env server |
+| Strict blackbox | `approach.blackbox=true approach.blackbox_strict=true primitive_level=none` | `robocode-sandbox-strict-blackbox`; no project/environment packages, reset/step and render tools only |
 
 ### Start docker
 
@@ -427,9 +450,9 @@ viewer command and archive layout do not change.
 
 ### Agentic approach
 
-The `agentic` approach launches a coding agent during `train()`. The agent reads the environment source code, figures out the state/action space and dynamics, and writes a `GeneratedApproach` class that is used at evaluation time. The agent can also write and run test scripts against the real environment to verify its solution before committing.
+The `agentic` approach launches a coding agent during `train()`. In whitebox mode it reads the filtered environment source; in blackbox mode it infers dynamics through the isolated env server. It writes a `GeneratedApproach` class that is used at evaluation time and can run test scripts against the real environment before committing.
 
-By default the agent uses the Claude Code CLI backend and runs in the Docker sandbox (requires `bash docker/build.sh` once):
+By default the agent uses the Claude Code CLI backend and runs in the whitebox Docker sandbox (requires `bash docker/build.sh` once):
 
 ```bash
 python experiments/run_experiment.py approach=agentic environment=motion2d_easy eval_seed="$EVAL_SEED"
@@ -437,11 +460,32 @@ python experiments/run_experiment.py approach=agentic environment=motion2d_easy 
 
 Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. Add `approach.blackbox_strict=true primitive_level=none` to also remove environment dependencies and non-render helper APIs: the generated program uses a generic Python environment with only the standard library, NumPy, and SciPy, can interact through `reset` and `step`, and may use the configured MCP tools to render states. The frozen program is checked against the same import allowlist before scoring. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
 
+The default hard generation budget is $20 per experiment. Codex charges the root
+agent and all of its subagents against that one shared threshold.
+
+Codex experiment templates (replace the environment and seeds as needed):
+
+```bash
+# Whitebox
+python experiments/run_experiment.py approach=agentic \
+    approach/backend=codex_gpt6 environment=motion2d_generalized \
+    approach.max_budget_usd=20.0 replicate_seed=0 eval_seed="$EVAL_SEED"
+
+# Blackbox
+python experiments/run_experiment.py approach=agentic \
+    approach/backend=codex_gpt6 environment=motion2d_generalized \
+    approach.blackbox=true approach.max_budget_usd=20.0 \
+    replicate_seed=0 eval_seed="$EVAL_SEED"
+```
+
 To use a different backend/model, override the `approach/backend` config:
 
 ```bash
 # GPT-5.4 via OpenCode
 python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt54 eval_seed="$EVAL_SEED"
+
+# GPT-5.6 Sol (medium reasoning) via Codex
+python experiments/run_experiment.py approach=agentic approach/backend=codex_gpt6 eval_seed="$EVAL_SEED"
 
 # Local Ollama model
 python experiments/run_experiment.py approach=agentic approach/backend=opencode_qwen eval_seed="$EVAL_SEED"
@@ -450,7 +494,7 @@ python experiments/run_experiment.py approach=agentic approach/backend=opencode_
 python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro eval_seed="$EVAL_SEED"
 ```
 
-Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
+Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `codex_gpt6`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
 
 The experiment runner rejects the legacy local sandbox for generated-code
 methods because that sandbox permits host filesystem reads. Use Docker or

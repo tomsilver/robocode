@@ -46,6 +46,7 @@ from robocode.primitive_specs import (
 )
 from robocode.utils.backends import AgentBackend
 from robocode.utils.claude_auth import sandbox_claude_config
+from robocode.utils.codex_auth import sandbox_codex_home
 from robocode.utils.sandbox_types import (
     GenerationMetrics,
     SandboxConfig,
@@ -346,6 +347,7 @@ def _stream_result_to_sandbox_result(
         stream.rate_limit_reset is not None
         or stream.output_token_limit_hit
         or stream.prompt_too_long_hit
+        or stream.unconfirmed_solution
     ):
         return SandboxResult(
             success=False,
@@ -355,6 +357,7 @@ def _stream_result_to_sandbox_result(
             rate_limit_reset=stream.rate_limit_reset,
             output_token_limit_hit=stream.output_token_limit_hit,
             prompt_too_long_hit=stream.prompt_too_long_hit,
+            unconfirmed_solution=stream.unconfirmed_solution,
             generation_metrics=metrics,
         )
 
@@ -487,15 +490,22 @@ async def run_agent_in_sandbox(
         else None
     )
     wall_start = time.monotonic()
-    claude_config = (
+    agent_config = (
         sandbox_claude_config(config.sandbox_dir)
         if backend.name == "claude"
-        else nullcontext(None)
+        else (
+            sandbox_codex_home(config.sandbox_dir)
+            if backend.name == "codex"
+            else nullcontext(None)
+        )
     )
     try:
-        with claude_config as config_dir:
+        with agent_config as config_dir:
             if config_dir is not None:
-                env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+                if backend.name == "claude":
+                    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+                else:
+                    env["CODEX_HOME"] = str(config_dir)
             with (
                 tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file,
                 agent_stdin(backend, config) as stdin_file,

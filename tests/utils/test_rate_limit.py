@@ -160,6 +160,48 @@ def test_retry_loop_resumes_with_carried_budget(tmp_path: Path, monkeypatch) -> 
     assert captured[2].max_turns == 20  # 50 - (20 + 10)
 
 
+def test_incomplete_codex_training_resumes_with_remaining_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A normal Codex exit resumes until training success is confirmed."""
+    approach = tmp_path / "approach.py"
+    approach.write_text("x = 1\n")
+    results = iter(
+        [
+            SandboxResult(
+                success=False,
+                output_file=None,
+                error="incomplete training",
+                total_cost_usd=5.0,
+                unconfirmed_solution=True,
+                generation_metrics=_metrics(100, turns=3),
+            ),
+            _succeeded(200, 4.0, approach, turns=2),
+        ]
+    )
+    captured: list[SandboxConfig] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    final = run_with_rate_limit_retry(
+        None,
+        SandboxConfig(sandbox_dir=tmp_path, prompt="original", max_budget_usd=20.0),
+        backend=None,  # type: ignore[arg-type]
+    )
+
+    assert final.success
+    assert final.total_cost_usd == pytest.approx(9.0)
+    assert len(captured) == 2
+    assert captured[1].resume_previous_session
+    assert captured[1].prompt == "original"
+    assert captured[1].max_budget_usd == pytest.approx(15.0)
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.unconfirmed_solution_retries == 1
+
+
 def test_retry_does_not_turn_exhausted_limits_into_unlimited(
     tmp_path: Path, monkeypatch
 ) -> None:
