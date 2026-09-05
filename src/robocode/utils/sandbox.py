@@ -347,6 +347,7 @@ def _stream_result_to_sandbox_result(
         stream.rate_limit_reset is not None
         or stream.output_token_limit_hit
         or stream.prompt_too_long_hit
+        or stream.unconfirmed_solution
     ):
         return SandboxResult(
             success=False,
@@ -356,6 +357,7 @@ def _stream_result_to_sandbox_result(
             rate_limit_reset=stream.rate_limit_reset,
             output_token_limit_hit=stream.output_token_limit_hit,
             prompt_too_long_hit=stream.prompt_too_long_hit,
+            unconfirmed_solution=stream.unconfirmed_solution,
             generation_metrics=metrics,
         )
 

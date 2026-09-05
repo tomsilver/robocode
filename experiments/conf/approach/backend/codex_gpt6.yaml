@@ -1,0 +1,6 @@
+backend: codex
+model: gpt-6-astra
+reasoning_effort: medium
+input_usd_per_mtok: 10.0
+cached_input_usd_per_mtok: 1.0
+output_usd_per_mtok: 50.0

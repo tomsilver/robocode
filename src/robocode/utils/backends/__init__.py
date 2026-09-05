@@ -60,7 +60,7 @@ def create_backend(backend_cfg: DictConfig) -> AgentBackend:
 DEFAULT_BACKEND_CFG = DictConfig({"backend": "claude", "model": "sonnet"})
 DEFAULT_OPENCODE_CFG = DictConfig({"backend": "opencode", "model": "openai/gpt-4o"})
 DEFAULT_CODEX_CFG = DictConfig(
-    {"backend": "codex", "model": "gpt-5.6-sol", "reasoning_effort": "medium"}
+    {"backend": "codex", "model": "gpt-6-astra", "reasoning_effort": "medium"}
 )
 DEFAULT_BACKEND = create_backend(DEFAULT_BACKEND_CFG)
 

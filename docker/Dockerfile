@@ -29,7 +29,7 @@ ENV TZ="$TZ"
 
 ARG CLAUDE_CODE_VERSION=latest
 ARG OPENCODE_VERSION=latest
-ARG CODEX_VERSION=latest
+ARG CODEX_VERSION=0.153.4
 
 # Remap the node user's UID/GID to match the host's at build time so that
 # bind-mounted host files (e.g. ~/.claude) are readable inside the container

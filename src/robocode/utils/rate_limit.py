@@ -119,12 +119,15 @@ def _fold_retry_metrics(
     rate_limit_retries: int,
     output_token_retries: int = 0,
     prompt_too_long_retries: int = 0,
+    unconfirmed_solution_retries: int = 0,
+    continued_solution_cost: float = 0.0,
 ) -> SandboxResult:
     """Record discarded retryable attempts' counts and spend on *result*."""
     if (
         rate_limit_retries == 0
         and output_token_retries == 0
         and prompt_too_long_retries == 0
+        and unconfirmed_solution_retries == 0
         and aborted_tokens == 0
         and aborted_cost == 0.0
     ):
@@ -135,10 +138,14 @@ def _fold_retry_metrics(
         rate_limit_retries=rate_limit_retries,
         output_token_retries=output_token_retries,
         prompt_too_long_retries=prompt_too_long_retries,
+        unconfirmed_solution_retries=unconfirmed_solution_retries,
         aborted_tokens=aborted_tokens,
         aborted_cost_usd=aborted_cost,
     )
-    return replace(result, generation_metrics=metrics)
+    total_cost = result.total_cost_usd
+    if continued_solution_cost:
+        total_cost = continued_solution_cost + (total_cost or 0.0)
+    return replace(result, total_cost_usd=total_cost, generation_metrics=metrics)
 
 
 def _run_active_sandbox(config: SandboxConfig, backend: AgentBackend) -> SandboxResult:
@@ -156,7 +163,7 @@ def run_with_rate_limit_retry(
     backend: AgentBackend,
     apptainer_config: ApptainerSandboxConfig | None = None,
 ) -> SandboxResult:
-    """Run the sandbox, resuming after retryable Claude interruptions.
+    """Run the sandbox, resuming after retryable agent interruptions.
 
     Each retry resumes the interrupted conversation (--continue) with the
     budget the run had left, so an agent that hit the usage cap continues its
@@ -176,6 +183,20 @@ def run_with_rate_limit_retry(
     rate_limit_retries = 0
     output_token_retries = 0
     prompt_too_long_retries = 0
+    unconfirmed_solution_retries = 0
+    continued_solution_cost = 0.0
+
+    def finish(latest: SandboxResult) -> SandboxResult:
+        return _fold_retry_metrics(
+            latest,
+            aborted_tokens,
+            aborted_cost,
+            rate_limit_retries,
+            output_token_retries,
+            prompt_too_long_retries,
+            unconfirmed_solution_retries,
+            continued_solution_cost,
+        )
 
     def budget_stop_reason(latest: SandboxResult) -> str | None:
         """Explain why another process cannot safely receive carried budget."""
@@ -193,15 +214,11 @@ def run_with_rate_limit_retry(
         rate_limited = result.rate_limit_reset is not None
         output_token_limited = result.output_token_limit_hit
         prompt_too_long = result.prompt_too_long_hit
-        if not rate_limited and not output_token_limited and not prompt_too_long:
-            return _fold_retry_metrics(
-                result,
-                aborted_tokens,
-                aborted_cost,
-                rate_limit_retries,
-                output_token_retries,
-                prompt_too_long_retries,
-            )
+        unconfirmed_solution = result.unconfirmed_solution
+        if not any(
+            (rate_limited, output_token_limited, prompt_too_long, unconfirmed_solution)
+        ):
+            return finish(result)
 
         if rate_limited:
             rate_limit_retries += 1
@@ -218,28 +235,14 @@ def run_with_rate_limit_retry(
         reason = budget_stop_reason(result)
         if reason is not None:
             logger.warning("Not resuming interrupted run because %s.", reason)
-            return _fold_retry_metrics(
-                result,
-                aborted_tokens,
-                aborted_cost,
-                rate_limit_retries,
-                output_token_retries,
-                prompt_too_long_retries,
-            )
+            return finish(result)
 
         if output_token_limited and output_token_retries >= _MAX_OUTPUT_TOKEN_RETRIES:
             logger.warning(
                 "Not resuming after output-token overflow: retry limit (%d) reached.",
                 _MAX_OUTPUT_TOKEN_RETRIES,
             )
-            return _fold_retry_metrics(
-                result,
-                aborted_tokens,
-                aborted_cost,
-                rate_limit_retries,
-                output_token_retries,
-                prompt_too_long_retries,
-            )
+            return finish(result)
 
         if prompt_too_long and not rate_limited:
             if prompt_too_long_retries >= _MAX_PROMPT_TOO_LONG_RETRIES:
@@ -248,14 +251,7 @@ def run_with_rate_limit_retry(
                     "(%d) reached.",
                     _MAX_PROMPT_TOO_LONG_RETRIES,
                 )
-                return _fold_retry_metrics(
-                    result,
-                    aborted_tokens,
-                    aborted_cost,
-                    rate_limit_retries,
-                    output_token_retries,
-                    prompt_too_long_retries,
-                )
+                return finish(result)
 
             remaining_turns = original_turns - aborted_turns if original_turns else 0
             compact_config = replace(
@@ -296,14 +292,7 @@ def run_with_rate_limit_retry(
                         compact_metrics, prompt_too_long_hit=True
                     ),
                 )
-                return _fold_retry_metrics(
-                    compact_result,
-                    aborted_tokens,
-                    aborted_cost,
-                    rate_limit_retries,
-                    output_token_retries,
-                    prompt_too_long_retries,
-                )
+                return finish(compact_result)
 
             prompt_too_long_retries += 1
             remaining_turns = original_turns - aborted_turns if original_turns else 0
@@ -317,7 +306,15 @@ def run_with_rate_limit_retry(
             )
             continue
 
-        if rate_limited:
+        if unconfirmed_solution:
+            unconfirmed_solution_retries += 1
+            continued_solution_cost += result.total_cost_usd or 0.0
+            logger.warning(
+                "Codex stopped without confirming high confidence in the solution; "
+                "resuming with remaining budget."
+            )
+            resume_prompt = active.prompt
+        elif rate_limited:
             assert result.rate_limit_reset is not None
             reset_hour, reset_minute, is_utc = parse_reset_time(result.rate_limit_reset)
             wait_secs = seconds_until_reset(reset_hour, is_utc, reset_minute)

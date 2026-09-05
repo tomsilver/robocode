@@ -76,11 +76,11 @@ See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude
 
 [Codex CLI](https://developers.openai.com/codex/cli/) runs OpenAI coding models directly. Install it with `npm install -g @openai/codex@latest` (it is also pre-installed in both Docker images), then authenticate with either `codex login` or a `CODEX_API_KEY` environment variable.
 
-Use the `codex_gpt56sol` preset for GPT-5.6 Sol with medium reasoning:
+Use the `codex_gpt6` preset for GPT-6 Astra with medium reasoning:
 
 ```bash
 python experiments/run_experiment.py approach=agentic \
-    approach/backend=codex_gpt56sol environment=motion2d_generalized \
+    approach/backend=codex_gpt6 environment=motion2d_generalized \
     replicate_seed=0 eval_seed="$EVAL_SEED"
 ```
 
@@ -468,12 +468,12 @@ Codex experiment templates (replace the environment and seeds as needed):
 ```bash
 # Whitebox
 python experiments/run_experiment.py approach=agentic \
-    approach/backend=codex_gpt56sol environment=motion2d_generalized \
+    approach/backend=codex_gpt6 environment=motion2d_generalized \
     approach.max_budget_usd=20.0 replicate_seed=0 eval_seed="$EVAL_SEED"
 
 # Blackbox
 python experiments/run_experiment.py approach=agentic \
-    approach/backend=codex_gpt56sol environment=motion2d_generalized \
+    approach/backend=codex_gpt6 environment=motion2d_generalized \
     approach.blackbox=true approach.max_budget_usd=20.0 \
     replicate_seed=0 eval_seed="$EVAL_SEED"
 ```
@@ -485,7 +485,7 @@ To use a different backend/model, override the `approach/backend` config:
 python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt54 eval_seed="$EVAL_SEED"
 
 # GPT-5.6 Sol (medium reasoning) via Codex
-python experiments/run_experiment.py approach=agentic approach/backend=codex_gpt56sol eval_seed="$EVAL_SEED"
+python experiments/run_experiment.py approach=agentic approach/backend=codex_gpt6 eval_seed="$EVAL_SEED"
 
 # Local Ollama model
 python experiments/run_experiment.py approach=agentic approach/backend=opencode_qwen eval_seed="$EVAL_SEED"
@@ -494,7 +494,7 @@ python experiments/run_experiment.py approach=agentic approach/backend=opencode_
 python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro eval_seed="$EVAL_SEED"
 ```
 
-Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `codex_gpt56sol`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
+Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `codex_gpt6`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
 
 The experiment runner rejects the legacy local sandbox for generated-code
 methods because that sandbox permits host filesystem reads. Use Docker or

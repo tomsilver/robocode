@@ -36,12 +36,13 @@ class CodexBackend(AgentBackend):
 
     def __init__(self, backend_cfg: DictConfig) -> None:
         self._reasoning_effort = backend_cfg.get("reasoning_effort", "medium")
-        self._input_rate = float(backend_cfg.get("input_usd_per_mtok", 4.0))
-        self._cached_rate = float(backend_cfg.get("cached_input_usd_per_mtok", 0.4))
-        self._output_rate = float(backend_cfg.get("output_usd_per_mtok", 20.0))
+        self._input_rate = float(backend_cfg.get("input_usd_per_mtok", 10.0))
+        self._cached_rate = float(backend_cfg.get("cached_input_usd_per_mtok", 1.0))
+        self._output_rate = float(backend_cfg.get("output_usd_per_mtok", 50.0))
         self._max_budget_usd = 0.0
         self._max_turns = 0
         self._session_root: Path | None = None
+        self._solution_confident_path: Path | None = None
         self._session_offsets: dict[Path, int] = {}
         self._session_usages: dict[Path, dict[str, int]] = {}
         self._previous_session_usage: dict[str, int] = {}
@@ -64,6 +65,7 @@ class CodexBackend(AgentBackend):
         self._max_budget_usd = config.max_budget_usd
         self._max_turns = config.max_turns
         self._session_root = sandbox_codex_sessions(config.sandbox_dir)
+        self._solution_confident_path = self._session_root / "solution_confident"
         command = os.environ.get("ROBOCODE_CODEX_CMD", "codex")
         if config.resume_previous_session:
             self._session_offsets = {}
@@ -140,6 +142,7 @@ class CodexBackend(AgentBackend):
         template = Path(__file__).with_name("prompt.txt").read_text(encoding="utf-8")
         instructions = template.format(
             system_prompt=config.system_prompt,
+            max_budget_usd=config.max_budget_usd,
             sandbox_instructions=build_agents_md(docker_python, primitive_names),
         ).strip()
         (config.sandbox_dir / "AGENTS.md").write_text(instructions + "\n")
@@ -267,6 +270,20 @@ class CodexBackend(AgentBackend):
             is_error = True
             stop_reason = "error_max_budget_usd"
             error_text = f"Codex budget reached: ${run_cost:.4f}"
+        unconfirmed_solution = bool(
+            not is_error
+            and not proc.returncode
+            and self._max_budget_usd > 0
+            and run_cost < self._max_budget_usd
+            and self._solution_confident_path is not None
+            and not self._solution_confident_path.is_file()
+        )
+        if unconfirmed_solution:
+            is_error = True
+            stop_reason = "unconfirmed_solution"
+            error_text = (
+                "Codex stopped without confirming high confidence in the solution"
+            )
         if stream_log:
             stream_log.close()
         stderr = read_stderr(proc, stderr_file)
@@ -299,6 +316,7 @@ class CodexBackend(AgentBackend):
             rate_limit_reset=rate_limit_reset,
             output_token_limit_hit=output_token_limit_hit,
             prompt_too_long_hit=prompt_too_long_hit,
+            unconfirmed_solution=unconfirmed_solution,
             input_tokens=max(input_tokens - cached_tokens, 0),
             output_tokens=output_tokens,
             cache_read_tokens=cached_tokens,

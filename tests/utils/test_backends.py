@@ -143,7 +143,7 @@ class TestCodexBackend:
         proc.stderr.read.return_value = ""
         proc.returncode = 0
 
-        assert backend.parse_stream(proc).total_cost == pytest.approx(0.0004)
+        assert backend.parse_stream(proc).total_cost == pytest.approx(0.001)
 
     def test_mcp_http_config(self, tmp_path: Path) -> None:
         sandbox = tmp_path / "sandbox"
@@ -165,12 +165,18 @@ class TestCodexBackend:
     def test_agents_md_contains_system_and_sandbox_instructions(
         self, tmp_path: Path
     ) -> None:
-        config = SandboxConfig(sandbox_dir=tmp_path, system_prompt="Solve the task.")
+        config = SandboxConfig(
+            sandbox_dir=tmp_path, system_prompt="Solve the task.", max_budget_usd=7.5
+        )
         CodexBackend(DEFAULT_CODEX_CFG).setup_sandbox_files(
             config, docker_python="/robocode/.venv/bin/python"
         )
         text = (tmp_path / "AGENTS.md").read_text()
         assert "Solve the task." in text
+        assert "$7.50" in text
+        assert "training seeds" not in text
+        assert "extremely confident" in text
+        assert ".agent_sessions/codex/solution_confident" in text
         assert "/robocode/.venv/bin/python" in text
 
     def test_parse_usage_and_tools(self, tmp_path: Path) -> None:
@@ -202,7 +208,7 @@ class TestCodexBackend:
         assert result.input_tokens == 400
         assert result.cache_read_tokens == 600
         assert result.output_tokens == 100
-        assert result.total_cost == pytest.approx(0.00384)
+        assert result.total_cost == pytest.approx(0.0096)
 
     def test_transient_transport_fallback_is_not_an_error(self, tmp_path: Path) -> None:
         backend = CodexBackend(DEFAULT_CODEX_CFG)
@@ -254,7 +260,7 @@ class TestCodexBackend:
 
         proc.kill.assert_called_once()
         assert result.is_error
-        assert result.total_cost == pytest.approx(4.0)
+        assert result.total_cost == pytest.approx(10.0)
 
     def test_shared_budget_includes_codex_subagents(self, tmp_path: Path) -> None:
         backend = CodexBackend(DEFAULT_CODEX_CFG)
@@ -264,14 +270,14 @@ class TestCodexBackend:
             "type": "event_msg",
             "payload": {
                 "type": "token_count",
-                "info": {"total_token_usage": {"output_tokens": 600_000}},
+                "info": {"total_token_usage": {"output_tokens": 240_000}},
             },
         }
 
         def stream():
             yield json.dumps({"type": "turn.started"}) + "\n"
             (sessions / "root.jsonl").write_text(json.dumps(event) + "\n")
-            event["payload"]["info"]["total_token_usage"]["output_tokens"] = 400_000
+            event["payload"]["info"]["total_token_usage"]["output_tokens"] = 160_000
             (sessions / "subagent.jsonl").write_text(json.dumps(event) + "\n")
             time.sleep(0.2)
 
@@ -288,6 +294,41 @@ class TestCodexBackend:
         assert result.error_text == "Codex budget reached: $20.0000"
         assert result.stop_reason == "error_max_budget_usd"
         assert result.total_cost == pytest.approx(20.0)
+        assert not result.unconfirmed_solution
+
+    def test_normal_stop_without_solution_confidence_requests_resume(
+        self, tmp_path: Path
+    ) -> None:
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter([json.dumps({"type": "turn.completed"}) + "\n"])
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+
+        result = backend.parse_stream(proc)
+
+        assert result.unconfirmed_solution
+        assert result.stop_reason == "unconfirmed_solution"
+
+    def test_solution_confidence_marker_allows_normal_stop(
+        self, tmp_path: Path
+    ) -> None:
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
+        marker = tmp_path / ".agent_sessions" / "codex" / "solution_confident"
+        marker.touch()
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = iter([json.dumps({"type": "turn.completed"}) + "\n"])
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+
+        result = backend.parse_stream(proc)
+
+        assert not result.is_error
+        assert not result.unconfirmed_solution
 
 
 # ---------------------------------------------------------------------------
