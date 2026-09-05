@@ -264,7 +264,9 @@ class EpisodeTimeout(BaseException):
 # Per-episode wall-clock backstop, on top of the policy-time budget. It only fires
 # when the simulator itself is the bottleneck (a hung native call, or an env so slow
 # that the full horizon takes longer than this), and is scored as ``wall_capped``.
-_EPISODE_WALL_CAP_S = 1800.0
+# Ten minutes of simulation without reaching the goal is treated as a failure: at
+# 30 minutes, a hundred-episode evaluation of a slow MuJoCo family took five hours.
+_EPISODE_WALL_CAP_S = 600.0
 
 
 class _PolicyClock:
