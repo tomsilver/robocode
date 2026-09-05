@@ -9,6 +9,7 @@ import pytest
 
 from robocode.approaches.bilevel_planning_approach import BilevelPlanningApproach
 from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
+from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.utils.episode import save_video
 
 
@@ -189,3 +190,33 @@ def test_train_is_not_supported() -> None:
     approach = _make_approach(env)
     with pytest.raises(NotImplementedError):
         approach.train()
+
+
+def test_unsupported_count_is_scored_unsolved_not_crashed(tmp_path: Path) -> None:
+    """A family whose models reject a count (Tossing3D beyond one cube) yields an
+    unsolved, flagged result instead of an exception that would abort the sweep."""
+    env = VariableObjectCountEnv(
+        constant_object_env_path=(
+            "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv"
+        ),
+        count_kwarg="num_obstructions",
+        count_object_prefix="obstruction",
+        design_counts=[0],
+        eval_counts=[0, 1],
+        bilevel_env_name="obstruction2d",
+    )
+
+    def _reject(count: int) -> None:
+        raise NotImplementedError(f"no models for count {count}")
+
+    env.models_for_count = _reject  # type: ignore[method-assign]
+    approach = _make_approach(env)  # type: ignore[arg-type]
+    result = approach.solve_instance(
+        env=env, seed=0, budget_usd=0.0, output_subdir=tmp_path, count=1
+    )
+    assert result.solved is False
+    assert result.crashed is False
+    assert result.extras["planner_unsupported"] is True
+    assert result.extras["plan_found"] is False
+    assert result.extras["object_count"] == 1
+    env.close()

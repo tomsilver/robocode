@@ -116,7 +116,26 @@ class BilevelPlanningApproach(BaseApproach[Any, Any]):
         vectorized to that count's Box space for the planner.
         """
         del budget_usd, output_subdir
-        models = self._get_models(env, count)
+        try:
+            models = self._get_models(env, count)
+        except NotImplementedError:
+            # The family ships models for some counts only (Tossing3D: one cube).
+            # Score the instance as unsolved and flag it, so the sweep continues and
+            # the unsupported counts can be footnoted from the per-episode extras.
+            return InstanceResult(
+                solved=False,
+                total_reward=None,
+                num_steps=None,
+                cost_usd=0.0,
+                frames=None,
+                extras={
+                    "planning_time": 0.0,
+                    "plan_found": False,
+                    "plan_length": 0,
+                    "planner_unsupported": True,
+                    **({"object_count": count} if count is not None else {}),
+                },
+            )
         agent: BilevelPlanningAgent[Any, Any, Any] = BilevelPlanningAgent(
             models,
             seed=seed,
