@@ -497,6 +497,14 @@ wheels = [
 ]
 
 [[package]]
+name = "dexmate-urdf"
+version = "0.8.4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/b8/72bf6e0e5323002a35c2246e97a2d665771b323298ad2b365df93e23d134/dexmate_urdf-0.8.4-py3-none-any.whl", hash = "sha256:0c04e8134e625fa13401268249ab3fead3ce7c54d267eb07950f2eb7deafe67c", size = 30132081, upload-time = "2026-07-02T17:24:27.525Z" },
+]
+
+[[package]]
 name = "dill"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1213,7 +1221,7 @@ requires-dist = [
     { name = "hydra-joblib-launcher" },
     { name = "ipykernel", marker = "extra == 'develop'" },
     { name = "isort", marker = "extra == 'develop'" },
-    { name = "kindergarden", specifier = ">=0.1.0" },
+    { name = "kindergarden", specifier = ">=0.2.4" },
     { name = "matplotlib" },
     { name = "mypy", marker = "extra == 'develop'" },
     { name = "nbmake", marker = "extra == 'develop'" },
@@ -1221,15 +1229,17 @@ requires-dist = [
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "pandas-stubs" },
+    { name = "prpl-kinematics", extras = ["planning"], marker = "extra == 'develop'", specifier = ">=0.0.1" },
+    { name = "prpl-kinematics", extras = ["planning"], marker = "extra == 'prpl-kinematics'", specifier = ">=0.0.1" },
     { name = "prpl-utils", specifier = ">=0.0.7" },
-    { name = "pybullet-helpers", specifier = ">=0.0.1" },
+    { name = "pybullet-helpers", specifier = ">=0.1.2" },
     { name = "pylint", marker = "extra == 'develop'", specifier = ">=2.14.5" },
     { name = "pytest", marker = "extra == 'develop'", specifier = ">=7.2.2,<9.1" },
     { name = "pytest-pylint", marker = "extra == 'develop'", specifier = ">=0.18.0" },
     { name = "relational-structs", specifier = ">=0.0.1" },
     { name = "tomsgeoms2d", specifier = ">=0.0.1" },
 ]
-provides-extras = ["develop"]
+provides-extras = ["prpl-kinematics", "develop"]
 
 [[package]]
 name = "kinder-models"
@@ -1243,7 +1253,9 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "pybullet-helpers" },
     { name = "relational-structs" },
+    { name = "scipy" },
     { name = "spatialmath-python" },
 ]
 
@@ -1255,23 +1267,27 @@ requires-dist = [
     { name = "flask-socketio" },
     { name = "h5py" },
     { name = "isort", marker = "extra == 'develop'" },
-    { name = "kindergarden", specifier = ">=0.1.0" },
+    { name = "kindergarden", specifier = ">=0.2.4" },
     { name = "matplotlib" },
     { name = "mypy", marker = "extra == 'develop'" },
     { name = "numpy" },
     { name = "opencv-python", specifier = ">=4.9.0" },
+    { name = "prpl-kinematics", extras = ["planning"], marker = "extra == 'develop'", specifier = ">=0.0.1" },
+    { name = "prpl-kinematics", extras = ["planning"], marker = "extra == 'prpl-kinematics'", specifier = ">=0.0.1" },
+    { name = "pybullet-helpers", specifier = ">=0.1.2" },
     { name = "pylint", marker = "extra == 'develop'", specifier = ">=2.14.5" },
-    { name = "pytest", marker = "extra == 'develop'", specifier = ">=7.2.2" },
+    { name = "pytest", marker = "extra == 'develop'", specifier = ">=7.2.2,<9.1" },
     { name = "pytest-pylint", marker = "extra == 'develop'", specifier = ">=0.18.0" },
     { name = "relational-structs", specifier = ">=0.0.1" },
     { name = "ruckig", marker = "extra == 'develop'", specifier = ">=0.12.2" },
+    { name = "scipy" },
     { name = "spatialmath-python" },
 ]
-provides-extras = ["develop"]
+provides-extras = ["prpl-kinematics", "develop"]
 
 [[package]]
 name = "kindergarden"
-version = "0.2.3"
+version = "0.2.4"
 source = { editable = "third-party/kindergarden" }
 dependencies = [
     { name = "dill" },
@@ -1316,6 +1332,8 @@ requires-dist = [
     { name = "opencv-python", specifier = ">=4.9.0" },
     { name = "opencv-python", marker = "extra == 'develop'", specifier = ">=4.9.0" },
     { name = "pillow" },
+    { name = "prpl-kinematics", marker = "extra == 'develop'", specifier = ">=0.0.1" },
+    { name = "prpl-kinematics", marker = "extra == 'prpl-kinematics'", specifier = ">=0.0.1" },
     { name = "prpl-utils", specifier = ">=0.0.1" },
     { name = "pybullet-arm64", specifier = ">=3.2.8" },
     { name = "pybullet-arm64", marker = "extra == 'develop'", specifier = ">=3.2.8" },
@@ -1338,7 +1356,7 @@ requires-dist = [
     { name = "trimesh", marker = "extra == 'pointcloud'", specifier = ">=4.0.0" },
     { name = "types-shapely", marker = "extra == 'develop'", specifier = ">=2.1.0" },
 ]
-provides-extras = ["pointcloud", "develop"]
+provides-extras = ["prpl-kinematics", "pointcloud", "develop"]
 
 [[package]]
 name = "kiwisolver"
@@ -2271,9 +2289,10 @@ wheels = [
 
 [[package]]
 name = "pybullet-helpers"
-version = "0.1.0"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "dexmate-urdf" },
     { name = "gymnasium" },
     { name = "hello-robot-stretch-urdf" },
     { name = "numpy" },
@@ -2281,9 +2300,9 @@ dependencies = [
     { name = "pybullet-arm64" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/60/393d4bbc3089b21833f3137d661ba8e62c1f56f931fb5c939370118a13e9/pybullet_helpers-0.1.0.tar.gz", hash = "sha256:9212e36aab9f4321b4e6792dbc127763ae72327b976eb0cb049aa3451d84b0bf", size = 94789784, upload-time = "2026-03-13T20:04:56.308Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/e4/c9132d45bef75955c09d234036a98a0d4a928341e3ea3c53f665b0d21c75/pybullet_helpers-0.1.2.tar.gz", hash = "sha256:64d9777ae8a4d1b4a43612bc3807fb6718bb4d35e8b775ff686642237858bc6d", size = 94823462, upload-time = "2026-08-29T18:31:09.743Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/38/6e/af0641af62151f3acdf345982dfdfa27687fc7dc29f3941bb1d60382a6c7/pybullet_helpers-0.1.0-py3-none-any.whl", hash = "sha256:f39cd27dc91d4cc55201f31d5b9b0b066d2037b81006b6174253d24889600804", size = 95204044, upload-time = "2026-03-13T20:04:33.866Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/14/29a80a091dccb01e99636f11044faf090249f37051678bc791335e9f2678/pybullet_helpers-0.1.2-py3-none-any.whl", hash = "sha256:c5ecc0eb80e09e78d75e66c3a17ef88dab9c63e3a18a2fc268231248facd7054", size = 95217262, upload-time = "2026-08-29T18:31:02.786Z" },
 ]
 
 [[package]]
