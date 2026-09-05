@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import multiprocessing as mp
 import os
 import signal
@@ -154,6 +155,7 @@ def run_episode(
     progress_callback: Callable[[int, int], None] | None = None,
     frame_sink: Callable[[NDArray[np.uint8]], None] | None = None,
     initial: tuple[Any, dict[str, Any]] | None = None,
+    policy_clock: _PolicyClock | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
     """Run a single evaluation episode; return metrics, frames, final state.
 
@@ -163,11 +165,16 @@ def run_episode(
     frame list stays empty; long episodes then need only one frame in memory.
     ``initial`` is the ``(state, info)`` of a reset the caller already performed
     (see :func:`reset_for_episode`), in which case the env is not reset again.
+    ``policy_clock`` charges the approach's own calls against a time budget (env
+    stepping and rendering are free) and adds ``policy_time_s`` / ``env_time_s`` to
+    the metrics.
     """
     if initial is None:
         initial = reset_for_episode(env, seed, count)
     state, info = initial
-    approach.reset(state, info)
+    clock = policy_clock or _PolicyClock(math.inf)
+    with clock.charge():
+        approach.reset(state, info)
 
     frames: list[NDArray[np.uint8]] = []
 
@@ -186,11 +193,15 @@ def run_episode(
     num_steps = 0
     terminated = False
     for _ in range(max_steps):
-        action = approach.step()
+        with clock.charge():
+            action = approach.step()
+        env_start = time.monotonic()
         state, reward, terminated, truncated, info = env.step(action)
+        clock.env_time += time.monotonic() - env_start
         total_reward += float(reward)
         num_steps += 1
-        approach.update(state, float(reward), terminated or truncated, info)
+        with clock.charge():
+            approach.update(state, float(reward), terminated or truncated, info)
         if render:
             _capture()
         if progress_callback is not None:
@@ -203,6 +214,8 @@ def run_episode(
         "num_steps": num_steps,
         "solved": bool(terminated),
     }
+    if policy_clock is not None:
+        metrics.update(policy_clock.metrics())
     if "object_count" in info:
         metrics["object_count"] = info["object_count"]
     return metrics, frames, state
@@ -230,7 +243,7 @@ def _fork_safe(env: Any) -> bool:
 
 
 class EpisodeTimeout(BaseException):
-    """Raised in-process when an episode overruns its wall-clock budget.
+    """Raised inside a policy call once the episode's policy-time budget is spent.
 
     Deliberately a :class:`BaseException`, for the reason :class:`KeyboardInterrupt`
     is one: a generated policy that wraps its body in ``except Exception`` would
@@ -243,50 +256,92 @@ class EpisodeTimeout(BaseException):
             except Exception:
                 continue
 
-    The forked path is immune because it stops such a policy with SIGINT and then
-    SIGKILL, so making this catchable would have quietly dropped the guarantee that
-    path provides rather than matching it.
+    A policy that catches even this keeps being interrupted (the alarm repeats), and
+    the forked path additionally kills a worker that overruns the wall-clock backstop.
     """
 
 
-def _timed_out_metrics(count: int | None) -> dict[str, Any]:
-    """Score an episode stopped at its budget: unsolved, and flagged as timed out."""
+# Per-episode wall-clock backstop, on top of the policy-time budget. It only fires
+# when the simulator itself is the bottleneck (a hung native call, or an env so slow
+# that the full horizon takes longer than this), and is scored as ``wall_capped``.
+_EPISODE_WALL_CAP_S = 1800.0
+
+
+class _PolicyClock:
+    """Charge only the policy's own calls against a per-episode time budget.
+
+    ``charge()`` wraps one call into the approach: it arms an alarm with the
+    remaining budget, so a call that never returns is interrupted as well, and adds
+    the call's duration afterwards. Environment stepping and rendering happen
+    outside, so a slow simulator does not eat the policy's time: the budget measures
+    how fast the policy reacts, not how fast the world moves. ``setitimer`` is
+    main-thread-only; off the main thread only the accounting applies.
+    """
+
+    def __init__(self, budget: float) -> None:
+        self.budget = budget
+        self.used = 0.0
+        self.env_time = 0.0
+
+    @contextlib.contextmanager
+    def charge(self) -> Iterator[None]:
+        """Time one policy call, interrupting it once the remaining budget is spent."""
+        remaining = self.budget - self.used
+        if remaining <= 0:
+            raise EpisodeTimeout
+        arm = math.isfinite(remaining) and (
+            threading.current_thread() is threading.main_thread()
+        )
+        if arm:
+
+            def _fire(_signum: int, _frame: Any) -> None:
+                raise EpisodeTimeout
+
+            previous = signal.signal(signal.SIGALRM, _fire)
+            # Repeating after the first alarm: a policy that catches BaseException
+            # could swallow one, so it keeps being interrupted rather than escaping.
+            signal.setitimer(signal.ITIMER_REAL, remaining, 1.0)
+        start = time.monotonic()
+        try:
+            yield
+        finally:
+            if arm:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous)
+            self.used += time.monotonic() - start
+        if self.used > self.budget:
+            raise EpisodeTimeout
+
+    def metrics(self) -> dict[str, Any]:
+        """The time split to record alongside an episode's score."""
+        return {
+            "policy_time_s": round(self.used, 3),
+            "env_time_s": round(self.env_time, 3),
+        }
+
+
+def _timed_out_metrics(
+    count: int | None,
+    clock: _PolicyClock | None = None,
+    *,
+    wall_capped: bool = False,
+) -> dict[str, Any]:
+    """Score an episode stopped at a budget: unsolved, and flagged as timed out.
+
+    ``wall_capped`` marks the wall-clock backstop rather than the policy budget.
+    """
     metrics: dict[str, Any] = {
         "total_reward": 0.0,
         "num_steps": 0,
         "solved": False,
         "timed_out": True,
+        "wall_capped": wall_capped,
     }
+    if clock is not None:
+        metrics.update(clock.metrics())
     if count is not None:
         metrics["object_count"] = count
     return metrics
-
-
-@contextlib.contextmanager
-def _sigalrm_guard(timeout: float) -> Iterator[None]:
-    """Raise :class:`EpisodeTimeout` in this thread once *timeout* seconds pass.
-
-    This is what catches a policy that hangs *inside* a single call, which a deadline
-    checked between steps cannot see. ``setitimer`` is main-thread-only, so off the
-    main thread this is a no-op and the per-step deadline is the only guard.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-
-    def _fire(_signum: int, _frame: Any) -> None:
-        raise EpisodeTimeout
-
-    previous = signal.signal(signal.SIGALRM, _fire)
-    # Repeating, not one-shot. A policy that catches BaseException could still
-    # swallow the first alarm; re-arming means it keeps being interrupted rather
-    # than escaping the budget outright on a single catch.
-    signal.setitimer(signal.ITIMER_REAL, timeout, timeout)
-    try:
-        yield
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
 
 
 def _run_episode_in_process(
@@ -299,38 +354,42 @@ def _run_episode_in_process(
     render: bool,
     count: int | None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
-    """Run one episode here, aborting it if it overruns ``timeout``.
+    """Run one episode here, aborting it once the policy's budget is spent.
 
-    The path for platforms where ``fork`` cannot carry the env (see
-    :data:`_EPISODE_FORK_SAFE`). Scoring matches the forked path exactly: an overrun
-    returns :func:`_timed_out_metrics` and a policy exception propagates for the
-    caller to score as a crash.
+    The path for envs that ``fork`` cannot carry (see :func:`_fork_safe`). Scoring
+    matches the forked path: an overrun returns :func:`_timed_out_metrics` and a
+    policy exception propagates for the caller to score as a crash. The wall-clock
+    backstop is checked between steps here, so it cannot interrupt a hung env call.
 
-    The one thing it cannot do is contain a *native* crash in the policy, which takes
-    this process down instead of one worker. That is the deliberate trade: on macOS
-    the alternative is not a safer rollout but no rollout at all.
+    The one thing this path cannot do is contain a *native* crash in the policy,
+    which takes this process down instead of one worker. That is the deliberate
+    trade: the alternative for these envs is not a safer rollout but no rollout.
     """
     initial = reset_for_episode(env, seed, count)
-    deadline = time.monotonic() + timeout
+    clock = _PolicyClock(timeout)
+    wall_deadline = time.monotonic() + _EPISODE_WALL_CAP_S
+    wall_capped = False
 
-    def _abort_if_overrun(_step: int, _total: int) -> None:
-        if time.monotonic() > deadline:
+    def _abort_if_wall_capped(_step: int, _total: int) -> None:
+        nonlocal wall_capped
+        if time.monotonic() > wall_deadline:
+            wall_capped = True
             raise EpisodeTimeout
 
     try:
-        with _sigalrm_guard(timeout):
-            return run_episode(
-                env,
-                approach,
-                seed,
-                max_steps,
-                render=render,
-                count=count,
-                progress_callback=_abort_if_overrun,
-                initial=initial,
-            )
+        return run_episode(
+            env,
+            approach,
+            seed,
+            max_steps,
+            render=render,
+            count=count,
+            progress_callback=_abort_if_wall_capped,
+            initial=initial,
+            policy_clock=clock,
+        )
     except EpisodeTimeout:
-        return _timed_out_metrics(count), [], None
+        return _timed_out_metrics(count, clock, wall_capped=wall_capped), [], None
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Re-raise as the forked path does -- a RuntimeError carrying the traceback --
         # so the error strings a caller records in results.json have the same shape on
@@ -376,14 +435,17 @@ def run_episode_with_timeout(
     render: bool = False,
     count: int | None = None,
 ) -> tuple[dict[str, Any], list[NDArray[np.uint8]], Any]:
-    """Run one eval episode under a hard per-instance wall-clock ``timeout``.
+    """Run one eval episode with ``timeout`` seconds of policy time per instance.
 
     The environment is reset first, outside the budget: building or resetting a
-    simulator is the harness's cost, not the policy's. The clock then covers the
-    policy's own reset plus the rollout, which runs in a forked worker (inheriting
-    the live, already reset env and the approach) so a hung or too-slow policy can
-    be killed; on overrun it is scored unsolved (``metrics["timed_out"]``). A worker
-    that dies before reporting (policy exception, OOM, native crash) re-raises here.
+    simulator is the harness's cost, not the policy's. The budget then charges only
+    the policy's own calls (its reset, each action, each update); simulator stepping
+    is free, so it measures how fast the policy reacts rather than how slow the env
+    is. An overrun is scored unsolved (``metrics["timed_out"]``). The rollout runs in
+    a forked worker (inheriting the live, already reset env and the approach), which
+    is killed if the whole episode exceeds the :data:`_EPISODE_WALL_CAP_S` backstop
+    (``metrics["wall_capped"]``). A worker that dies before reporting (policy
+    exception, OOM, native crash) re-raises here.
 
     Where forking cannot carry the env (see :func:`_fork_safe`), the rollout runs in
     this process instead and is bounded the same way; :func:`_run_episode_in_process`
@@ -407,11 +469,11 @@ def run_episode_with_timeout(
         outcome, exitcode = run_in_forked_worker(
             ctx,
             _timed_episode_worker,
-            (env, approach, seed, max_steps, render, count, initial, result),
-            timeout,
+            (env, approach, seed, max_steps, render, count, initial, timeout, result),
+            _EPISODE_WALL_CAP_S,
         )
         if outcome == "timeout":
-            return _timed_out_metrics(count), [], None
+            return _timed_out_metrics(count, wall_capped=True), [], None
         if "metrics" in result:
             return result["metrics"], list(result["frames"]), result["final_state"]
         # The worker died before reporting; surface it so the caller scores a crash.
@@ -432,18 +494,32 @@ def _timed_episode_worker(
     render: bool,
     count: int | None,
     initial: tuple[Any, dict[str, Any]],
+    timeout: float,
     result: Any,
 ) -> None:
     """Run one episode in a subprocess and stash its outcome in ``result``.
 
-    The try/except deliberately carries a policy crash across the process boundary
-    as ``result["error"]`` for the parent to re-raise. ``metrics`` is written last,
-    so its presence means the run finished (a partial dict means the worker died).
+    The policy-time budget is enforced here, in the worker, with the same clock as
+    the in-process path. The try/except deliberately carries a policy crash across
+    the process boundary as ``result["error"]`` for the parent to re-raise.
+    ``metrics`` is written last, so its presence means the run finished (a partial
+    dict means the worker died).
     """
+    clock = _PolicyClock(timeout)
     try:
-        metrics, frames, final_state = run_episode(
-            env, approach, seed, max_steps, render=render, count=count, initial=initial
-        )
+        try:
+            metrics, frames, final_state = run_episode(
+                env,
+                approach,
+                seed,
+                max_steps,
+                render=render,
+                count=count,
+                initial=initial,
+                policy_clock=clock,
+            )
+        except EpisodeTimeout:
+            metrics, frames, final_state = _timed_out_metrics(count, clock), [], None
         result["frames"] = frames
         result["final_state"] = final_state
         result["metrics"] = metrics

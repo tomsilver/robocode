@@ -825,6 +825,105 @@ class _ForkUnsafeCountEnv(_CountEnv):
     eval_fork_safe = False
 
 
+class _SlowStepCountEnv(_CountEnv):
+    """A ``_CountEnv`` whose simulator is slower than the policy budget under test."""
+
+    def step(self, action):
+        time.sleep(0.3)
+        return super().step(action)
+
+
+class _SlowStepForkUnsafeCountEnv(_SlowStepCountEnv):
+    """The slow simulator on the in-process path."""
+
+    eval_fork_safe = False
+
+
+class _HungStepForkUnsafeCountEnv(_CountEnv):
+    """An env whose step never returns in time, on the in-process path."""
+
+    eval_fork_safe = False
+
+    def step(self, action):
+        time.sleep(0.3)
+        return super().step(action)
+
+
+class _SlowPolicyApproach(BaseApproach[Any, Any]):
+    """Takes 0.3 s per action: three steps exceed a 0.5 s policy budget."""
+
+    def _get_action(self) -> Any:
+        time.sleep(0.3)
+        return np.zeros(1, dtype=np.float32)
+
+
+@pytest.mark.parametrize("env_cls", [_SlowStepCountEnv, _SlowStepForkUnsafeCountEnv])
+def test_run_episode_with_timeout_excludes_env_step_time(env_cls: type) -> None:
+    """Simulator time is not charged: a fast policy on a slow env still solves."""
+    env = env_cls()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5
+    )
+    assert metrics["solved"]
+    assert not metrics.get("timed_out")
+    assert metrics["env_time_s"] >= 0.9
+    assert metrics["policy_time_s"] < 0.5
+
+
+@pytest.mark.parametrize("env_cls", [_CountEnv, _ForkUnsafeCountEnv])
+def test_run_episode_with_timeout_charges_policy_time(env_cls: type) -> None:
+    """A policy that thinks too long across steps is stopped at the budget."""
+    env = env_cls()
+    approach = _SlowPolicyApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5
+    )
+    assert metrics["timed_out"] is True
+    assert metrics["wall_capped"] is False
+    assert metrics["policy_time_s"] >= 0.5
+
+
+def test_run_episode_with_timeout_records_time_split() -> None:
+    """A solved episode reports how much time went to the policy and to the env."""
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30
+    )
+    assert metrics["solved"]
+    assert metrics["policy_time_s"] >= 0.0
+    assert metrics["env_time_s"] >= 0.0
+
+
+def test_run_episode_with_timeout_wall_cap_in_process(
+    monkeypatch,  # type: ignore
+) -> None:
+    """A simulator slower than the wall-clock backstop is scored as wall capped."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_WALL_CAP_S", 0.5)
+    env = _HungStepForkUnsafeCountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, _ = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30
+    )
+    assert metrics["timed_out"] is True
+    assert metrics["wall_capped"] is True
+
+
+def test_run_episode_with_timeout_wall_cap_forked(monkeypatch) -> None:  # type: ignore
+    """The forked worker is killed at the wall-clock backstop, not the policy budget."""
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_WALL_CAP_S", 0.5)
+    env = _SlowStepCountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, frames, final_state = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30
+    )
+    assert metrics["timed_out"] is True
+    assert metrics["wall_capped"] is True
+    assert not frames
+    assert final_state is None
+
+
 def test_run_episode_with_timeout_runs_fork_unsafe_env_in_process(
     monkeypatch,  # type: ignore
 ) -> None:
