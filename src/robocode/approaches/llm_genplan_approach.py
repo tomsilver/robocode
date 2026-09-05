@@ -68,7 +68,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         num_train_tasks: int = 10,
         num_prompt_tasks: int = 2,
         max_debug_attempts: int | None = 4,
-        max_budget_usd: float | None = 5.0,
+        max_budget_usd: float | None = 20.0,
         chain_of_thought: bool = True,
         eval_timeout: float = 30.0,
         use_docker: bool = True,

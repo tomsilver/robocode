@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import TextIO
@@ -40,9 +42,8 @@ class CodexBackend(AgentBackend):
         self._max_budget_usd = 0.0
         self._max_turns = 0
         self._session_root: Path | None = None
-        self._session_path: Path | None = None
-        self._session_offset = 0
-        self._latest_session_usage: dict[str, int] = {}
+        self._session_offsets: dict[Path, int] = {}
+        self._session_usages: dict[Path, dict[str, int]] = {}
         self._previous_session_usage: dict[str, int] = {}
 
     @property
@@ -65,16 +66,16 @@ class CodexBackend(AgentBackend):
         self._session_root = sandbox_codex_sessions(config.sandbox_dir)
         command = os.environ.get("ROBOCODE_CODEX_CMD", "codex")
         if config.resume_previous_session:
-            self._session_path = None
-            self._session_offset = 0
-            self._latest_session_usage = {}
+            self._session_offsets = {}
+            self._session_usages = {}
             self._previous_session_usage = self._read_session_usage()
             args = [command, "exec", "resume", "--last", "--all"]
         else:
+            shutil.rmtree(self._session_root)
+            self._session_root.mkdir(parents=True)
             self._previous_session_usage = {}
-            self._session_path = None
-            self._session_offset = 0
-            self._latest_session_usage = {}
+            self._session_offsets = {}
+            self._session_usages = {}
             args = [command, "exec"]
         args += [
             "--json",
@@ -82,6 +83,7 @@ class CodexBackend(AgentBackend):
             config.model,
             "--config",
             f"model_reasoning_effort={json.dumps(self._reasoning_effort)}",
+            "--ignore-user-config",
             "--dangerously-bypass-approvals-and-sandbox",
         ]
         if config.mcp_tools:
@@ -156,7 +158,34 @@ class CodexBackend(AgentBackend):
         turn_limit_hit = False
         output_token_limit_hit = False
         prompt_too_long_hit = False
+        stop_reason: str | None = None
         latest_usage: dict[str, int] = {}
+        budget_reached = threading.Event()
+        monitor_ready = threading.Event()
+        monitor_stop = threading.Event()
+
+        def monitor_budget() -> None:
+            nonlocal latest_usage
+            while not monitor_stop.is_set():
+                usage = self._read_session_usage()
+                if usage:
+                    latest_usage = usage
+                run_cost = self._usage_cost(latest_usage) - self._usage_cost(
+                    self._previous_session_usage
+                )
+                if run_cost >= self._max_budget_usd:
+                    budget_reached.set()
+                    monitor_ready.set()
+                    proc.kill()
+                    return
+                monitor_ready.set()
+                monitor_stop.wait(0.1)
+
+        monitor = None
+        if self._max_budget_usd > 0:
+            monitor = threading.Thread(target=monitor_budget, daemon=True)
+            monitor.start()
+            monitor_ready.wait()
         stream_log = (
             open(stream_log_path, "a", encoding="utf-8") if stream_log_path else None
         )
@@ -212,18 +241,32 @@ class CodexBackend(AgentBackend):
             usage = message.get("usage")
             if isinstance(usage, dict):
                 latest_usage = {key: int(value or 0) for key, value in usage.items()}
-            session_usage = self._read_session_usage()
-            if session_usage:
-                latest_usage = session_usage
             run_cost = self._usage_cost(latest_usage) - self._usage_cost(
                 self._previous_session_usage
             )
             if self._max_budget_usd > 0 and run_cost >= self._max_budget_usd:
-                proc.kill()
+                if not budget_reached.is_set():
+                    proc.kill()
                 is_error = True
+                stop_reason = "error_max_budget_usd"
                 error_text = f"Codex budget reached: ${run_cost:.4f}"
                 break
+        monitor_stop.set()
+        if monitor is not None:
+            monitor.join()
         proc.wait()
+        session_usage = self._read_session_usage()
+        if session_usage:
+            latest_usage = session_usage
+        run_cost = self._usage_cost(latest_usage) - self._usage_cost(
+            self._previous_session_usage
+        )
+        if budget_reached.is_set() or (
+            self._max_budget_usd > 0 and run_cost >= self._max_budget_usd
+        ):
+            is_error = True
+            stop_reason = "error_max_budget_usd"
+            error_text = f"Codex budget reached: ${run_cost:.4f}"
         if stream_log:
             stream_log.close()
         stderr = read_stderr(proc, stderr_file)
@@ -262,41 +305,39 @@ class CodexBackend(AgentBackend):
             num_tool_calls=num_tool_calls,
             turn_limit_hit=turn_limit_hit,
             cli_duration_ms=int((time.monotonic() - started) * 1000),
+            stop_reason=stop_reason,
             model_usage=dict(run_usage),
         )
 
     def _read_session_usage(self) -> dict[str, int]:
         if self._session_root is None:
             return {}
-        if self._session_path is None:
-            sessions = sorted(
-                self._session_root.rglob("*.jsonl"),
-                key=lambda path: path.stat().st_mtime_ns,
-                reverse=True,
-            )
-            if not sessions:
-                return {}
-            self._session_path = sessions[0]
-        with self._session_path.open(encoding="utf-8") as session:
-            session.seek(self._session_offset)
-            lines = session.readlines()
-            self._session_offset = session.tell()
-        for line in lines:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            payload = event.get("payload") or {}
-            if (
-                event.get("type") == "event_msg"
-                and payload.get("type") == "token_count"
-            ):
-                usage = (payload.get("info") or {}).get("total_token_usage")
-                if isinstance(usage, dict):
-                    self._latest_session_usage = {
-                        key: int(value or 0) for key, value in usage.items()
-                    }
-        return self._latest_session_usage
+        for path in self._session_root.rglob("*.jsonl"):
+            with path.open(encoding="utf-8") as session:
+                session.seek(self._session_offsets.get(path, 0))
+                while line := session.readline():
+                    if not line.endswith("\n"):
+                        break
+                    self._session_offsets[path] = session.tell()
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    payload = event.get("payload") or {}
+                    if (
+                        event.get("type") == "event_msg"
+                        and payload.get("type") == "token_count"
+                    ):
+                        usage = (payload.get("info") or {}).get("total_token_usage")
+                        if isinstance(usage, dict):
+                            self._session_usages[path] = {
+                                key: int(value or 0) for key, value in usage.items()
+                            }
+        totals: dict[str, int] = {}
+        for usage in self._session_usages.values():
+            for key, value in usage.items():
+                totals[key] = totals.get(key, 0) + value
+        return totals
 
     def _usage_cost(self, usage: dict[str, int]) -> float:
         cached = usage.get("cached_input_tokens", 0)

@@ -28,6 +28,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,7 @@ from robocode.environments.kinder_geom2d_env import KinderGeom2DEnv
 from robocode.utils import rate_limit
 from robocode.utils.backends import DEFAULT_BACKEND, DEFAULT_BACKEND_CFG
 from robocode.utils.backends.claude import ClaudeBackend
+from robocode.utils.codex_auth import sandbox_codex_sessions
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
@@ -153,7 +155,7 @@ def test_config_defaults() -> None:
     config = DockerSandboxConfig(sandbox_dir=Path("/tmp/test"))
     assert config.docker_image == _DOCKER_IMAGE
     assert config.model == "sonnet"
-    assert config.max_budget_usd == 5.0
+    assert config.max_budget_usd == 20.0
     assert config.system_prompt == ""
     assert config.prompt == ""
     assert config.output_filename == ""
@@ -360,6 +362,54 @@ def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:
     with _build_docker_auth_args("codex") as (args, env):
         assert args == ["-e", "CODEX_API_KEY"]
         assert env == {"CODEX_API_KEY": "sk-test-value"}
+
+
+@requires_docker
+@pytest.mark.parametrize("blackbox", [False, True], ids=["whitebox", "blackbox"])
+def test_codex_container_excludes_host_memory_and_sessions(
+    tmp_path: Path, monkeypatch, blackbox: bool
+) -> None:
+    host = tmp_path / "host-codex"
+    (host / "sessions").mkdir(parents=True)
+    (host / "auth.json").write_text("{}")
+    (host / "config.toml").write_text('model = "host-private"')
+    (host / "AGENTS.md").write_text("host memory")
+    (host / "sessions" / "host.jsonl").write_text("host session")
+    monkeypatch.setenv("CODEX_HOME", str(host))
+    monkeypatch.delenv("CODEX_API_KEY", raising=False)
+    sandbox = tmp_path / ("blackbox" if blackbox else "whitebox")
+    sandbox.mkdir()
+    sessions = sandbox_codex_sessions(sandbox)
+
+    with (
+        _filtered_repo_mounts(blackbox=blackbox) as (src, kinder, baselines, ss),
+        _build_docker_auth_args("codex") as (auth_args, _),
+    ):
+        command = _docker_run_prefix(
+            f"robocode-test-codex-{uuid.uuid4().hex[:8]}",
+            _DOCKER_IMAGE,
+            sandbox,
+            src,
+            kinder,
+            baselines,
+            auth_args,
+            [],
+            ss_pybullet=ss,
+            extra_volumes=[f"{sessions.resolve()}:/home/node/.codex/sessions"],
+        )
+        command[2:2] = ["--entrypoint", "/bin/sh"]
+        command += [
+            "-c",
+            "test -f /home/node/.codex/auth.json && "
+            "test ! -e /home/node/.codex/config.toml && "
+            "test ! -e /home/node/.codex/AGENTS.md && "
+            'test -z "$(find /home/node/.codex/sessions -mindepth 1 -print -quit)"',
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert (host / "config.toml").read_text() == 'model = "host-private"'
+    assert (host / "sessions" / "host.jsonl").read_text() == "host session"
 
 
 # A fake claude that runs inside the container: the counter lives in /sandbox

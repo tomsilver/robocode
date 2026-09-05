@@ -318,7 +318,7 @@ def test_sandbox_config_defaults() -> None:
     assert config.prompt == ""
     assert config.output_filename == ""
     assert config.model == "sonnet"
-    assert config.max_budget_usd == 5.0
+    assert config.max_budget_usd == 20.0
     assert config.system_prompt == ""
 
 

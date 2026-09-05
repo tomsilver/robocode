@@ -40,7 +40,7 @@ class SandboxConfig:
     prompt: str = ""
     output_filename: str = ""
     model: str = "sonnet"
-    max_budget_usd: float = 5.0
+    max_budget_usd: float = 20.0
     max_turns: int = 0  # 0 = unlimited
     system_prompt: str = ""
     mcp_tools: tuple[str, ...] = ()

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -92,7 +93,19 @@ class TestCodexBackend:
         assert command[-1] == "-"
         assert "write approach.py" not in command
         assert 'model_reasoning_effort="medium"' in command
+        assert "--ignore-user-config" in command
         assert backend.stdin_text(config) == "write approach.py"
+
+    def test_fresh_run_clears_sandbox_local_sessions(self, tmp_path: Path) -> None:
+        sessions = tmp_path / ".agent_sessions" / "codex"
+        sessions.mkdir(parents=True)
+        (sessions / "previous.jsonl").write_text("host-independent prior run")
+
+        CodexBackend(DEFAULT_CODEX_CFG).build_cli_cmd(
+            SandboxConfig(sandbox_dir=tmp_path)
+        )
+
+        assert list(sessions.iterdir()) == []
 
     def test_resume_uses_isolated_last_session(self, tmp_path: Path) -> None:
         config = SandboxConfig(sandbox_dir=tmp_path, resume_previous_session=True)
@@ -242,6 +255,39 @@ class TestCodexBackend:
         proc.kill.assert_called_once()
         assert result.is_error
         assert result.total_cost == pytest.approx(4.0)
+
+    def test_shared_budget_includes_codex_subagents(self, tmp_path: Path) -> None:
+        backend = CodexBackend(DEFAULT_CODEX_CFG)
+        backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
+        sessions = tmp_path / ".agent_sessions" / "codex"
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {"total_token_usage": {"output_tokens": 600_000}},
+            },
+        }
+
+        def stream():
+            yield json.dumps({"type": "turn.started"}) + "\n"
+            (sessions / "root.jsonl").write_text(json.dumps(event) + "\n")
+            event["payload"]["info"]["total_token_usage"]["output_tokens"] = 400_000
+            (sessions / "subagent.jsonl").write_text(json.dumps(event) + "\n")
+            time.sleep(0.2)
+
+        proc = MagicMock(spec=subprocess.Popen)
+        proc.stdout = stream()
+        proc.stderr = MagicMock()
+        proc.stderr.read.return_value = ""
+        proc.returncode = 0
+
+        result = backend.parse_stream(proc)
+
+        proc.kill.assert_called_once()
+        assert result.is_error
+        assert result.error_text == "Codex budget reached: $20.0000"
+        assert result.stop_reason == "error_max_budget_usd"
+        assert result.total_cost == pytest.approx(20.0)
 
 
 # ---------------------------------------------------------------------------

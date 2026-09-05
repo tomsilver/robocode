@@ -29,7 +29,7 @@ def test_config_defaults() -> None:
     config = ApptainerSandboxConfig(sandbox_dir=Path("/tmp/test"))
     assert config.sif_path == _find_repo_root() / "robocode-sandbox.sif"
     assert config.model == "sonnet"
-    assert config.max_budget_usd == 5.0
+    assert config.max_budget_usd == 20.0
     assert config.system_prompt == ""
     assert config.prompt == ""
     assert config.output_filename == ""

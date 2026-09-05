@@ -688,8 +688,8 @@ async def run_agent_in_docker_sandbox(
 
         # Persist the CLI session store on the host, under the sandbox dir, which
         # survives the container --rm. A run interrupted by the usage cap can then
-        # be resumed in a fresh retry container (--continue in the same /sandbox
-        # working directory). Only Claude stores sessions at this path.
+        # be resumed in a fresh retry container using the same /sandbox working
+        # directory. Fresh Codex runs clear their sandbox-local store first.
         session_volumes: list[str] = []
         if backend_name == "claude":
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
