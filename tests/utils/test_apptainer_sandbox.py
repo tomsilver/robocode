@@ -257,6 +257,7 @@ def test_opencode_auth_passes_api_keys(monkeypatch) -> None:  # type: ignore
 
 
 def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:  # type: ignore
+    """Forward the Codex key through the container environment."""
     monkeypatch.setenv("CODEX_API_KEY", "sk-test-value")
 
     with _build_apptainer_auth_args("codex") as (args, env):

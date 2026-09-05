@@ -238,9 +238,9 @@ def test_pid_isolate_wraps_command_on_linux(monkeypatch) -> None:  # type: ignor
 def test_pid_isolate_falls_back_without_userns(monkeypatch) -> None:  # type: ignore
     """Linux hosts that forbid unprivileged user namespaces (CI, hardened kernels).
 
-    The uid_map write returns EPERM there, so the command must run unwrapped rather
-    than fail to launch; the local backend is documented as not fully isolated, and
-    a container backend is the answer where process isolation is required.
+    The uid_map write returns EPERM there, so the command must run unwrapped rather than
+    fail to launch; the local backend is documented as not fully isolated, and a
+    container backend is the answer where process isolation is required.
     """
     monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "linux")
     monkeypatch.setattr("robocode.utils.sandbox._userns_available", lambda: False)
@@ -264,7 +264,10 @@ def _clear_userns_cache():  # type: ignore
 def test_userns_available_true_when_probe_succeeds(  # type: ignore
     monkeypatch, _clear_userns_cache
 ) -> None:
-    """A zero-exit `unshare ... true` means the namespace can be created."""
+    """A zero-exit `unshare ...
+
+    true` means the namespace can be created.
+    """
     monkeypatch.setattr(
         "robocode.utils.sandbox.subprocess.run",
         lambda *a, **k: SimpleNamespace(returncode=0, stderr=b""),

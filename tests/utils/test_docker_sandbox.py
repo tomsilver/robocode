@@ -357,6 +357,7 @@ def test_claude_auth_mount_excludes_host_state(tmp_path: Path, monkeypatch) -> N
 
 
 def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:
+    """Forward the Codex key without putting its value in argv."""
     monkeypatch.setenv("CODEX_API_KEY", "sk-test-value")
 
     with _build_docker_auth_args("codex") as (args, env):
@@ -369,6 +370,7 @@ def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:
 def test_codex_container_excludes_host_memory_and_sessions(
     tmp_path: Path, monkeypatch, blackbox: bool
 ) -> None:
+    """Expose only credentials and sandbox sessions inside Docker."""
     host = tmp_path / "host-codex"
     (host / "sessions").mkdir(parents=True)
     (host / "auth.json").write_text("{}")

@@ -165,12 +165,11 @@ def run_with_rate_limit_retry(
 ) -> SandboxResult:
     """Run the sandbox, resuming after retryable agent interruptions.
 
-    Each retry resumes the interrupted conversation (--continue) with the
-    budget the run had left, so an agent that hit the usage cap continues its
-    work rather than restarting cold without receiving a fresh experimental
-    budget. Rehydrating the transcript may itself consume uncached input tokens,
-    so a resumed run is recorded explicitly and is not claimed to be identical
-    to an uninterrupted run.
+    Each retry resumes the interrupted conversation (--continue) with the budget the run
+    had left, so an agent that hit the usage cap continues its work rather than
+    restarting cold without receiving a fresh experimental budget. Rehydrating the
+    transcript may itself consume uncached input tokens, so a resumed run is recorded
+    explicitly and is not claimed to be identical to an uninterrupted run.
     """
     active: SandboxConfig | None = apptainer_config or docker_config or local_config
     assert active is not None

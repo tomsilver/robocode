@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -84,6 +85,7 @@ class TestCodexBackend:
     """Tests for Codex command construction and JSONL parsing."""
 
     def test_command_uses_stdin_and_reasoning_effort(self, tmp_path: Path) -> None:
+        """Pass the prompt on stdin and set the configured reasoning effort."""
         config = SandboxConfig(
             sandbox_dir=tmp_path, prompt="write approach.py", model="gpt-5.6-sol"
         )
@@ -97,6 +99,7 @@ class TestCodexBackend:
         assert backend.stdin_text(config) == "write approach.py"
 
     def test_fresh_run_clears_sandbox_local_sessions(self, tmp_path: Path) -> None:
+        """Start fresh runs without sessions left by an earlier experiment."""
         sessions = tmp_path / ".agent_sessions" / "codex"
         sessions.mkdir(parents=True)
         (sessions / "previous.jsonl").write_text("host-independent prior run")
@@ -105,9 +108,10 @@ class TestCodexBackend:
             SandboxConfig(sandbox_dir=tmp_path)
         )
 
-        assert list(sessions.iterdir()) == []
+        assert not list(sessions.iterdir())
 
     def test_resume_uses_isolated_last_session(self, tmp_path: Path) -> None:
+        """Resume the last conversation within the isolated Codex home."""
         config = SandboxConfig(sandbox_dir=tmp_path, resume_previous_session=True)
         command = CodexBackend(DEFAULT_CODEX_CFG).build_cli_cmd(config)
         assert command[:3] == ["codex", "exec", "resume"]
@@ -115,6 +119,7 @@ class TestCodexBackend:
         assert "--all" in command
 
     def test_resume_cost_excludes_previous_session_usage(self, tmp_path: Path) -> None:
+        """Charge only tokens consumed after the session resumes."""
         session_dir = tmp_path / ".agent_sessions" / "codex"
         session_dir.mkdir(parents=True)
         session = session_dir / "rollout.jsonl"
@@ -146,6 +151,7 @@ class TestCodexBackend:
         assert backend.parse_stream(proc).total_cost == pytest.approx(0.001)
 
     def test_mcp_http_config(self, tmp_path: Path) -> None:
+        """Configure the prestarted MCP server through its HTTP endpoint."""
         sandbox = tmp_path / "sandbox"
         sandbox.mkdir()
         (tmp_path / "env_config.json").write_text("{}")
@@ -165,6 +171,7 @@ class TestCodexBackend:
     def test_agents_md_contains_system_and_sandbox_instructions(
         self, tmp_path: Path
     ) -> None:
+        """Render the system instructions and configured budget into AGENTS.md."""
         config = SandboxConfig(
             sandbox_dir=tmp_path, system_prompt="Solve the task.", max_budget_usd=7.5
         )
@@ -180,6 +187,7 @@ class TestCodexBackend:
         assert "/robocode/.venv/bin/python" in text
 
     def test_parse_usage_and_tools(self, tmp_path: Path) -> None:
+        """Parse tool counts and token usage at the configured prices."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=0))
         events = [
@@ -211,6 +219,7 @@ class TestCodexBackend:
         assert result.total_cost == pytest.approx(0.0096)
 
     def test_transient_transport_fallback_is_not_an_error(self, tmp_path: Path) -> None:
+        """Allow Codex to recover from transient transport failures."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=0))
         events = [
@@ -232,6 +241,7 @@ class TestCodexBackend:
         assert not backend.parse_stream(proc).is_error
 
     def test_live_session_usage_enforces_budget(self, tmp_path: Path) -> None:
+        """Terminate Codex when session usage exceeds the shared budget."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=1))
         session_dir = tmp_path / ".agent_sessions" / "codex" / "2026" / "09"
@@ -263,21 +273,23 @@ class TestCodexBackend:
         assert result.total_cost == pytest.approx(10.0)
 
     def test_shared_budget_includes_codex_subagents(self, tmp_path: Path) -> None:
+        """Include subagent token usage when enforcing the dollar budget."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
         sessions = tmp_path / ".agent_sessions" / "codex"
+        usage = {"output_tokens": 240_000}
         event = {
             "type": "event_msg",
             "payload": {
                 "type": "token_count",
-                "info": {"total_token_usage": {"output_tokens": 240_000}},
+                "info": {"total_token_usage": usage},
             },
         }
 
-        def stream():
+        def stream() -> Iterator[str]:
             yield json.dumps({"type": "turn.started"}) + "\n"
             (sessions / "root.jsonl").write_text(json.dumps(event) + "\n")
-            event["payload"]["info"]["total_token_usage"]["output_tokens"] = 160_000
+            usage["output_tokens"] = 160_000
             (sessions / "subagent.jsonl").write_text(json.dumps(event) + "\n")
             time.sleep(0.2)
 
@@ -299,6 +311,7 @@ class TestCodexBackend:
     def test_normal_stop_without_solution_confidence_requests_resume(
         self, tmp_path: Path
     ) -> None:
+        """Resume an early stop without a solution confidence marker."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
         proc = MagicMock(spec=subprocess.Popen)
@@ -315,6 +328,7 @@ class TestCodexBackend:
     def test_solution_confidence_marker_allows_normal_stop(
         self, tmp_path: Path
     ) -> None:
+        """Permit an early stop when Codex explicitly confirms confidence."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
         marker = tmp_path / ".agent_sessions" / "codex" / "solution_confident"

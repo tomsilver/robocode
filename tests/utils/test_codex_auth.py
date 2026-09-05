@@ -7,6 +7,7 @@ from robocode.utils.codex_auth import sandbox_codex_home, throwaway_codex_home
 
 
 def test_throwaway_codex_home_copies_only_auth(tmp_path: Path, monkeypatch) -> None:
+    """Copy credentials without exposing host configuration or sessions."""
     host_home = tmp_path / "host"
     host_home.mkdir()
     (host_home / "auth.json").write_text(json.dumps({"tokens": {}}))
@@ -21,6 +22,7 @@ def test_throwaway_codex_home_copies_only_auth(tmp_path: Path, monkeypatch) -> N
 def test_local_codex_home_retains_sessions_not_auth(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Keep sandbox sessions while removing temporary credentials."""
     host_home = tmp_path / "host"
     host_home.mkdir()
     (host_home / "auth.json").write_text(json.dumps({"tokens": {}}))

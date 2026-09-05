@@ -1,7 +1,7 @@
 """Run the real Claude completion wrapper inside the GenPlan Docker sandbox.
 
-Both tests use this program. --without-deny-flag reproduces the old wrapper;
-otherwise all production restrictions remain. Each call has a $1 CLI budget.
+Both tests use this program. --without-deny-flag reproduces the old wrapper; otherwise
+all production restrictions remain. Each call has a $1 CLI budget.
 """
 
 import argparse
