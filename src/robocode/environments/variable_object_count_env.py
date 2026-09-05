@@ -399,6 +399,11 @@ class VariableObjectCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]])
         if errors:
             raise ExceptionGroup("Failed to close variable-count backends", errors)
 
+    @property
+    def constant_object_env_path(self) -> str:
+        """``"module:Class"`` of the kinder family this env wraps."""
+        return self._env_path
+
     # -- per-count Box view for the bilevel planner -------------------------
 
     def to_box(self, state: ObjectCentricState) -> NDArray[Any]:

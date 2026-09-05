@@ -438,6 +438,7 @@ def _discover_runs(root: Path) -> dict[str, RunInfo]:
                 "per_instance" in approach
                 or "best_of_k" in approach
                 or "bilevel_planning" in approach
+                or "pddlstream_planning" in approach
             ),
             policy_source=marker.get("policy_source"),
             eval_seed=int(eval_seed) if eval_seed is not None else None,

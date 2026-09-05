@@ -32,6 +32,10 @@ Usage::
     python scripts/compare_pddlstream_rollout.py --counts 3 5 --episodes 3
 """
 
+# mypy: disable-error-code="import-untyped"
+# The stock PDDLStream tree imported in _run_stock is untyped, and the pddlstream wheel
+# ships an `examples` package of its own, so mypy sees installed-but-untyped modules.
+
 from __future__ import annotations
 
 import argparse
