@@ -207,6 +207,17 @@ def run_episode(
 _EPISODE_FORK_SAFE = sys.platform != "darwin"
 
 
+def _fork_safe(env: Any) -> bool:
+    """Whether an eval episode on *env* may run in a forked worker.
+
+    MuJoCo's offscreen EGL context is not fork-safe on Linux either: kinder's
+    dynamic3d envs rebuild it on every reset, which in a forked child aborts (exit
+    code -6, incomplete framebuffer) or hangs until the timeout. Envs backed by it
+    advertise ``eval_fork_safe = False``; everything else keeps the forked worker.
+    """
+    return _EPISODE_FORK_SAFE and getattr(env, "eval_fork_safe", True)
+
+
 class EpisodeTimeout(BaseException):
     """Raised in-process when an episode overruns its wall-clock budget.
 
@@ -359,10 +370,11 @@ def run_episode_with_timeout(
     (``metrics["timed_out"]``). A worker that dies before reporting (policy
     exception, OOM, native crash) re-raises here.
 
-    Where forking cannot carry the env, the rollout runs in this process instead and
-    is bounded the same way; :func:`_run_episode_in_process` covers what that costs.
+    Where forking cannot carry the env (see :func:`_fork_safe`), the rollout runs in
+    this process instead and is bounded the same way; :func:`_run_episode_in_process`
+    covers what that costs.
     """
-    if not _EPISODE_FORK_SAFE:
+    if not _fork_safe(env):
         return _run_episode_in_process(
             env,
             approach,

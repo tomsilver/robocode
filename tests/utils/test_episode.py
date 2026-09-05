@@ -783,6 +783,42 @@ def test_run_episode_with_timeout_kills_slow_policy() -> None:
     assert final_state is None
 
 
+class _ForkUnsafeCountEnv(_CountEnv):
+    """A ``_CountEnv`` that, like a MuJoCo env, must not be evaluated in a fork."""
+
+    eval_fork_safe = False
+
+
+def test_run_episode_with_timeout_runs_fork_unsafe_env_in_process(
+    monkeypatch,  # type: ignore
+) -> None:
+    """An env that cannot survive a fork is rolled out in this process."""
+    monkeypatch.setattr(
+        "robocode.utils.episode.run_in_forked_worker",
+        lambda *_args, **_kwargs: pytest.fail("must not fork"),
+    )
+    env = _ForkUnsafeCountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    metrics, _, final_state = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=30
+    )
+    assert metrics["solved"]
+    assert final_state == np.array([3.0], dtype=np.float32)
+
+
+def test_run_episode_with_timeout_bounds_fork_unsafe_env_in_process() -> None:
+    """The in-process path still enforces the per-instance budget."""
+    env = _ForkUnsafeCountEnv()
+    approach = _SlowApproach(env.action_space, env.observation_space, 0, {})
+    metrics, frames, final_state = run_episode_with_timeout(
+        env, approach, seed=0, max_steps=10, timeout=0.5
+    )
+    assert metrics["timed_out"] is True
+    assert metrics["solved"] is False
+    assert not frames
+    assert final_state is None
+
+
 def test_run_episode_with_timeout_reraises_worker_crash() -> None:
     """A crash in the policy is carried back and re-raised for the caller to score."""
     env = _CountEnv()

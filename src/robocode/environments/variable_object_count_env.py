@@ -36,7 +36,7 @@ from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 from relational_structs import Object, ObjectCentricState
 
-from robocode.environments.mujoco_gl import configure_gl_backend
+from robocode.environments.mujoco_gl import configure_gl_backend, uses_mujoco
 from robocode.environments.variable_count import VariableCountEnv
 from robocode.utils.bilevel import (
     bilevel_count_kwarg,
@@ -176,6 +176,11 @@ class VariableObjectCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]])
                 errors.append(exc)
         if errors:
             raise ExceptionGroup("Failed to close Kinder backend", errors)
+
+    @property
+    def eval_fork_safe(self) -> bool:
+        """MuJoCo's offscreen GL context does not survive a fork; see episode.py."""
+        return not uses_mujoco(self._env_cls)
 
     def _backend_for(self, count: int) -> ConstantObjectKinDEREnv:
         """Return (building + caching on first use) the backend for a given count."""
