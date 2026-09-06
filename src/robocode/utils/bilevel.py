@@ -4,45 +4,140 @@ Both the SeSamE baseline (`BilevelPlanningApproach`) and the `bilevel_models`
 primitive need the same `SesameModels` bundle for an environment, built from the
 `bilevel_env_name` / `bilevel_env_model_kwargs` mapping carried on the env (see
 `KinderGeom2DEnv`). This module owns that one construction so the two callers do
-not duplicate the mapping read.
+not duplicate the mapping read, and it owns the table of kinder families that
+have models in `kinder_bilevel_planning`.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
-# Family (bilevel_env_name) -> the object-count kwarg its model builder expects.
-_BILEVEL_KWARG_BY_FAMILY: dict[str, str] = {
-    "obstruction2d": "num_obstructions",
-    "stickbutton2d": "num_buttons",
-    "clutteredstorage2d": "num_blocks",
-    "clutteredretrieval2d": "num_obstructions",
-    "motion2d": "num_passages",
-}
 
-# e.g. "kinder/Obstruction2D-o2-v0" -> name="Obstruction2D", count=2.
-_ENV_ID_RE = re.compile(r"kinder/([A-Za-z0-9]+2D)-[a-z](\d+)-v\d+")
+@dataclass(frozen=True)
+class BilevelFamily:
+    """A kinder env family that has SeSamE models in `kinder_bilevel_planning`."""
+
+    # Family token of the kinder gym id: "Obstruction2D" in "kinder/Obstruction2D-o2-v0".
+    id_family: str
+    # "module:Class" of the ConstantObjectKinDEREnv, as VariableObjectCountEnv takes it.
+    env_path: str
+    # File name of the model module under kinder_bilevel_planning/env_models/. The
+    # loader resolves it on disk, so it is case-sensitive and not derivable from the id.
+    bilevel_env_name: str
+    # Object-count kwarg of that module's create_bilevel_planning_models. It can
+    # differ from the env's own count kwarg (Transport3D takes num_cubes, its model
+    # num_objects).
+    count_kwarg: str
+
+
+_FAMILIES: tuple[BilevelFamily, ...] = (
+    BilevelFamily(
+        "Obstruction2D",
+        "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv",
+        "obstruction2d",
+        "num_obstructions",
+    ),
+    BilevelFamily(
+        "StickButton2D",
+        "kinder.envs.kinematic2d.stickbutton2d:StickButton2DEnv",
+        "stickbutton2d",
+        "num_buttons",
+    ),
+    BilevelFamily(
+        "ClutteredStorage2D",
+        "kinder.envs.kinematic2d.clutteredstorage2d:ClutteredStorage2DEnv",
+        "clutteredstorage2d",
+        "num_blocks",
+    ),
+    BilevelFamily(
+        "ClutteredRetrieval2D",
+        "kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv",
+        "clutteredretrieval2d",
+        "num_obstructions",
+    ),
+    BilevelFamily(
+        "Motion2D",
+        "kinder.envs.kinematic2d.motion2d:Motion2DEnv",
+        "motion2d",
+        "num_passages",
+    ),
+    BilevelFamily(
+        "DynObstruction2D",
+        "kinder.envs.dynamic2d.dyn_obstruction2d:DynObstruction2DEnv",
+        "dynobstruction2d",
+        "num_obstructions",
+    ),
+    BilevelFamily(
+        "DynPushPullHook2D",
+        "kinder.envs.dynamic2d.dyn_pushpullhook2d:DynPushPullHook2DEnv",
+        "dynpushpullhook2d",
+        "num_obstructions",
+    ),
+    BilevelFamily(
+        "Transport3D",
+        "kinder.envs.kinematic3d.transport3d:Transport3DEnv",
+        "transport3d",
+        "num_objects",
+    ),
+    # The kinematic Shelf3D. The MuJoCo Shelf3DEnv under dynamic3d.task_families is a
+    # different environment whose models (tidybot3d_shelf3D) are not wired here.
+    BilevelFamily(
+        "KinematicShelf3D",
+        "kinder.envs.kinematic3d.shelf3d:Shelf3DEnv",
+        "shelf3d",
+        "num_objects",
+    ),
+    BilevelFamily(
+        "Tossing3D",
+        "kinder.envs.dynamic3d.task_families:Tossing3DEnv",
+        "tidybot3d_tossing3D",
+        "num_objects",
+    ),
+)
+_BY_ID_FAMILY = {family.id_family: family for family in _FAMILIES}
+_BY_ENV_PATH = {family.env_path: family for family in _FAMILIES}
+_BY_NAME = {family.bilevel_env_name: family for family in _FAMILIES}
+
+# e.g. "kinder/Obstruction2D-o2-v0" -> family="Obstruction2D", count=2.
+_ENV_ID_RE = re.compile(r"kinder/([A-Za-z0-9]+)-[a-z](\d+)-v\d+")
 
 
 def infer_bilevel_mapping(env_id: str) -> tuple[str | None, dict[str, int]]:
-    """Infer ``(bilevel_env_name, model_kwargs)`` from a kinder 2D env id.
+    """Infer ``(bilevel_env_name, model_kwargs)`` from a kinder env id.
 
     e.g. ``"kinder/Obstruction2D-o2-v0" -> ("obstruction2d", {"num_obstructions": 2})``.
-    Returns ``(None, {})`` for env ids that have no bilevel planning model (3D
-    envs, pushpullhook, mazes). Used as a fallback so a plain ``KinderGeom2DEnv``
-    (e.g. one the agent builds to test) can use the ``bilevel_models`` primitive
-    without the explicit mapping; the env configs still set it explicitly, and a
-    test checks the two agree.
+    Returns ``(None, {})`` for env ids that have no bilevel planning model (e.g.
+    Obstruction3D, Packing3D, pushpullhook, mazes). Used as a fallback so a plain
+    ``KinderGeom2DEnv``/``KinderGeom3DEnv`` (e.g. one the agent builds to test) can use
+    the ``bilevel_models`` primitive without the explicit mapping; the 2D env configs
+    still set it explicitly, and a test checks the two agree.
     """
     match = _ENV_ID_RE.fullmatch(env_id)
     if match is None:
         return None, {}
-    family = match.group(1).lower()
-    kwarg = _BILEVEL_KWARG_BY_FAMILY.get(family)
-    if kwarg is None:
+    family = _BY_ID_FAMILY.get(match.group(1))
+    if family is None:
         return None, {}
-    return family, {kwarg: int(match.group(2))}
+    return family.bilevel_env_name, {family.count_kwarg: int(match.group(2))}
+
+
+def infer_bilevel_env_name_from_path(env_path: str) -> str | None:
+    """The ``bilevel_env_name`` for a ``"module:Class"`` env path, or None if
+    unmapped."""
+    family = _BY_ENV_PATH.get(env_path)
+    return None if family is None else family.bilevel_env_name
+
+
+def bilevel_count_kwarg(bilevel_env_name: str) -> str:
+    """The object-count kwarg of a family's ``create_bilevel_planning_models``."""
+    family = _BY_NAME.get(bilevel_env_name)
+    assert family is not None, (
+        f"{bilevel_env_name!r} is not a known bilevel env family; add it to "
+        "robocode.utils.bilevel._FAMILIES"
+    )
+    return family.count_kwarg
 
 
 class VariableCountBilevelModels:
@@ -81,7 +176,7 @@ def build_sesame_models(
     kwargs default to the env's own (the fixed-count case), but a variable-count env
     passes them explicitly so the models are built for the *current* instance's count:
     its per-count `ObjectCentricBoxSpace` and `{count_kwarg: k}`. Fails loudly if the
-    env config is missing the family mapping rather than planning silently.
+    env carries no family mapping rather than planning silently.
 
     A variable-count env (one exposing `models_for_count`) has no single count, so a
     call without explicit `model_kwargs` returns a :class:`VariableCountBilevelModels`
@@ -93,9 +188,9 @@ def build_sesame_models(
     a "models OFF" sandbox. Only actually using the bilevel models requires it.
     """
     # We never run under python -O, so this assert fires as a loud config check.
-    assert env.bilevel_env_name is not None, (
-        "bilevel_env_name is not set on the environment; add bilevel_env_name and "
-        "bilevel_env_model_kwargs to the env config to use bilevel planning models."
+    assert getattr(env, "bilevel_env_name", None) is not None, (
+        "bilevel_env_name is not set on the environment; this env family has no "
+        "bilevel planning models (or the env class does not carry the mapping)."
     )
     if model_kwargs is None and hasattr(env, "models_for_count"):
         return VariableCountBilevelModels(env)

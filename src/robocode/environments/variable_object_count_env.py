@@ -38,7 +38,11 @@ from relational_structs import Object, ObjectCentricState
 
 from robocode.environments.mujoco_gl import configure_gl_backend
 from robocode.environments.variable_count import VariableCountEnv
-from robocode.utils.bilevel import build_sesame_models
+from robocode.utils.bilevel import (
+    bilevel_count_kwarg,
+    build_sesame_models,
+    infer_bilevel_env_name_from_path,
+)
 
 
 def _load_constant_object_env_class(path: str) -> type[ConstantObjectKinDEREnv]:
@@ -98,8 +102,17 @@ class VariableObjectCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]])
             raise ValueError("design_counts must be non-empty")
         if not self._eval_counts:
             raise ValueError("eval_counts must be non-empty")
-        # Family name for the bilevel planning models (e.g. "obstruction2d"); None for
-        # families with no SeSamE models, which then support the program side only.
+        # Family name for the bilevel planning models (e.g. "obstruction2d"), consumed
+        # by BilevelPlanningApproach and the bilevel_models primitive. The 2D env
+        # configs set it explicitly; otherwise it is inferred from the env class path,
+        # and stays None for families with no SeSamE models, which then support the
+        # program side only. Only an explicitly configured family is advertised in the
+        # env card, so inference does not change the agent-facing description.
+        self._bilevel_env_name_configured = bilevel_env_name is not None
+        if bilevel_env_name is None:
+            bilevel_env_name = infer_bilevel_env_name_from_path(
+                constant_object_env_path
+            )
         self.bilevel_env_name = bilevel_env_name
 
         self._backends: dict[int, ConstantObjectKinDEREnv] = {}
@@ -396,12 +409,20 @@ class VariableObjectCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]])
         return box_space.vectorize(state)
 
     def models_for_count(self, count: int) -> Any:
-        """Build the SeSamE models for a given count (per-count Box space + kwargs)."""
+        """Build the SeSamE models for a given count (per-count Box space + kwargs).
+
+        The model builder's count kwarg is the family's, not this env's ``count_kwarg``
+        (Transport3D takes ``num_cubes``, its models ``num_objects``).
+        """
         backend = self._backend_for(count)
+        family = self.bilevel_env_name
+        model_kwargs = (
+            {bilevel_count_kwarg(family): count} if family is not None else {}
+        )
         return build_sesame_models(
             self,
             observation_space=backend.observation_space,
-            model_kwargs={self._count_kwarg: count},
+            model_kwargs=model_kwargs,
         )
 
     def infer_count(self, state: ObjectCentricState) -> int:
@@ -504,7 +525,7 @@ class VariableObjectCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]])
             return description
         bilevel_example_arg = (
             f'    bilevel_env_name="{self.bilevel_env_name}",\n'
-            if self.bilevel_env_name is not None
+            if self._bilevel_env_name_configured
             else ""
         )
         fixed_kwargs_example_arg = (
