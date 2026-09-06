@@ -576,6 +576,30 @@ The `cli_*` presets drive the same authenticated Claude CLI as the agentic backe
 
 The `anthropic_*` presets bill the Messages API and need `ANTHROPIC_API_KEY`; their `input_cost_per_mtok` / `output_cost_per_mtok` fields turn reported token usage into an estimated `cost_usd`, which bounds `approach.max_budget_usd`. The CLI reports its own cost, and the local presets report none.
 
+### Planner baselines
+
+Two per-instance planners solve each evaluation seed from scratch, with no LLM in the loop; they report `planning_time` and `plan_found` per episode and spend no budget. Both plan within the shared `eval_timeout`.
+
+`bilevel_planning` runs kinder-baselines' SeSamE planner on every family for which `kinder_bilevel_planning` ships models: the kinematic-2D families, DynObstruction2D, DynPushPullHook2D, Transport3D, the kinematic Shelf3D, and Tossing3D (one cube only; other counts score as unsolved with a `planner_unsupported` flag). The family mapping is inferred from the env (`src/robocode/utils/bilevel.py`), so no env config needs a key. Some families need the planner settings their upstream configs use, passed as approach overrides:
+
+```bash
+python experiments/run_experiment.py approach=bilevel_planning primitive_level=none \
+    environment=transport3d_generalized approach.max_skill_horizon=1000 eval_seed="$EVAL_SEED"
+# dynpushpullhook2d: approach.samples_per_step=20 approach.max_abstract_plans=5
+# shelf3d:           approach.max_skill_horizon=1000
+# tossing3d:         approach.max_abstract_plans=1 approach.samples_per_step=5 approach.max_skill_horizon=400
+```
+
+`pddlstream_planning` runs the PDDLStream domain that kinder-baselines ships for Packing3D (`kinder-pddlstream-planning`) on a twin simulator and replays the plan against the evaluated environment in lockstep. It needs the `pddlstream` extra, whose install compiles FastDownward (`make` and a C++ compiler required):
+
+```bash
+uv sync --extra bilevel --extra pddlstream
+python experiments/run_experiment.py approach=pddlstream_planning primitive_level=none \
+    environment=packing3d_generalized eval_seed="$EVAL_SEED"
+```
+
+The pinned pddlstream fork bundles a FastDownward whose `search/ext/optional.hh` does not compile with GCC 13+ or recent clang (`tl::optional<T&>` carries a stale `emplace`; removing that member is the fix upstream FastDownward applied). Until the fork carries the fix, build it from a patched checkout and install it with `uv pip install --no-deps <path>`. PDDLStream writes its scratch files to `temp/` and `statistics/` in the working directory; both are ignored.
+
 ### Replicates and the evaluation suite
 
 `replicate_seed` and `eval_seed` have deliberately different roles:
