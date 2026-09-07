@@ -21,6 +21,8 @@ _ID_CASES = [
     ("kinder/Transport3D-o2-v0", "transport3d", {"num_objects": 2}),
     ("kinder/KinematicShelf3D-o3-v0", "shelf3d", {"num_objects": 3}),
     ("kinder/Tossing3D-o1-v0", "tidybot3d_tossing3D", {"num_objects": 1}),
+    ("kinder/Shelf3D-o2-v0", "tidybot3d_shelf3D", {"num_objects": 2}),
+    ("kinder/SweepIntoDrawer3D-o5-v0", "tidybot3d_sweep3D", {"num_objects": 5}),
 ]
 
 _PATH_CASES = [
@@ -33,9 +35,10 @@ _PATH_CASES = [
     ("kinder.envs.kinematic3d.shelf3d:Shelf3DEnv", "shelf3d"),
     ("kinder.envs.dynamic3d.task_families:Tossing3DEnv", "tidybot3d_tossing3D"),
     ("kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv", "obstruction2d"),
-    # No models: Obstruction3D has skills only; the MuJoCo Shelf3D is a different env.
+    # The MuJoCo Shelf3D has its own models, distinct from the kinematic one above.
+    ("kinder.envs.dynamic3d.task_families:Shelf3DEnv", "tidybot3d_shelf3D"),
+    # No models: Obstruction3D has skills only.
     ("kinder.envs.kinematic3d.obstruction3d:Obstruction3DEnv", None),
-    ("kinder.envs.dynamic3d.task_families:Shelf3DEnv", None),
     ("robocode.environments.dyn_scoop_sort2d:DynScoopSort2DEnv", None),
 ]
 
@@ -199,5 +202,51 @@ def test_tossing3d_models_round_trip_state() -> None:
         # The upstream operators name a single cube, so count 2 has no models.
         with pytest.raises(NotImplementedError):
             env.models_for_count(2)
+    finally:
+        env.close()
+
+
+def _skip_without_mujoco_gl() -> None:
+    try:
+        import mujoco  # pylint: disable=import-outside-toplevel
+
+        mujoco.GLContext(max_width=16, max_height=16).free()
+    except Exception as e:  # pylint: disable=broad-except
+        pytest.skip(f"mujoco GL runtime unavailable: {e}")
+
+
+def test_dynamic_shelf3d_models_round_trip_state() -> None:
+    """The MuJoCo Shelf3D models accept the env's count-1 Box view."""
+    _skip_without_mujoco_gl()
+    env = VariableObjectCountEnv(
+        constant_object_env_path="kinder.envs.dynamic3d.task_families:Shelf3DEnv",
+        count_kwarg="num_objects",
+        count_object_prefix="cube",
+        design_counts=[1],
+        eval_counts=[1, 2],
+        constant_object_env_kwargs={"scene_bg": False},
+    )
+    try:
+        assert env.bilevel_env_name == "tidybot3d_shelf3D"
+        state, _ = env.reset(seed=0, options={"object_count": 1})
+        models = env.models_for_count(1)
+        round_trip = models.observation_to_state(env.to_box(state))
+        assert set(round_trip.get_object_names()) == set(state.get_object_names())
+    finally:
+        env.close()
+
+
+def test_sweep_into_drawer3d_models_round_trip_state() -> None:
+    """The single-variant SweepIntoDrawer3D is reached by gym id and yields models."""
+    _skip_without_mujoco_gl()
+    env = KinderGeom3DEnv("kinder/SweepIntoDrawer3D-o5-v0", scene_bg=False)
+    try:
+        assert env.bilevel_env_name == "tidybot3d_sweep3D"
+        assert env.bilevel_env_model_kwargs == {"num_objects": 5}
+        models = build_sesame_models(env)
+        assert len(models.skills) > 0
+        obs, _ = env.reset(seed=0)
+        state = models.observation_to_state(obs)
+        assert models.state_abstractor(state) is not None
     finally:
         env.close()

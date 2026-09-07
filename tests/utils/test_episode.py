@@ -226,7 +226,10 @@ class _ScriptedPerInstanceApproach(BaseApproach[Any, Any]):
         self.calls.append(
             {"seed": seed, "budget_usd": budget_usd, "render": render, "count": count}
         )
-        return self._results.pop(0)
+        result = self._results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def test_per_instance_eval_stops_when_budget_exhausted(tmp_path: Path) -> None:
@@ -251,6 +254,37 @@ def test_per_instance_eval_stops_when_budget_exhausted(tmp_path: Path) -> None:
     assert out["per_episode"][3]["attempted"] is False
     assert out["per_episode"][4]["attempted"] is False
     assert out["total_cost_usd"] == pytest.approx(3.0)
+
+
+def test_per_instance_eval_scores_a_crash_and_continues(tmp_path: Path) -> None:
+    """An exception out of solve_instance scores that instance as a crash (a failure
+    with no reward or step count) and the remaining instances still run."""
+    results: list[Any] = [
+        InstanceResult(solved=True, total_reward=1.0, num_steps=3, cost_usd=0.0),
+        AssertionError("no base motion plan"),
+        InstanceResult(solved=True, total_reward=1.0, num_steps=3, cost_usd=0.0),
+    ]
+    approach = _ScriptedPerInstanceApproach(results)
+    out = run_per_instance_eval(
+        None,
+        approach,
+        [10, 11, 12],
+        max_budget_usd=100.0,
+        output_dir=tmp_path,
+        eval_counts=[1, 2, 3],
+    )
+    assert len(approach.calls) == 3
+    assert out["num_attempted"] == 3
+    assert out["num_solved"] == 2
+    assert out["solve_rate"] == pytest.approx(2 / 3)
+    crashed = out["per_episode"][1]
+    assert crashed["crashed"] is True
+    assert crashed["attempted"] is True
+    assert crashed["solved"] is False
+    assert crashed["object_count"] == 2
+    assert crashed["error"].startswith("AssertionError")
+    assert crashed["num_steps"] is None and crashed["total_reward"] is None
+    assert out["mean_eval_steps"] == pytest.approx(3.0)
 
 
 def test_per_instance_eval_respects_per_instance_cap(tmp_path: Path) -> None:
