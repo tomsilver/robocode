@@ -131,8 +131,10 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         if blackbox_strict:
             if not blackbox:
                 raise ValueError("blackbox_strict requires blackbox=true")
-            if self._container_backend != "docker":
-                raise ValueError("blackbox_strict requires container_backend=docker")
+            if self._container_backend not in ("docker", "apptainer"):
+                raise ValueError(
+                    "blackbox_strict requires container_backend=docker or apptainer"
+                )
             if self._primitives:
                 raise ValueError(
                     "blackbox_strict exposes no primitives; configure primitives=[]"
@@ -279,6 +281,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 autocompact_pct=self._autocompact_pct,
                 blackbox=self._blackbox,
                 telemetry=self._telemetry,
+                blackbox_strict=self._blackbox_strict,
             )
             sandbox_logger = logging.getLogger("robocode.utils.apptainer_sandbox")
         else:
