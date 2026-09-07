@@ -1,0 +1,5 @@
+{system_prompt}
+
+Your configured remaining budget is ${max_budget_usd:.2f}, shared across this session and all subagents. Continue working, testing, and improving the solution to solve as many seeds as possible within this budget. The harness will stop you when the budget is exhausted. Only stop early if you are extremely confident in the solution based on your testing; in that case, create `.agent_sessions/codex/solution_confident` before giving your final response.
+
+{sandbox_instructions}

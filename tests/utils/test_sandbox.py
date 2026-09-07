@@ -57,6 +57,7 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
     assert d["gen_output_token_retries"] == 1
     assert d["gen_prompt_too_long_hit"] is True
     assert d["gen_prompt_too_long_retries"] == 1
+    assert d["gen_unconfirmed_solution_retries"] == 0
     assert d["gen_aborted_tokens"] == 300
     assert d["gen_aborted_cost_usd"] == 1.5
     assert all(k.startswith("gen_") for k in d)
@@ -112,6 +113,24 @@ def test_output_token_limit_ignores_partial_output_for_retry(tmp_path: Path) -> 
     assert result.output_token_limit_hit
     assert result.generation_metrics is not None
     assert result.generation_metrics.output_token_limit_hit
+
+
+def test_unconfirmed_solution_ignores_partial_output_for_resume(tmp_path: Path) -> None:
+    """An unverified Codex policy is resumed instead of evaluated."""
+    (tmp_path / "approach.py").write_text("partial = True\n")
+    stream = _StreamParseResult(
+        is_error=True,
+        error_text="Codex stopped without confirming high confidence in the solution",
+        num_turns=1,
+        total_cost=4.0,
+        unconfirmed_solution=True,
+    )
+
+    result = _stream_result_to_sandbox_result(stream, tmp_path, "approach.py")
+
+    assert not result.success
+    assert result.output_file is None
+    assert result.unconfirmed_solution
 
 
 def test_prompt_too_long_ignores_partial_output_for_compaction(tmp_path: Path) -> None:
@@ -219,9 +238,9 @@ def test_pid_isolate_wraps_command_on_linux(monkeypatch) -> None:  # type: ignor
 def test_pid_isolate_falls_back_without_userns(monkeypatch) -> None:  # type: ignore
     """Linux hosts that forbid unprivileged user namespaces (CI, hardened kernels).
 
-    The uid_map write returns EPERM there, so the command must run unwrapped rather
-    than fail to launch; the local backend is documented as not fully isolated, and
-    a container backend is the answer where process isolation is required.
+    The uid_map write returns EPERM there, so the command must run unwrapped rather than
+    fail to launch; the local backend is documented as not fully isolated, and a
+    container backend is the answer where process isolation is required.
     """
     monkeypatch.setattr("robocode.utils.sandbox.sys.platform", "linux")
     monkeypatch.setattr("robocode.utils.sandbox._userns_available", lambda: False)
@@ -245,7 +264,10 @@ def _clear_userns_cache():  # type: ignore
 def test_userns_available_true_when_probe_succeeds(  # type: ignore
     monkeypatch, _clear_userns_cache
 ) -> None:
-    """A zero-exit `unshare ... true` means the namespace can be created."""
+    """A zero-exit `unshare ...
+
+    true` means the namespace can be created.
+    """
     monkeypatch.setattr(
         "robocode.utils.sandbox.subprocess.run",
         lambda *a, **k: SimpleNamespace(returncode=0, stderr=b""),
@@ -318,7 +340,7 @@ def test_sandbox_config_defaults() -> None:
     assert config.prompt == ""
     assert config.output_filename == ""
     assert config.model == "sonnet"
-    assert config.max_budget_usd == 5.0
+    assert config.max_budget_usd == 20.0
     assert config.system_prompt == ""
 
 
