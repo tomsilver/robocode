@@ -179,12 +179,6 @@ def test_inferred_family_is_not_advertised_in_description() -> None:
 
 def test_tossing3d_models_round_trip_state() -> None:
     """Tossing3D's models (MuJoCo + PyBullet) accept the env's count-1 Box view."""
-    try:
-        import mujoco  # pylint: disable=import-outside-toplevel
-
-        mujoco.GLContext(max_width=16, max_height=16).free()
-    except Exception as e:  # pylint: disable=broad-except
-        pytest.skip(f"mujoco GL runtime unavailable: {e}")
     env = VariableObjectCountEnv(
         constant_object_env_path="kinder.envs.dynamic3d.task_families:Tossing3DEnv",
         count_kwarg="num_objects",
@@ -206,18 +200,8 @@ def test_tossing3d_models_round_trip_state() -> None:
         env.close()
 
 
-def _skip_without_mujoco_gl() -> None:
-    try:
-        import mujoco  # pylint: disable=import-outside-toplevel
-
-        mujoco.GLContext(max_width=16, max_height=16).free()
-    except Exception as e:  # pylint: disable=broad-except
-        pytest.skip(f"mujoco GL runtime unavailable: {e}")
-
-
 def test_dynamic_shelf3d_models_round_trip_state() -> None:
     """The MuJoCo Shelf3D models accept the env's count-1 Box view."""
-    _skip_without_mujoco_gl()
     env = VariableObjectCountEnv(
         constant_object_env_path="kinder.envs.dynamic3d.task_families:Shelf3DEnv",
         count_kwarg="num_objects",
@@ -238,7 +222,6 @@ def test_dynamic_shelf3d_models_round_trip_state() -> None:
 
 def test_sweep_into_drawer3d_models_round_trip_state() -> None:
     """The single-variant SweepIntoDrawer3D is reached by gym id and yields models."""
-    _skip_without_mujoco_gl()
     env = KinderGeom3DEnv("kinder/SweepIntoDrawer3D-o5-v0", scene_bg=False)
     try:
         assert env.bilevel_env_name == "tidybot3d_sweep3D"
