@@ -1,6 +1,7 @@
 """Tests for the MCP config written into a sandbox."""
 
 import json
+import re
 from pathlib import Path
 
 from robocode.mcp import _write_sandbox_env_config, setup_mcp_config
@@ -129,3 +130,31 @@ def test_sandbox_env_config_leaves_fixed_count_configs_alone(tmp_path: Path) -> 
         "_target_": "pkg.mod:Env",
         "num_blocks": 3,
     }
+
+
+SORTCLUTTEREDBLOCKS3D_CFG = {
+    "_target_": "robocode.environments.variable_object_count_env.VariableObjectCountEnv",
+    "constant_object_env_path": (
+        "kinder.envs.dynamic3d.task_families:SortClutteredBlocks3DEnv"
+    ),
+    "count_kwarg": "num_objects",
+    "count_object_prefix": "cube",
+    "design_counts": [4],
+    "eval_counts": [4, 20],
+    "constant_object_env_kwargs": {"scene_bg": False},
+}
+
+
+def test_sandbox_env_config_uses_a_count_the_family_registers(tmp_path: Path) -> None:
+    """Families that reject count 1 get their smallest registered count, so the
+    in-sandbox render server can still build the env; the held-out count stays out."""
+    sandbox_dir = _write_sandbox(tmp_path, SORTCLUTTEREDBLOCKS3D_CFG)
+
+    written = json.loads(
+        (sandbox_dir / ".mcp" / "env_config.json").read_text(encoding="utf-8")
+    )
+    assert written["design_counts"] == [4]
+    assert written["eval_counts"] == [4]
+    for path in sandbox_dir.rglob("*"):
+        if path.is_file():
+            assert not re.search(r"^\s*20,?$", path.read_text(encoding="utf-8"), re.M)

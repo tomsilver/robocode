@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from robocode.environments.variable_object_count_env import (
+    _load_constant_object_env_class,
+)
+
 # Server name used by FastMCP and to build Claude CLI tool names
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
@@ -281,8 +285,26 @@ _COUNT_RANGE_KEYS = ("design_counts", "eval_counts")
 # Deliberately not a count anyone would configure: the sandbox copy must be
 # constructible without implying an evaluation protocol. A plausible-looking value
 # would read to an agent as "you are evaluated at this count".
-_PLACEHOLDER_COUNTS = [1]
+_PLACEHOLDER_COUNT = 1
 _PLACEHOLDER_MARKER = "__placeholder__"
+
+
+def _placeholder_counts(config: dict[str, Any]) -> list[int]:
+    """Return the count the sandbox copy is built with.
+
+    Families that register a fixed set of counts (kinder's ``supported_counts``)
+    reject 1, so they get their smallest registered count: it is the family's own
+    default, visible in the source, and says nothing about the evaluation range.
+    """
+    env_path = config.get("constant_object_env_path")
+    if env_path is None:
+        return [_PLACEHOLDER_COUNT]
+    supported = getattr(
+        _load_constant_object_env_class(env_path), "supported_counts", None
+    )
+    if supported is None or _PLACEHOLDER_COUNT in supported:
+        return [_PLACEHOLDER_COUNT]
+    return [min(supported)]
 
 
 def _write_sandbox_env_config(source: Path, dest: Path) -> None:
@@ -291,7 +313,7 @@ def _write_sandbox_env_config(source: Path, dest: Path) -> None:
     substituted = False
     for key in _COUNT_RANGE_KEYS:
         if key in config:
-            config[key] = list(_PLACEHOLDER_COUNTS)
+            config[key] = _placeholder_counts(config)
             substituted = True
     if substituted:
         # Say so in the file itself, so a whitebox agent reading it sees a
