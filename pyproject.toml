@@ -41,6 +41,13 @@ bilevel = [
     "kinder_bilevel_planning",
     "kinder_models",
 ]
+# PDDLStream baseline on the kinder families that ship a PDDLStream domain
+# (Packing3D). pddlstream is the PRPL packaged fork, whose install compiles
+# FastDownward (needs make and a C++ compiler). Host only; never in the sandbox.
+pddlstream = [
+    "kinder_pddlstream_planning",
+    "pddlstream",
+]
 tracker = [
     "gspread>=6.2,<7",
 ]
@@ -109,6 +116,9 @@ kindergarden = { path = "third-party/kindergarden", editable = true }
 libero = { path = "third-party/LIBERO-PRO", editable = true }
 kinder_bilevel_planning = { path = "third-party/kinder-baselines/kinder-bilevel-planning", editable = true }
 kinder_models = { path = "third-party/kinder-baselines/kinder-models", editable = true }
+kinder_pddlstream_planning = { path = "third-party/kinder-baselines/kinder-pddlstream-planning", editable = true }
+# Full SHA so the VCS wheel (and its FastDownward build) is reused from the cache.
+pddlstream = { git = "https://github.com/Princeton-Robot-Planning-and-Learning/pddlstream", rev = "5919a844b8c947acdb49bedb6e8b2b93e6a70c0c" }
 
 [[tool.mypy.overrides]]
 module = [
@@ -118,6 +128,7 @@ module = [
     "pybullet_helpers.*",
     "pybullet_tools.*",
     "pybullet_utils.*",
+    "pddlstream.*",
     "libero.*",
     "mujoco.*",
 ]

@@ -175,3 +175,7 @@ Results
 ref/
 .codex
 .agents
+
+# pddlstream writes its FastDownward scratch files into the working directory.
+temp/
+statistics/

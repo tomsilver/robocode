@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 
 from robocode.environments.base_env import BaseEnv
 from robocode.environments.mujoco_gl import configure_gl_backend
+from robocode.utils.bilevel import infer_bilevel_mapping
 
 # Register the kinder gym envs. register_all_environments() imports mujoco and forces
 # osmesa on headless Linux, so lock our GL backend first and restore it after -- the
@@ -33,7 +34,13 @@ def _unwrap_to_kinder(env: gymnasium.Env) -> ConstantObjectKinDEREnv:
 class KinderGeom3DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
     """A robocode environment backed by a kinder geom3d environment."""
 
-    def __init__(self, env_id: str, scene_bg: str | bool | None = None) -> None:
+    def __init__(
+        self,
+        env_id: str,
+        scene_bg: str | bool | None = None,
+        bilevel_env_name: str | None = None,
+        bilevel_env_model_kwargs: dict[str, Any] | None = None,
+    ) -> None:
         self._env_id = env_id
         # scene_bg selects the background scene for dynamic3d (TidyBot) envs:
         # None/False is the plain white "simple" ground, while "mimiclabs-labN"
@@ -48,6 +55,22 @@ class KinderGeom3DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         self.observation_space = self._kinder_env.observation_space
         self.action_space = self._kinder_env.action_space
         self._current_obs: NDArray[Any] | None = None
+        # Mapping to the bilevel planning models for this env family, consumed by
+        # BilevelPlanningApproach and the bilevel_models primitive: the family
+        # (e.g. "transport3d") and its object-count kwargs (e.g. {"num_objects": 1}).
+        # Inferred from env_id unless given explicitly; None for families that ship
+        # no models (Obstruction3D, Packing3D, ...). Stored as a plain dict since
+        # Hydra passes a DictConfig.
+        if bilevel_env_name is None:
+            bilevel_env_name, inferred_kwargs = infer_bilevel_mapping(env_id)
+            if bilevel_env_model_kwargs is None:
+                bilevel_env_model_kwargs = inferred_kwargs
+        self.bilevel_env_name = bilevel_env_name
+        self.bilevel_env_model_kwargs = (
+            dict(bilevel_env_model_kwargs)
+            if bilevel_env_model_kwargs is not None
+            else {}
+        )
         super().__init__()
 
     @property
