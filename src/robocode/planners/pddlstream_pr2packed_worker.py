@@ -27,6 +27,20 @@ import traceback
 from typing import Any
 
 
+def gripper_closes(position: Any, gripper_max: float) -> bool:
+    """Whether an upstream ``GripperCommand`` is a grasp rather than a release.
+
+    ``position`` is a tuple of per-finger widths when closing and a scalar when
+    opening. Opening commands the joint's max limit exactly and a grasp commands the
+    block's width, which is strictly less but not necessarily by much -- 0.43 against
+    a 0.55 limit for this benchmark's blocks -- so the test is "below the limit", not
+    "below half of it". Splitting on half reads every grasp as a release, and the
+    robot then traces the whole plan without ever picking anything up.
+    """
+    width = float(max(position) if isinstance(position, (list, tuple)) else position)
+    return width < gripper_max - 1e-6
+
+
 def _plan(payload: dict[str, Any]) -> dict[str, Any]:
     """Restore the evaluated instance into a stock scene and plan on it."""
     # pylint: disable=import-outside-toplevel,import-error,no-name-in-module
@@ -125,16 +139,12 @@ def _plan(payload: dict[str, Any]) -> dict[str, Any]:
                     continue
                 steps.append({"kind": group, "values": [float(v) for v in conf.values]})
         elif name == "GripperCommand":
-            # Closing carries one width per finger joint; opening carries the
-            # joint's max limit as a scalar.
-            position = command.position
-            commanded = float(
-                max(position) if isinstance(position, (list, tuple)) else position
+            steps.append(
+                {
+                    "kind": "gripper",
+                    "close": gripper_closes(command.position, gripper_max),
+                }
             )
-            # Opening commands the joint's max limit exactly; a grasp commands the
-            # block's width, which is strictly less but not necessarily by much (0.43
-            # against a 0.55 limit here), so anything below the limit is a close.
-            steps.append({"kind": "gripper", "close": commanded < gripper_max - 1e-6})
     return {"solved": True, "steps": steps}
 
 

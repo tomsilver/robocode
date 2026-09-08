@@ -22,6 +22,9 @@ from typing import Any, Callable
 import numpy as np
 
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
+from robocode.environments.pr2_tamp_variable_count_env import (
+    PR2PackedVariableCountEnv,
+)
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.planners.pddlstream_packing3d import (
     PACKING3D_ENV_PATH,
@@ -102,11 +105,6 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         count so the planner faces the same instance as the generalized program.
         """
         del budget_usd
-        # pylint: disable=import-outside-toplevel
-        from robocode.environments.pr2_tamp_variable_count_env import (
-            PR2PackedVariableCountEnv,
-        )
-
         if isinstance(env, PR2PackedVariableCountEnv):
             return self._solve_pr2packed(
                 env=env,
