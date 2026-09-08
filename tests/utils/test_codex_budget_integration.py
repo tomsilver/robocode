@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from omegaconf import DictConfig
 
+from robocode.utils import docker_sandbox
 from robocode.utils.backends.codex import CodexBackend
 from robocode.utils.docker_sandbox import DockerSandboxConfig
 from robocode.utils.rate_limit import run_with_rate_limit_retry
@@ -54,10 +55,6 @@ def fake_cli(tmp_path, monkeypatch, request):
             pytest.skip(f"Docker daemon/image {STRICT_BLACKBOX_IMAGE} unavailable")
         # Record actual production container names; do not replace the launcher,
         # entrypoint, firewall, mounts, CLI stream, parser, or budget monitor.
-        from robocode.utils import (
-            docker_sandbox,
-        )  # pylint: disable=import-outside-toplevel
-
         original = docker_sandbox._docker_run_prefix  # pylint: disable=protected-access
 
         def record_container(*args, **kwargs):
