@@ -182,7 +182,6 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
     assert "--cleanenv" in cmd
     pwd_idx = cmd.index("--pwd")
     assert cmd[pwd_idx + 1] == "/sandbox"
-
     # Env vars are passed as `--env KEY=val` pairs.
     assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192" in cmd
     assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70" in cmd
@@ -205,6 +204,30 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
 
     # Agent command is appended at the end.
     assert cmd[-3:] == ["claude", "--print", "hello"]
+
+
+def test_build_cmd_mounts_kindergarden_assets_read_only(tmp_path: Path) -> None:
+    """Dynamic3D assets are shared rather than copied into per-run staging."""
+    bind = (
+        "/host/assets:/robocode/third-party/kindergarden/src/kinder/envs/"
+        "dynamic3d/models/assets:ro"
+    )
+    config = ApptainerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        sif_path=tmp_path / "robocode-sandbox.sif",
+    )
+    cmd = _build_apptainer_cmd(
+        config,
+        sandbox_abs="/host/sandbox",
+        src_abs="/host/src",
+        kindergarden_abs="/host/kindergarden",
+        kinder_baselines_abs=None,
+        auth_args=[],
+        firewall_domains=[],
+        agent_cmd=["claude"],
+        kindergarden_asset_binds=[bind],
+    )
+    assert bind in cmd
 
 
 def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
