@@ -808,8 +808,8 @@ def genplan_interface_spec(object_centric: bool = False) -> str:
 GENPLAN_SUMMARY_PROMPT = "Write a short summary of this environment in words."
 
 GENPLAN_STRATEGY_PROMPT = (
-    "There is a simple strategy for solving all instances of this environment "
-    "without using search. What is that strategy?"
+    "There is a simple strategy for solving all instances of this environment. "
+    "What is that strategy?"
 )
 
 
