@@ -14,6 +14,8 @@ import inspect
 import json
 import logging
 import re
+import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -29,7 +31,12 @@ from robocode.primitive_descriptions import format_primitives_description
 from robocode.utils.apptainer_sandbox import _DEFAULT_SIF, run_genplan_in_apptainer
 from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
-from robocode.utils.genplan_validate import render_state, validate_tasks
+from robocode.utils.genplan_validate import (
+    TaskScore,
+    render_state,
+    score_tasks,
+    validate_tasks,
+)
 from robocode.utils.llm import LLMClient, LLMResponse, create_llm_client
 from robocode.utils.sandbox_types import resolve_container_backend
 from robocode.utils.source_deps import collect_local_deps
@@ -38,6 +45,11 @@ logger = logging.getLogger(__name__)
 
 _ObsType = TypeVar("_ObsType")
 _ActType = TypeVar("_ActType")
+
+
+def _score_key(score: TaskScore) -> tuple[int, int, float]:
+    """Rank candidates by solved tasks, clean completions, then mean reward."""
+    return score.num_solved, score.num_completed, score.mean_reward
 
 
 def _redact_held_out_counts(env_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -164,8 +176,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     "role": "user",
                     "content": (
                         f"{context}\n\nThere is a simple strategy for solving "
-                        "all instances of this environment without using "
-                        f"search. {interface_spec}"
+                        f"all instances of this environment. {interface_spec}"
                     ),
                 }
             )
@@ -274,18 +285,84 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
 
         The first implementation attempt always runs (chain-of-thought may have already
         consumed the budget); the budget/step cap bounds only the further debug
-        attempts, so an approach file is always written.
+        attempts. Candidates are checked before installation so compiler and loader
+        failures can be reported to Claude as actionable refinement feedback.
         """
         t = 0
+        best_score: TaskScore | None = None
+        best_generation: int | None = None
         while True:
             response = self._complete(messages, sandbox_dir, f"impl{t}")
             messages.append({"role": "assistant", "content": response})
-            # Overwrite, don't accumulate: each response is a full class.
-            approach_path.write_text(_parse_python_code(response))
             if t == 0:
                 self._assert_loop_bounded()
 
-            failure = self._validate(approach_path, seeds)
+            candidate = _parse_python_code(response)
+            candidate_path = sandbox_dir / f"impl{t}_candidate.py"
+            # Keep every parsed submission so best/final code can be recovered from
+            # the generation numbers recorded in the score summaries below.
+            candidate_path.write_text(candidate, encoding="utf-8")
+            failure = _check_submission_compiles(candidate, candidate_path)
+            candidate_score: TaskScore | None = None
+            if failure is None:
+                logger.info("Validating impl%d on %d training tasks", t, len(seeds))
+                started = time.monotonic()
+                failure = self._validate(candidate_path, seeds)
+                logger.info(
+                    "Validation impl%d finished in %.1fs",
+                    t,
+                    time.monotonic() - started,
+                )
+                if failure is None or failure["error_type"] != "policy-load-error":
+                    assert self._env is not None
+                    candidate_score = score_tasks(
+                        self._env,
+                        candidate_path,
+                        self._action_space,
+                        self._state_space,
+                        self._primitives,
+                        seeds,
+                        self._max_steps,
+                        self._eval_timeout,
+                    )
+                    if best_score is None or _score_key(candidate_score) > _score_key(
+                        best_score
+                    ):
+                        best_score = candidate_score
+                        best_generation = t
+                        approach_path.write_text(candidate, encoding="utf-8")
+                        (sandbox_dir / "best_score.json").write_text(
+                            json.dumps(
+                                {
+                                    "generation": t,
+                                    "score": candidate_score._asdict(),
+                                },
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                        logger.info(
+                            "New best policy: impl%d score=%s", t, candidate_score
+                        )
+            else:
+                logger.info("Submission impl%d did not compile", t)
+            generation_result = {
+                "generation": t,
+                "score": (
+                    candidate_score._asdict() if candidate_score is not None else None
+                ),
+                "error_type": failure["error_type"] if failure else None,
+            }
+            serialized_result = json.dumps(generation_result, indent=2)
+            (sandbox_dir / f"impl{t}_score.json").write_text(
+                serialized_result, encoding="utf-8"
+            )
+            # This small pointer is overwritten each generation. Together with the
+            # per-generation candidate and score files, it identifies the literal
+            # final submission without duplicating its source code.
+            (sandbox_dir / "final_score.json").write_text(
+                serialized_result, encoding="utf-8"
+            )
             if failure is None:
                 logger.info(
                     "All %d training tasks solved at attempt %d",
@@ -293,15 +370,56 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                     t,
                 )
                 self.num_generations = t + 1
+                logger.info(
+                    "Selected best policy impl%d score=%s; final submission impl%d "
+                    "score=%s",
+                    best_generation,
+                    best_score,
+                    t,
+                    candidate_score,
+                )
                 return
             logger.info("Attempt %d failed (%s)", t, failure["error_type"])
+            (sandbox_dir / f"impl{t}_feedback.json").write_text(
+                json.dumps(failure, indent=2), encoding="utf-8"
+            )
+            logger.info("Feedback: %s", failure["feedback"].splitlines()[0])
             t += 1
             if not self._within_budget(t):
+                logger.info(
+                    "Refinement stopped at budget/attempt limit: %d generations; "
+                    "reported cost=%s, budget=%s",
+                    t,
+                    self.total_cost_usd,
+                    self._max_budget_usd,
+                )
                 break
             messages.append(
-                {"role": "user", "content": f"{failure['feedback']}\nFix the code."}
+                {
+                    "role": "user",
+                    "content": (
+                        f"{failure['feedback']}\n\n"
+                        "Fix the reported issue and submit the corrected complete "
+                        "module.\n\n"
+                        f"{prompts.GENPLAN_SUBMISSION_CONTRACT}"
+                    ),
+                }
             )
         self.num_generations = t  # budget/step cap reached without solving
+        if best_score is None:
+            raise RuntimeError(
+                "GenPlan exhausted its refinement budget without producing any "
+                "loadable policy. Final submission feedback:\n" + failure["feedback"]
+            )
+        logger.info(
+            "Selected best policy impl%d score=%s; final submission impl%d "
+            "score=%s outcome=%s",
+            best_generation,
+            best_score,
+            t - 1,
+            candidate_score,
+            failure["error_type"],
+        )
 
     # ------------------------------------------------------------------ prompt
 
@@ -336,11 +454,34 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
 
     def _complete(self, messages: list[dict[str, str]], sandbox: Path, tag: str) -> str:
         assert self._client is not None
-        result: LLMResponse = self._client.complete(messages)
+        (sandbox / f"{tag}_prompt.txt").write_text(
+            messages[-1]["content"], encoding="utf-8"
+        )
+        logger.info(
+            "Requesting %s; reported cost=%s, budget=%s",
+            tag,
+            self.total_cost_usd,
+            self._max_budget_usd,
+        )
+        started = time.monotonic()
+        try:
+            result: LLMResponse = self._client.complete(messages)
+        except Exception as exc:
+            (sandbox / f"{tag}_error.txt").write_text(str(exc), encoding="utf-8")
+            logger.exception(
+                "Request %s failed after %.1fs", tag, time.monotonic() - started
+            )
+            raise
         if result.cost_usd is not None:
             self.total_cost_usd = (self.total_cost_usd or 0.0) + result.cost_usd
-        (sandbox / f"{tag}_prompt.txt").write_text(messages[-1]["content"])
         (sandbox / f"{tag}_response.txt").write_text(result.text)
+        logger.info(
+            "Received %s in %.1fs; call cost=%s, total cost=%s",
+            tag,
+            time.monotonic() - started,
+            result.cost_usd,
+            self.total_cost_usd,
+        )
         return result.text
 
     # -------------------------------------------------------------- validation
@@ -390,14 +531,32 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         return self._action_space.sample()
 
 
+def _check_submission_compiles(
+    source: str, approach_path: Path
+) -> dict[str, str] | None:
+    """Compile a submission without executing it; return actionable feedback."""
+    try:
+        compile(source, str(approach_path), "exec")
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {
+            "error_type": "submission-not-compilable",
+            "feedback": (
+                "The submitted response could not be compiled as Python source. "
+                "The compiler reported:\n" + traceback.format_exc()
+            ),
+        }
+    return None
+
+
 def _gather_env_source(env: gymnasium.Env) -> str:
     """Best-effort bundle of the env's local source (robocode + kinder)."""
     files: list[Path] = []
     for obj, package in _source_targets(env):
-        source_file = inspect.getsourcefile(type(obj))
+        cls = obj if inspect.isclass(obj) else type(obj)
+        source_file = inspect.getsourcefile(cls)
         assert source_file is not None
         src = Path(source_file)
-        root = src.parents[len(type(obj).__module__.split(".")) - 1]
+        root = src.parents[len(cls.__module__.split(".")) - 1]
         files.extend(collect_local_deps(src, root, package))
     seen: set[Path] = set()
     blocks: list[str] = []
@@ -415,6 +574,28 @@ def _source_targets(env: gymnasium.Env) -> list[tuple[Any, str]]:
     underlying = getattr(env, "_kinder_env", None)
     if underlying is not None:
         targets.append((underlying, type(underlying).__module__.split(".")[0]))
+    # Dynamic-wrapper special case: VariableObjectCountEnv selects its real backend
+    # class from configuration and stores it in _env_cls. No static import points
+    # from the wrapper to that selected class, so ordinary import traversal finds
+    # only the wrapper. Register the class explicitly; merely reading this class
+    # reference does not construct/reset a backend or expose held-out tasks.
+    # Example walkthrough:
+    # 1. A VariableObjectCountEnv configured for Dynamic 2D stores the selected
+    #    DynObstruction2DEnv class in env._env_cls.
+    # 2. getattr below retrieves DynObstruction2DEnv itself; it does not call the
+    #    class, create a Dynamic 2D instance, or choose an object count/task.
+    # 3. Its module is "kinder.envs.dynamic2d.dyn_obstruction2d", so splitting at
+    #    the first dot produces the allowed package root "kinder".
+    # 4. Appending (DynObstruction2DEnv, "kinder") tells source discovery to include
+    #    that implementation and follow only its kinder imports.
+    # Read the configured backend class when this env is such a wrapper; ordinary
+    # environments do not define _env_cls and therefore return None.
+    env_cls = getattr(env, "_env_cls", None)
+    # Skip the dynamic-wrapper special case for ordinary environments.
+    if env_cls is not None:
+        # Scan the selected backend's source, restricting recursive import discovery
+        # to the backend's top-level package (for example, "kinder").
+        targets.append((env_cls, env_cls.__module__.split(".")[0]))
     return targets
 
 

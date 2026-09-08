@@ -73,6 +73,7 @@ from robocode.utils.claude_auth import (
 from robocode.utils.codex_auth import sandbox_codex_sessions, throwaway_codex_home
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
+    GENPLAN_CONTAINER_TIMEOUT_S,
     _filtered_repo_mounts,
     _find_repo_root,
     _get_claude_oauth_token,
@@ -475,7 +476,7 @@ def run_genplan_in_apptainer(
     sandbox_dir: Path,
     completion_cfg: dict[str, Any],
     sif_path: Path = _DEFAULT_SIF,
-    timeout: float = 3600.0,
+    timeout: float = GENPLAN_CONTAINER_TIMEOUT_S,
     include_bilevel: bool = False,
 ) -> None:
     """Apptainer analog of :func:`docker_sandbox.run_genplan_in_docker`.

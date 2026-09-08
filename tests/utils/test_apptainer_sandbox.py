@@ -25,7 +25,11 @@ from robocode.utils.apptainer_sandbox import (
     sif_path_for,
 )
 from robocode.utils.backends import create_backend
-from robocode.utils.docker_sandbox import DOCKER_PYTHON, _find_repo_root
+from robocode.utils.docker_sandbox import (
+    DOCKER_PYTHON,
+    GENPLAN_CONTAINER_TIMEOUT_S,
+    _find_repo_root,
+)
 from robocode.utils.strict_blackbox import (
     STRICT_BLACKBOX_MCP_PYTHON,
     STRICT_BLACKBOX_PYTHON,
@@ -291,8 +295,11 @@ def test_genplan_cmd_adds_containall(
     )
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **_kwargs) -> None:
+    timeouts: list[float] = []
+
+    def fake_run(cmd: list[str], **kwargs) -> None:
         calls.append(cmd)
+        timeouts.append(kwargs["timeout"])
 
     monkeypatch.setattr("robocode.utils.apptainer_sandbox.subprocess.run", fake_run)
 
@@ -303,6 +310,7 @@ def test_genplan_cmd_adds_containall(
     )
 
     assert len(calls) == 1
+    assert timeouts == [GENPLAN_CONTAINER_TIMEOUT_S]
     assert calls[0][:3] == ["apptainer", "exec", "--containall"]
     assert "--pid" in calls[0]
 
