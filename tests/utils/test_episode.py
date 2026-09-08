@@ -24,6 +24,7 @@ from gymnasium.spaces import Box
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
 from robocode.utils.episode import (
     _EPISODE_FORK_SAFE,
+    _PolicyClock,
     load_generated_approach,
     open_video_writer,
     run_episode,
@@ -1234,3 +1235,43 @@ def test_run_episode_frame_sink_receives_frames() -> None:
     assert not frames
     # One frame for the initial state plus one per step.
     assert len(sunk) == metrics["num_steps"] + 1
+
+
+@pytest.mark.parametrize("supply_clock", [False, True])
+def test_run_episode_always_records_precise_time_split(
+    monkeypatch: pytest.MonkeyPatch, supply_clock: bool
+) -> None:
+    """Fast calls retain timing with or without a budget; non-policy work is excluded."""
+    now = 0.0
+
+    def advance(seconds: float, fn: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            nonlocal now
+            now += seconds
+            return fn(*args, **kwargs)
+
+        return wrapped
+
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    env = _CountEnv()
+    approach = _NoopApproach(env.action_space, env.observation_space, 0, {})
+    monkeypatch.setattr(env, "reset", advance(11.0, env.reset))
+    monkeypatch.setattr(env, "step", advance(0.000007, env.step))
+    monkeypatch.setattr(env, "render", advance(13.0, env.render))
+    monkeypatch.setattr(approach, "reset", advance(0.000002, approach.reset))
+    monkeypatch.setattr(approach, "step", advance(0.000003, approach.step))
+    monkeypatch.setattr(approach, "update", advance(0.000005, approach.update))
+    clock = _PolicyClock(math.inf) if supply_clock else None
+    metrics, _, _ = run_episode(
+        env,
+        approach,
+        seed=0,
+        max_steps=1,
+        render=True,
+        progress_callback=advance(17.0, lambda *_: None),
+        policy_clock=clock,
+    )
+    assert metrics["policy_time_s"] == pytest.approx(0.000010)
+    assert metrics["env_time_s"] == pytest.approx(0.000007)
+    assert metrics["num_steps"] == 1
+    assert metrics["solved"] is False
