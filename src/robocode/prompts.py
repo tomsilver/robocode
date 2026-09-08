@@ -856,7 +856,7 @@ def build_system_prompt(
     )
     if backend_name == "opencode":
         system_prompt += OPENCODE_PROMPT_SUFFIX
-    else:
+    elif backend_name == "claude":
         system_prompt += CLAUDE_PROMPT_SUFFIX
     if mcp_tools:
         if object_centric:

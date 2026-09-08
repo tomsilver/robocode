@@ -2,7 +2,7 @@ defaults:
   - backend: claude_opus5
 
 _target_: robocode.approaches.agentic_per_instance_approach.AgenticPerInstanceApproach
-max_budget_usd: 5.0  # GLOBAL budget shared across all eval seeds
+max_budget_usd: 20.0  # GLOBAL budget shared across all eval seeds
 max_budget_per_instance_usd: null  # per-seed cap; null = a seed may use all remaining
 max_turns: 0
 output_dir: ${hydra:runtime.output_dir}

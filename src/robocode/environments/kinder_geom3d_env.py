@@ -11,7 +11,7 @@ from kinder.core import ConstantObjectKinDEREnv
 from numpy.typing import NDArray
 
 from robocode.environments.base_env import BaseEnv
-from robocode.environments.mujoco_gl import configure_gl_backend
+from robocode.environments.mujoco_gl import configure_gl_backend, uses_mujoco
 from robocode.utils.bilevel import infer_bilevel_mapping
 
 # Register the kinder gym envs. register_all_environments() imports mujoco and forces
@@ -72,6 +72,11 @@ class KinderGeom3DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
             else {}
         )
         super().__init__()
+
+    @property
+    def eval_fork_safe(self) -> bool:
+        """MuJoCo's offscreen GL context does not survive a fork; see episode.py."""
+        return not uses_mujoco(type(self._kinder_env))
 
     @property
     def env_description(self) -> str:

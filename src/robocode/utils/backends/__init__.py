@@ -16,12 +16,14 @@ from omegaconf import DictConfig
 
 from robocode.utils.backends.base import AgentBackend
 from robocode.utils.backends.claude import ClaudeBackend
+from robocode.utils.backends.codex import CodexBackend
 from robocode.utils.backends.opencode import OpenCodeBackend
 
 __all__ = [
     "AgentBackend",
     "DEFAULT_BACKEND",
     "DEFAULT_BACKEND_CFG",
+    "DEFAULT_CODEX_CFG",
     "DEFAULT_OPENCODE_CFG",
     "PROVIDERS",
     "CLAUDE_PROMPT_SUFFIX",
@@ -47,12 +49,19 @@ def create_backend(backend_cfg: DictConfig) -> AgentBackend:
         return ClaudeBackend(backend_cfg)
     if name == "opencode":
         return OpenCodeBackend(backend_cfg)
-    raise ValueError(f"Unknown backend {name!r}. Expected 'claude' or 'opencode'.")
+    if name == "codex":
+        return CodexBackend(backend_cfg)
+    raise ValueError(
+        f"Unknown backend {name!r}. Expected 'claude', 'codex', or 'opencode'."
+    )
 
 
 # Convenience defaults for tests and callers that don't use Hydra configs.
 DEFAULT_BACKEND_CFG = DictConfig({"backend": "claude", "model": "sonnet"})
 DEFAULT_OPENCODE_CFG = DictConfig({"backend": "opencode", "model": "openai/gpt-4o"})
+DEFAULT_CODEX_CFG = DictConfig(
+    {"backend": "codex", "model": "gpt-6-astra", "reasoning_effort": "medium"}
+)
 DEFAULT_BACKEND = create_backend(DEFAULT_BACKEND_CFG)
 
 
@@ -73,6 +82,9 @@ PROVIDERS: dict[str, ProviderInfo] = {
     "openai": ProviderInfo(
         domains=["api.openai.com"],
         api_key_env="OPENAI_API_KEY",
+    ),
+    "codex": ProviderInfo(
+        domains=["api.openai.com", "chatgpt.com", "ab.chatgpt.com"],
     ),
     "anthropic": ProviderInfo(
         domains=["api.anthropic.com"],

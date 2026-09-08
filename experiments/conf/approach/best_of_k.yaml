@@ -11,7 +11,7 @@ num_prompt_tasks: 2
 # least one must be set. Defaults are generation-matched with llm_genplan
 # (5 generations each), so the two differ only in feedback.
 max_generation_steps: 5  # step cap: number of candidates (null -> budget only)
-max_budget_usd: 5.0  # dollar cap; only bounds cost-reporting backends (null -> step cap only)
+max_budget_usd: 20.0  # dollar cap; only bounds cost-reporting backends (null -> step cap only)
 # false: a single prompt -> code, sampled per candidate (simplest baseline).
 # true: each candidate repeats GenPlan's summary -> strategy -> code flow, no debug loop.
 chain_of_thought: false

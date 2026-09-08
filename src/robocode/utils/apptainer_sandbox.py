@@ -34,6 +34,15 @@ unprivileged apptainer install on the target cluster can't grant real
 The image ENTRYPOINT is invoked explicitly rather than via
 ``apptainer run`` so behaviour does not depend on Apptainer's runscript
 translation of Docker images.
+
+Strict blackbox runs (``blackbox_strict=True``) execute in
+``robocode-strict-blackbox.sif`` instead, built from
+``docker/Dockerfile.strict-blackbox`` via ``docker/build_strict_blackbox_sif.sh``.
+No project code is bound into it: the sandbox is the only mount. The strict
+firewall (model provider plus the env server's port) cannot be installed here
+for the same reason the regular one is skipped, so under Apptainer the strict
+ablation rests on the dependency-clean image, the strict env server, and the
+host-side import allowlist at scoring time.
 """
 
 from __future__ import annotations
@@ -45,7 +54,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,12 +70,14 @@ from robocode.utils.claude_auth import (
     sandbox_claude_session_store,
     throwaway_claude_config,
 )
+from robocode.utils.codex_auth import sandbox_codex_sessions, throwaway_codex_home
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     _filtered_repo_mounts,
     _find_repo_root,
     _get_claude_oauth_token,
     _mcp_prestart_wrapper,
+    container_python,
 )
 from robocode.utils.sandbox import (
     SandboxConfig,
@@ -78,6 +89,7 @@ from robocode.utils.sandbox import (
     _stream_result_to_sandbox_result,
     agent_stdin,
 )
+from robocode.utils.strict_blackbox import STRICT_BLACKBOX_MCP_PYTHON
 from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
@@ -85,8 +97,10 @@ logger = logging.getLogger(__name__)
 # Python interpreter inside the SIF (same path as in the Docker image).
 APPTAINER_PYTHON: str = DOCKER_PYTHON
 
-# Default SIF path: <repo_root>/robocode-sandbox.sif.
+# Default SIF paths: <repo_root>/robocode-sandbox.sif and, for strict blackbox
+# runs, <repo_root>/robocode-strict-blackbox.sif.
 _DEFAULT_SIF: Path = _find_repo_root() / "robocode-sandbox.sif"
+_DEFAULT_STRICT_SIF: Path = _find_repo_root() / "robocode-strict-blackbox.sif"
 
 
 def _telemetry_apptainer(config: SandboxConfig) -> tuple[list[str], dict[str, str]]:
@@ -112,10 +126,18 @@ class ApptainerSandboxConfig(SandboxConfig):
     """Configuration for an Apptainer-sandboxed agent run.
 
     Extends :class:`~robocode.utils.sandbox.SandboxConfig` with ``sif_path``
-    for the SIF image.
+    for the SIF image and ``strict_sif_path`` for the dependency-clean image a
+    strict blackbox run executes in instead.
     """
 
     sif_path: Path = _DEFAULT_SIF
+    blackbox_strict: bool = False
+    strict_sif_path: Path = _DEFAULT_STRICT_SIF
+
+
+def sif_path_for(config: ApptainerSandboxConfig) -> Path:
+    """The image a run executes in: the dependency-clean one under strict."""
+    return config.strict_sif_path if config.blackbox_strict else config.sif_path
 
 
 @contextmanager
@@ -155,6 +177,12 @@ def _build_apptainer_auth_args(
                 )
                 claude_copy = stack.enter_context(throwaway_claude_config())
                 apptainer_args += ["--bind", f"{claude_copy}:/home/node/.claude"]
+        elif backend_name == "codex":
+            if os.environ.get("CODEX_API_KEY"):
+                extra_env["APPTAINERENV_CODEX_API_KEY"] = os.environ["CODEX_API_KEY"]
+            else:
+                codex_home = stack.enter_context(throwaway_codex_home())
+                apptainer_args += ["--bind", f"{codex_home}:/home/node/.codex"]
         else:
             opencode_data = Path.home() / ".local" / "share" / "opencode"
             if opencode_data.exists():
@@ -198,8 +226,8 @@ def _apptainer_exec_prefix() -> list[str]:
 def _build_apptainer_cmd(
     config: ApptainerSandboxConfig,
     sandbox_abs: str,
-    src_abs: str,
-    kindergarden_abs: str,
+    src_abs: str | None,
+    kindergarden_abs: str | None,
     kinder_baselines_abs: str | None,
     auth_args: list[str],
     firewall_domains: list[str],
@@ -211,6 +239,9 @@ def _build_apptainer_cmd(
 
     Split out from :func:`run_agent_in_apptainer_sandbox` so unit tests
     can inspect the constructed command without running anything.
+
+    A strict blackbox launch passes ``None`` for the repo mounts: its image holds
+    no project code, so the sandbox is the only mount.
     """
     cmd = _apptainer_exec_prefix()
     cmd += [
@@ -245,14 +276,11 @@ def _build_apptainer_cmd(
 
     cmd += auth_args
 
-    cmd += [
-        "--bind",
-        f"{sandbox_abs}:/sandbox",
-        "--bind",
-        f"{src_abs}:/robocode/src",
-        "--bind",
-        f"{kindergarden_abs}:/robocode/third-party/kindergarden",
-    ]
+    cmd += ["--bind", f"{sandbox_abs}:/sandbox"]
+    if src_abs is not None:
+        cmd += ["--bind", f"{src_abs}:/robocode/src"]
+    if kindergarden_abs is not None:
+        cmd += ["--bind", f"{kindergarden_abs}:/robocode/third-party/kindergarden"]
     if kinder_baselines_abs is not None:
         cmd += [
             "--bind",
@@ -263,7 +291,7 @@ def _build_apptainer_cmd(
     for bind in extra_binds or []:
         cmd += ["--bind", bind]
     cmd += [
-        str(config.sif_path),
+        str(sif_path_for(config)),
         "/usr/local/bin/entrypoint.sh",
     ]
     cmd += agent_cmd
@@ -281,11 +309,17 @@ async def run_agent_in_apptainer_sandbox(
     See the module docstring for the docker -> apptainer flag mapping.
     """
     backend_name = backend.name
+    strict_blackbox = config.blackbox_strict
 
-    if not config.sif_path.exists():
+    sif_path = sif_path_for(config)
+    if not sif_path.exists():
+        build_script = (
+            "docker/build_strict_blackbox_sif.sh"
+            if strict_blackbox
+            else "docker/build_sif.sh"
+        )
         raise RuntimeError(
-            f"SIF image not found at {config.sif_path}; "
-            "build it with: bash docker/build_sif.sh"
+            f"SIF image not found at {sif_path}; build it with: bash {build_script}"
         )
 
     _setup_sandbox_dir(config)
@@ -293,11 +327,18 @@ async def run_agent_in_apptainer_sandbox(
     sandbox_abs = str(config.sandbox_dir.resolve())
     run_id = f"apptainer-sandbox-{uuid.uuid4().hex[:8]}"
 
-    with (
-        _filtered_repo_mounts(
+    # The strict image holds no project code, so nothing is mounted beside the
+    # sandbox.
+    mounts = (
+        nullcontext((None, None, None, None))
+        if strict_blackbox
+        else _filtered_repo_mounts(
             blackbox=config.blackbox,
             include_bilevel="bilevel_models" in config.primitive_names,
-        ) as (
+        )
+    )
+    with (
+        mounts as (
             filtered_src,
             filtered_kindergarden,
             filtered_kinder_baselines,
@@ -306,18 +347,24 @@ async def run_agent_in_apptainer_sandbox(
         _build_apptainer_auth_args(backend_name) as (auth_args, auth_env),
     ):
         firewall_domains: list[str] = []
-        if backend_name == "opencode":
+        if backend_name in {"opencode", "codex"}:
             firewall_domains = firewall_domains_for_provider(
-                provider_from_model(config.model)
+                "codex"
+                if backend_name == "codex"
+                else provider_from_model(config.model)
             )
 
         # Apptainer shares the host network namespace (even with --containall and
         # --pid), so use a free loopback port for the render http server to avoid
         # colliding with the host or a concurrent run.
         mcp_port = _free_port()
+        # Under strict the agent's scripts run in the dependency-clean venv and
+        # the render proxy in its own, so MCP packages never reach the former.
+        agent_python = container_python(strict_blackbox)
+        mcp_python = STRICT_BLACKBOX_MCP_PYTHON if strict_blackbox else agent_python
         agent_cmd = backend.build_cli_cmd(
             config,
-            mcp_python_cmd=APPTAINER_PYTHON,
+            mcp_python_cmd=mcp_python,
             mcp_env_config_path="/sandbox/.mcp/env_config.json",
             mcp_config_cli_path="/sandbox/.mcp/mcp_config.json",
             mcp_log_file_path="/sandbox/.mcp/mcp_server.log",
@@ -327,7 +374,9 @@ async def run_agent_in_apptainer_sandbox(
         # Start and health-check the render server before the CLI (same wrapper
         # as docker) so its tools are connected on the agent's first turn.
         if config.mcp_tools:
-            agent_cmd = _mcp_prestart_wrapper(agent_cmd, port=mcp_port)
+            agent_cmd = _mcp_prestart_wrapper(
+                agent_cmd, port=mcp_port, python_cmd=agent_python
+            )
 
         # Persist the CLI session store under the sandbox dir (survives the
         # ephemeral container) so a rate-limited run can be resumed via
@@ -336,13 +385,20 @@ async def run_agent_in_apptainer_sandbox(
         if backend_name == "claude":
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
             session_binds = [f"{sessions_dir.resolve()}:/home/node/.claude/projects"]
+        elif backend_name == "codex":
+            sessions_dir = sandbox_codex_sessions(config.sandbox_dir)
+            session_binds = [f"{sessions_dir.resolve()}:/home/node/.codex/sessions"]
 
         tel_binds, tel_env = _telemetry_apptainer(config)
         apptainer_cmd = _build_apptainer_cmd(
             config,
             sandbox_abs=sandbox_abs,
-            src_abs=str(filtered_src.resolve()),
-            kindergarden_abs=str(filtered_kindergarden.resolve()),
+            src_abs=str(filtered_src.resolve()) if filtered_src is not None else None,
+            kindergarden_abs=(
+                str(filtered_kindergarden.resolve())
+                if filtered_kindergarden is not None
+                else None
+            ),
             ss_pybullet_abs=(
                 str(ss_pybullet.resolve()) if ss_pybullet is not None else None
             ),
@@ -359,7 +415,7 @@ async def run_agent_in_apptainer_sandbox(
 
         backend.setup_sandbox_files(
             config,
-            docker_python=APPTAINER_PYTHON,
+            docker_python=agent_python,
             primitive_names=config.primitive_names,
         )
         _initial_commit(config.sandbox_dir)
@@ -370,7 +426,7 @@ async def run_agent_in_apptainer_sandbox(
         logger.info(
             "Starting Apptainer sandbox: run_id=%s sif=%s sandbox=%s",
             run_id,
-            config.sif_path,
+            sif_path,
             sandbox_abs,
         )
         logger.info("System prompt:\n%s", config.system_prompt)

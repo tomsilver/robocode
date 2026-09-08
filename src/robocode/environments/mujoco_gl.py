@@ -29,6 +29,17 @@ _DEFAULT_MUJOCO_GL = "cgl" if sys.platform == "darwin" else "egl"
 _mujoco_import = {"attempted": False}
 
 
+def uses_mujoco(env_cls: type) -> bool:
+    """Whether *env_cls* is one of kinder's MuJoCo-backed dynamic3d environments.
+
+    Decided from the class hierarchy's module names so callers need not import
+    ``kinder.envs.dynamic3d`` (and with it mujoco) to ask.
+    """
+    return any(
+        cls.__module__.startswith("kinder.envs.dynamic3d") for cls in env_cls.__mro__
+    )
+
+
 def configure_gl_backend() -> tuple[str, str]:
     """Set and lock the GL backend once (idempotent); return the current pair.
 

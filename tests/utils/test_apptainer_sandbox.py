@@ -6,17 +6,30 @@ Unit-level coverage only: verifies config defaults, that
 command line. No SIF or apptainer binary is invoked.
 """
 
+import asyncio
+import subprocess
 from contextlib import nullcontext
 from pathlib import Path
 
+import pytest
+from omegaconf import DictConfig
+
+from robocode.mcp import MCP_START_SCRIPT
 from robocode.utils.apptainer_sandbox import (
     APPTAINER_PYTHON,
     ApptainerSandboxConfig,
     _build_apptainer_auth_args,
     _build_apptainer_cmd,
+    run_agent_in_apptainer_sandbox,
     run_genplan_in_apptainer,
+    sif_path_for,
 )
+from robocode.utils.backends import create_backend
 from robocode.utils.docker_sandbox import DOCKER_PYTHON, _find_repo_root
+from robocode.utils.strict_blackbox import (
+    STRICT_BLACKBOX_MCP_PYTHON,
+    STRICT_BLACKBOX_PYTHON,
+)
 
 
 def test_apptainer_python_matches_docker_python() -> None:
@@ -29,13 +42,109 @@ def test_config_defaults() -> None:
     config = ApptainerSandboxConfig(sandbox_dir=Path("/tmp/test"))
     assert config.sif_path == _find_repo_root() / "robocode-sandbox.sif"
     assert config.model == "sonnet"
-    assert config.max_budget_usd == 5.0
+    assert config.max_budget_usd == 20.0
     assert config.system_prompt == ""
     assert config.prompt == ""
     assert config.output_filename == ""
     assert not config.init_files
     assert not config.primitive_names
     assert not config.mcp_tools
+
+
+def test_config_strict_defaults() -> None:
+    """Strict runs are off by default and select the strict SIF when on."""
+    config = ApptainerSandboxConfig(sandbox_dir=Path("/tmp/test"))
+    assert not config.blackbox_strict
+    assert config.strict_sif_path == _find_repo_root() / "robocode-strict-blackbox.sif"
+    assert sif_path_for(config) == config.sif_path
+    strict = ApptainerSandboxConfig(
+        sandbox_dir=Path("/tmp/test"), blackbox=True, blackbox_strict=True
+    )
+    assert sif_path_for(strict) == strict.strict_sif_path
+
+
+def test_build_cmd_strict_has_no_project_mounts(tmp_path: Path) -> None:
+    """A strict launch runs the strict SIF with the sandbox as its only mount."""
+    config = ApptainerSandboxConfig(
+        sandbox_dir=tmp_path / "sandbox",
+        sif_path=tmp_path / "robocode-sandbox.sif",
+        strict_sif_path=tmp_path / "robocode-strict-blackbox.sif",
+        blackbox=True,
+        blackbox_strict=True,
+    )
+    cmd = _build_apptainer_cmd(
+        config,
+        sandbox_abs="/host/sandbox",
+        src_abs=None,
+        kindergarden_abs=None,
+        kinder_baselines_abs=None,
+        auth_args=[],
+        firewall_domains=[],
+        agent_cmd=["claude"],
+    )
+    joined = " ".join(cmd)
+    assert str(config.strict_sif_path) in cmd
+    assert str(config.sif_path) not in cmd
+    assert "/host/sandbox:/sandbox" in cmd
+    assert "--containall" in cmd
+    assert "ROBOCODE_SKIP_FIREWALL=1" in cmd
+    assert "/robocode/src" not in joined
+    assert "kindergarden" not in joined
+    assert "ss-pybullet" not in joined
+    assert "ROBOCODE_UV_EXTRA_ARGS" not in joined
+
+
+class _Launched(Exception):
+    """Raised by the fake launcher once the command line has been captured."""
+
+
+def test_strict_run_wires_separate_interpreters(  # type: ignore
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The agent's scripts use the strict venv and the render proxy its own."""
+    strict_sif_path = tmp_path / "robocode-strict-blackbox.sif"
+    strict_sif_path.touch()
+    sandbox_dir = tmp_path / "run" / "sandbox"
+    config = ApptainerSandboxConfig(
+        sandbox_dir=sandbox_dir,
+        sif_path=tmp_path / "robocode-sandbox.sif",
+        strict_sif_path=strict_sif_path,
+        blackbox=True,
+        blackbox_strict=True,
+        mcp_tools=("render_state",),
+        prompt="hello",
+        output_filename="approach.py",
+    )
+    monkeypatch.setattr(
+        "robocode.utils.apptainer_sandbox._build_apptainer_auth_args",
+        lambda _backend: nullcontext(([], {})),
+    )
+    launched: list[list[str]] = []
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd: list[str], **kwargs):  # type: ignore
+        if cmd[0] != "apptainer":  # the sandbox's own git commands
+            return real_popen(cmd, **kwargs)
+        launched.append(cmd)
+        raise _Launched
+
+    monkeypatch.setattr("robocode.utils.apptainer_sandbox.subprocess.Popen", fake_popen)
+    backend = create_backend(DictConfig({"backend": "claude", "model": "sonnet"}))
+    with pytest.raises(_Launched):
+        asyncio.run(run_agent_in_apptainer_sandbox(config, backend))
+
+    assert len(launched) == 1
+    cmd = launched[0]
+    joined = " ".join(cmd)
+    assert str(strict_sif_path) in cmd
+    assert "/robocode/src" not in joined
+    # The render-server probe and CLAUDE.md name the strict interpreter; the MCP
+    # start script the render proxy's separate one.
+    assert f"{STRICT_BLACKBOX_PYTHON} -c" in joined
+    assert STRICT_BLACKBOX_PYTHON in (sandbox_dir / "CLAUDE.md").read_text()
+    start_script = (sandbox_dir / ".mcp" / MCP_START_SCRIPT).read_text()
+    assert f"{STRICT_BLACKBOX_MCP_PYTHON} -m robocode.mcp.server" in start_script
+    assert APPTAINER_PYTHON not in start_script
 
 
 def test_build_cmd_basic_shape(tmp_path: Path) -> None:
@@ -254,6 +363,15 @@ def test_opencode_auth_passes_api_keys(monkeypatch) -> None:  # type: ignore
         assert env.get("APPTAINERENV_ANTHROPIC_API_KEY") == "sk-test-value"
         # The secret must not appear on the command line.
         assert not any("sk-test-value" in a for a in args)
+
+
+def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:  # type: ignore
+    """Forward the Codex key through the container environment."""
+    monkeypatch.setenv("CODEX_API_KEY", "sk-test-value")
+
+    with _build_apptainer_auth_args("codex") as (args, env):
+        assert not args
+        assert env == {"APPTAINERENV_CODEX_API_KEY": "sk-test-value"}
 
 
 def test_claude_auth_uses_env_token(monkeypatch) -> None:  # type: ignore

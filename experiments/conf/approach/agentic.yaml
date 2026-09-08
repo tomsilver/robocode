@@ -2,7 +2,7 @@ defaults:
   - backend: claude_opus5
 
 _target_: robocode.approaches.agentic_approach.AgenticApproach
-max_budget_usd: 5.0
+max_budget_usd: 20.0
 max_turns: 0
 output_dir: ${hydra:runtime.output_dir}
 load_dir: null
