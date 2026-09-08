@@ -717,14 +717,37 @@ def run_per_instance_eval(
             if max_budget_per_instance_usd is None
             else min(max_budget_per_instance_usd, remaining)
         )
-        result = approach.solve_instance(
-            env=env,
-            seed=seed,
-            budget_usd=budget_i,
-            output_subdir=output_dir / f"instance_{i}",
-            render=render,
-            count=count_i,
-        )
+        try:
+            result = approach.solve_instance(
+                env=env,
+                seed=seed,
+                budget_usd=budget_i,
+                output_subdir=output_dir / f"instance_{i}",
+                render=render,
+                count=count_i,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # A planner or per-instance agent can raise on an instance it cannot
+            # handle (an assertion deep in a skill, say). That instance is a failure
+            # and the sweep goes on; it carries no reward or step count.
+            logger.exception(
+                "solve_instance crashed on eval seed %d; scored as a crash", seed
+            )
+            num_attempted += 1
+            per_episode.append(
+                {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    **count_field,
+                    "seed": seed,
+                    "attempted": True,
+                    "solved": False,
+                    "crashed": True,
+                    "total_reward": None,
+                    "num_steps": None,
+                    "cost_usd": 0.0,
+                }
+            )
+            continue
         num_attempted += 1
         remaining -= result.cost_usd
         total_cost += result.cost_usd
