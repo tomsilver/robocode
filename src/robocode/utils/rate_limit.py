@@ -256,6 +256,31 @@ def run_with_rate_limit_retry(
         ):
             return finish(result)
 
+        if (
+            getattr(backend, "name", None) == "codex"
+            and original_budget > 0
+            and result.total_cost_usd is not None
+            and original_budget - aborted_cost - result.total_cost_usd <= 0.50 + 1e-9
+        ):
+            output_path = active.sandbox_dir / active.output_filename
+            metrics = replace(
+                result.generation_metrics or GenerationMetrics(),
+                stop_reason="error_max_budget_usd",
+            )
+            return finish(
+                replace(
+                    result,
+                    success=output_path.is_file(),
+                    output_file=output_path if output_path.is_file() else None,
+                    error="Codex remaining budget <= $0.50; not resuming",
+                    rate_limit_reset=None,
+                    output_token_limit_hit=False,
+                    prompt_too_long_hit=False,
+                    unconfirmed_solution=False,
+                    generation_metrics=metrics,
+                )
+            )
+
         if rate_limited:
             rate_limit_retries += 1
         assert result.generation_metrics is not None
