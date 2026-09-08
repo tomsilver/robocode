@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -44,8 +45,13 @@ class CodexBackend(AgentBackend):
         self._session_root: Path | None = None
         self._solution_confident_path: Path | None = None
         self._session_offsets: dict[Path, int] = {}
-        self._session_usages: dict[Path, dict[str, int]] = {}
+        self._response_usages: dict[str, dict[str, int]] = {}
+        self._usage_lock = threading.Lock()
         self._previous_session_usage: dict[str, int] = {}
+        self._usage_start_timeout = float(
+            backend_cfg.get("usage_start_timeout_s", 120.0)
+        )
+        self._model: str | None = None
 
     @property
     def name(self) -> str:
@@ -64,20 +70,23 @@ class CodexBackend(AgentBackend):
     ) -> list[str]:
         self._max_budget_usd = config.max_budget_usd
         self._max_turns = config.max_turns
+        self._model = config.model
         self._session_root = sandbox_codex_sessions(config.sandbox_dir)
         self._solution_confident_path = self._session_root / "solution_confident"
         command = os.environ.get("ROBOCODE_CODEX_CMD", "codex")
         if config.resume_previous_session:
-            self._session_offsets = {}
-            self._session_usages = {}
             self._previous_session_usage = self._read_session_usage()
+            if not self._previous_session_usage:
+                raise ValueError(
+                    "Cannot resume Codex without authoritative usage history"
+                )
             args = [command, "exec", "resume", "--last", "--all"]
         else:
+            self._response_usages = {}
             shutil.rmtree(self._session_root)
             self._session_root.mkdir(parents=True)
             self._previous_session_usage = {}
             self._session_offsets = {}
-            self._session_usages = {}
             args = [command, "exec"]
         args += [
             "--json",
@@ -121,6 +130,22 @@ class CodexBackend(AgentBackend):
         return args
 
     def stdin_text(self, config: SandboxConfig) -> str:
+        if config.resume_previous_session and config.max_budget_usd > 0:
+            return (
+                f"{config.prompt}\n\nRemaining shared budget: "
+                f"${config.max_budget_usd:.2f}. Do not restart from scratch. "
+                "Read .agent_sessions/codex/budget_status.json before more work. "
+                "This continuation authorizes useful finishing work even when "
+                "wrap_up is true. Warnings change priorities, not permission to work. "
+                "Identify a remaining uncertainty, run a focused check using your "
+                "tools, and correct any issue the evidence reveals. Validation "
+                "that leaves the policy unchanged is useful work too. If still "
+                "uncertain, continue with the next useful check while budget "
+                "remains; do not merely "
+                "repeat that the policy is saved or that the budget is low. "
+                "Before stopping, create .agent_sessions/codex/solution_confident "
+                "only if extremely confident; otherwise leave it absent."
+            )
         return config.prompt
 
     def build_env(
@@ -143,9 +168,14 @@ class CodexBackend(AgentBackend):
         instructions = template.format(
             system_prompt=config.system_prompt,
             max_budget_usd=config.max_budget_usd,
+            original_budget_usd=(
+                config.max_budget_usd + self._usage_cost(self._previous_session_usage)
+            ),
             sandbox_instructions=build_agents_md(docker_python, primitive_names),
         ).strip()
         (config.sandbox_dir / "AGENTS.md").write_text(instructions + "\n")
+        if config.max_budget_usd > 0:
+            self._write_budget_status(0.0)
 
     def parse_stream(
         self,
@@ -163,26 +193,50 @@ class CodexBackend(AgentBackend):
         prompt_too_long_hit = False
         stop_reason: str | None = None
         latest_usage: dict[str, int] = {}
+        stdout_usage: dict[str, int] = {}
+        accounting_error: list[str] = []
         budget_reached = threading.Event()
         monitor_ready = threading.Event()
         monitor_stop = threading.Event()
+        monitor_started = time.monotonic()
+        initial_responses = len(self._response_usages)
+        kill_lock = threading.Lock()
+        killed = False
+
+        def stop_agent() -> None:
+            nonlocal killed
+            with kill_lock:
+                if not killed:
+                    killed = True
+                    self._kill_process_tree(proc)
 
         def monitor_budget() -> None:
             nonlocal latest_usage
-            while not monitor_stop.is_set():
-                usage = self._read_session_usage()
-                if usage:
-                    latest_usage = usage
-                run_cost = self._usage_cost(latest_usage) - self._usage_cost(
-                    self._previous_session_usage
-                )
-                if run_cost >= self._max_budget_usd:
-                    budget_reached.set()
+            try:
+                while not monitor_stop.is_set():
+                    latest_usage = self._read_session_usage()
+                    run_cost = self._usage_cost(latest_usage) - self._usage_cost(
+                        self._previous_session_usage
+                    )
+                    self._write_budget_status(run_cost)
+                    if (
+                        len(self._response_usages) == initial_responses
+                        and time.monotonic() - monitor_started
+                        >= self._usage_start_timeout
+                    ):
+                        raise ValueError("Timed out waiting for Codex response usage")
+                    if run_cost >= self._max_budget_usd:
+                        budget_reached.set()
+                        stop_agent()
+                        return
                     monitor_ready.set()
-                    proc.kill()
-                    return
+                    monitor_stop.wait(0.1)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # No monitor failure may leave generation running unmetered.
+                accounting_error.append(str(exc))
+                stop_agent()
+            finally:
                 monitor_ready.set()
-                monitor_stop.wait(0.1)
 
         monitor = None
         if self._max_budget_usd > 0:
@@ -211,7 +265,7 @@ class CodexBackend(AgentBackend):
                 num_turns += 1
                 logger.info("Agent: %s", item.get("text", ""))
                 if self._max_turns > 0 and num_turns >= self._max_turns:
-                    proc.kill()
+                    stop_agent()
                     is_error = True
                     turn_limit_hit = True
                     error_text = f"Turn limit reached: {num_turns} >= {self._max_turns}"
@@ -242,14 +296,15 @@ class CodexBackend(AgentBackend):
                     )
                     prompt_too_long_hit = bool(_PROMPT_TOO_LONG_RE.search(error_text))
             usage = message.get("usage")
-            if isinstance(usage, dict):
-                latest_usage = {key: int(value or 0) for key, value in usage.items()}
+            if isinstance(usage, dict) and self._max_budget_usd <= 0:
+                # stdout is turn-scoped, never overwrite the lifetime ledger.
+                stdout_usage = {key: int(value or 0) for key, value in usage.items()}
             run_cost = self._usage_cost(latest_usage) - self._usage_cost(
                 self._previous_session_usage
             )
             if self._max_budget_usd > 0 and run_cost >= self._max_budget_usd:
                 if not budget_reached.is_set():
-                    proc.kill()
+                    stop_agent()
                 is_error = True
                 stop_reason = "error_max_budget_usd"
                 error_text = f"Codex budget reached: ${run_cost:.4f}"
@@ -258,9 +313,19 @@ class CodexBackend(AgentBackend):
         if monitor is not None:
             monitor.join()
         proc.wait()
-        session_usage = self._read_session_usage()
+        try:
+            session_usage = self._read_session_usage()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            accounting_error.append(str(exc))
+            session_usage = latest_usage
         if session_usage:
             latest_usage = session_usage
+        elif self._max_budget_usd <= 0:
+            latest_usage = stdout_usage
+        if self._max_budget_usd > 0 and not session_usage:
+            accounting_error.append(
+                "No authoritative token_usage_record usage available"
+            )
         run_cost = self._usage_cost(latest_usage) - self._usage_cost(
             self._previous_session_usage
         )
@@ -270,6 +335,27 @@ class CodexBackend(AgentBackend):
             is_error = True
             stop_reason = "error_max_budget_usd"
             error_text = f"Codex budget reached: ${run_cost:.4f}"
+            rate_limit_reset = None
+            output_token_limit_hit = False
+            prompt_too_long_hit = False
+        if accounting_error:
+            is_error = True
+            stop_reason = "error_budget_accounting"
+            error_text = "; ".join(accounting_error)
+            rate_limit_reset = None
+            output_token_limit_hit = False
+            prompt_too_long_hit = False
+        if (
+            not is_error
+            and not proc.returncode
+            and 0 < self._max_budget_usd
+            and self._max_budget_usd - run_cost <= 0.50 + 1e-9
+        ):
+            # A normal early exit with a tiny remainder is ready for evaluation,
+            # even without confidence. Reuse the accepted budget stop category.
+            stop_reason = "error_max_budget_usd"
+            is_error = True
+            error_text = "Codex remaining budget <= $0.50; not resuming"
         unconfirmed_solution = bool(
             not is_error
             and not proc.returncode
@@ -312,7 +398,7 @@ class CodexBackend(AgentBackend):
             is_error=is_error,
             error_text=error_text,
             num_turns=num_turns,
-            total_cost=self._usage_cost(run_usage),
+            total_cost=None if accounting_error else self._usage_cost(run_usage),
             rate_limit_reset=rate_limit_reset,
             output_token_limit_hit=output_token_limit_hit,
             prompt_too_long_hit=prompt_too_long_hit,
@@ -328,9 +414,18 @@ class CodexBackend(AgentBackend):
         )
 
     def _read_session_usage(self) -> dict[str, int]:
+        """Sum unique response usage, never resettable token_count snapshots."""
+        with self._usage_lock:
+            return self._read_response_usage()
+
+    def _read_response_usage(self) -> dict[str, int]:
         if self._session_root is None:
             return {}
+        if any(not path.is_file() for path in self._session_offsets):
+            raise ValueError("Codex usage log disappeared during the experiment")
         for path in self._session_root.rglob("*.jsonl"):
+            if path.stat().st_size < self._session_offsets.get(path, 0):
+                raise ValueError(f"Codex usage log truncated: {path.name}")
             with path.open(encoding="utf-8") as session:
                 session.seek(self._session_offsets.get(path, 0))
                 while line := session.readline():
@@ -339,23 +434,123 @@ class CodexBackend(AgentBackend):
                     self._session_offsets[path] = session.tell()
                     try:
                         event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Malformed Codex session record: {path.name}"
+                        ) from exc
                     payload = event.get("payload") or {}
                     if (
-                        event.get("type") == "event_msg"
-                        and payload.get("type") == "token_count"
+                        event.get("type") == "turn_context"
+                        and self._model
+                        and payload.get("model") != self._model
                     ):
-                        usage = (payload.get("info") or {}).get("total_token_usage")
-                        if isinstance(usage, dict):
-                            self._session_usages[path] = {
-                                key: int(value or 0) for key, value in usage.items()
-                            }
+                        raise ValueError(
+                            "Codex model differs from configured pricing model"
+                        )
+                    if event.get("type") != "token_usage_record":
+                        continue
+                    response_id = payload["response_id"]
+                    usage = payload["usage"]
+                    if not isinstance(response_id, str) or not response_id:
+                        raise ValueError("Missing response ID in Codex usage ledger")
+                    for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+                        value = usage[key]
+                        # Reject bool too: it is an int subclass, not a token count.
+                        # pylint: disable-next=unidiomatic-typecheck
+                        if type(value) is not int or value < 0:
+                            raise ValueError(f"Invalid Codex {key}: {value!r}")
+                    if usage["cached_input_tokens"] > usage["input_tokens"]:
+                        raise ValueError("Cached input exceeds total input")
+                    previous = self._response_usages.get(response_id)
+                    if previous is not None and previous != usage:
+                        raise ValueError("Conflicting duplicate Codex response usage")
+                    self._response_usages[response_id] = dict(usage)
         totals: dict[str, int] = {}
-        for usage in self._session_usages.values():
+        for usage in self._response_usages.values():
             for key, value in usage.items():
                 totals[key] = totals.get(key, 0) + value
         return totals
+
+    @staticmethod
+    def _kill_process_tree(proc: subprocess.Popen[str]) -> None:
+        """Stop this invocation's descendants, including new-session tool hosts.
+
+        A process-group kill alone misses Codex's setsid children. Never target
+        the harness's shared process group or other experiment sessions.
+        Docker additionally removes its named container in the runner's finally.
+        """
+        pid = getattr(proc, "pid", None)
+        # Reject bool/mock PIDs rather than signaling an unrelated process.
+        # pylint: disable-next=unidiomatic-typecheck
+        if type(pid) is not int or not Path("/proc").is_dir():
+            proc.kill()
+            return
+        targets = {pid}
+        try:
+            os.kill(pid, signal.SIGSTOP)
+            while True:
+                rows = subprocess.check_output(["ps", "-eo", "pid=,ppid="], text=True)
+                parents = {
+                    int(p): int(parent)
+                    for p, parent in (line.split() for line in rows.splitlines())
+                }
+                discovered = {
+                    p for p, parent in parents.items() if parent in targets
+                } - targets
+                if not discovered:
+                    break
+                for child in discovered:
+                    try:
+                        os.kill(child, signal.SIGSTOP)
+                    except ProcessLookupError:
+                        pass
+                targets.update(discovered)
+        except ProcessLookupError:
+            pass
+        finally:
+            for child in targets - {pid}:
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            proc.kill()
+
+    def _write_budget_status(self, run_cost: float) -> None:
+        """Best-effort agent-readable warning; not an injected CLI message."""
+        if self._session_root is None:
+            return
+        remaining = max(self._max_budget_usd - run_cost, 0.0)
+        previous_cost = self._usage_cost(self._previous_session_usage)
+        warning_threshold = (
+            1.0 if remaining <= 1.0 else 2.0 if remaining <= 2.0 else None
+        )
+        status = {
+            "max_budget_usd": previous_cost + self._max_budget_usd,
+            "spent_usd": previous_cost + run_cost,
+            "remaining_usd": remaining,
+            "attempt_budget_usd": self._max_budget_usd,
+            "attempt_spent_usd": run_cost,
+            "wrap_up": remaining <= 2.0,
+            "warning_threshold_usd": warning_threshold,
+            "message": (
+                "At most $1 remains: prioritize essential quick checks, minimal "
+                "corrections, and saving/committing your final approach. No new "
+                "subagents. This warning is not an instruction to exit; continue "
+                "useful finishing work if not confident."
+                if remaining <= 1.0
+                else (
+                    "At most $2 remains: save and commit your best approach; focus on "
+                    "targeted validation and small fixes, not broad exploration or "
+                    "new subagents. This warning is not an instruction to exit."
+                    if remaining <= 2.0
+                    else "Continue within the shared budget."
+                )
+            ),
+        }
+        path = self._session_root / "budget_status.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(status) + "\n", encoding="utf-8")
+        temporary.replace(path)
 
     def _usage_cost(self, usage: dict[str, int]) -> float:
         cached = usage.get("cached_input_tokens", 0)
