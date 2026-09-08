@@ -22,7 +22,9 @@ class BilevelFamily:
     # Family token of the kinder gym id: "Obstruction2D" in "kinder/Obstruction2D-o2-v0".
     id_family: str
     # "module:Class" of the ConstantObjectKinDEREnv, as VariableObjectCountEnv takes it.
-    env_path: str
+    # None for families that register a single variant and so have no count-taking
+    # class; those are reached by gym id only.
+    env_path: str | None
     # File name of the model module under kinder_bilevel_planning/env_models/. The
     # loader resolves it on disk, so it is case-sensitive and not derivable from the id.
     bilevel_env_name: str
@@ -81,12 +83,17 @@ _FAMILIES: tuple[BilevelFamily, ...] = (
         "transport3d",
         "num_objects",
     ),
-    # The kinematic Shelf3D. The MuJoCo Shelf3DEnv under dynamic3d.task_families is a
-    # different environment whose models (tidybot3d_shelf3D) are not wired here.
+    # The kinematic (PyBullet) Shelf3D; the MuJoCo one is the "Shelf3D" family below.
     BilevelFamily(
         "KinematicShelf3D",
         "kinder.envs.kinematic3d.shelf3d:Shelf3DEnv",
         "shelf3d",
+        "num_objects",
+    ),
+    BilevelFamily(
+        "Shelf3D",
+        "kinder.envs.dynamic3d.task_families:Shelf3DEnv",
+        "tidybot3d_shelf3D",
         "num_objects",
     ),
     BilevelFamily(
@@ -95,9 +102,11 @@ _FAMILIES: tuple[BilevelFamily, ...] = (
         "tidybot3d_tossing3D",
         "num_objects",
     ),
+    # Single registered variant (five cubes), so no count-taking class.
+    BilevelFamily("SweepIntoDrawer3D", None, "tidybot3d_sweep3D", "num_objects"),
 )
 _BY_ID_FAMILY = {family.id_family: family for family in _FAMILIES}
-_BY_ENV_PATH = {family.env_path: family for family in _FAMILIES}
+_BY_ENV_PATH = {family.env_path: family for family in _FAMILIES if family.env_path}
 _BY_NAME = {family.bilevel_env_name: family for family in _FAMILIES}
 
 # e.g. "kinder/Obstruction2D-o2-v0" -> family="Obstruction2D", count=2.
