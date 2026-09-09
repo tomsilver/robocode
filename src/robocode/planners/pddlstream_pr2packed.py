@@ -27,7 +27,8 @@ from typing import Any, Iterator
 import numpy as np
 from numpy.typing import NDArray
 
-from robocode.environments.pr2_tamp_env import PR2PackedEnv
+from robocode.environments.pr2_tamp_base import PR2TampEnv
+from robocode.environments.pr2_tamp_blocked_env import PR2BlockedEnv
 from robocode.oracles.pr2packed.planning import shortest
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _REACH_TOLERANCE = 0.02
 # environment keeps rejecting (a rejected step leaves the robot where it was).
 _MAX_STEPS_PER_WAYPOINT = 64
 _RESULT_MARKER = "__PLAN__"
+_PROBLEMS = ("packed", "blocked")
 
 
 class PlanningFailure(Exception):
@@ -49,10 +51,18 @@ class PlanningFailure(Exception):
 
 
 class PR2PackedPDDLStreamPlanner:
-    """Plan a ``packed`` instance upstream and replay it as environment actions."""
+    """Plan a ``packed`` or ``blocked`` instance upstream and replay it as actions.
 
-    def __init__(self, env: PR2PackedEnv) -> None:
+    *problem* names the stock PDDLStream scene the evaluated environment mirrors.
+    Its count axis differs per scene: ``packed`` counts the blocks, ``blocked``
+    counts the spare green blocks on the far table.
+    """
+
+    def __init__(self, env: PR2TampEnv, problem: str = "packed") -> None:
+        if problem not in _PROBLEMS:
+            raise ValueError(f"problem must be one of {_PROBLEMS}, got {problem!r}")
         self._env = env
+        self._problem = problem
 
     def plan(self, *, max_time: float, seed: int) -> list[dict[str, Any]]:
         """Return the plan's waypoints, or raise :class:`PlanningFailure`."""
@@ -102,17 +112,32 @@ class PR2PackedPDDLStreamPlanner:
             base = [float(v) for v in get_joint_positions(env.robot, env.base_joints)]
             arm = [float(v) for v in get_joint_positions(env.robot, env.arm_joints)]
             block_poses = []
-            for block in env.blocks:
-                point, quat = get_pose(block)
+            for body in env.movables:
+                point, quat = get_pose(body)
                 block_poses.append(
                     [[float(v) for v in point], [float(v) for v in quat]]
                 )
+            # The blocked pen (walls included) is re-posed per instance; the packed
+            # scene has no walls to carry over.
+            wall_poses = []
+            if isinstance(env, PR2BlockedEnv):
+                for body in env.walls:
+                    point, quat = get_pose(body)
+                    wall_poses.append(
+                        [[float(v) for v in point], [float(v) for v in quat]]
+                    )
+        # The count axis is scene-specific: `packed` counts its blocks, which are
+        # all of its movables; `blocked` counts the spare greens, which are its
+        # movables minus the penned green and the red blocker.
+        count = len(env.movables) - (2 if self._problem == "blocked" else 0)
         return {
-            "count": len(env.blocks),
+            "problem": self._problem,
+            "count": count,
             "base": base,
             "arm": arm,
             "gripper_opening": float(self._obs()[10]),
             "block_poses": block_poses,
+            "wall_poses": wall_poses,
             "max_time": max_time,
             "seed": seed,
         }
