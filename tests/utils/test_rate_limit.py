@@ -62,6 +62,17 @@ def _prompt_too_long(tokens: int, cost: float | None, turns: int = 0) -> Sandbox
     )
 
 
+def _api_errored(tokens: int, cost: float | None, turns: int = 0) -> SandboxResult:
+    return SandboxResult(
+        success=False,
+        output_file=None,
+        error="API Error: 529 Overloaded",
+        total_cost_usd=cost,
+        api_error_hit=True,
+        generation_metrics=_metrics(tokens, turns),
+    )
+
+
 def _compacted(tokens: int, cost: float | None, turns: int = 0) -> SandboxResult:
     return SandboxResult(
         success=False,
@@ -320,6 +331,73 @@ def test_output_token_limit_retry_count_is_bounded(tmp_path: Path, monkeypatch) 
     assert final.generation_metrics is not None
     assert final.generation_metrics.output_token_retries == 2
     assert final.generation_metrics.aborted_cost_usd == pytest.approx(0.3)
+
+
+def test_transient_api_error_resumes_after_backoff(tmp_path: Path, monkeypatch) -> None:
+    """A server-side 5xx backs off briefly, then resumes with the remaining budget."""
+    approach = tmp_path / "approach.py"
+    approach.write_text("x = 1\n")
+    results = iter(
+        [
+            _api_errored(100, 4.0, turns=3),
+            _succeeded(200, 1.0, approach, turns=2),
+        ]
+    )
+    captured: list[SandboxConfig] = []
+    sleeps: list[float] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    monkeypatch.setattr(rate_limit.time, "sleep", sleeps.append)
+    config = SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=5.0, max_turns=20)
+
+    final = run_with_rate_limit_retry(
+        None, config, backend=None  # type: ignore[arg-type]
+    )
+
+    assert final.success
+    assert sleeps == [60]
+    assert len(captured) == 2
+    assert captured[1].resume_previous_session
+    assert captured[1].max_budget_usd == 1.0
+    assert captured[1].max_turns == 17
+    assert "transient" in captured[1].prompt
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.api_error_retries == 1
+    assert final.generation_metrics.aborted_tokens == 100
+    assert final.generation_metrics.aborted_cost_usd == 4.0
+
+
+def test_transient_api_error_retry_count_is_bounded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A persistent outage stops after the bounded backoff schedule."""
+    results = iter([_api_errored(10, 0.1) for _ in range(7)])
+    captured: list[SandboxConfig] = []
+    sleeps: list[float] = []
+
+    async def fake_run(config: SandboxConfig, _backend) -> SandboxResult:
+        captured.append(config)
+        return next(results)
+
+    monkeypatch.setattr(rate_limit, "run_agent_in_sandbox", fake_run)
+    monkeypatch.setattr(rate_limit.time, "sleep", sleeps.append)
+    final = run_with_rate_limit_retry(
+        None,
+        SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=0.0, max_turns=0),
+        backend=None,  # type: ignore[arg-type]
+    )
+
+    assert not final.success
+    assert final.api_error_hit
+    assert len(captured) == 6  # initial attempt plus five resumptions
+    assert sleeps == [60, 120, 300, 600, 900]
+    assert final.generation_metrics is not None
+    assert final.generation_metrics.api_error_retries == 5
+    assert final.generation_metrics.aborted_cost_usd == pytest.approx(0.6)
 
 
 def test_prompt_too_long_compacts_then_resumes_with_remaining_budget(

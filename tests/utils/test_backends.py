@@ -1053,6 +1053,54 @@ class TestClaudeParseStreamMetrics:
         assert result.output_token_limit_hit
         assert result.total_cost == 0.5
 
+    def test_parse_detects_transient_api_error_status(self) -> None:
+        """A server-side 5xx result is exposed for the backoff-and-resume path."""
+        event = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "api_error_status": 529,
+            "result": "API Error: 529 Overloaded. This is a server-side issue.",
+            "total_cost_usd": 4.7,
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert result.api_error_hit
+        assert result.total_cost == 4.7
+
+    def test_parse_detects_transient_api_error_in_text(self) -> None:
+        """The error text alone identifies a 5xx when no status is reported."""
+        event = {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "result": "API Error: 500 Internal server error",
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.api_error_hit
+
+    def test_parse_ignores_client_api_errors(self) -> None:
+        """A 4xx is not transient and must not trigger a resume."""
+        event = {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "api_error_status": 400,
+            "result": "API Error: 400 Bad request",
+        }
+        proc = self._make_mock_proc([json.dumps(event) + "\n"])
+
+        result = ClaudeBackend(DEFAULT_BACKEND_CFG).parse_stream(proc)
+
+        assert result.is_error
+        assert not result.api_error_hit
+
     def test_parse_detects_prompt_too_long_in_assistant_text(self) -> None:
         """An oversized prompt is exposed for the compaction recovery path."""
         event = {

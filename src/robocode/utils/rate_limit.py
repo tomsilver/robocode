@@ -34,6 +34,10 @@ _MAX_WAIT_SECS = 5.5 * 3600
 # response, especially for configurations where both cost and turns are unlimited.
 _MAX_OUTPUT_TOKEN_RETRIES = 2
 _MAX_PROMPT_TOO_LONG_RETRIES = 2
+# Transient server errors (overloaded, internal error) end the CLI session; back
+# off briefly and resume it, since the outage usually clears within minutes.
+_MAX_API_ERROR_RETRIES = 5
+_API_ERROR_BACKOFF_SECS = (60, 120, 300, 600, 900)
 
 _OUTPUT_TOKEN_RESUME_PROMPT = (
     "Continue the task from where the previous response was interrupted because it "
@@ -47,6 +51,10 @@ _COMPACT_PROMPT = (
 _CONTEXT_RESUME_PROMPT = (
     "Continue the task from the compacted conversation. Inspect the current files, "
     "use tools directly, and finish the implementation concisely."
+)
+_API_ERROR_RESUME_PROMPT = (
+    "Continue the task from where the previous request failed with a transient "
+    "server error. Use tools directly and finish the implementation."
 )
 
 
@@ -138,6 +146,7 @@ def _fold_retry_metrics(
     prompt_too_long_retries: int = 0,
     unconfirmed_solution_retries: int = 0,
     continued_solution_cost: float = 0.0,
+    api_error_retries: int = 0,
 ) -> SandboxResult:
     """Record discarded retryable attempts' counts and spend on *result*."""
     if (
@@ -145,6 +154,7 @@ def _fold_retry_metrics(
         and output_token_retries == 0
         and prompt_too_long_retries == 0
         and unconfirmed_solution_retries == 0
+        and api_error_retries == 0
         and aborted_tokens == 0
         and aborted_cost == 0.0
     ):
@@ -156,6 +166,7 @@ def _fold_retry_metrics(
         output_token_retries=output_token_retries,
         prompt_too_long_retries=prompt_too_long_retries,
         unconfirmed_solution_retries=unconfirmed_solution_retries,
+        api_error_retries=api_error_retries,
         aborted_tokens=aborted_tokens,
         aborted_cost_usd=aborted_cost,
     )
@@ -201,6 +212,7 @@ def run_with_rate_limit_retry(
     prompt_too_long_retries = 0
     unconfirmed_solution_retries = 0
     continued_solution_cost = 0.0
+    api_error_retries = 0
 
     def finish(latest: SandboxResult) -> SandboxResult:
         return _fold_retry_metrics(
@@ -212,6 +224,7 @@ def run_with_rate_limit_retry(
             prompt_too_long_retries,
             unconfirmed_solution_retries,
             continued_solution_cost,
+            api_error_retries,
         )
 
     def budget_stop_reason(latest: SandboxResult) -> str | None:
@@ -231,8 +244,15 @@ def run_with_rate_limit_retry(
         output_token_limited = result.output_token_limit_hit
         prompt_too_long = result.prompt_too_long_hit
         unconfirmed_solution = result.unconfirmed_solution
+        api_errored = result.api_error_hit
         if not any(
-            (rate_limited, output_token_limited, prompt_too_long, unconfirmed_solution)
+            (
+                rate_limited,
+                output_token_limited,
+                prompt_too_long,
+                unconfirmed_solution,
+                api_errored,
+            )
         ):
             return finish(result)
 
@@ -257,6 +277,13 @@ def run_with_rate_limit_retry(
             logger.warning(
                 "Not resuming after output-token overflow: retry limit (%d) reached.",
                 _MAX_OUTPUT_TOKEN_RETRIES,
+            )
+            return finish(result)
+
+        if api_errored and api_error_retries >= _MAX_API_ERROR_RETRIES:
+            logger.warning(
+                "Not resuming after a transient API error: retry limit (%d) reached.",
+                _MAX_API_ERROR_RETRIES,
             )
             return finish(result)
 
@@ -334,6 +361,21 @@ def run_with_rate_limit_retry(
             assert result.rate_limit_reset is not None
             wait_for_rate_limit_reset(result.rate_limit_reset)
             resume_prompt = active.prompt
+        elif api_errored:
+            wait_secs = _API_ERROR_BACKOFF_SECS[
+                min(api_error_retries, len(_API_ERROR_BACKOFF_SECS) - 1)
+            ]
+            api_error_retries += 1
+            logger.warning(
+                "Claude reported a transient API error (%s); resuming with remaining "
+                "budget in %d s (attempt %d/%d).",
+                result.error,
+                wait_secs,
+                api_error_retries,
+                _MAX_API_ERROR_RETRIES,
+            )
+            time.sleep(wait_secs)
+            resume_prompt = _API_ERROR_RESUME_PROMPT
         else:
             output_token_retries += 1
             logger.warning(
