@@ -20,6 +20,7 @@ import json
 import logging
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -57,17 +58,22 @@ class PR2PackedPDDLStreamPlanner:
         """Return the plan's waypoints, or raise :class:`PlanningFailure`."""
         payload = self._instance(max_time=max_time, seed=seed)
         worker = Path(__file__).with_name("pddlstream_pr2packed_worker.py")
-        completed = subprocess.run(
-            [sys.executable, str(worker)],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            check=False,
-            # The planner is given its own wall-clock budget; the subprocess is
-            # killed a little after it so a wedged sampler cannot outlive the
-            # episode's timeout.
-            timeout=max_time + 30.0,
-        )
+        # PDDLStream writes FastDownward's inputs and outputs below fixed paths
+        # relative to the working directory, so every planning call gets its own
+        # directory; concurrent planners sharing a cwd read each other's plans.
+        with tempfile.TemporaryDirectory(prefix=".pddlstream-pr2packed-") as tmp:
+            completed = subprocess.run(
+                [sys.executable, str(worker)],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=tmp,
+                # The planner is given its own wall-clock budget; the subprocess is
+                # killed a little after it so a wedged sampler cannot outlive the
+                # episode's timeout.
+                timeout=max_time + 30.0,
+            )
         result = self._parse(completed.stdout)
         if result is None:
             raise PlanningFailure(
