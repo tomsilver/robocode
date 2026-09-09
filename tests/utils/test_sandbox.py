@@ -38,9 +38,11 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
         other_tool_time_s=1.0,
         output_token_limit_hit=True,
         prompt_too_long_hit=True,
+        api_error_hit=True,
         rate_limit_retries=2,
         output_token_retries=1,
         prompt_too_long_retries=1,
+        api_error_retries=3,
         aborted_tokens=300,
         aborted_cost_usd=1.5,
     )
@@ -57,6 +59,8 @@ def test_generation_metrics_to_dict_flat_keys() -> None:
     assert d["gen_output_token_retries"] == 1
     assert d["gen_prompt_too_long_hit"] is True
     assert d["gen_prompt_too_long_retries"] == 1
+    assert d["gen_api_error_hit"] is True
+    assert d["gen_api_error_retries"] == 3
     assert d["gen_unconfirmed_solution_retries"] == 0
     assert d["gen_aborted_tokens"] == 300
     assert d["gen_aborted_cost_usd"] == 1.5
@@ -131,6 +135,26 @@ def test_unconfirmed_solution_ignores_partial_output_for_resume(tmp_path: Path) 
     assert not result.success
     assert result.output_file is None
     assert result.unconfirmed_solution
+
+
+def test_transient_api_error_ignores_partial_output_for_resume(tmp_path: Path) -> None:
+    """A 5xx interruption resumes the session rather than scoring partial code."""
+    (tmp_path / "approach.py").write_text("partial = True\n")
+    stream = _StreamParseResult(
+        is_error=True,
+        error_text="API Error: 529 Overloaded",
+        num_turns=1,
+        total_cost=4.7,
+        api_error_hit=True,
+    )
+
+    result = _stream_result_to_sandbox_result(stream, tmp_path, "approach.py")
+
+    assert not result.success
+    assert result.output_file is None
+    assert result.api_error_hit
+    assert result.generation_metrics is not None
+    assert result.generation_metrics.api_error_hit
 
 
 def test_prompt_too_long_ignores_partial_output_for_compaction(tmp_path: Path) -> None:
