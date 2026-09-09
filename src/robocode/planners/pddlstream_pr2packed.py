@@ -43,6 +43,8 @@ _REACH_TOLERANCE = 0.02
 # environment keeps rejecting (a rejected step leaves the robot where it was).
 _MAX_STEPS_PER_WAYPOINT = 64
 _RESULT_MARKER = "__PLAN__"
+# How long past its planning budget the worker may run before it is killed.
+_PLANNER_GRACE_SECS = 30.0
 _PROBLEMS = ("packed", "blocked")
 
 
@@ -72,18 +74,26 @@ class PR2PackedPDDLStreamPlanner:
         # relative to the working directory, so every planning call gets its own
         # directory; concurrent planners sharing a cwd read each other's plans.
         with tempfile.TemporaryDirectory(prefix=".pddlstream-pr2packed-") as tmp:
-            completed = subprocess.run(
-                [sys.executable, str(worker)],
-                input=json.dumps(payload),
-                capture_output=True,
-                text=True,
-                check=False,
-                cwd=tmp,
-                # The planner is given its own wall-clock budget; the subprocess is
-                # killed a little after it so a wedged sampler cannot outlive the
-                # episode's timeout.
-                timeout=max_time + 30.0,
-            )
+            try:
+                completed = subprocess.run(
+                    [sys.executable, str(worker)],
+                    input=json.dumps(payload),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    cwd=tmp,
+                    # The planner is given its own wall-clock budget; the subprocess
+                    # is killed a little after it so a wedged sampler cannot outlive
+                    # the episode's timeout.
+                    timeout=max_time + _PLANNER_GRACE_SECS,
+                )
+            except subprocess.TimeoutExpired as error:
+                # A planner that overran its budget found no plan within it, which
+                # the caller scores as unsolved rather than as a crash.
+                raise PlanningFailure(
+                    f"planner subprocess exceeded its {max_time:.0f} s budget by more "
+                    f"than {_PLANNER_GRACE_SECS:.0f} s"
+                ) from error
         result = self._parse(completed.stdout)
         if result is None:
             raise PlanningFailure(

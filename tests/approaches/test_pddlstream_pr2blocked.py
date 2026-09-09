@@ -8,6 +8,7 @@ come back execute on the environment, both with and without a spare.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from robocode.environments.pr2_tamp_blocked_variable_count_env import (  # noqa:
     PR2BlockedVariableCountEnv,
 )
 from robocode.planners.pddlstream_pr2packed import (  # noqa: E402
+    PlanningFailure,
     PR2PackedPDDLStreamPlanner,
 )
 
@@ -51,6 +53,23 @@ def test_unknown_problem_is_rejected() -> None:
     """The planner only knows the stock scenes it can rebuild."""
     with pytest.raises(ValueError, match="problem must be one of"):
         PR2PackedPDDLStreamPlanner(object(), problem="stacked")  # type: ignore[arg-type]
+
+
+def test_planner_overrun_is_no_plan_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker killed past its budget reports no plan rather than raising."""
+    planner = PR2PackedPDDLStreamPlanner(
+        object(), problem="blocked"  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(planner, "_instance", lambda **_: {})
+
+    def _hang(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="worker", timeout=90.0)
+
+    monkeypatch.setattr(subprocess, "run", _hang)
+    with pytest.raises(PlanningFailure, match="exceeded its 60 s budget"):
+        planner.plan(max_time=60.0, seed=0)
 
 
 def test_instance_payload_counts_spares_and_lists_every_movable() -> None:
