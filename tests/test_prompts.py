@@ -503,7 +503,7 @@ def test_mcp_tool_lines_opencode_naming():
 def test_genplan_constants():
     """Genplan prompt constants carry their distinctive single-code-block text."""
     assert "GeneratedApproach" in prompts.GENPLAN_INTERFACE_SPEC
-    assert "Return ONLY" in prompts.GENPLAN_INTERFACE_SPEC
+    assert "Return exactly one Python code block" in prompts.GENPLAN_INTERFACE_SPEC
     assert prompts.GENPLAN_SUMMARY_PROMPT
     assert "simple strategy" in prompts.GENPLAN_STRATEGY_PROMPT
 
@@ -526,7 +526,7 @@ def test_genplan_interface_spec_object_centric():
     assert "get_objects" in spec
     # The class skeleton is preserved.
     assert "class GeneratedApproach" in spec
-    assert "Return ONLY" in spec
+    assert prompts.GENPLAN_SUBMISSION_CONTRACT in spec
 
 
 # ---------------------------------------------------------------------------

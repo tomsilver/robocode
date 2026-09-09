@@ -160,7 +160,10 @@ def test_twin_client_is_closed_after_attempt(
 
 
 def test_other_envs_are_refused() -> None:
-    """The baseline covers the variable-count Packing3D family only."""
+    """Families without an upstream PDDLStream domain are refused.
+
+    PR2Packed is covered too, and is exercised in test_pddlstream_pr2packed.
+    """
     env = VariableObjectCountEnv(
         constant_object_env_path=(
             "kinder.envs.kinematic2d.obstruction2d:Obstruction2DEnv"

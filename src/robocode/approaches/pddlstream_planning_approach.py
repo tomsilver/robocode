@@ -1,9 +1,15 @@
 """Per-instance PDDLStream planning baseline.
 
-Plans each evaluation seed once with PDDLStream on a twin simulator of the
-evaluated environment, then executes the plan open-loop against the evaluated
-environment (see :mod:`robocode.planners.pddlstream_packing3d`). Packing3D is the
-one family with an upstream PDDLStream domain; the baseline refuses any other env.
+Plans each evaluation seed once with PDDLStream, then executes the plan open-loop
+against the evaluated environment. Two families have an upstream PDDLStream domain
+and each reaches it differently, so the baseline dispatches on the environment and
+refuses any other:
+
+* **Packing3D** plans on a twin simulator held in this process and replays the plan
+  through it in lockstep (:mod:`robocode.planners.pddlstream_packing3d`).
+* **PR2Packed** is stock PDDLStream's own ``packed`` benchmark, so it plans with the
+  upstream domain and streams in a subprocess and servos the returned joint-space
+  waypoints (:mod:`robocode.planners.pddlstream_pr2packed`).
 """
 
 from __future__ import annotations
@@ -16,11 +22,18 @@ from typing import Any, Callable
 import numpy as np
 
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
+from robocode.environments.pr2_tamp_variable_count_env import (
+    PR2PackedVariableCountEnv,
+)
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.planners.pddlstream_packing3d import (
     PACKING3D_ENV_PATH,
     Packing3DPDDLStreamPlanner,
     StopExecution,
+)
+from robocode.planners.pddlstream_pr2packed import (
+    PlanningFailure,
+    PR2PackedPDDLStreamPlanner,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,6 +105,15 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         count so the planner faces the same instance as the generalized program.
         """
         del budget_usd
+        if isinstance(env, PR2PackedVariableCountEnv):
+            return self._solve_pr2packed(
+                env=env,
+                seed=seed,
+                render=render,
+                count=count,
+                max_steps=max_steps,
+                progress_callback=progress_callback,
+            )
         planner = self._planner_for(env, count)
         try:
             return self._solve_with_planner(
@@ -106,6 +128,103 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
             )
         finally:
             planner.close()
+
+    def _solve_pr2packed(
+        self,
+        *,
+        env: Any,
+        seed: int,
+        render: bool,
+        count: int | None,
+        max_steps: int | None,
+        progress_callback: Callable[[str, int, int], None] | None,
+    ) -> InstanceResult:
+        """Plan one PR2 ``packed`` instance upstream and servo the plan back.
+
+        Unlike Packing3D there is no twin to keep in step: the plan is computed from
+        the instance's state in a separate process and comes back as joint-space
+        waypoints, which the planner turns into actions by reading the evaluated
+        environment's own observation. The environment is never mutated except
+        through ``step``.
+        """
+        if count is None:
+            raise NotImplementedError(
+                "PDDLStreamPlanningApproach needs a pinned object count for PR2Packed"
+            )
+        obs, _ = env.reset(seed=seed, options={"object_count": count})
+        del obs
+
+        frames: list[Any] = []
+
+        def _capture() -> None:
+            rendered = env.render()
+            if isinstance(rendered, np.ndarray):
+                frames.append(rendered)
+
+        if render:
+            _capture()
+        if progress_callback is not None:
+            progress_callback("planning", 0, 0)
+
+        planner = PR2PackedPDDLStreamPlanner(env.current_backend)
+        plan_start = time.perf_counter()
+        try:
+            steps = planner.plan(max_time=self._eval_timeout, seed=seed)
+        except PlanningFailure as error:
+            logger.info("PDDLStream found no plan for seed %d: %s", seed, error)
+            return InstanceResult(
+                solved=False,
+                total_reward=None,
+                num_steps=None,
+                cost_usd=0.0,
+                frames=frames if render else None,
+                extras={
+                    "planning_time": time.perf_counter() - plan_start,
+                    "plan_found": False,
+                    "plan_length": 0,
+                    "object_count": count,
+                },
+            )
+        planning_time = time.perf_counter() - plan_start
+
+        episode_max_steps = env.max_steps_for_count(count)
+        if max_steps is not None:
+            episode_max_steps = min(episode_max_steps, max_steps)
+
+        total_reward = 0.0
+        num_steps = 0
+        terminated = False
+        exec_start = time.perf_counter()
+        for action in planner.actions(steps):
+            if num_steps >= episode_max_steps:
+                break
+            _, reward, terminated, truncated, _ = env.step(action)
+            total_reward += float(reward)
+            num_steps += 1
+            if progress_callback is not None:
+                progress_callback("running episode", num_steps, episode_max_steps)
+            if render:
+                _capture()
+            if terminated or truncated:
+                break
+        execution_time = time.perf_counter() - exec_start
+
+        return InstanceResult(
+            solved=bool(terminated),
+            total_reward=total_reward,
+            num_steps=num_steps,
+            cost_usd=0.0,
+            frames=frames if render else None,
+            extras={
+                "planning_time": planning_time,
+                "execution_time": execution_time,
+                "plan_found": True,
+                "plan_length": num_steps,
+                "waypoint_count": len(steps),
+                "step_budget": episode_max_steps,
+                "object_count": count,
+            },
+        )
 
     def _solve_with_planner(
         self,
