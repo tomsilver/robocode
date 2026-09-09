@@ -337,6 +337,7 @@ def _stream_result_to_sandbox_result(
         turn_limit_hit=stream.turn_limit_hit,
         output_token_limit_hit=stream.output_token_limit_hit,
         prompt_too_long_hit=stream.prompt_too_long_hit,
+        api_error_hit=stream.api_error_hit,
         stop_reason=stream.stop_reason,
         model_usage=stream.model_usage,
     )
@@ -348,6 +349,7 @@ def _stream_result_to_sandbox_result(
         or stream.output_token_limit_hit
         or stream.prompt_too_long_hit
         or stream.unconfirmed_solution
+        or stream.api_error_hit
     ):
         return SandboxResult(
             success=False,
@@ -358,6 +360,7 @@ def _stream_result_to_sandbox_result(
             output_token_limit_hit=stream.output_token_limit_hit,
             prompt_too_long_hit=stream.prompt_too_long_hit,
             unconfirmed_solution=stream.unconfirmed_solution,
+            api_error_hit=stream.api_error_hit,
             generation_metrics=metrics,
         )
 
