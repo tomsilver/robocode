@@ -228,6 +228,18 @@ class PR2TampEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         """Half-extents the body's centre must lie within, across the approach axis."""
 
     @property
+    def _grasp_max_pitch_deg(self) -> float | None:
+        """How far the tool's approach axis may tilt from horizontal, in degrees.
+
+        ``None`` -- the default -- accepts any orientation, which is right for a scene
+        where the grasp direction does not matter. A scene whose difficulty *is* the
+        grasp direction has to say so: without this the position window alone is
+        satisfied by a diagonal reach, since it only measures where the body's centre
+        sits relative to the tool and never which way the tool is pointing.
+        """
+        return None
+
+    @property
     def movables(self) -> list[int]:
         """Every body a policy can move, in observation order.
 
@@ -562,6 +574,16 @@ class PR2TampEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         which is where the fingers stop.
         """
         tool = get_link_pose(self._robot, self._tool_link)
+        max_pitch = self._grasp_max_pitch_deg
+        if max_pitch is not None:
+            # +x of the tool frame is the approach direction; its world-frame tilt out
+            # of the horizontal plane is what the scene constrains.
+            approach_world = np.array(p.getMatrixFromQuaternion(tool[1])).reshape(
+                3, 3
+            ) @ np.array([1.0, 0.0, 0.0])
+            pitch = abs(np.degrees(np.arcsin(np.clip(approach_world[2], -1.0, 1.0))))
+            if pitch > max_pitch:
+                return None
         lateral_limit = np.array(self._grasp_lateral_limit)
         best_body: int | None = None
         best_distance = self._grasp_radius

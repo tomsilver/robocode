@@ -27,7 +27,9 @@ from robocode.environments.ss_pybullet import (
     GREY,
     RED,
     REST_LEFT_ARM,
+    Euler,
     Point,
+    Pose,
     Problem,
     add_data_path,
     arm_conf,
@@ -39,13 +41,17 @@ from robocode.environments.ss_pybullet import (
     get_carry_conf,
     get_other_arm,
     get_point,
+    get_pose,
+    invert,
     load_pybullet,
+    multiply,
     open_arm,
     pairwise_collision,
     sample_placement,
     set_arm_conf,
     set_group_conf,
     set_point,
+    set_pose,
     stable_z,
 )
 
@@ -305,3 +311,55 @@ def build_blocked_scene(num_spares: int) -> tuple[Problem, dict[str, Any]]:
         "initial_arm_conf": list(initial_conf),
     }
     return problem, handles
+
+
+# How far the pen assembly's centre may be jittered from the benchmark's position.
+# The plate is as wide as the near table, so the free strip beside it is only just
+# larger than the pen's own footprint; the yaw is what actually varies an instance.
+BLOCKED_PEN_JITTER = 0.03
+
+
+def resample_blocked_layout(
+    pen_bodies: list[int],
+    centre: Any,
+    rng: Any,
+    obstacles: list[int],
+    attempts: int = 60,
+) -> bool:
+    """Re-pose the pen assembly rigidly at a fresh yaw, keeping its geometry intact.
+
+    ``pen_bodies`` -- the penned block, the blocker and the walls -- move together as
+    one rigid group about *centre*, so their relative arrangement, and therefore the
+    fact that the blocker stands in the pen's only gap, is exactly the benchmark's
+    whatever pose is drawn. Only where the assembly sits and which way its opening
+    faces change.
+
+    Randomizing this is what stops one trajectory from solving every episode. The
+    goal is existential and the far-table spares never interact with it, so with a
+    fixed near table the whole family collapses to a single instance that a policy can
+    hard-code its way through -- which is what synthesized policies did.
+
+    Returns whether a collision-free pose was found within *attempts*.
+    """
+    originals = [get_pose(body) for body in pen_bodies]
+    origin = Pose(Point(x=float(centre[0]), y=float(centre[1]), z=0.0))
+    relative = [multiply(invert(origin), pose) for pose in originals]
+    for _ in range(attempts):
+        yaw = float(rng.uniform(-np.pi, np.pi))
+        offset = rng.uniform(-BLOCKED_PEN_JITTER, BLOCKED_PEN_JITTER, size=2)
+        placed = Pose(
+            Point(x=float(centre[0] + offset[0]), y=float(centre[1] + offset[1])),
+            Euler(yaw=yaw),
+        )
+        for body, rel in zip(pen_bodies, relative):
+            set_pose(body, multiply(placed, rel))
+        if not any(
+            pairwise_collision(body, obstacle)
+            for body in pen_bodies
+            for obstacle in obstacles
+            if obstacle not in pen_bodies
+        ):
+            return True
+    for body, pose in zip(pen_bodies, originals):
+        set_pose(body, pose)
+    return False

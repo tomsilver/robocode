@@ -84,6 +84,33 @@ def test_the_red_blocker_on_the_plate_does_not_end_the_episode(
     assert not terminated
 
 
+# A base and arm configuration, taken from a synthesized policy, that reaches in over
+# the blocker at a 40 degree pitch and takes the penned block without moving it. It is
+# kept as the witness for the regression it exposed: the grasp position window alone is
+# satisfied by a diagonal reach, so only the approach-angle limit distinguishes that
+# from the side grasp the task is about. It is expressed against the benchmark's build
+# layout, which the test restores before using it.
+_OVER_THE_BLOCKER_CONF = [
+    3.5,
+    0.2,
+    -0.8,
+    0.930483,
+    0.27981,
+    0.862933,
+    -0.747565,
+    2.681431307,
+    -1.004296,
+    -3.641669307,
+]
+
+
+def _restore_build_layout(env: PR2BlockedEnv) -> None:
+    """Put the pen back exactly where the scene builder placed it."""
+    # pylint: disable=protected-access
+    for body, pose in {**env._initial_poses, **env._initial_wall_poses}.items():
+        sp.set_pose(body, pose)
+
+
 def test_the_blocker_obstructs_the_penned_block(env: PR2BlockedEnv) -> None:
     """The pen plus the blocker leave no side grasp of the target reachable.
 
@@ -131,22 +158,77 @@ def test_the_blocker_obstructs_the_penned_block(env: PR2BlockedEnv) -> None:
     assert unblocked > 0, "the target is unreachable even with the blocker gone"
 
 
-def test_reset_restores_the_fixed_layout(env: PR2BlockedEnv) -> None:
-    """A solved episode must not leave the next one already solved.
+def test_a_diagonal_reach_over_the_blocker_does_not_grasp(
+    env: PR2BlockedEnv,
+) -> None:
+    """A pitched reach satisfies the position window but is refused as a grasp.
 
-    Nothing about the pen is resampled, so unlike ``packed`` the fixed bodies have to
-    be put back explicitly; without that a green block left on the plate carries over.
+    The grasp window says where the block's centre sits relative to the tool; it says
+    nothing about which way the tool points. A synthesized policy exploited exactly
+    that, taking the penned block at a 40 degree pitch over the blocker and solving
+    every episode in six steps without the pen mattering at all. The approach-angle
+    limit is what closes it.
     """
     env.reset(seed=0)
-    with env.client():
-        before = np.array(sp.get_pose(env.penned)[0])
+    # pylint: disable=protected-access
+    with env.client(), sp.WorldSaver():
+        _restore_build_layout(env)
+        sp.set_joint_positions(env.robot, env.base_joints, _OVER_THE_BLOCKER_CONF[0:3])
+        sp.set_joint_positions(env.robot, env.arm_joints, _OVER_THE_BLOCKER_CONF[3:10])
+        # The witness still puts the block inside the position window ...
+        tool = sp.get_link_pose(env.robot, env.tool_link)
+        offset = np.array(sp.multiply(sp.invert(tool), sp.get_pose(env.penned))[0])
+        assert -0.01 <= offset[0] <= env._max_grasp_approach
+        assert abs(offset[1]) <= env._grasp_lateral_limit[0]
+        assert abs(offset[2]) <= env._grasp_lateral_limit[1]
+        # ... and is refused anyway, because of how the tool is pointing.
+        assert env._grasp_candidate() is None
+
+
+def test_pen_geometry_survives_randomization(env: PR2BlockedEnv) -> None:
+    """Instances vary, but the blocker always stands the same way in the only gap.
+
+    The pen moves as one rigid group, so randomizing where it sits and which way it
+    opens cannot produce an instance where the blocker fails to block.
+    """
+    separations = []
+    layouts = set()
+    for seed in range(6):
+        env.reset(seed=seed)
+        with env.client():
+            penned = np.array(sp.get_pose(env.penned)[0])
+            blocker = np.array(sp.get_pose(env.blocker)[0])
+            assert sp.is_placement(env.penned, env.near_table)
+        separations.append(round(float(np.linalg.norm(penned - blocker)), 6))
+        layouts.add((tuple(np.round(penned, 4)), tuple(np.round(blocker, 4))))
+    assert len(set(separations)) == 1, f"pen geometry drifted: {separations}"
+    assert len(layouts) > 1, "every episode had the same layout"
+
+
+def test_reset_clears_a_solved_layout(env: PR2BlockedEnv) -> None:
+    """A solved episode must not leave the next one already solved.
+
+    Nothing about the pen is resampled from scratch -- it is re-posed rigidly from the
+    build layout -- so the bodies have to be put back explicitly before that. Without it
+    a green block left on the plate carries straight over into the next episode.
+    """
+    env.reset(seed=0)
     _place_on_plate(env, env.penned)
     assert env.step(_NOOP)[2], "the episode should be solved before the reset"
     env.reset(seed=1)
     with env.client():
-        after = np.array(sp.get_pose(env.penned)[0])
-    assert np.allclose(before, after)
+        assert not sp.is_placement(env.penned, env.plate)
+        assert sp.is_placement(env.penned, env.near_table)
     assert not env.step(_NOOP)[2]
+
+
+def test_reset_is_reproducible(env: PR2BlockedEnv) -> None:
+    """The same seed gives the same instance, pen pose included."""
+    first, _ = env.reset(seed=5)
+    other, _ = env.reset(seed=6)
+    again, _ = env.reset(seed=5)
+    assert np.allclose(first, again), "the same seed gave a different instance"
+    assert not np.allclose(first, other), "different seeds gave the same instance"
 
 
 def test_spares_are_resampled_and_reproducible() -> None:

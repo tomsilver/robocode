@@ -36,6 +36,7 @@ from robocode.environments.pr2_tamp_scenes import (
     BLOCKED_SPACING,
     build_blocked_scene,
     resample_block_placements,
+    resample_blocked_layout,
 )
 from robocode.environments.ss_pybullet import (
     HideOutput,
@@ -49,6 +50,11 @@ from robocode.environments.ss_pybullet import (
 # blocker and the plate are, and so where the task is decided; a robot that has
 # driven off to the far table leaves the frame, which reads correctly as "it went to
 # fetch a spare".
+# A side grasp approaches horizontally (0 degrees) and a top grasp straight down
+# (90). The limit sits well clear of both, leaving room for the tracking error of
+# arriving by clipped delta actions while still refusing a reach over the pen.
+_MAX_GRASP_PITCH_DEGREES = 25.0
+
 _CAMERA_EYE = [6.6, -1.9, 2.4]
 _CAMERA_TARGET = [4.5, 0.0, 0.85]
 
@@ -96,17 +102,38 @@ class PR2BlockedEnv(PR2TampEnv):
         # here and restored on every reset. Without that a solved episode would leave
         # a green block on the plate and the next reset would start already solved.
         self._initial_poses = {body: get_pose(body) for body in self._movables}
+        # The walls move with the pen, so their build poses are recorded too, and the
+        # pen's centre is the penned block's -- the point the assembly rotates about.
+        self._initial_wall_poses = {body: get_pose(body) for body in self._walls}
+        self._pen_centre = get_pose(self._penned)[0][:2]
 
     def _reset_scene(self) -> None:
-        """Restore the fixed layout, then re-randomize the spares on the far table.
+        """Re-pose the pen assembly, then re-randomize the spares on the far table.
 
-        The penned block, its walls and the blocker keep the benchmark's fixed
-        layout: their geometry is the task, and sampling it would sometimes produce
-        an instance where the blocker does not block. They still have to be *restored*,
-        since the previous episode moved them.
+        The pen -- the penned block, the blocker and the walls -- moves rigidly, so its
+        internal geometry stays exactly the benchmark's and the blocker always stands in
+        the only gap; what varies is where the assembly sits and which way that gap
+        faces. That is what makes an instance an instance: the goal is existential and
+        the far-table spares never interact with it, so a fixed near table would leave
+        the whole family solvable by one hard-coded trajectory.
+
+        The bodies are restored to their build poses first, since the previous episode
+        moved them and the resampling is defined relative to the benchmark's layout.
         """
         for body, pose in self._initial_poses.items():
             set_pose(body, pose)
+        for body, pose in self._initial_wall_poses.items():
+            set_pose(body, pose)
+
+        obstacles = [self._near_table, self._plate, *self._spares]
+        if not resample_blocked_layout(
+            [self._penned, self._blocker, *self._walls],
+            self._pen_centre,
+            self.np_random,
+            obstacles,
+        ):
+            raise RuntimeError("Could not place the pen assembly on the near table")
+
         if not self._spares:
             return
         for _ in range(self._max_placement_resets):
@@ -136,6 +163,20 @@ class PR2BlockedEnv(PR2TampEnv):
         # A side grasp approaches horizontally, so the block's centre sits one half
         # *width* along the approach axis rather than one half height.
         return BLOCKED_BLOCK_WIDTH / 2 + GRASP_APPROACH_TOLERANCE
+
+    @property
+    def _grasp_max_pitch_deg(self) -> float | None:
+        """``blocked`` is a side-grasp task, so the approach must be near horizontal.
+
+        Without this the pen is decorative. The position window alone is satisfied by
+        reaching in diagonally over the blocker -- a synthesized policy found exactly
+        that, taking the penned block at a 40 degree pitch without ever moving the
+        blocker -- because the window only says where the block's centre sits relative
+        to the tool, not which way the tool points. ss-pybullet's side grasps come in
+        at 0 degrees and its top grasps at 90, so this admits the former with slack for
+        arriving by bounded delta actions, and rejects anything reaching over the pen.
+        """
+        return _MAX_GRASP_PITCH_DEGREES
 
     @property
     def _grasp_lateral_limit(self) -> tuple[float, float]:
