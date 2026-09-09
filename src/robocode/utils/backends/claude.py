@@ -45,6 +45,8 @@ _OUTPUT_TOKEN_LIMIT_RE = re.compile(
     r"response exceeded (?:the )?\d+ output token maximum", re.IGNORECASE
 )
 _PROMPT_TOO_LONG_RE = re.compile(r"\bprompt is too long\b", re.IGNORECASE)
+# Server-side failures (overloaded, internal error) that end a session mid-task.
+_TRANSIENT_API_ERROR_RE = re.compile(r"\bAPI Error: 5\d\d\b")
 
 
 def _tool_timing_category(block: dict[str, Any]) -> str:
@@ -292,6 +294,7 @@ class ClaudeBackend(AgentBackend):
         rate_limit_reset: str | None = None
         output_token_limit_hit = False
         prompt_too_long_hit = False
+        api_error_hit = False
         mcp_log: Path | None = None
         num_tool_calls = 0
         num_autocompactions = 0
@@ -508,6 +511,11 @@ class ClaudeBackend(AgentBackend):
                         output_token_limit_hit = True
                     if _PROMPT_TOO_LONG_RE.search(error_text):
                         prompt_too_long_hit = True
+                    status = msg.get("api_error_status")
+                    if (
+                        isinstance(status, int) and 500 <= status < 600
+                    ) or _TRANSIENT_API_ERROR_RE.search(error_text):
+                        api_error_hit = True
 
         proc.wait()
 
@@ -523,6 +531,8 @@ class ClaudeBackend(AgentBackend):
             output_token_limit_hit = True
         if stderr_output and _PROMPT_TOO_LONG_RE.search(stderr_output):
             prompt_too_long_hit = True
+        if stderr_output and _TRANSIENT_API_ERROR_RE.search(stderr_output):
+            api_error_hit = True
         if proc.returncode != 0 and not is_error:
             is_error = True
             error_text = (
@@ -540,6 +550,9 @@ class ClaudeBackend(AgentBackend):
         if prompt_too_long_hit and not is_error:
             is_error = True
             error_text = "Claude prompt is too long"
+        if api_error_hit and not is_error:
+            is_error = True
+            error_text = "Claude reported a transient API error"
 
         # Token counts come from the cumulative per-model usage, not the top-level
         # ``usage`` (which is empty on a final budget-error session).
@@ -557,6 +570,7 @@ class ClaudeBackend(AgentBackend):
             rate_limit_reset=rate_limit_reset,
             output_token_limit_hit=output_token_limit_hit,
             prompt_too_long_hit=prompt_too_long_hit,
+            api_error_hit=api_error_hit,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read_tokens,
