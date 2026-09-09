@@ -1,0 +1,8 @@
+# PDDLStream's `blocked` benchmark: a PR2 must get ANY green block onto the plate.
+# One green block starts penned in behind three walls with a red block in the only
+# gap, so it can only be side-grasped once the blocker is moved. `num_spares` counts
+# the alternative green blocks waiting on a second table nine metres away, so the
+# count runs opposite to `packed`: zero spares is the hardest case, because then the
+# blocker has to be moved and there is no alternative.
+_target_: robocode.environments.pr2_tamp_blocked_env.PR2BlockedEnv
+num_spares: 1

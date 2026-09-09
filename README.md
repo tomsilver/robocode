@@ -180,6 +180,12 @@ All environments are available as Hydra configs via `environment=<config_name>`.
 
 ### PR2 TAMP (continuous, ss-pybullet)
 
+Two of PDDLStream's own PR2 benchmarks, `packed` and `blocked`, re-exposed as
+closed-loop gymnasium environments. They share the robot, the kinematic dynamics and
+the action space; what differs is the scene, the goal, and the grasp.
+
+#### `packed`
+
 PDDLStream's [`packed`](https://github.com/caelan/pddlstream) benchmark, re-exposed as a
 closed-loop gymnasium environment: a PR2 must pick every block off the table and place it
 on a green plate. The scene and goal are carried over verbatim so instances line up with
@@ -254,6 +260,58 @@ Every candidate configuration and path is validated against the environment's ow
 collision test rather than the planner's, because ss-pybullet configures the two
 separately and a path the planner accepts is not automatically one the environment
 will execute.
+
+#### `blocked`
+
+PDDLStream's [`blocked`](https://github.com/caelan/pddlstream) benchmark, exposed the
+same way. A green block sits on the near table inside a three-sided pen of walls with a
+red block standing in the one gap, and the goal is to get **any** green block onto the
+plate. Spare green blocks, if the instance has any, wait on a second table nine metres
+away.
+
+| Config | Spares | Observation |
+|---|---|---|
+| `pr2blocked_easy` | 2 | `Box(93,)` |
+| `pr2blocked_medium` | 1 | `Box(82,)` |
+| `pr2blocked_hard` | 0 | `Box(71,)` |
+| `pr2blocked_generalized` | 0-4 (varies per reset) | `ObjectCentricState` |
+
+What makes this a different problem rather than a re-skin of `packed` is the grasp.
+`blocked` is a *side*-grasp task: the pen walls are as tall as the block, so the only
+approach that clears them is horizontal, and the red block occupies the one horizontal
+direction left open. The robot therefore either moves the blocker aside and takes the
+penned block, or drives to the far table and hauls a spare back. `tests/environments/`
+asserts that premise directly — with the blocker in place no side grasp of the target is
+reachable, and with it moved away some are — because an environment where the blocker
+does not block would be a plain pick-and-place wearing this benchmark's name.
+
+The count axis runs **opposite** to every other generalized env here. The goal is
+existential, so spares are alternatives rather than extra work: zero spares is the
+hardest instance, because the penned block is then the only green one and the blocker
+*must* be moved. `design_counts` therefore starts at zero, so an approach is built
+against the case that forces the blocking manipulation, and `max_steps_for_count` is
+nearly flat in the count.
+
+The red block is movable and graspable — relocating it is the task — but it is not a
+green block, so parking it on the plate does not finish the episode.
+
+**Oracle.** `approach=oracle environment=pr2blocked_generalized`.
+`robocode.oracles.pr2blocked` prefers the penned block, since it and the plate share a
+table while a spare costs a nine-metre drive each way. It relocates the blocker to a
+spot that is on the table, off the plate, and clear of the pen, then side-grasps the
+target and releases it over the plate. Each candidate parking spot is checked by
+planning the penned pick with the blocker where it *would* end up, and discarded if that
+does not free it — most of the table fails that test, so moving the blocker somewhere
+merely tidy is not enough. It solves every configured count inside
+`max_steps_for_count` (65-148 steps observed); `tests/oracles/pr2blocked/` is that
+check.
+
+Unlike `packed`, a transfer needs two base poses rather than one — the plate's centre is
+0.6m from the penned block and nine metres from the spares, so no single base pose
+reaches both. That mirrors upstream's own plans for this problem, which are
+`move_base, pick, move_base, place`. The scene-agnostic planning machinery is shared
+between the two oracles in `robocode/oracles/pr2_tamp_planning.py`, and the environments
+share `robocode/environments/pr2_tamp_base.py`.
 
 Geometry, grasping, and collision checking come from
 [ss-pybullet](https://github.com/caelan/ss-pybullet), vendored as a submodule under

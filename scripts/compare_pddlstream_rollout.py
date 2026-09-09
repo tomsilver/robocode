@@ -72,6 +72,7 @@ def _run_ours(
     """Roll out in our environment and record states plus our own predicates."""
     import numpy as np
 
+    from robocode.environments import pr2_tamp_base as _base_mod
     from robocode.environments import pr2_tamp_env as _env_mod
     from robocode.environments.pr2_tamp_env import PR2PackedEnv
     from robocode.environments.ss_pybullet import (
@@ -167,16 +168,17 @@ def _run_ours(
         "episodes": [],
         # The stock side renders with exactly this camera, so any visual difference
         # is the world differing, not the viewpoint. Read from the environment
-        # module rather than restated here, so the two can never drift apart.
+        # modules rather than restated here, so the two can never drift apart: the
+        # viewpoint is the packed scene's, the projection is shared by every PR2 scene.
         # pylint: disable=protected-access
         "camera": {
             "eye": list(_env_mod._CAMERA_EYE),
             "target": list(_env_mod._CAMERA_TARGET),
-            "fov": _env_mod._CAMERA_FOV_DEGREES,
-            "near": _env_mod._CAMERA_NEAR,
-            "far": _env_mod._CAMERA_FAR,
-            "width": _env_mod._RENDER_WIDTH,
-            "height": _env_mod._RENDER_HEIGHT,
+            "fov": _base_mod._CAMERA_FOV_DEGREES,
+            "near": _base_mod._CAMERA_NEAR,
+            "far": _base_mod._CAMERA_FAR,
+            "width": _base_mod._RENDER_WIDTH,
+            "height": _base_mod._RENDER_HEIGHT,
         },
     }
 
