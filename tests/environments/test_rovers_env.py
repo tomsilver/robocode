@@ -43,11 +43,8 @@ def _park(
     env: RoversEnv, index: int, xy: Any, heading: float = 0.0
 ) -> None:  # noqa: E501
     with env.client():
-        sp.set_joint_positions(
-            env.rovers[index],
-            env.base_joint_groups[index],
-            [float(xy[0]), float(xy[1]), float(heading)],
-        )
+        conf: Any = [float(xy[0]), float(xy[1]), float(heading)]
+        sp.set_joint_positions(env.rovers[index], env.base_joint_groups[index], conf)
 
 
 def test_rovers_basic(env: RoversEnv) -> None:
@@ -76,8 +73,8 @@ def test_an_all_zero_action_does_nothing(env: RoversEnv) -> None:
         assert env._operator(operator_action(operator)) == operator
 
 
-def test_sampling_requires_standing_over_a_sample(env: RoversEnv) -> None:
-    """sample_rock's precondition: the base over the rock, and a free store."""
+def test_sampling_from_nowhere_is_refused(env: RoversEnv) -> None:
+    """sample_rock's precondition: the base has to be over a sample."""
     env.reset(seed=1)
     _park(env, 0, (0.5, 0.5))
     with env.client():
@@ -86,14 +83,17 @@ def test_sampling_requires_standing_over_a_sample(env: RoversEnv) -> None:
     # pylint: disable=protected-access
     assert not env._store_full[0], "sampled from nowhere near a sample"
 
+
+def test_sampling_over_a_rock_fills_the_store(env: RoversEnv) -> None:
+    """Standing on a sample fills the store and records the analysis; drop frees it."""
+    env.reset(seed=1)
     with env.client():
         point: Any = sp.get_point(env.rocks[0])
     _park(env, 0, point[:2])
     env.step(_action(SAMPLE, NOOP))
+    # pylint: disable=protected-access
     assert env._store_full[0]
     assert env.rocks[0] in env._analyzed[0]
-
-    # A full store refuses a second sample, and dropping frees it.
     env.step(_action(DROP, NOOP))
     assert not env._store_full[0]
 

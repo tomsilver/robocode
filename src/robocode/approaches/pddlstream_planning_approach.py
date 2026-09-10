@@ -28,6 +28,9 @@ from robocode.environments.pr2_tamp_blocked_variable_count_env import (
 from robocode.environments.pr2_tamp_variable_count_env import (
     PR2PackedVariableCountEnv,
 )
+from robocode.environments.rovers_variable_count_env import (
+    RoversVariableCountEnv,
+)
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.planners.pddlstream_packing3d import (
     PACKING3D_ENV_PATH,
@@ -38,6 +41,7 @@ from robocode.planners.pddlstream_pr2packed import (
     PlanningFailure,
     PR2PackedPDDLStreamPlanner,
 )
+from robocode.planners.pddlstream_rovers import RoversPDDLStreamPlanner
 
 logger = logging.getLogger(__name__)
 
@@ -108,12 +112,23 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         count so the planner faces the same instance as the generalized program.
         """
         del budget_usd
+        if isinstance(env, RoversVariableCountEnv):
+            return self._solve_upstream(
+                make_planner=RoversPDDLStreamPlanner,
+                env=env,
+                seed=seed,
+                render=render,
+                count=count,
+                max_steps=max_steps,
+                progress_callback=progress_callback,
+            )
         if isinstance(env, (PR2PackedVariableCountEnv, PR2BlockedVariableCountEnv)):
-            return self._solve_pr2_tamp(
-                problem=(
-                    "blocked"
-                    if isinstance(env, PR2BlockedVariableCountEnv)
-                    else "packed"
+            problem = (
+                "blocked" if isinstance(env, PR2BlockedVariableCountEnv) else "packed"
+            )
+            return self._solve_upstream(
+                make_planner=lambda backend, p=problem: PR2PackedPDDLStreamPlanner(
+                    backend, problem=p
                 ),
                 env=env,
                 seed=seed,
@@ -137,10 +152,10 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         finally:
             planner.close()
 
-    def _solve_pr2_tamp(
+    def _solve_upstream(
         self,
         *,
-        problem: str,
+        make_planner: Any,
         env: Any,
         seed: int,
         render: bool,
@@ -148,18 +163,18 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         max_steps: int | None,
         progress_callback: Callable[[str, int, int], None] | None,
     ) -> InstanceResult:
-        """Plan one PR2 ``packed`` or ``blocked`` instance upstream and servo it back.
+        """Plan one instance with stock PDDLStream and replay the plan.
 
-        Unlike Packing3D there is no twin to keep in step: the plan is computed from
-        the instance's state in a separate process and comes back as joint-space
-        waypoints, which the planner turns into actions by reading the evaluated
-        environment's own observation. The environment is never mutated except
-        through ``step``.
+        Shared by every family whose domain lives upstream rather than in
+        kinder-baselines. There is no twin to keep in step: the plan is computed from
+        the instance's state in a separate process and comes back as waypoints, which
+        the planner turns into actions by reading the evaluated environment's own
+        observation. The environment is never mutated except through ``step``.
         """
         if count is None:
             raise NotImplementedError(
-                "PDDLStreamPlanningApproach needs a pinned object count for the PR2 "
-                "TAMP environments"
+                "PDDLStreamPlanningApproach needs a pinned object count for the "
+                "upstream-domain environments"
             )
         obs, _ = env.reset(seed=seed, options={"object_count": count})
         del obs
@@ -176,7 +191,7 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         if progress_callback is not None:
             progress_callback("planning", 0, 0)
 
-        planner = PR2PackedPDDLStreamPlanner(env.current_backend, problem=problem)
+        planner = make_planner(env.current_backend)
         plan_start = time.perf_counter()
         try:
             steps = planner.plan(max_time=self._eval_timeout, seed=seed)

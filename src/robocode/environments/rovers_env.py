@@ -260,6 +260,15 @@ class RoversEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         return list(self._fixed)
 
     @property
+    def scattered_obstacles(self) -> list[int]:
+        """The pillars the layout scatters, without the walls, mounds or lander.
+
+        Those are fixed furniture that any rebuild of this scene reproduces; the pillars
+        are what an instance actually varies.
+        """
+        return list(self._obstacle_bodies)
+
+    @property
     def base_joint_groups(self) -> list[list[int]]:
         """Each rover's planar base joint group."""
         return [list(joints) for joints in self._base_joints]
