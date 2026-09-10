@@ -1,4 +1,5 @@
-"""Plan one PR2 ``packed`` instance with stock PDDLStream, as a subprocess.
+"""Plan one PR2 ``packed`` or ``blocked`` instance with stock PDDLStream, as a
+subprocess.
 
 This module is executed as a script and imports the *stock* PDDLStream tree,
 including its own vendored copy of ss-pybullet under
@@ -46,7 +47,7 @@ def _plan(payload: dict[str, Any]) -> dict[str, Any]:
     # pylint: disable=import-outside-toplevel,import-error,no-name-in-module
     import numpy as np
     from examples.pybullet.pr2.run import post_process
-    from examples.pybullet.tamp.problems import packed
+    from examples.pybullet.tamp.problems import blocked, packed
     from examples.pybullet.tamp.run import pddlstream_from_problem
     from examples.pybullet.utils.pybullet_tools.pr2_primitives import Conf
     from examples.pybullet.utils.pybullet_tools.pr2_utils import (
@@ -57,6 +58,7 @@ def _plan(payload: dict[str, Any]) -> dict[str, Any]:
     from examples.pybullet.utils.pybullet_tools.utils import (
         HideOutput,
         connect,
+        get_bodies,
         get_max_limit,
         set_client,
         set_joint_positions,
@@ -67,6 +69,7 @@ def _plan(payload: dict[str, Any]) -> dict[str, Any]:
     from pddlstream.language.stream import StreamInfo
 
     count = int(payload["count"])
+    problem_name = payload.get("problem", "packed")
     client = connect(use_gui=False)
     set_client(client)
 
@@ -75,7 +78,10 @@ def _plan(payload: dict[str, Any]) -> dict[str, Any]:
     # that is about to be replaced.
     np.random.seed(0)
     with HideOutput():
-        problem = packed(num=count)
+        if problem_name == "blocked":
+            problem = blocked(num=count)
+        else:
+            problem = packed(num=count)
 
     robot = problem.robot
     base_joints = list(get_group_joints(robot, "base"))
@@ -88,9 +94,26 @@ def _plan(payload: dict[str, Any]) -> dict[str, Any]:
     opening = float(payload["gripper_opening"])
     set_joint_positions(robot, gripper_joints, [opening] * len(gripper_joints))
     gripper_max = float(get_max_limit(robot, gripper_joints[0]))
-    # `packed` appends the blocks last and in order, so movable[i] is our block i.
+    # Both scenes list their movables in the environment's observation order
+    # (`packed`: the blocks; `blocked`: the penned green, the spares, then the red
+    # blocker), so movable[i] is our body i.
     for body, pose in zip(problem.movable, payload["block_poses"]):
         set_pose(body, (tuple(pose[0]), tuple(pose[1])))
+    # `blocked` re-poses its whole pen assembly per instance, walls included, so
+    # the stock walls have to follow. They are the bodies the Problem does not
+    # name: everything but the floor (loaded first), the robot, the surfaces and
+    # the movables, in creation order, which is the environment's wall order.
+    wall_poses = payload.get("wall_poses", [])
+    if wall_poses:
+        named = {robot, *problem.movable, *problem.surfaces}
+        unnamed = sorted(body for body in get_bodies() if body not in named)
+        walls = unnamed[1:]
+        if len(walls) != len(wall_poses):
+            raise RuntimeError(
+                f"expected {len(wall_poses)} stock walls, found {len(walls)}"
+            )
+        for body, pose in zip(walls, wall_poses):
+            set_pose(body, (tuple(pose[0]), tuple(pose[1])))
 
     stream_info = {
         "inverse-kinematics": StreamInfo(),
