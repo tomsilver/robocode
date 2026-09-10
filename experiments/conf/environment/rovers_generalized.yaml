@@ -1,0 +1,15 @@
+# PDDLStream's `rovers` with a varying objective count.
+#
+# Two turtlebot rovers must acquire one stone and one soil sample, photograph every
+# objective, and radio all of it to the Husky lander, ending back where they started
+# with empty stores. Mounds, pillars and a dividing wall block driving and line of
+# sight alike.
+#
+# The count is the number of objectives, because each one is a separate errand: it has
+# to be photographed from somewhere with a clear line to it, then radioed from
+# somewhere with a clear line to the lander. The sample half of the goal does not grow
+# with the count. The scene has four mounds to stand objectives on, so four is the
+# ceiling; design_counts stay below it and 4 is held out.
+_target_: robocode.environments.rovers_variable_count_env.RoversVariableCountEnv
+design_counts: [1, 2, 3]
+eval_counts: [1, 2, 3, 4]
