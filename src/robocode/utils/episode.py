@@ -165,9 +165,10 @@ def run_episode(
     frame list stays empty; long episodes then need only one frame in memory.
     ``initial`` is the ``(state, info)`` of a reset the caller already performed
     (see :func:`reset_for_episode`), in which case the env is not reset again.
-    ``policy_clock`` charges the approach's own calls against a time budget (env
-    stepping and rendering are free) and adds ``policy_time_s`` / ``env_time_s`` to
-    the metrics.
+    Every episode reports ``policy_time_s`` for approach reset, step, and update,
+    and ``env_time_s`` for simulator steps. Environment reset, rendering, and
+    progress callbacks are excluded. ``policy_clock`` optionally enforces a budget
+    on the approach calls; omitting it still records both timings.
     """
     if initial is None:
         initial = reset_for_episode(env, seed, count)
@@ -214,8 +215,7 @@ def run_episode(
         "num_steps": num_steps,
         "solved": bool(terminated),
     }
-    if policy_clock is not None:
-        metrics.update(policy_clock.metrics())
+    metrics.update(clock.metrics())
     if "object_count" in info:
         metrics["object_count"] = info["object_count"]
     return metrics, frames, state
@@ -317,8 +317,8 @@ class _PolicyClock:
     def metrics(self) -> dict[str, Any]:
         """The time split to record alongside an episode's score."""
         return {
-            "policy_time_s": round(self.used, 3),
-            "env_time_s": round(self.env_time, 3),
+            "policy_time_s": round(self.used, 6),
+            "env_time_s": round(self.env_time, 6),
         }
 
 
