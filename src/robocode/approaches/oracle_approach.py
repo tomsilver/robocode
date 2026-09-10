@@ -48,6 +48,10 @@ ORACLE_TARGETS: dict[str, str] = {
     "pr2blocked_generalized": (
         "robocode.oracles.pr2blocked.approach:PR2BlockedOracleApproach"
     ),
+    "rovers_easy": "robocode.oracles.rovers.approach:RoversOracleApproach",
+    "rovers_medium": "robocode.oracles.rovers.approach:RoversOracleApproach",
+    "rovers_hard": "robocode.oracles.rovers.approach:RoversOracleApproach",
+    "rovers_generalized": "robocode.oracles.rovers.approach:RoversOracleApproach",
 }
 
 

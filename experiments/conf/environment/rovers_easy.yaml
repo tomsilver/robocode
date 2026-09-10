@@ -1,0 +1,5 @@
+# PDDLStream's `rovers` benchmark: two turtlebots sample, photograph and radio home.
+# The 1/2/4-objective variants scale the imaging half of the goal; the sample half
+# (one stone, one soil) is the same in each.
+_target_: robocode.environments.rovers_env.RoversEnv
+num_objectives: 1
