@@ -4,10 +4,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from robocode.environments.variable_object_count_env import (
-    _load_constant_object_env_class,
-)
-
 # Server name used by FastMCP and to build Claude CLI tool names
 # (e.g. ``mcp__robocode-tools__render_state``).
 MCP_SERVER_NAME = "robocode-tools"
@@ -299,6 +295,16 @@ def _placeholder_counts(config: dict[str, Any]) -> list[int]:
     env_path = config.get("constant_object_env_path")
     if env_path is None:
         return [_PLACEHOLDER_COUNT]
+    # Imported here rather than at module scope: a blackbox sandbox strips
+    # robocode.environments, and this module is the render server's entry point, so a
+    # top-level import of it stops the server booting at all -- no port bound, no
+    # render tools, and the whole run aborts before the agent takes a turn. Only this
+    # host-side helper needs the env package, and it never runs in that sandbox.
+    # pylint: disable=import-outside-toplevel
+    from robocode.environments.variable_object_count_env import (
+        _load_constant_object_env_class,
+    )
+
     supported = getattr(
         _load_constant_object_env_class(env_path), "supported_counts", None
     )
