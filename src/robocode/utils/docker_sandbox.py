@@ -46,7 +46,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,6 +176,36 @@ def _find_repo_root() -> Path:
     )
 
 
+_LARGE_KINDERGARDEN_ASSET_DIRS = (
+    Path("src/kinder/envs/dynamic3d/models/assets"),
+    Path("src/kinder/envs/kinematic3d/assets"),
+)
+
+
+def _ignore_kindergarden_copy_patterns(
+    kindergarden: Path, blackbox: bool
+) -> Callable[[str, list[str]], set[str]]:
+    """Skip non-source payloads when staging Kindergarden into /tmp."""
+    root = kindergarden.resolve()
+    skip_names = {"tests", "docs", "demos"}
+    if blackbox:
+        skip_names.add("envs")
+
+    def ignore(dirpath: str, names: list[str]) -> set[str]:
+        ignored = {name for name in names if name in skip_names}
+        try:
+            rel_dir = Path(dirpath).resolve().relative_to(root)
+        except ValueError:
+            rel_dir = Path()
+        for name in names:
+            child = rel_dir / name
+            if child in _LARGE_KINDERGARDEN_ASSET_DIRS:
+                ignored.add(name)
+        return ignored
+
+    return ignore
+
+
 def _copy_kindergarden_without_tests(
     kindergarden: Path, dest: Path, *, blackbox: bool = False
 ) -> None:
@@ -184,12 +214,34 @@ def _copy_kindergarden_without_tests(
     ``demos/`` holds recorded solutions. Blackbox also skips ``kinder/envs/``;
     the installable skeleton stays so ``uv sync --frozen`` succeeds.
     """
-    skip = ("tests", "docs", "demos") + (("envs",) if blackbox else ())
+    # Large meshes/textures are source-adjacent data, not source code. Copying
+    # them into every per-run staging directory exhausts /tmp when several
+    # replicates start, so callers bind-mount the originals read-only.
     shutil.copytree(
         kindergarden,
         dest,
-        ignore=shutil.ignore_patterns(*skip),
+        ignore=_ignore_kindergarden_copy_patterns(kindergarden, blackbox),
     )
+
+
+def _kindergarden_asset_mounts() -> list[tuple[Path, str]]:
+    """Return existing bulky Kindergarden asset dirs and their container paths."""
+    kindergarden = _find_repo_root() / "third-party" / "kindergarden"
+    container_root = "/robocode/third-party/kindergarden"
+    mounts: list[tuple[Path, str]] = []
+    for rel_path in _LARGE_KINDERGARDEN_ASSET_DIRS:
+        host_path = kindergarden / rel_path
+        if host_path.is_dir():
+            mounts.append((host_path, f"{container_root}/{rel_path.as_posix()}:ro"))
+    return mounts
+
+
+def _kindergarden_asset_volumes() -> list[str]:
+    """Return Docker/Apptainer volume specs for bulky Kindergarden assets."""
+    return [
+        f"{host.resolve()}:{container}"
+        for host, container in _kindergarden_asset_mounts()
+    ]
 
 
 # The two kinder-baselines subpackages robocode depends on (editable path deps in
@@ -328,6 +380,7 @@ def _docker_run_prefix(
     env_args: list[str] | None = None,
     map_host_gateway: bool = False,
     ss_pybullet: Path | None = None,
+    kindergarden_asset_volumes: list[str] | None = None,
     extra_volumes: list[str] | None = None,
     env_server_port: int | None = None,
 ) -> list[str]:
@@ -382,6 +435,8 @@ def _docker_run_prefix(
             "-v",
             f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
         ]
+    for volume in kindergarden_asset_volumes or []:
+        cmd += ["-v", volume]
     if filtered_kinder_baselines is not None:
         cmd += [
             "-v",
@@ -449,6 +504,7 @@ def run_genplan_in_docker(
             auth_args,
             firewall_domains,
             ss_pybullet=ss_pybullet,
+            kindergarden_asset_volumes=_kindergarden_asset_volumes(),
         ) + [DOCKER_PYTHON, "-m", "robocode.approaches.genplan_driver"]
         logger.info("Starting genplan Docker container %s", container_name)
         try:
@@ -736,6 +792,9 @@ async def run_agent_in_docker_sandbox(
             auth_args,
             firewall_domains,
             ss_pybullet=ss_pybullet,
+            kindergarden_asset_volumes=(
+                [] if config.blackbox else _kindergarden_asset_volumes()
+            ),
             extra_volumes=session_volumes + tel_volumes,
             env_args=[
                 "-e",

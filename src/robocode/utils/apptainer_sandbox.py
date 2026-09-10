@@ -77,6 +77,7 @@ from robocode.utils.docker_sandbox import (
     _filtered_repo_mounts,
     _find_repo_root,
     _get_claude_oauth_token,
+    _kindergarden_asset_volumes,
     _mcp_prestart_wrapper,
     container_python,
 )
@@ -235,6 +236,7 @@ def _build_apptainer_cmd(
     agent_cmd: list[str],
     extra_binds: list[str] | None = None,
     ss_pybullet_abs: str | None = None,
+    kindergarden_asset_binds: list[str] | None = None,
 ) -> list[str]:
     """Assemble the full ``apptainer exec`` command line.
 
@@ -289,6 +291,8 @@ def _build_apptainer_cmd(
         ]
     if ss_pybullet_abs is not None:
         cmd += ["--bind", f"{ss_pybullet_abs}:/robocode/third-party/ss-pybullet:ro"]
+    for bind in kindergarden_asset_binds or []:
+        cmd += ["--bind", bind]
     for bind in extra_binds or []:
         cmd += ["--bind", bind]
     cmd += [
@@ -402,6 +406,9 @@ async def run_agent_in_apptainer_sandbox(
             ),
             ss_pybullet_abs=(
                 str(ss_pybullet.resolve()) if ss_pybullet is not None else None
+            ),
+            kindergarden_asset_binds=(
+                [] if config.blackbox else _kindergarden_asset_volumes()
             ),
             kinder_baselines_abs=(
                 str(filtered_kinder_baselines.resolve())
@@ -520,6 +527,7 @@ def run_genplan_in_apptainer(
         bilevel_env: list[str] = []
         bilevel_bind: list[str] = []
         ss_pybullet_bind: list[str] = []
+        asset_binds = _kindergarden_asset_volumes()
         if ss_pybullet is not None:
             ss_pybullet_bind = [
                 "--bind",
@@ -545,6 +553,7 @@ def run_genplan_in_apptainer(
             f"{filtered_src.resolve()}:/robocode/src",
             "--bind",
             f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
+            *(tok for bind in asset_binds for tok in ("--bind", bind)),
             *ss_pybullet_bind,
             *bilevel_bind,
             str(sif_path),
