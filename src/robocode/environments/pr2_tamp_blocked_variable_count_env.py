@@ -1,14 +1,17 @@
-"""PR2 ``packed`` with an object count that varies across resets.
+"""PR2 ``blocked`` with a spare-block count that varies across resets.
 
-:class:`~robocode.environments.pr2_tamp_env.PR2PackedEnv` fixes its block count at
-construction and freezes it into a fixed-length ``Box`` observation, so one generated
-program cannot span instances of different sizes. This wrapper keeps a backend per
-configured count and returns the observation as an ``ObjectCentricState`` instead, so
-a single frozen program can run on any of them.
+:class:`~robocode.environments.pr2_tamp_blocked_env.PR2BlockedEnv` fixes its spare
+count at construction and freezes it into a fixed-length ``Box`` observation, so one
+generated program cannot span instances of different sizes. This wrapper keeps a
+backend per configured count and returns the observation as an ``ObjectCentricState``
+instead, exactly as the ``packed`` wrapper does.
 
-That mirrors what ``VariableObjectCountEnv`` does for the kinder families, and it is
-what makes ``packed -n 3/4/5`` -- the sweep in the LLM-PDDLStream paper -- a
-generalization axis rather than three separate tasks.
+The count means something different here than it does for ``packed``, though, because
+``blocked``'s goal is existential: any one green block on the plate ends the episode.
+Spares are therefore *alternatives* rather than extra work, and the count runs the
+other way -- zero is the hardest instance, since the penned block is then the only
+green one and the blocker has to be moved, while a higher count offers the choice of
+hauling a spare in from the far table instead.
 """
 
 from __future__ import annotations
@@ -27,10 +30,10 @@ from robocode.environments.pr2_tamp_base import (
     ROBOT_FEATURES,
     SURFACE_FEATURES,
 )
-from robocode.environments.pr2_tamp_env import PR2PackedEnv
+from robocode.environments.pr2_tamp_blocked_env import PR2BlockedEnv
 from robocode.environments.variable_count import VariableCountEnv
 
-# Object-centric schema. The feature names match the Box layout PR2PackedEnv
+# Object-centric schema. The feature names match the Box layout PR2BlockedEnv
 # documents, so a program written against either view reads the same quantities.
 RobotType = Type("robot")
 SurfaceType = Type("surface")
@@ -61,23 +64,26 @@ TYPE_FEATURES: dict[Type, list[str]] = {
     BlockType: _BLOCK_FEATURE_NAMES,
 }
 
-# Object names are stable across counts so a program can address them by name. Blocks
-# are the count-defining objects and carry the shared prefix the count is read from.
+# Object names are stable across counts so a program can address them by name.
+# ``green0`` is always the penned block and ``green1``.. are the spares, so the count
+# is one less than the number of greens; ``blocker`` is the red block, which is
+# movable and graspable but is not a goal object.
 ROBOT_NAME = "robot"
-SURFACE_NAMES = ("table", "plate")
-BLOCK_PREFIX = "block"
+SURFACE_NAMES = ("near_table", "far_table", "plate")
+GREEN_PREFIX = "green"
+BLOCKER_NAME = "blocker"
 
 
-class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]]):
-    """PR2 ``packed`` whose block count varies per reset (object-centric obs)."""
+class PR2BlockedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any]]):
+    """PR2 ``blocked`` whose spare count varies per reset (object-centric obs)."""
 
     def __init__(
         self,
         design_counts: list[int],
         eval_counts: list[int],
         grasp_radius: float = 0.08,
-        base_steps: int = 120,
-        steps_per_object: int = 90,
+        base_steps: int = 320,
+        steps_per_object: int = 20,
     ) -> None:
         self._design_counts = [int(c) for c in design_counts]
         self._eval_counts = [int(c) for c in eval_counts]
@@ -85,11 +91,13 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
             raise ValueError("design_counts must be non-empty")
         if not self._eval_counts:
             raise ValueError("eval_counts must be non-empty")
+        if min(self._design_counts + self._eval_counts) < 0:
+            raise ValueError("counts are spare-block counts and cannot be negative")
         self._grasp_radius = grasp_radius
         self._base_steps = int(base_steps)
         self._steps_per_object = int(steps_per_object)
-        self._backends: dict[int, PR2PackedEnv] = {}
-        self._current: PR2PackedEnv | None = None
+        self._backends: dict[int, PR2BlockedEnv] = {}
+        self._current: PR2BlockedEnv | None = None
         self._current_count: int | None = None
 
         # Build the largest design instance up front so a bad config fails at
@@ -110,31 +118,24 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
 
     # -- backends & counts ---------------------------------------------------
 
-    def _backend_for(self, count: int) -> PR2PackedEnv:
+    def _backend_for(self, count: int) -> PR2BlockedEnv:
         """Return (building and caching on first use) the backend for a given count.
 
         Each backend holds a live PyBullet client with its own PR2 loaded, and they
-        are kept until :meth:`close`, so a full sweep costs one client and one PR2 URDF
-        per configured count -- five for the default config. They are cached rather
-        than rebuilt because loading the PR2 dominates a reset, and evaluation
-        interleaves counts episode by episode.
+        are kept until :meth:`close`, for the same reason the ``packed`` wrapper keeps
+        its own: loading the PR2 dominates a reset, and evaluation interleaves counts
+        episode by episode.
         """
         backend = self._backends.get(count)
         if backend is None:
-            if count > 9:
-                raise ValueError(
-                    f"the plate holds at most 9 blocks, got a count of {count}"
-                )
-            backend = PR2PackedEnv(num_blocks=count, grasp_radius=self._grasp_radius)
+            if count < 0:
+                raise ValueError(f"spare count cannot be negative, got {count}")
+            backend = PR2BlockedEnv(num_spares=count, grasp_radius=self._grasp_radius)
             self._backends[count] = backend
         return backend
 
     def _count_for_seed(self, seed: int | None) -> int:
-        """A design-range count for an unpinned reset.
-
-        Any other count reaches the env only through an explicit
-        ``options={"object_count": k}``.
-        """
+        """A design-range count for an unpinned reset."""
         return int(np.random.default_rng(seed).choice(self._design_counts))
 
     @property
@@ -151,10 +152,16 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
         return self._current_count
 
     def max_steps_for_count(self, count: int) -> int:
+        """Step budget for an instance.
+
+        Mostly flat in the count, unlike ``packed``: the goal is existential, so a
+        spare is an alternative rather than another block to move. The per-object term
+        only pays for the extra clutter a bigger far table has to be navigated around.
+        """
         return self._base_steps + self._steps_per_object * int(count)
 
     @property
-    def current_backend(self) -> PR2PackedEnv:
+    def current_backend(self) -> PR2BlockedEnv:
         """The fixed-count environment backing the current instance."""
         assert self._current is not None, "Must call reset()"
         return self._current
@@ -175,8 +182,10 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
                 obs[offset : offset + SURFACE_FEATURES], dtype=np.float32
             )
             offset += SURFACE_FEATURES
-        for index in range(count):
-            data[Object(f"{BLOCK_PREFIX}{index}", BlockType)] = np.asarray(
+        # The backend reports the greens (penned first, then spares) and then the
+        # blocker, which is why the blocker is read last here.
+        for name in _body_names(count):
+            data[Object(name, BlockType)] = np.asarray(
                 obs[offset : offset + BODY_FEATURES], dtype=np.float32
             )
             offset += BODY_FEATURES
@@ -185,11 +194,7 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
     @staticmethod
     def _to_box(state: ObjectCentricState, count: int) -> NDArray[Any]:
         """Flatten an object-centric state back into the backend's Box layout."""
-        names = (
-            [ROBOT_NAME]
-            + list(SURFACE_NAMES)
-            + [f"{BLOCK_PREFIX}{i}" for i in range(count)]
-        )
+        names = [ROBOT_NAME, *SURFACE_NAMES, *_body_names(count)]
         by_name = {obj.name: obj for obj in state}
         rows = []
         for name in names:
@@ -202,14 +207,20 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
         return np.concatenate(rows).astype(np.float32)
 
     def _count_from_state(self, state: ObjectCentricState) -> int:
-        count = sum(
-            1 for name in state.get_object_names() if name.startswith(BLOCK_PREFIX)
+        """Infer the spare count, which is one less than the number of greens.
+
+        A count of zero is a real instance here rather than a degenerate one, so it is
+        the absence of ``green0`` -- not a count of zero -- that means the state does
+        not describe this family.
+        """
+        greens = sum(
+            1 for name in state.get_object_names() if name.startswith(GREEN_PREFIX)
         )
-        if count == 0:
+        if greens == 0:
             raise ValueError(
-                f"cannot infer object count: no objects with prefix {BLOCK_PREFIX!r}"
+                f"cannot infer spare count: no objects with prefix {GREEN_PREFIX!r}"
             )
-        return count
+        return greens - 1
 
     # -- gym API -------------------------------------------------------------
 
@@ -279,9 +290,8 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
         """Render a card that reads the same whatever counts are configured.
 
         Neither the design counts nor the evaluation sweep appear anywhere: which
-        counts an approach is scored on, and how far past the design range they go,
-        is the experimenter's to know. The backend card is therefore requested in
-        count-invariant form, and nothing here interpolates a count.
+        counts an approach is scored on, and how far past the design range they go, is
+        the experimenter's to know.
         """
         # pylint: disable=protected-access
         reference = self._backend_for(max(self._design_counts))
@@ -293,12 +303,22 @@ class PR2PackedVariableCountEnv(VariableCountEnv[ObjectCentricState, NDArray[Any
         return (
             f"{base}\n"
             f"## Variable Object Count\n\n"
-            f"The number of blocks changes between episodes, so observations are "
-            f"object-centric rather than a fixed-length vector: each is an "
-            f"`ObjectCentricState` holding one `robot`, the `table` and `plate` "
-            f"surfaces, and `block0`..`blockN-1`.\n\n"
+            f"The number of spare green blocks changes between episodes, and may be "
+            f"zero, so observations are object-centric rather than a fixed-length "
+            f"vector: each is an `ObjectCentricState` holding one `robot`, the "
+            f"`near_table`, `far_table` and `plate` surfaces, `green0` (the penned "
+            f"block, always present) with `green1`..`greenN` for any spares, and "
+            f"`blocker`.\n\n"
+            f"Any one green block on the plate ends the episode, so spares are "
+            f"alternatives rather than extra work. When there are none, the penned "
+            f"block is the only green one and the blocker has to be moved.\n\n"
             f"Feature names per type:\n\n"
             + "\n".join(schema_lines)
             + "\n\nIterate the state's objects rather than indexing fixed offsets, so "
-            "one program handles any number of blocks.\n"
+            "one program handles any number of spares.\n"
         )
+
+
+def _body_names(count: int) -> list[str]:
+    """Movable object names in the backend's observation order."""
+    return [f"{GREEN_PREFIX}{i}" for i in range(count + 1)] + [BLOCKER_NAME]

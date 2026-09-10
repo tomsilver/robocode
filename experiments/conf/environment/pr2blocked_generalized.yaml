@@ -1,0 +1,13 @@
+# PDDLStream's `blocked` with a varying number of spare green blocks.
+#
+# design_counts are what an approach is built against; eval_counts sweeps those plus
+# held-out larger instances. The count is the number of spare green blocks on the far
+# table, and because the goal is existential -- any one green block on the plate --
+# spares are alternatives rather than extra work. So the axis runs opposite to
+# `packed`: zero is the hardest instance, where the penned block is the only green one
+# and the blocker must be moved, and a higher count adds the option of hauling a spare
+# in instead. The design range therefore starts at zero, so an approach is built
+# against the case that forces the blocking manipulation.
+_target_: robocode.environments.pr2_tamp_blocked_variable_count_env.PR2BlockedVariableCountEnv
+design_counts: [0, 1, 2]
+eval_counts: [0, 1, 2, 3, 4]

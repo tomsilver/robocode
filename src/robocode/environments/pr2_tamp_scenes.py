@@ -1,10 +1,12 @@
-"""PR2 tabletop scenes for the ``packed`` TAMP benchmark.
+"""PR2 tabletop scenes for the ``packed`` and ``blocked`` TAMP benchmarks.
 
-``build_packed_scene`` is adapted from ``examples/pybullet/tamp/problems.py`` in
+``build_packed_scene`` and ``build_blocked_scene`` are adapted from
+``examples/pybullet/tamp/problems.py`` in
 Caelan Garrett's PDDLStream repository (https://github.com/caelan/pddlstream,
-MIT-licensed), which is where the ``packed`` benchmark used in the LLM-PDDLStream
-paper is defined. Only the scene construction is carried over: the PDDL domain,
-the stream samplers, and the planner are deliberately left behind, because
+MIT-licensed), which is where the ``packed`` and ``blocked`` benchmarks used in the
+LLM-PDDLStream paper are defined. Only the scene construction is carried over:
+the PDDL domain, the stream samplers, and the planner are deliberately left
+behind, because
 robocode's agents synthesize their own task and motion planning against the
 environment rather than consuming PDDLStream's primitives.
 
@@ -22,8 +24,12 @@ import numpy as np
 from robocode.environments.ss_pybullet import (
     BLUE,
     GREEN,
+    GREY,
+    RED,
     REST_LEFT_ARM,
+    Euler,
     Point,
+    Pose,
     Problem,
     add_data_path,
     arm_conf,
@@ -34,13 +40,18 @@ from robocode.environments.ss_pybullet import (
     get_bodies,
     get_carry_conf,
     get_other_arm,
+    get_point,
+    get_pose,
+    invert,
     load_pybullet,
+    multiply,
     open_arm,
     pairwise_collision,
     sample_placement,
     set_arm_conf,
     set_group_conf,
     set_point,
+    set_pose,
     stable_z,
 )
 
@@ -141,9 +152,214 @@ def build_packed_scene(num_blocks: int) -> tuple[Problem, dict[str, Any]]:
     handles = {
         "robot": pr2,
         "floor": floor,
+        "initial_base_conf": [-1.0, 0.0, 0.0],
         "blocks": blocks,
         "table": table,
         "plate": plate,
         "initial_arm_conf": list(initial_conf),
     }
     return problem, handles
+
+
+# ------------------------------------------------------------------- blocked
+
+# Geometry of the original `blocked` benchmark, kept verbatim. The blocks are taller
+# than `packed`'s (2x the width rather than 0.10m) because the task turns on a *side*
+# grasp: a three-sided pen of walls the same height as the block leaves exactly one
+# approach direction open, and a red block sits in it.
+BLOCKED_BLOCK_WIDTH = 0.07
+BLOCKED_BLOCK_HEIGHT = 2 * BLOCKED_BLOCK_WIDTH
+BLOCKED_PLATE_WIDTH = 0.6
+BLOCKED_X_EXTENT = 10.0
+# Spacing between the penned block and both the red blocker and the walls.
+BLOCKED_SPACING = 0.15
+BLOCKED_WALL_THICKNESS = 0.01
+# `blocked` is a side-grasp problem, which is what makes the pen and blocker matter.
+BLOCKED_GRASP_TYPE = "side"
+# The direction left open by the walls, and so the one the red block occupies.
+BLOCKED_OPEN_DIRECTION = (-1.0, 0.0)
+
+
+def build_blocked_scene(num_spares: int) -> tuple[Problem, dict[str, Any]]:
+    """Build the ``blocked`` scene in the current physics client.
+
+    One green block sits on the near table inside a three-sided pen of walls, with a
+    red block in the one gap. *num_spares* further green blocks go on the far table,
+    which is where the count axis lives: at zero the penned block is the only green
+    one and the blocker has to be moved, and above zero there is the alternative of
+    hauling a spare across instead.
+
+    Returns the PDDLStream ``Problem``, whose ``goal_on`` is satisfied by *any* green
+    block reaching the plate, and the handles the environment needs to drive it.
+    """
+    if num_spares < 0:
+        raise ValueError(f"num_spares must be non-negative, got {num_spares}")
+
+    base_limits = (
+        -BLOCKED_X_EXTENT / 2.0 * np.ones(2),
+        BLOCKED_X_EXTENT / 2.0 * np.ones(2),
+    )
+    table_x = (BLOCKED_X_EXTENT - 1) / 2.0
+    other_arm = get_other_arm(ARM)
+    initial_conf = get_carry_conf(ARM, BLOCKED_GRASP_TYPE)
+
+    add_data_path()
+    floor = load_pybullet("plane.urdf")
+    pr2 = create_pr2()
+    set_arm_conf(pr2, ARM, initial_conf)
+    open_arm(pr2, ARM)
+    set_arm_conf(pr2, other_arm, arm_conf(other_arm, REST_LEFT_ARM))
+    close_arm(pr2, other_arm)
+    # Setting the base group rather than the body pose; see build_packed_scene.
+    set_group_conf(pr2, "base", [BLOCKED_X_EXTENT / 4, 0, 0])
+
+    near_table = create_table()
+    set_point(near_table, Point(x=+table_x, y=0))
+    far_table = create_table()
+    set_point(far_table, Point(x=-table_x, y=0))
+
+    plate = create_box(
+        BLOCKED_PLATE_WIDTH, BLOCKED_PLATE_WIDTH, PLATE_HEIGHT, color=GREEN
+    )
+    table_point = get_point(near_table)
+    plate_x, plate_y = float(table_point[0]), float(table_point[1])
+    set_point(
+        plate,
+        Point(x=plate_x, y=plate_y - 0.3, z=stable_z(plate, near_table)),
+    )
+
+    def _new_block(color: Any) -> int:
+        return create_box(
+            BLOCKED_BLOCK_WIDTH, BLOCKED_BLOCK_WIDTH, BLOCKED_BLOCK_HEIGHT, color=color
+        )
+
+    penned = _new_block(BLUE)
+    penned_x, penned_y = plate_x, plate_y + 0.3
+    set_point(penned, Point(x=penned_x, y=penned_y, z=stable_z(penned, near_table)))
+
+    blocker = _new_block(RED)
+    set_point(
+        blocker,
+        Point(
+            x=penned_x + BLOCKED_SPACING * BLOCKED_OPEN_DIRECTION[0],
+            y=penned_y + BLOCKED_SPACING * BLOCKED_OPEN_DIRECTION[1],
+            z=stable_z(blocker, near_table),
+        ),
+    )
+
+    # Three walls seal the pen on +x and both y sides, leaving -x -- where the red
+    # block stands -- as the only direction a side grasp can come from.
+    side_wall = create_box(
+        BLOCKED_WALL_THICKNESS,
+        2 * BLOCKED_SPACING,
+        BLOCKED_BLOCK_HEIGHT,
+        color=GREY,
+    )
+    end_walls = [
+        create_box(
+            BLOCKED_SPACING,
+            BLOCKED_WALL_THICKNESS,
+            BLOCKED_BLOCK_HEIGHT,
+            color=GREY,
+        )
+        for _ in range(2)
+    ]
+    wall_z = stable_z(side_wall, near_table)
+    set_point(side_wall, Point(x=penned_x + BLOCKED_SPACING, y=penned_y, z=wall_z))
+    for wall, sign in zip(end_walls, (+1.0, -1.0)):
+        set_point(
+            wall,
+            Point(
+                x=penned_x + BLOCKED_SPACING / 2,
+                y=penned_y + sign * BLOCKED_SPACING,
+                z=wall_z,
+            ),
+        )
+    walls = [side_wall, *end_walls]
+
+    spares = [_new_block(BLUE) for _ in range(num_spares)]
+    if spares:
+        resample_block_placements(spares, far_table)
+
+    greens = [penned, *spares]
+    problem = Problem(
+        robot=pr2,
+        movable=[*greens, blocker],
+        arms=[ARM],
+        grasp_types=[BLOCKED_GRASP_TYPE],
+        surfaces=[near_table, far_table, plate],
+        # Upstream writes this goal as the single existential ('?green', plate); the
+        # environment scores it as "any green block on the plate", which is the same
+        # condition without needing PDDL's typing machinery.
+        goal_on=[(green, plate) for green in greens],
+        body_types=[(green, "green") for green in greens],
+        base_limits=base_limits,
+        costs=True,
+    )
+    handles = {
+        "robot": pr2,
+        "floor": floor,
+        "initial_base_conf": [BLOCKED_X_EXTENT / 4, 0.0, 0.0],
+        "greens": greens,
+        "penned": penned,
+        "spares": spares,
+        "blocker": blocker,
+        "walls": walls,
+        "near_table": near_table,
+        "far_table": far_table,
+        "plate": plate,
+        "initial_arm_conf": list(initial_conf),
+    }
+    return problem, handles
+
+
+# How far the pen assembly's centre may be jittered from the benchmark's position.
+# The plate is as wide as the near table, so the free strip beside it is only just
+# larger than the pen's own footprint; the yaw is what actually varies an instance.
+BLOCKED_PEN_JITTER = 0.03
+
+
+def resample_blocked_layout(
+    pen_bodies: list[int],
+    centre: Any,
+    rng: Any,
+    obstacles: list[int],
+    attempts: int = 60,
+) -> bool:
+    """Re-pose the pen assembly rigidly at a fresh yaw, keeping its geometry intact.
+
+    ``pen_bodies`` -- the penned block, the blocker and the walls -- move together as
+    one rigid group about *centre*, so their relative arrangement, and therefore the
+    fact that the blocker stands in the pen's only gap, is exactly the benchmark's
+    whatever pose is drawn. Only where the assembly sits and which way its opening
+    faces change.
+
+    Randomizing this is what stops one trajectory from solving every episode. The
+    goal is existential and the far-table spares never interact with it, so with a
+    fixed near table the whole family collapses to a single instance that a policy can
+    hard-code its way through -- which is what synthesized policies did.
+
+    Returns whether a collision-free pose was found within *attempts*.
+    """
+    originals = [get_pose(body) for body in pen_bodies]
+    origin = Pose(Point(x=float(centre[0]), y=float(centre[1]), z=0.0))
+    relative = [multiply(invert(origin), pose) for pose in originals]
+    for _ in range(attempts):
+        yaw = float(rng.uniform(-np.pi, np.pi))
+        offset = rng.uniform(-BLOCKED_PEN_JITTER, BLOCKED_PEN_JITTER, size=2)
+        placed = Pose(
+            Point(x=float(centre[0] + offset[0]), y=float(centre[1] + offset[1])),
+            Euler(yaw=yaw),
+        )
+        for body, rel in zip(pen_bodies, relative):
+            set_pose(body, multiply(placed, rel))
+        if not any(
+            pairwise_collision(body, obstacle)
+            for body in pen_bodies
+            for obstacle in obstacles
+            if obstacle not in pen_bodies
+        ):
+            return True
+    for body, pose in zip(pen_bodies, originals):
+        set_pose(body, pose)
+    return False

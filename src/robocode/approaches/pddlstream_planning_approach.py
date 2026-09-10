@@ -22,6 +22,9 @@ from typing import Any, Callable
 import numpy as np
 
 from robocode.approaches.base_approach import BaseApproach, InstanceResult
+from robocode.environments.pr2_tamp_blocked_variable_count_env import (
+    PR2BlockedVariableCountEnv,
+)
 from robocode.environments.pr2_tamp_variable_count_env import (
     PR2PackedVariableCountEnv,
 )
@@ -105,8 +108,13 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         count so the planner faces the same instance as the generalized program.
         """
         del budget_usd
-        if isinstance(env, PR2PackedVariableCountEnv):
-            return self._solve_pr2packed(
+        if isinstance(env, (PR2PackedVariableCountEnv, PR2BlockedVariableCountEnv)):
+            return self._solve_pr2_tamp(
+                problem=(
+                    "blocked"
+                    if isinstance(env, PR2BlockedVariableCountEnv)
+                    else "packed"
+                ),
                 env=env,
                 seed=seed,
                 render=render,
@@ -129,9 +137,10 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         finally:
             planner.close()
 
-    def _solve_pr2packed(
+    def _solve_pr2_tamp(
         self,
         *,
+        problem: str,
         env: Any,
         seed: int,
         render: bool,
@@ -139,7 +148,7 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         max_steps: int | None,
         progress_callback: Callable[[str, int, int], None] | None,
     ) -> InstanceResult:
-        """Plan one PR2 ``packed`` instance upstream and servo the plan back.
+        """Plan one PR2 ``packed`` or ``blocked`` instance upstream and servo it back.
 
         Unlike Packing3D there is no twin to keep in step: the plan is computed from
         the instance's state in a separate process and comes back as joint-space
@@ -149,7 +158,8 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         """
         if count is None:
             raise NotImplementedError(
-                "PDDLStreamPlanningApproach needs a pinned object count for PR2Packed"
+                "PDDLStreamPlanningApproach needs a pinned object count for the PR2 "
+                "TAMP environments"
             )
         obs, _ = env.reset(seed=seed, options={"object_count": count})
         del obs
@@ -166,7 +176,7 @@ class PDDLStreamPlanningApproach(BaseApproach[Any, Any]):
         if progress_callback is not None:
             progress_callback("planning", 0, 0)
 
-        planner = PR2PackedPDDLStreamPlanner(env.current_backend)
+        planner = PR2PackedPDDLStreamPlanner(env.current_backend, problem=problem)
         plan_start = time.perf_counter()
         try:
             steps = planner.plan(max_time=self._eval_timeout, seed=seed)

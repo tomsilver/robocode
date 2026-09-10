@@ -40,6 +40,14 @@ ORACLE_TARGETS: dict[str, str] = {
     "pr2packed_generalized": (
         "robocode.oracles.pr2packed.approach:PR2PackedOracleApproach"
     ),
+    "pr2blocked_easy": "robocode.oracles.pr2blocked.approach:PR2BlockedOracleApproach",
+    "pr2blocked_medium": (
+        "robocode.oracles.pr2blocked.approach:PR2BlockedOracleApproach"
+    ),
+    "pr2blocked_hard": "robocode.oracles.pr2blocked.approach:PR2BlockedOracleApproach",
+    "pr2blocked_generalized": (
+        "robocode.oracles.pr2blocked.approach:PR2BlockedOracleApproach"
+    ),
 }
 
 
