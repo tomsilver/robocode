@@ -179,3 +179,6 @@ ref/
 # pddlstream writes its FastDownward scratch files into the working directory.
 temp/
 statistics/
+
+# Derived held-out evaluations of saved GenPlan candidates.
+first_attempt_eval/

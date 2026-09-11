@@ -28,6 +28,7 @@ dependencies = [
    "anthropic",
    "openai",
    "tenacity",
+   "tqdm",
 ]
 
 [project.optional-dependencies]
