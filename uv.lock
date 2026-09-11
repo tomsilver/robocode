@@ -2871,6 +2871,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "scipy-stubs" },
     { name = "tenacity" },
+    { name = "tqdm" },
     { name = "types-shapely" },
 ]
 
@@ -2949,6 +2950,7 @@ requires-dist = [
     { name = "robosuite", marker = "extra == 'libero'", specifier = "==1.4.0" },
     { name = "scipy-stubs" },
     { name = "tenacity" },
+    { name = "tqdm" },
     { name = "types-pyyaml", marker = "extra == 'develop'" },
     { name = "types-shapely" },
 ]

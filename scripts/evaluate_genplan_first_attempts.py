@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+from tqdm import tqdm  # type: ignore[import-untyped]
+from tqdm.contrib.logging import logging_redirect_tqdm  # type: ignore[import-untyped]
 
 LOGGER = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -318,6 +320,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--no-progress", action="store_true", help="disable the tqdm progress bar"
+    )
+    parser.add_argument(
         "--num-eval-tasks",
         type=int,
         help="override suite size (intended only for benchmarking)",
@@ -362,39 +367,50 @@ def main() -> int:
             ): evaluation
             for evaluation in evaluations
         }
-        for future in concurrent.futures.as_completed(future_to_eval):
-            evaluation = future_to_eval[future]
-            try:
-                outcome = future.result()
-            except Exception as error:  # pylint: disable=broad-exception-caught
-                result_root = (
-                    args.output_dir.resolve()
-                    if args.num_eval_tasks is None
-                    else args.output_dir.resolve()
-                    / f"benchmark_{args.num_eval_tasks}_tasks"
+        completed_futures = concurrent.futures.as_completed(future_to_eval)
+        with (
+            logging_redirect_tqdm(),
+            tqdm(
+                completed_futures,
+                total=len(future_to_eval),
+                desc="First attempts",
+                unit="policy",
+                disable=args.no_progress,
+            ) as progress,
+        ):
+            for future in progress:
+                evaluation = future_to_eval[future]
+                try:
+                    outcome = future.result()
+                except Exception as error:  # pylint: disable=broad-exception-caught
+                    result_root = (
+                        args.output_dir.resolve()
+                        if args.num_eval_tasks is None
+                        else args.output_dir.resolve()
+                        / f"benchmark_{args.num_eval_tasks}_tasks"
+                    )
+                    outcome = Outcome(
+                        evaluation,
+                        "failed",
+                        0.0,
+                        result_root
+                        / evaluation.experiment
+                        / f"replicate_{evaluation.replicate_seed}",
+                        f"{type(error).__name__}: {error}",
+                    )
+                outcomes.append(outcome)
+                LOGGER.info(
+                    "%s seed=%s: %s (%.1fs)%s",
+                    outcome.evaluation.experiment,
+                    outcome.evaluation.replicate_seed,
+                    outcome.status,
+                    outcome.elapsed_s,
+                    f" — {outcome.message}" if outcome.message else "",
                 )
-                outcome = Outcome(
-                    evaluation,
-                    "failed",
-                    0.0,
-                    result_root
-                    / evaluation.experiment
-                    / f"replicate_{evaluation.replicate_seed}",
-                    f"{type(error).__name__}: {error}",
+                _write_summary(
+                    args.output_dir.resolve(),
+                    sorted(outcomes, key=lambda o: o.evaluation.key),
                 )
-            outcomes.append(outcome)
-            LOGGER.info(
-                "%s seed=%s: %s (%.1fs)%s",
-                outcome.evaluation.experiment,
-                outcome.evaluation.replicate_seed,
-                outcome.status,
-                outcome.elapsed_s,
-                f" — {outcome.message}" if outcome.message else "",
-            )
-            _write_summary(
-                args.output_dir.resolve(),
-                sorted(outcomes, key=lambda o: o.evaluation.key),
-            )
     failed = sum(outcome.status == "failed" for outcome in outcomes)
     LOGGER.info("Finished %d evaluations (%d failed)", len(outcomes), failed)
     return 1 if failed else 0

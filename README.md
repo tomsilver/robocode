@@ -698,6 +698,7 @@ benchmark before launching the full suite. Benchmark results go into a separate
 protocol values come from each run's saved `.hydra/config.yaml`, so later default
 changes do not alter the replay. When reruns exist, a completed source evaluation is
 preferred; an interrupted source is used only if it is the sole saved first attempt.
+The command displays a policy-level progress bar; pass `--no-progress` to disable it.
 
 ### Planner baselines
 
