@@ -6,7 +6,12 @@ import numpy as np
 from gymnasium import Env
 from gymnasium.spaces import Box
 
-from robocode.utils.genplan_validate import evaluate_tasks, score_tasks, validate_tasks
+from robocode.utils.genplan_validate import (
+    evaluate_tasks,
+    evaluate_tasks_parallel,
+    score_tasks,
+    validate_tasks,
+)
 
 
 class _ToyEnv(Env):
@@ -159,3 +164,53 @@ def test_evaluate_returns_first_failure_and_score_from_same_rollouts(tmp_path):
     assert evaluation.failure is not None
     assert "seed 7" in evaluation.failure["feedback"]
     assert evaluation.score == (0, 2, 2, -10.0)
+
+
+def test_parallel_evaluation_matches_serial_results(tmp_path):
+    """Isolated workers preserve ordered feedback and aggregate scoring."""
+    env = _ToyEnv()
+    approach_path = tmp_path / "approach.py"
+    approach_path.write_text(
+        f"{_HEADER}    def get_action(self, state):\n"
+        "        return np.array([0.0], dtype=np.float32)\n"
+    )
+    serial = evaluate_tasks(
+        env,
+        approach_path,
+        env.action_space,
+        env.observation_space,
+        primitives={},
+        seeds=[7, 8, 9],
+        max_steps=10,
+        timeout=10.0,
+    )
+    parallel = evaluate_tasks_parallel(
+        {"_target_": "tests.utils.test_genplan_validate._ToyEnv"},
+        approach_path,
+        primitive_names=[],
+        seeds=[7, 8, 9],
+        max_steps=10,
+        timeout=10.0,
+        max_workers=3,
+    )
+    assert parallel == serial
+
+
+def test_parallel_evaluation_bounds_hanging_policies(tmp_path):
+    """Every hanging seed is terminated and represented in the aggregate score."""
+    approach_path = tmp_path / "approach.py"
+    approach_path.write_text(
+        f"{_HEADER}    def get_action(self, state):\n        while True: pass\n"
+    )
+    evaluation = evaluate_tasks_parallel(
+        {"_target_": "tests.utils.test_genplan_validate._ToyEnv"},
+        approach_path,
+        primitive_names=[],
+        seeds=[0, 1, 2],
+        max_steps=10,
+        timeout=0.1,
+        max_workers=3,
+    )
+    assert evaluation.failure is not None
+    assert evaluation.failure["error_type"] == "timeout"
+    assert evaluation.score == (0, 0, 3, 0.0)

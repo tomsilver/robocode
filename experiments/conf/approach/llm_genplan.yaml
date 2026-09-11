@@ -7,6 +7,10 @@ load_dir: null
 # Defaults follow Silver et al. 2023.
 num_train_tasks: 10
 num_prompt_tasks: 2
+# Independent training-seed rollouts use isolated spawned environments. Three
+# workers per replicate leaves room for three concurrent replicates on a 24-core
+# workstation while matching the Claude CLI's three-session concurrency limit.
+num_score_workers: 3
 # The debug loop stops at whichever bound binds first (and early on success).
 # Either bound may be null to disable it; at least one must be set.
 max_debug_attempts: 4  # step cap: 1 initial attempt + this many debug attempts
