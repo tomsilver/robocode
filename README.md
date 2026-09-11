@@ -680,6 +680,21 @@ The `cli_*` presets drive the same authenticated Claude CLI as the agentic backe
 
 The `anthropic_*` presets bill the Messages API and need `ANTHROPIC_API_KEY`; their `input_cost_per_mtok` / `output_cost_per_mtok` fields turn reported token usage into an estimated `cost_usd`, which bounds `approach.max_budget_usd`. The CLI reports its own cost, and the local presets report none.
 
+GenPlan saves every refinement as `sandbox/implN_candidate.py`. To evaluate each
+initial `impl0` policy on the same held-out suite as its selected final policy, run:
+
+```bash
+python scripts/evaluate_genplan_first_attempts.py multirun --jobs 4
+```
+
+The script selects the newest run for each experiment and replicate, stages
+the initial policy without changing the source run, and reuses its environment,
+primitive level, replicate seed, private evaluation seed, task count, and timeout. No
+model is called and no feedback is supplied. Results are written under
+`first_attempt_eval/`; completed suites are skipped on subsequent invocations. Use
+`--dry-run` to inspect commands or `--num-eval-tasks N` for a short throughput
+benchmark before launching the full suite.
+
 ### Planner baselines
 
 Two per-instance planners solve each evaluation seed from scratch, with no LLM in the loop; they report `planning_time` and `plan_found` per episode and spend no budget. Both plan within the shared `eval_timeout`.
