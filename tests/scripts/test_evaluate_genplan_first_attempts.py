@@ -89,7 +89,11 @@ def test_build_command_preserves_protocol_and_replaces_runtime_options(
 
 def test_evaluate_one_skips_complete_result(tmp_path: Path) -> None:
     evaluation = Evaluation(
-        "example", 42, tmp_path / "run", tmp_path / "candidate.py", ()
+        "example",
+        42,
+        tmp_path / "run",
+        tmp_path / "candidate.py",
+        ("num_eval_tasks=1",),
     )
     result_dir = tmp_path / "out" / "example" / "replicate_42"
     result_dir.mkdir(parents=True)
@@ -107,3 +111,8 @@ def test_evaluate_one_skips_complete_result(tmp_path: Path) -> None:
     outcome = evaluate_one(evaluation, tmp_path / "out")
 
     assert outcome.status == "skipped"
+
+    benchmark_outcome = evaluate_one(
+        evaluation, tmp_path / "out", dry_run=True, num_eval_tasks=2
+    )
+    assert benchmark_outcome.status == "dry-run"

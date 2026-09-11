@@ -148,7 +148,7 @@ def build_command(
     return [sys.executable, str(RUNNER), *overrides]
 
 
-def _is_complete(results_path: Path) -> bool:
+def _is_complete(results_path: Path, expected_tasks: int) -> bool:
     try:
         results = json.loads(results_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -161,6 +161,7 @@ def _is_complete(results_path: Path) -> bool:
     return (
         isinstance(per_episode, list)
         and isinstance(num_tasks, int)
+        and num_tasks == expected_tasks
         and len(per_episode) == num_tasks
     )
 
@@ -178,7 +179,13 @@ def evaluate_one(
         output_root / evaluation.experiment / f"replicate_{evaluation.replicate_seed}"
     )
     results_path = result_dir / "results.json"
-    if not force and _is_complete(results_path):
+    configured_tasks = _parse_override(evaluation.overrides, "num_eval_tasks")
+    if num_eval_tasks is None and configured_tasks is None:
+        raise ValueError(f"num_eval_tasks is absent from {evaluation.run_dir}")
+    expected_tasks = (
+        num_eval_tasks if num_eval_tasks is not None else int(configured_tasks or "")
+    )
+    if not force and _is_complete(results_path, expected_tasks):
         return Outcome(evaluation, "skipped", 0.0, result_dir, "already complete")
 
     command = build_command(evaluation, result_dir, num_eval_tasks=num_eval_tasks)
