@@ -72,6 +72,36 @@ def _load_overrides(run_dir: Path) -> tuple[str, ...]:
     return tuple(raw)
 
 
+def _configured_num_eval_tasks(run_dir: Path) -> int:
+    """Read the suite size from the historical composed config."""
+    path = run_dir / ".hydra" / "config.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("num_eval_tasks"), int):
+        raise ValueError(f"num_eval_tasks is absent or invalid in {path}")
+    return raw["num_eval_tasks"]
+
+
+def _source_eval_complete(run_dir: Path) -> bool:
+    """Whether the source run recorded every scheduled held-out episode."""
+    try:
+        results = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    per_episode = results.get("per_episode")
+    num_tasks = results.get("num_eval_tasks")
+    return (
+        isinstance(per_episode, list)
+        and isinstance(num_tasks, int)
+        and len(per_episode) == num_tasks
+    )
+
+
+def _selection_key(evaluation: Evaluation) -> tuple[bool, str, str]:
+    """Prefer completed sources, then the campaign timestamp and full path."""
+    timestamp = evaluation.run_dir.parent.name
+    return _source_eval_complete(evaluation.run_dir), timestamp, str(evaluation.run_dir)
+
+
 def discover_evaluations(search_roots: Iterable[Path]) -> list[Evaluation]:
     """Return the newest candidate for every experiment and replicate."""
     selected: dict[tuple[str, int], Evaluation] = {}
@@ -95,27 +125,12 @@ def discover_evaluations(search_roots: Iterable[Path]) -> list[Evaluation]:
                 experiment, replicate_seed, run_dir, candidate, overrides
             )
             current = selected.get(evaluation.key)
-            # Run directories begin with an ISO timestamp in campaign output. Path
-            # order is deterministic even after archives have reset mtimes.
-            if current is None or str(run_dir) > str(current.run_dir):
+            # Prefer a reproducible final evaluation over a newer interrupted rerun.
+            # Within the same completion class, campaign directories begin with an
+            # ISO timestamp; the full path is only a deterministic tie breaker.
+            if current is None or _selection_key(evaluation) > _selection_key(current):
                 selected[evaluation.key] = evaluation
     return sorted(selected.values(), key=lambda item: item.key)
-
-
-_DROP_OVERRIDE_KEYS = {
-    "approach.load_dir",
-    "approach.output_dir",
-    "hydra.run.dir",
-    "hydra.sweep.dir",
-    "hydra.sweep.subdir",
-    "mcp_tools",
-    "record_approach_history",
-    "render_videos",
-}
-
-
-def _override_key(value: str) -> str:
-    return value.split("=", 1)[0].lstrip("+")
 
 
 def build_command(
@@ -126,15 +141,11 @@ def build_command(
 ) -> list[str]:
     """Build a runner command that loads impl0 without invoking the model."""
     load_dir = result_dir / "loaded_policy"
-    overrides = [
-        value
-        for value in evaluation.overrides
-        if _override_key(value) not in _DROP_OVERRIDE_KEYS
-    ]
+    # Loading the saved, fully composed Hydra config protects historical protocol
+    # values from later changes to environment and approach defaults.
+    config_dir = result_dir / "source_config"
+    overrides: list[str] = []
     if num_eval_tasks is not None:
-        overrides = [
-            value for value in overrides if _override_key(value) != "num_eval_tasks"
-        ]
         overrides.append(f"num_eval_tasks={num_eval_tasks}")
     overrides.extend(
         [
@@ -145,7 +156,13 @@ def build_command(
             f"hydra.run.dir={result_dir.resolve()}",
         ]
     )
-    return [sys.executable, str(RUNNER), *overrides]
+    return [
+        sys.executable,
+        str(RUNNER),
+        f"--config-dir={config_dir.resolve()}",
+        "--config-name=first_attempt_config",
+        *overrides,
+    ]
 
 
 def _is_complete(results_path: Path, expected_tasks: int) -> bool:
@@ -175,15 +192,19 @@ def evaluate_one(
     num_eval_tasks: int | None = None,
 ) -> Outcome:
     """Stage and evaluate one candidate, returning a serializable summary."""
+    result_root = (
+        output_root
+        if num_eval_tasks is None
+        else output_root / f"benchmark_{num_eval_tasks}_tasks"
+    )
     result_dir = (
-        output_root / evaluation.experiment / f"replicate_{evaluation.replicate_seed}"
+        result_root / evaluation.experiment / f"replicate_{evaluation.replicate_seed}"
     )
     results_path = result_dir / "results.json"
-    configured_tasks = _parse_override(evaluation.overrides, "num_eval_tasks")
-    if num_eval_tasks is None and configured_tasks is None:
-        raise ValueError(f"num_eval_tasks is absent from {evaluation.run_dir}")
     expected_tasks = (
-        num_eval_tasks if num_eval_tasks is not None else int(configured_tasks or "")
+        num_eval_tasks
+        if num_eval_tasks is not None
+        else _configured_num_eval_tasks(evaluation.run_dir)
     )
     if not force and _is_complete(results_path, expected_tasks):
         return Outcome(evaluation, "skipped", 0.0, result_dir, "already complete")
@@ -195,6 +216,12 @@ def evaluate_one(
     policy_dir = result_dir / "loaded_policy" / "sandbox"
     policy_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(evaluation.candidate, policy_dir / "approach.py")
+    config_dir = result_dir / "source_config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        evaluation.run_dir / ".hydra" / "config.yaml",
+        config_dir / "first_attempt_config.yaml",
+    )
     metadata = {
         "source_run": str(evaluation.run_dir.resolve()),
         "source_candidate": str(evaluation.candidate.resolve()),
@@ -336,7 +363,25 @@ def main() -> int:
             for evaluation in evaluations
         }
         for future in concurrent.futures.as_completed(future_to_eval):
-            outcome = future.result()
+            evaluation = future_to_eval[future]
+            try:
+                outcome = future.result()
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                result_root = (
+                    args.output_dir.resolve()
+                    if args.num_eval_tasks is None
+                    else args.output_dir.resolve()
+                    / f"benchmark_{args.num_eval_tasks}_tasks"
+                )
+                outcome = Outcome(
+                    evaluation,
+                    "failed",
+                    0.0,
+                    result_root
+                    / evaluation.experiment
+                    / f"replicate_{evaluation.replicate_seed}",
+                    f"{type(error).__name__}: {error}",
+                )
             outcomes.append(outcome)
             LOGGER.info(
                 "%s seed=%s: %s (%.1fs)%s",

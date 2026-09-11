@@ -693,7 +693,11 @@ primitive level, replicate seed, private evaluation seed, task count, and timeou
 model is called and no feedback is supplied. Results are written under
 `first_attempt_eval/`; completed suites are skipped on subsequent invocations. Use
 `--dry-run` to inspect commands or `--num-eval-tasks N` for a short throughput
-benchmark before launching the full suite.
+benchmark before launching the full suite. Benchmark results go into a separate
+`benchmark_N_tasks/` subtree and cannot be mistaken for full-suite results. Historical
+protocol values come from each run's saved `.hydra/config.yaml`, so later default
+changes do not alter the replay. When reruns exist, a completed source evaluation is
+preferred; an interrupted source is used only if it is the sole saved first attempt.
 
 ### Planner baselines
 
