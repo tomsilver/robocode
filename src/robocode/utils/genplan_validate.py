@@ -9,16 +9,21 @@ this runs there too.
 from __future__ import annotations
 
 import multiprocessing as mp
+import time
 import traceback
 from collections.abc import Callable
 from multiprocessing.managers import SyncManager
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import gymnasium
+import hydra
 from gymnasium.spaces import Space
+from omegaconf import OmegaConf
 
 from robocode.approaches.base_approach import BaseApproach
+from robocode.primitives import build_primitives
 from robocode.utils.episode import (
     load_generated_approach,
     run_episode,
@@ -148,9 +153,7 @@ def evaluate_tasks(
     reported, matching the previous validation-then-scoring behavior.
     """
     ctx = mp.get_context("fork")  # fork: workers inherit the live env
-    first_failure: dict[str, str] | None = None
-    num_solved = 0
-    completed_rewards: list[float] = []
+    results: list[dict[str, Any]] = []
     with ctx.Manager() as manager:
         for seed in seeds:
             result = _validate_episode(
@@ -165,21 +168,143 @@ def evaluate_tasks(
                 ctx,
                 manager,
             )
-            if not result["solved"] and first_failure is None:
-                first_failure = {
-                    "error_type": result["error_type"],
-                    "feedback": result["feedback"],
-                }
-                if result["error_type"] == "policy-load-error":
-                    return TaskEvaluation(first_failure, None)
-            num_solved += int(result["solved"])
-            if result["solved"] or result.get("error_type") == "not-solved":
-                completed_rewards.append(float(result["total_reward"]))
+            results.append(result)
+            if result.get("error_type") == "policy-load-error":
+                return _summarize_results(results)
+    return _summarize_results(results)
+
+
+def evaluate_tasks_parallel(
+    environment: dict[str, Any],
+    approach_path: Path,
+    primitive_names: list[str],
+    seeds: list[int],
+    max_steps: int,
+    timeout: float,
+    max_workers: int,
+) -> TaskEvaluation:
+    """Evaluate tasks concurrently in isolated, freshly constructed environments.
+
+    ``spawn`` is required because Kindergarden's MuJoCo contexts are not fork-safe.
+    Each process constructs and closes its own environment. Results are returned in
+    the caller's seed order so scheduling cannot change feedback or scoring.
+    """
+    if max_workers < 1:
+        raise ValueError("max_workers must be positive")
+    ctx = mp.get_context("spawn")
+    results: list[dict[str, Any] | None] = [None] * len(seeds)
+    pending = iter(enumerate(seeds))
+    active: dict[int, tuple[BaseProcess, Any, int, float | None]] = {}
+    with ctx.Manager() as manager:
+        shared_results = manager.dict()
+
+        def start_next() -> bool:
+            try:
+                index, seed = next(pending)
+            except StopIteration:
+                return False
+            ready = ctx.Event()
+            process = ctx.Process(
+                target=_isolated_episode_worker,
+                args=(
+                    environment,
+                    approach_path,
+                    primitive_names,
+                    seed,
+                    max_steps,
+                    ready,
+                    shared_results,
+                    index,
+                ),
+            )
+            process.start()
+            active[index] = (process, ready, seed, None)
+            return True
+
+        while len(active) < min(max_workers, len(seeds)) and start_next():
+            pass
+
+        while active:
+            now = time.monotonic()
+            for index, (process, ready, seed, deadline) in list(active.items()):
+                if deadline is None and ready.is_set():
+                    deadline = now + timeout
+                    active[index] = (process, ready, seed, deadline)
+                if not process.is_alive():
+                    process.join()
+                    results[index] = shared_results.get(
+                        index, _worker_crashed_result(seed, process.exitcode)
+                    )
+                    del active[index]
+                    start_next()
+                elif deadline is not None and now >= deadline:
+                    process.terminate()
+                    process.join()
+                    results[index] = _timeout_result(seed, timeout)
+                    del active[index]
+                    start_next()
+            if active:
+                time.sleep(0.01)
+
+    ordered_results = [result for result in results if result is not None]
+    assert len(ordered_results) == len(seeds)
+    return _summarize_results(ordered_results)
+
+
+def _isolated_episode_worker(
+    environment: dict[str, Any],
+    approach_path: Path,
+    primitive_names: list[str],
+    seed: int,
+    max_steps: int,
+    ready: Any,
+    results: Any,
+    index: int,
+) -> None:
+    """Construct one environment, run one scoring episode, and close it."""
+    env = hydra.utils.instantiate(OmegaConf.create(environment))
+    try:
+        primitives = build_primitives(env, primitive_names)
+        ready.set()
+        results[index] = _classify_episode(
+            env,
+            approach_path,
+            env.action_space,
+            env.observation_space,
+            primitives,
+            seed,
+            max_steps,
+        )
+    finally:
+        env.close()
+
+
+def _summarize_results(results: list[dict[str, Any]]) -> TaskEvaluation:
+    """Produce seed-ordered feedback and aggregate scoring from task outcomes."""
+    first_failure: dict[str, str] | None = None
+    completed_rewards: list[float] = []
+    for result in results:
+        if not result["solved"] and first_failure is None:
+            first_failure = {
+                "error_type": result["error_type"],
+                "feedback": result["feedback"],
+            }
+        if result["solved"] or result.get("error_type") == "not-solved":
+            completed_rewards.append(float(result["total_reward"]))
+    if first_failure is not None and first_failure["error_type"] == "policy-load-error":
+        return TaskEvaluation(first_failure, None)
     mean_reward = (
         sum(completed_rewards) / len(completed_rewards) if completed_rewards else 0.0
     )
-    score = TaskScore(num_solved, len(completed_rewards), len(seeds), mean_reward)
-    return TaskEvaluation(first_failure, score)
+    return TaskEvaluation(
+        first_failure,
+        TaskScore(
+            sum(int(result["solved"]) for result in results),
+            len(completed_rewards),
+            len(results),
+            mean_reward,
+        ),
+    )
 
 
 def score_tasks(
@@ -264,33 +389,41 @@ def _validate_episode(
         timeout,
     )
     if outcome == "timeout":
-        return {
-            "solved": False,
-            "total_reward": 0.0,
-            "num_steps": 0,
-            "error_type": "timeout",
-            "feedback": (
-                f"On the task with seed {seed}, get_action did not finish within "
-                f"{timeout:g}s. The code likely has an infinite loop or is far too "
-                "slow."
-            ),
-        }
+        return _timeout_result(seed, timeout)
     if "solved" not in result:
         # The worker died before reporting (OOM kill, segfault in native code,
         # os._exit, ...), so there is no traceback to forward.
-        return {
-            "solved": False,
-            "total_reward": 0.0,
-            "num_steps": 0,
-            "error_type": "worker-crashed",
-            "feedback": (
-                f"On the task with seed {seed}, the episode worker died with "
-                f"exit code {exitcode} before reporting a result (e.g. out "
-                "of memory or a crash in native code). Make the code terminate "
-                "normally and reduce memory use."
-            ),
-        }
+        return _worker_crashed_result(seed, exitcode)
     return dict(result)
+
+
+def _timeout_result(seed: int, timeout: float) -> dict[str, Any]:
+    """Classify an episode process that exceeded its wall-clock budget."""
+    return {
+        "solved": False,
+        "total_reward": 0.0,
+        "num_steps": 0,
+        "error_type": "timeout",
+        "feedback": (
+            f"On the task with seed {seed}, get_action did not finish within "
+            f"{timeout:g}s. The code likely has an infinite loop or is far too slow."
+        ),
+    }
+
+
+def _worker_crashed_result(seed: int, exitcode: int | None) -> dict[str, Any]:
+    """Classify an episode process that exited without returning an outcome."""
+    return {
+        "solved": False,
+        "total_reward": 0.0,
+        "num_steps": 0,
+        "error_type": "worker-crashed",
+        "feedback": (
+            f"On the task with seed {seed}, the episode worker died with exit code "
+            f"{exitcode} before reporting a result (e.g. out of memory or a crash "
+            "in native code). Make the code terminate normally and reduce memory use."
+        ),
+    }
 
 
 def _episode_worker(

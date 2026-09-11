@@ -34,6 +34,7 @@ from robocode.utils.episode import load_generated_approach
 from robocode.utils.genplan_validate import (
     TaskScore,
     evaluate_tasks,
+    evaluate_tasks_parallel,
     render_state,
 )
 from robocode.utils.llm import LLMClient, LLMResponse, create_llm_client
@@ -80,6 +81,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         max_steps: int = 100,
         num_train_tasks: int = 10,
         num_prompt_tasks: int = 2,
+        num_score_workers: int = 3,
         max_debug_attempts: int | None = 4,
         max_budget_usd: float | None = 20.0,
         chain_of_thought: bool = True,
@@ -113,6 +115,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._max_steps = max_steps
         self._num_train_tasks = num_train_tasks
         self._num_prompt_tasks = num_prompt_tasks
+        if num_score_workers < 1:
+            raise ValueError("num_score_workers must be positive")
+        self._num_score_workers = num_score_workers
         self._max_debug_attempts = max_debug_attempts
         self._max_budget_usd = max_budget_usd
         self._chain_of_thought = chain_of_thought
@@ -205,6 +210,7 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             "max_steps": self._max_steps,
             "num_train_tasks": self._num_train_tasks,
             "num_prompt_tasks": self._num_prompt_tasks,
+            "num_score_workers": self._num_score_workers,
             "max_debug_attempts": self._max_debug_attempts,
             "max_budget_usd": self._max_budget_usd,
             "chain_of_thought": self._chain_of_thought,
@@ -307,16 +313,27 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
                 assert self._env is not None
                 logger.info("Validating impl%d on %d training tasks", t, len(seeds))
                 started = time.monotonic()
-                evaluation = evaluate_tasks(
-                    self._env,
-                    candidate_path,
-                    self._action_space,
-                    self._state_space,
-                    self._primitives,
-                    seeds,
-                    self._max_steps,
-                    self._eval_timeout,
-                )
+                if self._num_score_workers > 1 and self._env_cfg is not None:
+                    evaluation = evaluate_tasks_parallel(
+                        json.loads(self._env_cfg),
+                        candidate_path,
+                        list(self._primitives),
+                        seeds,
+                        self._max_steps,
+                        self._eval_timeout,
+                        self._num_score_workers,
+                    )
+                else:
+                    evaluation = evaluate_tasks(
+                        self._env,
+                        candidate_path,
+                        self._action_space,
+                        self._state_space,
+                        self._primitives,
+                        seeds,
+                        self._max_steps,
+                        self._eval_timeout,
+                    )
                 failure = evaluation.failure
                 logger.info(
                     "Validation impl%d finished in %.1fs",

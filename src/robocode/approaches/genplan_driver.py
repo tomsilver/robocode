@@ -48,11 +48,13 @@ def main() -> None:
     common: dict[str, Any] = {
         "completion": OmegaConf.create(cfg["completion"]),
         "env": env,
+        "env_cfg": json.dumps(cfg["environment"]),
         "env_description_path": desc_path,
         "output_dir": "/",  # train() writes to output_dir/sandbox -> /sandbox
         "max_steps": cfg["max_steps"],
         "num_train_tasks": cfg["num_train_tasks"],
         "num_prompt_tasks": cfg["num_prompt_tasks"],
+        "num_score_workers": cfg["num_score_workers"],
         "max_budget_usd": cfg["max_budget_usd"],
         "chain_of_thought": cfg["chain_of_thought"],
         "eval_timeout": cfg["eval_timeout"],
