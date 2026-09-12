@@ -24,6 +24,37 @@ METRICS = [
     ("persistent_state_fields", "Persistent state fields"),
 ]
 
+METHOD_COLORS = {
+    "agentic/blackbox/claude-opus-5": "#17658c",
+    "agentic/blackbox/gpt-5.6-sol": "#b45f24",
+    "agentic/whitebox/claude-opus-5": "#3a8f6b",
+    "llm_genplan": "#c23b43",
+}
+
+
+def _set_paper_style() -> None:
+    plt.rcParams.update(
+        {
+            "font.family": "sans-serif",
+            "font.size": 7.0,
+            "axes.titlesize": 8.5,
+            "axes.labelsize": 7.5,
+            "xtick.labelsize": 6.5,
+            "ytick.labelsize": 6.5,
+            "legend.fontsize": 7.0,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+            "savefig.transparent": False,
+        }
+    )
+
+
+def _save_figure(figure: Any, path: Path, dpi: int = 300) -> None:
+    figure.savefig(path, dpi=dpi, bbox_inches="tight")
+    figure.savefig(path.with_suffix(".pdf"), bbox_inches="tight")
+
 
 def _load_analyzer(path: Path) -> Any:
     spec = importlib.util.spec_from_file_location("complexity_analyzer", path)
@@ -417,17 +448,16 @@ def _plot_cross_method_evolution(
         .reset_index()
     )
     methods = sorted(environment_means.method.unique())
-    colors = dict(zip(methods, plt.get_cmap("tab10").colors, strict=False))
+    colors = {method: METHOD_COLORS[method] for method in methods}
     paths = []
-    for column, filename, ylabel, title in (
+    for column, filename, ylabel in (
         (
             "value",
             "cross_method_evolution_absolute.png",
             "Mean complexity",
-            "Absolute policy complexity over synthesis",
         ),
     ):
-        fig = plt.figure(figsize=(20, 9))
+        fig = plt.figure(figsize=(7.2, 3.55))
         grid = fig.add_gridspec(2, 4, width_ratios=[1, 1, 1, 0.85])
         axes = [fig.add_subplot(grid[row, col]) for row in range(2) for col in range(3)]
         solve_axis = fig.add_subplot(grid[:, 3])
@@ -441,8 +471,8 @@ def _plot_cross_method_evolution(
                     100 * stats.index,
                     stats["mean"],
                     marker="o",
-                    markersize=3,
-                    linewidth=2,
+                    markersize=1.8,
+                    linewidth=1.25,
                     color=colors[method],
                     label=label,
                 )
@@ -451,12 +481,12 @@ def _plot_cross_method_evolution(
                     stats["mean"] - ci,
                     stats["mean"] + ci,
                     color=colors[method],
-                    alpha=0.12,
+                    alpha=0.10,
                 )
             axis.set_title(metric_title)
             axis.set_xlabel("Synthesis progress (%)")
             axis.set_ylabel(ylabel)
-            axis.grid(alpha=0.25)
+            axis.grid(axis="y", alpha=0.25, linewidth=0.5)
         final = programs.copy()
         final["method"] = final.display_method.map(
             lambda method: (
@@ -483,7 +513,7 @@ def _plot_cross_method_evolution(
                 position + jitter,
                 color=short_colors[method],
                 alpha=0.45,
-                s=24,
+                s=9,
             )
             bootstrap_means = np.mean(
                 rng.choice(values, size=(20_000, len(values)), replace=True), axis=1
@@ -496,26 +526,21 @@ def _plot_cross_method_evolution(
                 xerr=[[mean - low], [high - mean]],
                 fmt="D",
                 color="black",
-                markersize=7,
-                capsize=5,
-                linewidth=2,
+                markersize=4,
+                capsize=3,
+                linewidth=1.2,
             )
         solve_axis.set_xlim(-0.03, 1.03)
-        solve_axis.set_yticks(range(len(short_methods)), short_methods, fontsize=9)
-        solve_axis.set_xlabel("Final held-out solve rate")
-        solve_axis.set_title("Performance at endpoint only")
-        solve_axis.grid(axis="x", alpha=0.25)
+        solve_axis.set_yticks(range(len(short_methods)), short_methods, fontsize=5.5)
+        solve_axis.set_xlabel("Held-out solve rate")
+        solve_axis.set_title("Final solve rate")
+        solve_axis.grid(axis="x", alpha=0.25, linewidth=0.5)
 
         handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False)
-        fig.suptitle(
-            f"{title} — seeds averaged within environment; "
-            f"{len(common_environments)} shared environments",
-            y=0.98,
-        )
-        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
+        fig.tight_layout(rect=(0, 0.07, 1, 1), w_pad=0.9, h_pad=1.0)
         path = output / filename
-        fig.savefig(path, dpi=180, bbox_inches="tight")
+        _save_figure(fig, path)
         plt.close(fig)
         paths.append(path)
     environment_means.to_csv(output.parent / "cross_method_evolution.csv", index=False)
@@ -559,36 +584,40 @@ def _plot_pattern_summaries(
 
     paths.extend(_plot_cross_method_evolution(programs, trajectories, directory))
 
-    ordered = environments.sort_values("own_source_loc", ascending=True)
-    fig, axes = plt.subplots(len(METRICS), 1, figsize=(15, 42), sharey=True)
+    ordered = environments.sort_values("own_source_loc", ascending=False)
+    fig, axes = plt.subplots(len(METRICS), 1, figsize=(7.2, 8.5), sharex=True)
     positions = np.arange(len(ordered))
     for axis, (metric, title) in zip(axes, METRICS, strict=True):
-        axis.barh(
-            positions - 0.18,
-            ordered[f"own_{metric}"],
-            height=0.34,
-            label="Environment-owned source",
-            color="#2878b5",
-        )
-        axis.barh(
-            positions + 0.18,
+        axis.bar(
+            positions,
             ordered[f"closure_{metric}"],
-            height=0.34,
+            width=0.78,
             label="Local dependency closure",
-            color="#9ac8e2",
+            color="#aab4bd",
+        )
+        axis.bar(
+            positions,
+            ordered[f"own_{metric}"],
+            width=0.48,
+            label="Environment-owned source",
+            color="#17658c",
         )
         axis.set_title(title)
-        axis.set_xlabel("Static complexity")
-        axis.grid(axis="x", alpha=0.25)
-    axes[0].set_yticks(positions, ordered.environment, fontsize=8)
-    axes[0].legend(loc="lower right")
-    fig.suptitle(
-        "Static complexity of Kinder environments and their local dependencies",
-        y=0.995,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.992))
+        axis.grid(axis="y", alpha=0.25, linewidth=0.5)
+    labels = [
+        value.removesuffix("_generalized")
+        .replace("cluttered", "clut.")
+        .replace("obstruction", "obstr.")
+        .replace("constrainedcupboard", "cupboard")
+        .replace("sortclutteredblocks", "sort-blocks")
+        .replace("sweepintodrawer", "sweep-drawer")
+        for value in ordered.environment
+    ]
+    axes[-1].set_xticks(positions, labels, rotation=58, ha="right", fontsize=5)
+    axes[0].legend(loc="upper right", ncol=2, frameon=False)
+    fig.tight_layout(h_pad=0.8)
     path = directory / "environment_static_complexity.png"
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    _save_figure(fig, path)
     plt.close(fig)
     paths.append(path)
 
@@ -619,11 +648,11 @@ def _plot_pattern_summaries(
     loc = performance[performance.metric == "source_loc"]
     methods = sorted(loc.method.unique())
     rng = np.random.default_rng(0)
-    fig, axis = plt.subplots(figsize=(11, 5.5))
+    fig, axis = plt.subplots(figsize=(7.2, 2.45))
     for position, method in enumerate(methods):
         values = loc.loc[loc.method == method, "spearman_rho"].to_numpy()
         jitter = rng.uniform(-0.10, 0.10, len(values))
-        axis.scatter(values, position + jitter, color=f"C{position}", alpha=0.45, s=28)
+        axis.scatter(values, position + jitter, color=f"C{position}", alpha=0.45, s=12)
         bootstrap_means = np.mean(
             rng.choice(values, size=(20_000, len(values)), replace=True), axis=1
         )
@@ -635,34 +664,30 @@ def _plot_pattern_summaries(
             xerr=[[mean - low], [high - mean]],
             fmt="D",
             color="black",
-            markersize=7,
-            capsize=5,
-            linewidth=2,
+            markersize=4,
+            capsize=3,
+            linewidth=1.2,
         )
-        axis.text(1.03, position, f"n={len(values)} envs", va="center", fontsize=9)
+        axis.text(1.03, position, f"n={len(values)}", va="center", fontsize=6)
     axis.axvline(0, color="black", linestyle="--", linewidth=1)
     axis.set_xlim(-1.05, 1.18)
     axis.set_yticks(range(len(methods)), methods)
-    axis.set_xlabel("Within-environment Spearman ρ: final lines of code vs. final solve rate")
-    axis.set_title(
-        "Lines of code and solve rate across seeds\n"
-        "Small dots: individual environments; diamonds: mean with 95% bootstrap CI"
-    )
-    axis.grid(axis="x", alpha=0.25)
+    axis.set_xlabel("Spearman ρ: final lines of code vs. final solve rate")
+    axis.grid(axis="x", alpha=0.25, linewidth=0.5)
     fig.tight_layout()
     path = directory / "performance_correlations.png"
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    _save_figure(fig, path)
     plt.close(fig)
     paths.append(path)
 
     env_corr = correlations.pivot(index="method", columns="metric", values="spearman_rho")
     env_corr.index = [_short_method(value) for value in env_corr.index]
     env_corr = env_corr[[metric for metric, _ in METRICS]].rename(columns=dict(METRICS))
-    fig, axis = plt.subplots(figsize=(12, 4.5))
-    _heatmap(axis, env_corr, "Exploratory: environment closure vs. mean policy complexity (Spearman ρ)")
+    fig, axis = plt.subplots(figsize=(7.2, 2.6))
+    _heatmap(axis, env_corr, "Environment complexity vs. policy complexity (Spearman ρ)")
     fig.tight_layout()
     path = directory / "environment_policy_correlation_heatmap.png"
-    fig.savefig(path, dpi=180, bbox_inches="tight")
+    _save_figure(fig, path)
     plt.close(fig)
     paths.append(path)
     return paths, performance
@@ -687,6 +712,7 @@ def _gallery(
 
 
 def main() -> None:
+    _set_paper_style()
     parser = argparse.ArgumentParser()
     parser.add_argument("repo", type=Path)
     parser.add_argument("output", type=Path)
