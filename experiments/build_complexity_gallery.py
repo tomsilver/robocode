@@ -486,38 +486,81 @@ def _trajectory_checkpoints(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _plot_cross_method_evolution(
-    trajectories: pd.DataFrame, output: Path
+    programs: pd.DataFrame, trajectories: pd.DataFrame, output: Path
 ) -> list[Path]:
-    checkpoints = _trajectory_checkpoints(trajectories)
-    common_environments = set.intersection(
-        *(set(group.environment) for _, group in checkpoints.groupby("method"))
-    )
-    checkpoints = checkpoints[checkpoints.environment.isin(common_environments)]
-    # Average seeds first, so every environment gets equal weight even when a seed is
-    # missing. The ribbon then represents a 95% CI across environments.
-    environment_means = (
-        checkpoints.groupby(["method", "environment", "stage", "metric"])[
-            ["value", "change_pct"]
+    trajectories = trajectories.copy()
+    trajectories["outcome_solve_rate"] = trajectories["final_solve_rate"]
+    # GenPlan trajectory snapshots do not carry evaluation results, so attach the
+    # result from the corresponding final program. Agentic trajectories already
+    # identify the exact archived run and retain their own result.
+    genplan_outcomes = (
+        programs[
+            programs.display_method.eq("llm_genplan/whitebox/claude-opus-5")
         ]
-        .mean()
-        .reset_index()
+        .groupby(["environment", "replicate_seed"])
+        .result_solve_rate.mean()
     )
-    methods = sorted(environment_means.method.unique())
+    genplan = trajectories.method.eq("llm_genplan")
+    genplan_keys = pd.MultiIndex.from_frame(
+        trajectories.loc[genplan, ["environment", "replicate_seed"]]
+    )
+    trajectories.loc[genplan, "outcome_solve_rate"] = genplan_keys.map(
+        genplan_outcomes
+    )
+
+    common_environments = set.intersection(
+        *(set(group.environment) for _, group in trajectories.groupby("method"))
+    )
+    trajectories = trajectories[
+        trajectories.environment.isin(common_environments)
+    ]
+    variants = (
+        ("all", "cross_method_evolution_absolute.png", pd.Series(True, index=trajectories.index)),
+        (
+            "fully_successful",
+            "cross_method_evolution_successful.png",
+            trajectories.outcome_solve_rate.eq(1.0),
+        ),
+        (
+            "not_fully_successful",
+            "cross_method_evolution_not_fully_successful.png",
+            trajectories.outcome_solve_rate.lt(1.0),
+        ),
+    )
+    methods = sorted(trajectories.method.unique())
     colors = {method: METHOD_COLORS[method] for method in methods}
     paths = []
-    for column, filename, ylabel in (
-        (
-            "value",
-            "cross_method_evolution_absolute.png",
-            "Mean complexity",
-        ),
-    ):
+    summaries = []
+    counts = []
+    for variant, filename, mask in variants:
+        selected = trajectories[mask]
+        selected_runs = selected[
+            ["method", "environment", "replicate_seed"]
+        ].drop_duplicates()
+        run_counts = selected_runs.groupby("method").agg(
+            trajectories=("replicate_seed", "size"),
+            environments=("environment", "nunique"),
+        )
+        for method, row in run_counts.iterrows():
+            counts.append({"subset": variant, "method": method, **row.to_dict()})
+        checkpoints = _trajectory_checkpoints(selected)
+        # Average seeds first, so every represented environment gets equal weight.
+        # The ribbon then represents a 95% CI across environments.
+        environment_means = (
+            checkpoints.groupby(["method", "environment", "stage", "metric"])[
+                ["value", "change_pct"]
+            ]
+            .mean()
+            .reset_index()
+        )
+        environment_means["subset"] = variant
+        summaries.append(environment_means)
         fig, axes_grid = plt.subplots(2, 3, figsize=(7.2, 3.55))
         axes = list(axes_grid.flat)
         for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
             subset = environment_means[environment_means.metric == metric]
             for method, group in subset.groupby("method"):
-                stats = group.groupby("stage")[column].agg(["mean", "sem"])
+                stats = group.groupby("stage")["value"].agg(["mean", "sem"])
                 ci = 1.96 * stats["sem"].fillna(0)
                 label = _short_method(method)
                 axis.plot(
@@ -538,7 +581,7 @@ def _plot_cross_method_evolution(
                 )
             axis.set_title(metric_title)
             axis.set_xlabel("Synthesis progress (%)")
-            axis.set_ylabel(ylabel)
+            axis.set_ylabel("Mean complexity")
             axis.grid(axis="y", alpha=0.25, linewidth=0.5)
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
@@ -547,7 +590,12 @@ def _plot_cross_method_evolution(
         _save_figure(fig, path)
         plt.close(fig)
         paths.append(path)
-    environment_means.to_csv(output.parent / "cross_method_evolution.csv", index=False)
+    pd.concat(summaries, ignore_index=True).to_csv(
+        output.parent / "cross_method_evolution.csv", index=False
+    )
+    pd.DataFrame(counts).to_csv(
+        output.parent / "cross_method_evolution_counts.csv", index=False
+    )
     return paths
 
 
@@ -586,7 +634,7 @@ def _plot_pattern_summaries(
     sampled = _sample_trajectories(trajectories)
     sampled.to_csv(output / "trajectory_pattern_summary.csv", index=False)
 
-    paths.extend(_plot_cross_method_evolution(trajectories, directory))
+    paths.extend(_plot_cross_method_evolution(programs, trajectories, directory))
 
     ordered = environments.sort_values("own_source_loc", ascending=False)
     fig, axes = plt.subplots(len(METRICS), 1, figsize=(7.2, 8.5), sharex=True)
@@ -721,15 +769,22 @@ def _gallery(
         input=postscript.stdout,
     )
     sections = [("Complexity results", pattern_paths)]
+    figure_titles = {
+        "cross_method_evolution_absolute": "Complexity evolution — all runs",
+        "cross_method_evolution_successful": "Complexity evolution — 100% successful runs",
+        "cross_method_evolution_not_fully_successful": "Complexity evolution — runs below 100% success",
+    }
     cards = []
     for title, paths in sections:
         cards.append(f"<h2>{title}</h2>")
         cards.extend(
-            f'<article><h3>{path.stem}</h3><img loading="lazy" src="{path.relative_to(output)}"></article>'
+            f'<article><h3>{figure_titles.get(path.stem, path.stem)}</h3>'
+            f'<p><a download href="{path.with_suffix(".pdf").relative_to(output)}">Download PDF</a></p>'
+            f'<img loading="lazy" src="{path.relative_to(output)}"></article>'
             for path in paths
         )
     (output / "index.html").write_text(
-        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>RoboCode complexity</title><style>body{max-width:1500px;margin:auto;padding:24px;font-family:system-ui;background:#f5f7fa}article{background:white;padding:16px;margin:20px 0;border-radius:10px}img{width:100%;height:auto}a{margin-right:16px}</style><h1>RoboCode static complexity</h1><p><a href=measurements.pdf download>Measurement definitions (PDF)</a><a href=measurements.md download>Markdown</a><a href=program_complexity_all_methods.csv>Programs CSV</a><a href=environment_complexity.csv>Environments CSV</a><a href=correlations.csv>Correlations CSV</a></p>"
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>RoboCode complexity</title><style>body{max-width:1500px;margin:auto;padding:24px;font-family:system-ui;background:#f5f7fa}article{background:white;padding:16px;margin:20px 0;border-radius:10px}img{width:100%;height:auto}a{margin-right:16px}</style><h1>RoboCode static complexity</h1><p><a href=measurements.pdf download>Measurement definitions (PDF)</a><a href=measurements.md download>Markdown</a><a href=cross_method_evolution_counts.csv>Trajectory subset counts</a><a href=program_complexity_all_methods.csv>Programs CSV</a><a href=environment_complexity.csv>Environments CSV</a><a href=correlations.csv>Correlations CSV</a></p>"
         + "".join(cards)
     )
 
