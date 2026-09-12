@@ -7,6 +7,7 @@ from gymnasium import Env
 from gymnasium.spaces import Box
 
 from robocode.utils.genplan_validate import (
+    evaluate_held_out_tasks_parallel,
     evaluate_tasks,
     evaluate_tasks_parallel,
     score_tasks,
@@ -34,6 +35,16 @@ class _ToyEnv(Env):
 
     def render(self):
         return None
+
+
+class _SeedToyEnv(_ToyEnv):
+    """Toy environment whose required rollout length identifies its reset seed."""
+
+    def reset(self, *, seed=None, options=None):
+        observation, info = super().reset(seed=seed, options=options)
+        self._pos = float(seed)
+        observation[0] = self._pos
+        return observation, info
 
 
 _HEADER = """\
@@ -214,3 +225,24 @@ def test_parallel_evaluation_bounds_hanging_policies(tmp_path):
     assert evaluation.failure is not None
     assert evaluation.failure["error_type"] == "timeout"
     assert evaluation.score == (0, 0, 3, 0.0)
+
+
+def test_parallel_held_out_evaluation_preserves_seed_order(tmp_path):
+    """Held-out workers return complete metrics in the scheduled order."""
+    approach_path = tmp_path / "approach.py"
+    approach_path.write_text(
+        f"{_HEADER}    def get_action(self, state):\n"
+        "        return np.array([1.0], dtype=np.float32)\n"
+    )
+    results = evaluate_held_out_tasks_parallel(
+        {"_target_": "tests.utils.test_genplan_validate._SeedToyEnv"},
+        approach_path,
+        primitive_names=[],
+        seeds=[0, 1, 2],
+        max_steps=[10, 10, 10],
+        counts=[None, None, None],
+        timeout=10.0,
+        max_workers=3,
+    )
+    assert [result["num_steps"] for result in results] == [3, 2, 1]
+    assert all(result["solved"] for result in results)

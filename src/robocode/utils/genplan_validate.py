@@ -8,7 +8,9 @@ this runs there too.
 
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
+import queue
 import time
 import traceback
 from collections.abc import Callable
@@ -27,8 +29,11 @@ from robocode.primitives import build_primitives
 from robocode.utils.episode import (
     load_generated_approach,
     run_episode,
+    run_episode_with_timeout,
     run_in_forked_worker,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def render_state(observation_space: Space[Any], obs: Any) -> str:
@@ -134,6 +139,147 @@ class TaskEvaluation(NamedTuple):
 
     failure: dict[str, str] | None
     score: TaskScore | None
+
+
+def evaluate_held_out_tasks_parallel(
+    environment: dict[str, Any],
+    approach_path: Path,
+    primitive_names: list[str],
+    seeds: list[int],
+    max_steps: list[int],
+    counts: list[int | None],
+    timeout: float,
+    max_workers: int,
+) -> list[dict[str, Any]]:
+    """Evaluate a saved generated policy on independent tasks concurrently.
+
+    Each spawned worker owns an independently constructed environment and policy,
+    reusing them across its episodes just as serial evaluation does. Results are
+    returned in the caller's seed order, regardless of worker completion order.
+    """
+    if max_workers < 1:
+        raise ValueError("max_workers must be positive")
+    if len(seeds) != len(max_steps) or len(seeds) != len(counts):
+        raise ValueError("seeds, max_steps, and counts must have equal lengths")
+
+    ctx = mp.get_context("spawn")
+    results: list[dict[str, Any] | None] = [None] * len(seeds)
+    task_queue = ctx.Queue()
+    result_queue = ctx.Queue()
+    num_workers = min(max_workers, len(seeds))
+    workers = [
+        ctx.Process(
+            target=_held_out_worker_loop,
+            args=(
+                environment,
+                approach_path,
+                primitive_names,
+                timeout,
+                task_queue,
+                result_queue,
+            ),
+        )
+        for _ in range(num_workers)
+    ]
+    for worker in workers:
+        worker.start()
+    for index, seed in enumerate(seeds):
+        task_queue.put((index, seed, max_steps[index], counts[index]))
+    for _ in workers:
+        task_queue.put(None)
+
+    completed = 0
+    while completed < len(seeds) and any(worker.is_alive() for worker in workers):
+        try:
+            index, result = result_queue.get(timeout=0.05)
+        except queue.Empty:
+            continue
+        results[index] = result
+        completed += 1
+        logger.info(
+            "Held-out episode %d/%d complete: solved=%s, steps=%s",
+            completed,
+            len(seeds),
+            result["solved"],
+            result["num_steps"],
+        )
+
+    for worker in workers:
+        worker.join()
+    while True:
+        try:
+            index, result = result_queue.get_nowait()
+        except queue.Empty:
+            break
+        if results[index] is None:
+            results[index] = result
+
+    exitcodes = [worker.exitcode for worker in workers if worker.exitcode]
+    for index, result in enumerate(results):
+        if result is not None:
+            continue
+        results[index] = {
+            "total_reward": None,
+            "num_steps": None,
+            "solved": False,
+            "crashed": True,
+            "error": (
+                "evaluation worker exited before reporting; " f"exit codes {exitcodes}"
+            ),
+            **({"object_count": counts[index]} if counts[index] is not None else {}),
+        }
+
+    ordered_results = [result for result in results if result is not None]
+    assert len(ordered_results) == len(seeds)
+    return ordered_results
+
+
+def _held_out_worker_loop(
+    environment: dict[str, Any],
+    approach_path: Path,
+    primitive_names: list[str],
+    timeout: float,
+    tasks: Any,
+    results: Any,
+) -> None:
+    """Construct one isolated evaluator and consume held-out episode tasks."""
+    env = hydra.utils.instantiate(OmegaConf.create(environment))
+    try:
+        primitives = build_primitives(env, primitive_names)
+        generated = load_generated_approach(
+            approach_path, env.action_space, env.observation_space, primitives
+        )
+        policy = _ValidationPolicy(
+            generated, env.action_space, env.observation_space, primitives
+        )
+        while (task := tasks.get()) is not None:
+            index, seed, max_steps, count = task
+            try:
+                metrics, _, _ = run_episode_with_timeout(
+                    env,
+                    policy,
+                    seed,
+                    max_steps,
+                    timeout=timeout,
+                    count=count,
+                )
+                results.put((index, metrics))
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                results.put(
+                    (
+                        index,
+                        {
+                            "total_reward": None,
+                            "num_steps": None,
+                            "solved": False,
+                            "crashed": True,
+                            "error": f"{type(exc).__name__}: {exc}",
+                            **({"object_count": count} if count is not None else {}),
+                        },
+                    )
+                )
+    finally:
+        env.close()
 
 
 def evaluate_tasks(
