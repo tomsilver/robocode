@@ -9,10 +9,12 @@ import json
 import os
 import re
 import subprocess
+import textwrap
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import pandas as pd
 import yaml
@@ -81,9 +83,11 @@ Each saved synthesis history is sampled at the nearest available revision to 0%,
 10%, ..., 100% progress. Replicate seeds are averaged within each environment
 first; the plotted line then averages environments equally. Shaded bands are 95%
 normal confidence intervals across environments (mean plus or minus 1.96 standard
-errors). Only the 21 environments represented in all four evolving methods are
-included. The plotted endpoint is the final saved implementation; solve rate is not
-included in the trajectory figure because it is reported in the paper's table.
+errors). For every averaged figure, the environment set is restricted after
+filtering to the intersection represented by all four evolving methods. The exact
+included and excluded environments are printed above each figure. The plotted
+endpoint is the final saved implementation; solve rate is not included in the
+trajectory panels because it is reported in the paper's table.
 
 Three versions use the same calculation: **all runs**, runs whose final held-out
 solve rate is exactly 1.0 (**100% successful**), and runs whose final held-out solve
@@ -515,12 +519,7 @@ def _plot_cross_method_evolution(
         genplan_outcomes
     )
 
-    common_environments = set.intersection(
-        *(set(group.environment) for _, group in trajectories.groupby("method"))
-    )
-    trajectories = trajectories[
-        trajectories.environment.isin(common_environments)
-    ]
+    all_environments = set(trajectories.environment)
     variants = (
         (
             "all",
@@ -546,9 +545,69 @@ def _plot_cross_method_evolution(
     paths = []
     summaries = []
     counts = []
+    report_path = output.parent / "complexity_evolution_report.pdf"
+
+    def draw(
+        environment_means: pd.DataFrame,
+        figure_title: str,
+        detail_lines: list[str],
+    ) -> Any:
+        fig, axes_grid = plt.subplots(2, 3, figsize=(7.2, 4.35))
+        axes = list(axes_grid.flat)
+        for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
+            subset = environment_means[environment_means.metric == metric]
+            for method, group in subset.groupby("method"):
+                stats = group.groupby("stage")["value"].agg(["mean", "sem"])
+                ci = 1.96 * stats["sem"].fillna(0)
+                axis.plot(
+                    100 * stats.index,
+                    stats["mean"],
+                    marker="o",
+                    markersize=1.8,
+                    linewidth=1.25,
+                    color=colors[method],
+                    label=_short_method(method),
+                )
+                axis.fill_between(
+                    100 * stats.index,
+                    stats["mean"] - ci,
+                    stats["mean"] + ci,
+                    color=colors[method],
+                    alpha=0.10,
+                )
+            axis.set_title(metric_title)
+            axis.set_xlabel("Normalized revision progress (%)")
+            axis.set_ylabel("Mean complexity")
+            axis.grid(axis="y", alpha=0.25, linewidth=0.5)
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
+        fig.suptitle(figure_title, fontsize=9, fontweight="bold", y=0.995)
+        y = 0.965
+        for line in detail_lines:
+            wrapped = textwrap.fill(line, width=128)
+            fig.text(0.5, y, wrapped, ha="center", va="top", fontsize=5.5)
+            y -= 0.028 * (wrapped.count("\n") + 1)
+        fig.tight_layout(rect=(0, 0.065, 1, y - 0.005), w_pad=0.9, h_pad=1.0)
+        return fig
+
+    variant_data = []
     for variant, figure_title, filename, mask in variants:
-        selected = trajectories[mask]
-        selected_runs = selected[
+        selected = trajectories[mask].copy()
+        available = {
+            method: set(group.environment)
+            for method, group in selected.groupby("method")
+        }
+        included = set.intersection(
+            *(available.get(method, set()) for method in methods)
+        )
+        excluded = all_environments - included
+        averaged = selected[selected.environment.isin(included)]
+        variant_data.append((variant, figure_title, filename, selected, included))
+        detail_lines = [
+            f"Included ({len(included)}): {', '.join(sorted(included)) or 'none'}",
+            f"Excluded ({len(excluded)}): {', '.join(sorted(excluded)) or 'none'}",
+        ]
+        selected_runs = averaged[
             ["method", "environment", "replicate_seed"]
         ].drop_duplicates()
         run_counts = selected_runs.groupby("method").agg(
@@ -557,8 +616,9 @@ def _plot_cross_method_evolution(
         )
         for method, row in run_counts.iterrows():
             counts.append({"subset": variant, "method": method, **row.to_dict()})
-        checkpoints = _trajectory_checkpoints(selected)
-        # Average seeds first, so every represented environment gets equal weight.
+        checkpoints = _trajectory_checkpoints(averaged)
+        # Average seeds first, then average the identical environment set for each
+        # method. The ribbon represents a 95% CI across those environments.
         # The ribbon then represents a 95% CI across environments.
         environment_means = (
             checkpoints.groupby(["method", "environment", "stage", "metric"])[
@@ -569,42 +629,58 @@ def _plot_cross_method_evolution(
         )
         environment_means["subset"] = variant
         summaries.append(environment_means)
-        fig, axes_grid = plt.subplots(2, 3, figsize=(7.2, 3.55))
-        axes = list(axes_grid.flat)
-        for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
-            subset = environment_means[environment_means.metric == metric]
-            for method, group in subset.groupby("method"):
-                stats = group.groupby("stage")["value"].agg(["mean", "sem"])
-                ci = 1.96 * stats["sem"].fillna(0)
-                label = _short_method(method)
-                axis.plot(
-                    100 * stats.index,
-                    stats["mean"],
-                    marker="o",
-                    markersize=1.8,
-                    linewidth=1.25,
-                    color=colors[method],
-                    label=label,
-                )
-                axis.fill_between(
-                    100 * stats.index,
-                    stats["mean"] - ci,
-                    stats["mean"] + ci,
-                    color=colors[method],
-                    alpha=0.10,
-                )
-            axis.set_title(metric_title)
-            axis.set_xlabel("Synthesis progress (%)")
-            axis.set_ylabel("Mean complexity")
-            axis.grid(axis="y", alpha=0.25, linewidth=0.5)
-        handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
-        fig.suptitle(figure_title, fontsize=9, fontweight="bold", y=0.995)
-        fig.tight_layout(rect=(0, 0.07, 1, 0.96), w_pad=0.9, h_pad=1.0)
+        fig = draw(environment_means, f"Average: {figure_title}", detail_lines)
         path = output / filename
         _save_figure(fig, path)
         plt.close(fig)
         paths.append(path)
+
+    with PdfPages(report_path) as report:
+        for variant, figure_title, _, selected, included in variant_data:
+            averaged = selected[selected.environment.isin(included)]
+            checkpoints = _trajectory_checkpoints(averaged)
+            means = (
+                checkpoints.groupby(["method", "environment", "stage", "metric"])[
+                    ["value", "change_pct"]
+                ]
+                .mean()
+                .reset_index()
+            )
+            excluded = all_environments - included
+            fig = draw(
+                means,
+                f"Average: {figure_title}",
+                [
+                    f"Included ({len(included)}): {', '.join(sorted(included)) or 'none'}",
+                    f"Excluded ({len(excluded)}): {', '.join(sorted(excluded)) or 'none'}",
+                ],
+            )
+            report.savefig(fig)
+            plt.close(fig)
+        for environment in sorted(all_environments):
+            for variant, figure_title, _, selected, _ in variant_data:
+                environment_rows = selected[selected.environment.eq(environment)]
+                if environment_rows.empty:
+                    continue
+                checkpoints = _trajectory_checkpoints(environment_rows)
+                means = (
+                    checkpoints.groupby(["method", "environment", "stage", "metric"])[
+                        ["value", "change_pct"]
+                    ]
+                    .mean()
+                    .reset_index()
+                )
+                present = set(means.method)
+                fig = draw(
+                    means,
+                    f"{environment}: {figure_title}",
+                    [
+                        f"Available approaches: {', '.join(_short_method(m) for m in methods if m in present) or 'none'}",
+                        f"Unavailable approaches: {', '.join(_short_method(m) for m in methods if m not in present) or 'none'}",
+                    ],
+                )
+                report.savefig(fig)
+                plt.close(fig)
     pd.concat(summaries, ignore_index=True).to_csv(
         output.parent / "cross_method_evolution.csv", index=False
     )
@@ -799,7 +875,7 @@ def _gallery(
             for path in paths
         )
     (output / "index.html").write_text(
-        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>RoboCode complexity</title><style>body{max-width:1500px;margin:auto;padding:24px;font-family:system-ui;background:#f5f7fa}article{background:white;padding:16px;margin:20px 0;border-radius:10px}img{width:100%;height:auto}a{margin-right:16px}</style><h1>RoboCode static complexity</h1><p><a href=measurements.pdf download>Measurement definitions (PDF)</a><a href=measurements.md download>Markdown</a><a href=cross_method_evolution_counts.csv>Trajectory subset counts</a><a href=program_complexity_all_methods.csv>Programs CSV</a><a href=environment_complexity.csv>Environments CSV</a><a href=correlations.csv>Correlations CSV</a></p>"
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>RoboCode complexity</title><style>body{max-width:1500px;margin:auto;padding:24px;font-family:system-ui;background:#f5f7fa}article{background:white;padding:16px;margin:20px 0;border-radius:10px}img{width:100%;height:auto}a{margin-right:16px}</style><h1>RoboCode static complexity</h1><p><a href=complexity_evolution_report.pdf download>Complete evolution report (PDF)</a><a href=measurements.pdf download>Measurement definitions (PDF)</a><a href=measurements.md download>Markdown</a><a href=cross_method_evolution_counts.csv>Trajectory subset counts</a><a href=program_complexity_all_methods.csv>Programs CSV</a><a href=environment_complexity.csv>Environments CSV</a><a href=correlations.csv>Correlations CSV</a></p>"
         + "".join(cards)
     )
 
