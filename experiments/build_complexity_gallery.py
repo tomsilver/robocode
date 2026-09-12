@@ -521,39 +521,59 @@ def _plot_pattern_summaries(
     perf_rows = []
     for method, group in valid.groupby("display_method"):
         for metric, _ in METRICS:
-            environment_rhos = []
-            for _, environment_group in group.groupby("environment"):
+            for environment, environment_group in group.groupby("environment"):
                 complete = environment_group[[metric, "result_solve_rate"]].dropna()
                 if (
                     len(complete) >= 3
                     and complete[metric].nunique() > 1
                     and complete.result_solve_rate.nunique() > 1
                 ):
-                    environment_rhos.append(
-                        complete[metric].rank().corr(
-                            complete.result_solve_rate.rank()
-                        )
+                    perf_rows.append(
+                        {
+                            "method": _short_method(method),
+                            "metric": metric,
+                            "environment": environment,
+                            "spearman_rho": complete[metric]
+                            .rank()
+                            .corr(complete.result_solve_rate.rank()),
+                            "n_seeds": len(complete),
+                        }
                     )
-            perf_rows.append(
-                {
-                    "method": _short_method(method),
-                    "metric": metric,
-                    "within_environment_spearman_rho": np.mean(environment_rhos),
-                    "n_environments": len(environment_rhos),
-                }
-            )
     performance = pd.DataFrame(perf_rows)
     performance.to_csv(output / "performance_correlations.csv", index=False)
-    pivot = performance.pivot(
-        index="method", columns="metric", values="within_environment_spearman_rho"
+    loc = performance[performance.metric == "source_loc"]
+    methods = sorted(loc.method.unique())
+    rng = np.random.default_rng(0)
+    fig, axis = plt.subplots(figsize=(11, 5.5))
+    for position, method in enumerate(methods):
+        values = loc.loc[loc.method == method, "spearman_rho"].to_numpy()
+        jitter = rng.uniform(-0.10, 0.10, len(values))
+        axis.scatter(values, position + jitter, color=f"C{position}", alpha=0.45, s=28)
+        bootstrap_means = np.mean(
+            rng.choice(values, size=(20_000, len(values)), replace=True), axis=1
+        )
+        mean = np.mean(values)
+        low, high = np.quantile(bootstrap_means, [0.025, 0.975])
+        axis.errorbar(
+            mean,
+            position,
+            xerr=[[mean - low], [high - mean]],
+            fmt="D",
+            color="black",
+            markersize=7,
+            capsize=5,
+            linewidth=2,
+        )
+        axis.text(1.03, position, f"n={len(values)} envs", va="center", fontsize=9)
+    axis.axvline(0, color="black", linestyle="--", linewidth=1)
+    axis.set_xlim(-1.05, 1.18)
+    axis.set_yticks(range(len(methods)), methods)
+    axis.set_xlabel("Within-environment Spearman ρ: final lines of code vs. final solve rate")
+    axis.set_title(
+        "Lines of code and solve rate across seeds\n"
+        "Small dots: individual environments; diamonds: mean with 95% bootstrap CI"
     )
-    pivot = pivot[[metric for metric, _ in METRICS]].rename(columns=dict(METRICS))
-    fig, axis = plt.subplots(figsize=(12, 4.5))
-    _heatmap(
-        axis,
-        pivot,
-        "Policy complexity vs. solve rate (mean seed-level Spearman ρ across environments)",
-    )
+    axis.grid(axis="x", alpha=0.25)
     fig.tight_layout()
     path = directory / "performance_correlations.png"
     fig.savefig(path, dpi=180, bbox_inches="tight")
