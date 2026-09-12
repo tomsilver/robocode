@@ -517,56 +517,6 @@ def _plot_pattern_summaries(
 
     paths.extend(_plot_cross_method_evolution(trajectories, directory))
 
-    metric_columns = [metric for metric, _ in METRICS]
-    common_final_environments = set.intersection(
-        *(set(group.environment) for _, group in programs.groupby("display_method"))
-    )
-    final_data = programs[programs.environment.isin(common_final_environments)]
-    final_means = (
-        final_data.groupby(["display_method", "environment"])[metric_columns]
-        .mean()
-        .reset_index()
-    )
-    methods = sorted(final_means.display_method.unique())
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
-    rng = np.random.default_rng(0)
-    for axis, (metric, title) in zip(axes.flat, METRICS, strict=True):
-        values = []
-        for position, method in enumerate(methods):
-            group = final_means[final_means.display_method == method]
-            metric_values = group[metric].to_numpy()
-            values.append(metric_values)
-            jitter = rng.uniform(-0.09, 0.09, len(metric_values))
-            axis.scatter(
-                position + jitter,
-                metric_values,
-                s=16,
-                alpha=0.45,
-                color=f"C{position}",
-            )
-        boxes = axis.boxplot(values, positions=range(len(methods)), widths=0.45)
-        for median in boxes["medians"]:
-            median.set_color("black")
-            median.set_linewidth(2)
-        axis.set_title(title)
-        axis.set_xticks(
-            range(len(methods)),
-            [_short_method(method) for method in methods],
-            rotation=25,
-            ha="right",
-            fontsize=8,
-        )
-        axis.grid(axis="y", alpha=0.25)
-    fig.suptitle(
-        "Final-program complexity by method — seeds averaged within environment; "
-        f"{len(common_final_environments)} shared environments"
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
-    path = directory / "final_program_complexity.png"
-    fig.savefig(path, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    paths.append(path)
-
     valid = programs.dropna(subset=["result_solve_rate"]).copy()
     perf_rows = []
     for method, group in valid.groupby("display_method"):
