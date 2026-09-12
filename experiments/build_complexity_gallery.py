@@ -21,6 +21,7 @@ import yaml
 
 METRICS = [
     ("source_loc", "Lines of code"),
+    ("logical_loc", "Logical LOC (comments excluded)"),
     ("ast_nodes", "AST nodes"),
     ("cyclomatic_total", "Cyclomatic complexity"),
     ("cyclomatic_max_function", "Maximum function complexity"),
@@ -46,6 +47,12 @@ import or execute the generated programs.
 
 Number of physical source lines, including blank and comment-only lines. This
 measures overall source-file size and is intentionally not logical LOC.
+
+### Logical lines of code (comments excluded)
+
+Number of logical Python statements, counted from tokenizer `NEWLINE` tokens.
+Blank lines, comment-only lines, and physical continuation lines are excluded.
+Docstrings remain executable Python statements and are therefore counted.
 
 ### AST nodes
 
@@ -74,7 +81,7 @@ and class definitions do not themselves increase this depth.
 Number of distinct attributes assigned through `self.<name>`. This measures the
 size of the policy's explicit persistent object state.
 
-All six measurements are counts. Larger values indicate more source or structural
+All seven measurements are counts. Larger values indicate more source or structural
 complexity, but none is by itself a measure of correctness or software quality.
 
 ### Complexity evolution
@@ -552,9 +559,13 @@ def _plot_cross_method_evolution(
         figure_title: str,
         detail_lines: list[str],
     ) -> Any:
-        fig, axes_grid = plt.subplots(2, 3, figsize=(7.2, 4.35))
+        fig, axes_grid = plt.subplots(3, 3, figsize=(7.2, 5.8))
         axes = list(axes_grid.flat)
-        for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
+        for axis in axes[len(METRICS) :]:
+            axis.set_visible(False)
+        for axis, (metric, metric_title) in zip(
+            axes[: len(METRICS)], METRICS, strict=True
+        ):
             subset = environment_means[environment_means.metric == metric]
             for method, group in subset.groupby("method"):
                 stats = group.groupby("stage")["value"].agg(["mean", "sem"])

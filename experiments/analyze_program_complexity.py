@@ -49,6 +49,7 @@ _NESTING = (
 # columns are deliberately excluded.
 COMPLEXITY_METRICS = [
     "source_loc",
+    "logical_loc",
     "ast_nodes",
     "function_count",
     "branch_count",
@@ -128,10 +129,14 @@ def _cyclomatic_complexity(node: ast.AST) -> int:
 def _source_metrics(source: str) -> dict[str, Any]:
     lines = source.splitlines()
     nonblank = sum(bool(line.strip()) for line in lines)
+    logical_loc = 0
     operators: Counter[str] = Counter()
     operands: Counter[str] = Counter()
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+        # NEWLINE terminates a logical Python statement; blank lines, comments,
+        # and continuation lines emit NL instead and are therefore excluded.
+        logical_loc = sum(token.type == tokenize.NEWLINE for token in tokens)
         for token in tokens:
             if token.type == tokenize.OP or (
                 token.type == tokenize.NAME
@@ -161,6 +166,7 @@ def _source_metrics(source: str) -> dict[str, Any]:
     base: dict[str, Any] = {
         "source_loc": len(lines),
         "nonblank_loc": nonblank,
+        "logical_loc": logical_loc,
     }
     try:
         tree = ast.parse(source)

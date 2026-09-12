@@ -40,6 +40,18 @@ def test_source_metrics_count_decisions_and_state() -> None:
     assert metrics["max_nesting_depth"] == 1
 
 
+def test_logical_loc_excludes_comments_blanks_and_continuations() -> None:
+    source = """# comment
+
+x = (
+    1 + 2  # inline comment
+)
+"""
+    metrics = analysis._source_metrics(source)
+    assert metrics["source_loc"] == 5
+    assert metrics["logical_loc"] == 1
+
+
 def test_collects_final_agentic_program_from_zip(tmp_path: Path) -> None:
     archive_path = tmp_path / "example__agentic__run.zip"
     root = "campaign/run/replicate_42"
