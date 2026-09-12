@@ -292,11 +292,9 @@ def _plot_correlations(
     )
     merged = means.merge(envs, on="environment")
     rows = []
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
-    for axis, (metric, title) in zip(axes.flat, METRICS, strict=True):
+    for metric, _ in METRICS:
         xcol = f"closure_{metric}"
         for method, group in merged.groupby("display_method"):
-            axis.scatter(group[xcol], group[metric], label=method, alpha=0.75)
             rows.append(
                 {
                     "method": method,
@@ -306,17 +304,6 @@ def _plot_correlations(
                     "spearman_rho": group[xcol].rank().corr(group[metric].rank()),
                 }
             )
-        axis.set_title(title)
-        axis.set_xlabel("Environment dependency-closure complexity")
-        axis.set_ylabel("Mean policy complexity")
-        axis.grid(alpha=0.25)
-    axes.flat[0].legend(fontsize=7)
-    fig.suptitle("Environment source complexity vs. generated-policy complexity")
-    fig.tight_layout()
-    fig.savefig(
-        output / "environment_policy_correlations.png", dpi=170, bbox_inches="tight"
-    )
-    plt.close(fig)
     return pd.DataFrame(rows)
 
 
@@ -335,20 +322,20 @@ def _sample_trajectories(frame: pd.DataFrame) -> pd.DataFrame:
     rows = []
     stages = np.linspace(0, 1, 11)
     for keys, trajectory in frame.groupby(
-        ["method", "environment", "experiment_id"], dropna=False
+        ["method", "environment", "replicate_seed"], dropna=False
     ):
         trajectory = trajectory.sort_values("revision_progress")
-        sampled = pd.DataFrame(
-            [
-                trajectory.loc[
-                    (trajectory.revision_progress - stage).abs().idxmin()
-                ]
-                for stage in stages
-            ]
-        ).drop_duplicates("revision_progress")
+        samples = []
+        for stage in stages:
+            sample = trajectory.loc[
+                (trajectory.revision_progress - stage).abs().idxmin()
+            ].to_dict()
+            sample["stage"] = stage
+            samples.append(sample)
+        sampled = pd.DataFrame(samples)
         for metric, _ in METRICS:
             values = sampled[metric].fillna(0).astype(float).to_numpy()
-            progress = sampled.revision_progress.to_numpy()
+            progress = sampled.stage.to_numpy()
             rho = (
                 pd.Series(progress).rank().corr(pd.Series(values).rank())
                 if len(np.unique(values)) > 1
@@ -358,7 +345,7 @@ def _sample_trajectories(frame: pd.DataFrame) -> pd.DataFrame:
                 {
                     "method": keys[0],
                     "environment": keys[1],
-                    "experiment_id": keys[2],
+                    "replicate_seed": keys[2],
                     "metric": metric,
                     "spearman_rho": rho,
                     "endpoint_change_pct": 100
@@ -368,6 +355,130 @@ def _sample_trajectories(frame: pd.DataFrame) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows)
+
+
+def _trajectory_checkpoints(frame: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for (method, environment, seed), trajectory in frame.groupby(
+        ["method", "environment", "replicate_seed"], dropna=False
+    ):
+        trajectory = trajectory.sort_values("revision_progress")
+        for stage in np.linspace(0, 1, 11):
+            sample = trajectory.loc[
+                (trajectory.revision_progress - stage).abs().idxmin()
+            ]
+            for metric, _ in METRICS:
+                rows.append(
+                    {
+                        "method": method,
+                        "environment": environment,
+                        "replicate_seed": seed,
+                        "stage": stage,
+                        "metric": metric,
+                        "value": float(sample[metric] or 0),
+                    }
+                )
+    result = pd.DataFrame(rows)
+    baseline = result.loc[result.stage == 0, [
+        "method", "environment", "replicate_seed", "metric", "value"
+    ]].rename(columns={"value": "baseline"})
+    result = result.merge(
+        baseline,
+        on=["method", "environment", "replicate_seed", "metric"],
+        validate="many_to_one",
+    )
+    result["change_pct"] = (
+        100 * (result.value - result.baseline) / result.baseline.abs().clip(lower=1)
+    )
+    endpoint = result.loc[
+        result.stage == 1,
+        ["method", "environment", "replicate_seed", "metric", "value"],
+    ].rename(columns={"value": "endpoint"})
+    result = result.merge(
+        endpoint,
+        on=["method", "environment", "replicate_seed", "metric"],
+        validate="many_to_one",
+    )
+    result["fraction_of_final_pct"] = 100 * result.value / result.endpoint
+    result.loc[result.endpoint == 0, "fraction_of_final_pct"] = np.nan
+    return result
+
+
+def _plot_cross_method_evolution(
+    trajectories: pd.DataFrame, output: Path
+) -> list[Path]:
+    checkpoints = _trajectory_checkpoints(trajectories)
+    common_environments = set.intersection(
+        *(set(group.environment) for _, group in checkpoints.groupby("method"))
+    )
+    checkpoints = checkpoints[checkpoints.environment.isin(common_environments)]
+    # Average seeds first, so every environment gets equal weight even when a seed is
+    # missing. The ribbon then represents a 95% CI across environments.
+    environment_means = (
+        checkpoints.groupby(["method", "environment", "stage", "metric"])[
+            ["value", "change_pct", "fraction_of_final_pct"]
+        ]
+        .mean()
+        .reset_index()
+    )
+    methods = sorted(environment_means.method.unique())
+    colors = dict(zip(methods, plt.get_cmap("tab10").colors, strict=False))
+    paths = []
+    for column, filename, ylabel, title in (
+        (
+            "value",
+            "cross_method_evolution_absolute.png",
+            "Mean complexity",
+            "Absolute policy complexity over synthesis",
+        ),
+        (
+            "fraction_of_final_pct",
+            "cross_method_evolution_relative.png",
+            "Fraction of final complexity (%)",
+            "Fraction of final complexity reached over synthesis",
+        ),
+    ):
+        fig, axes = plt.subplots(2, 3, figsize=(16, 9), sharex=True)
+        for axis, (metric, metric_title) in zip(axes.flat, METRICS, strict=True):
+            subset = environment_means[environment_means.metric == metric]
+            for method, group in subset.groupby("method"):
+                stats = group.groupby("stage")[column].agg(["mean", "sem"])
+                ci = 1.96 * stats["sem"].fillna(0)
+                label = _short_method(method)
+                axis.plot(
+                    100 * stats.index,
+                    stats["mean"],
+                    marker="o",
+                    markersize=3,
+                    linewidth=2,
+                    color=colors[method],
+                    label=label,
+                )
+                axis.fill_between(
+                    100 * stats.index,
+                    stats["mean"] - ci,
+                    stats["mean"] + ci,
+                    color=colors[method],
+                    alpha=0.12,
+                )
+            axis.set_title(metric_title)
+            axis.set_xlabel("Synthesis progress (%)")
+            axis.set_ylabel(ylabel)
+            axis.grid(alpha=0.25)
+        handles, labels = axes.flat[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False)
+        fig.suptitle(
+            f"{title} — seeds averaged within environment; "
+            f"{len(common_environments)} shared environments",
+            y=0.98,
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        path = output / filename
+        fig.savefig(path, dpi=180, bbox_inches="tight")
+        plt.close(fig)
+        paths.append(path)
+    environment_means.to_csv(output.parent / "cross_method_evolution.csv", index=False)
+    return paths
 
 
 def _heatmap(
@@ -404,36 +515,54 @@ def _plot_pattern_summaries(
     sampled = _sample_trajectories(trajectories)
     sampled.to_csv(output / "trajectory_pattern_summary.csv", index=False)
 
-    selected = ["source_loc", "cyclomatic_total", "persistent_state_fields"]
-    summary = (
-        sampled[sampled.metric.isin(selected)]
-        .groupby(["method", "metric"])
-        .agg(
-            median_rho=("spearman_rho", "median"),
-            median_endpoint_change_pct=("endpoint_change_pct", "median"),
-        )
+    paths.extend(_plot_cross_method_evolution(trajectories, directory))
+
+    metric_columns = [metric for metric, _ in METRICS]
+    common_final_environments = set.intersection(
+        *(set(group.environment) for _, group in programs.groupby("display_method"))
+    )
+    final_data = programs[programs.environment.isin(common_final_environments)]
+    final_means = (
+        final_data.groupby(["display_method", "environment"])[metric_columns]
+        .mean()
         .reset_index()
     )
-    summary["method"] = summary.method.map(_short_method)
-    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-    for axis, column, title in (
-        (axes[0], "median_rho", "Monotonicity over revision progress"),
-        (axes[1], "median_endpoint_change_pct", "Median first-to-final growth"),
-    ):
-        pivot = summary.pivot(index="method", columns="metric", values=column)
-        pivot = pivot.rename(columns=dict(METRICS))
-        pivot.plot.bar(ax=axis, width=0.8)
-        axis.axhline(0, color="black", linewidth=0.8)
+    methods = sorted(final_means.display_method.unique())
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    rng = np.random.default_rng(0)
+    for axis, (metric, title) in zip(axes.flat, METRICS, strict=True):
+        values = []
+        for position, method in enumerate(methods):
+            group = final_means[final_means.display_method == method]
+            metric_values = group[metric].to_numpy()
+            values.append(metric_values)
+            jitter = rng.uniform(-0.09, 0.09, len(metric_values))
+            axis.scatter(
+                position + jitter,
+                metric_values,
+                s=16,
+                alpha=0.45,
+                color=f"C{position}",
+            )
+        boxes = axis.boxplot(values, positions=range(len(methods)), widths=0.45)
+        for median in boxes["medians"]:
+            median.set_color("black")
+            median.set_linewidth(2)
         axis.set_title(title)
-        axis.set_xlabel("")
-        axis.set_ylabel("Spearman ρ" if column == "median_rho" else "Change (%)")
-        if column == "median_endpoint_change_pct":
-            axis.set_yscale("symlog", linthresh=10)
-        axis.tick_params(axis="x", rotation=20)
+        axis.set_xticks(
+            range(len(methods)),
+            [_short_method(method) for method in methods],
+            rotation=25,
+            ha="right",
+            fontsize=8,
+        )
         axis.grid(axis="y", alpha=0.25)
-    fig.suptitle("Complexity accumulation during synthesis (10% checkpoints)")
-    fig.tight_layout()
-    path = directory / "trajectory_monotonicity_and_growth.png"
+    fig.suptitle(
+        "Final-program complexity by method — seeds averaged within environment; "
+        f"{len(common_final_environments)} shared environments"
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    path = directory / "final_program_complexity.png"
     fig.savefig(path, dpi=180, bbox_inches="tight")
     plt.close(fig)
     paths.append(path)
@@ -442,42 +571,50 @@ def _plot_pattern_summaries(
     perf_rows = []
     for method, group in valid.groupby("display_method"):
         for metric, _ in METRICS:
-            centered_x = group[metric] - group.groupby("environment")[metric].transform("mean")
-            centered_y = group.result_solve_rate - group.groupby("environment").result_solve_rate.transform("mean")
+            environment_rhos = []
+            for _, environment_group in group.groupby("environment"):
+                complete = environment_group[[metric, "result_solve_rate"]].dropna()
+                if (
+                    len(complete) >= 3
+                    and complete[metric].nunique() > 1
+                    and complete.result_solve_rate.nunique() > 1
+                ):
+                    environment_rhos.append(
+                        complete[metric].rank().corr(
+                            complete.result_solve_rate.rank()
+                        )
+                    )
             perf_rows.append(
                 {
                     "method": _short_method(method),
                     "metric": metric,
-                    "within_environment_spearman_rho": centered_x.rank().corr(centered_y.rank()),
+                    "within_environment_spearman_rho": np.mean(environment_rhos),
+                    "n_environments": len(environment_rhos),
                 }
             )
     performance = pd.DataFrame(perf_rows)
     performance.to_csv(output / "performance_correlations.csv", index=False)
-    pivot = performance.pivot(index="method", columns="metric", values="within_environment_spearman_rho")
-    pivot = pivot.rename(columns=dict(METRICS))
+    pivot = performance.pivot(
+        index="method", columns="metric", values="within_environment_spearman_rho"
+    )
+    pivot = pivot[[metric for metric, _ in METRICS]].rename(columns=dict(METRICS))
     fig, axis = plt.subplots(figsize=(12, 4.5))
-    _heatmap(axis, pivot, "Policy complexity vs. solve rate (within-environment Spearman ρ)")
+    _heatmap(
+        axis,
+        pivot,
+        "Policy complexity vs. solve rate (mean seed-level Spearman ρ across environments)",
+    )
     fig.tight_layout()
     path = directory / "performance_correlations.png"
     fig.savefig(path, dpi=180, bbox_inches="tight")
     plt.close(fig)
     paths.append(path)
 
-    metric_columns = [metric for metric, _ in METRICS]
-    redundancy = programs[metric_columns].corr(method="spearman").rename(index=dict(METRICS), columns=dict(METRICS))
-    fig, axis = plt.subplots(figsize=(9, 7))
-    _heatmap(axis, redundancy, "Redundancy among static-complexity metrics")
-    fig.tight_layout()
-    path = directory / "metric_redundancy.png"
-    fig.savefig(path, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    paths.append(path)
-
     env_corr = correlations.pivot(index="method", columns="metric", values="spearman_rho")
     env_corr.index = [_short_method(value) for value in env_corr.index]
-    env_corr = env_corr.rename(columns=dict(METRICS))
+    env_corr = env_corr[[metric for metric, _ in METRICS]].rename(columns=dict(METRICS))
     fig, axis = plt.subplots(figsize=(12, 4.5))
-    _heatmap(axis, env_corr, "Environment closure vs. mean policy complexity (Spearman ρ)")
+    _heatmap(axis, env_corr, "Exploratory: environment closure vs. mean policy complexity (Spearman ρ)")
     fig.tight_layout()
     path = directory / "environment_policy_correlation_heatmap.png"
     fig.savefig(path, dpi=180, bbox_inches="tight")
@@ -488,19 +625,9 @@ def _plot_pattern_summaries(
 
 def _gallery(
     output: Path,
-    final_paths: list[Path],
-    evolution_paths: list[Path],
     pattern_paths: list[Path],
 ) -> None:
-    sections = [
-        ("Cross-run patterns", pattern_paths),
-        (
-            "Environment vs. policy correlation",
-            [output / "environment_policy_correlations.png"],
-        ),
-        ("Final policies by environment", final_paths),
-        ("Complexity evolution", evolution_paths),
-    ]
+    sections = [("Complexity results", pattern_paths)]
     cards = []
     for title, paths in sections:
         cards.append(f"<h2>{title}</h2>")
@@ -537,16 +664,15 @@ def main() -> None:
     trajectories.to_csv(output / "complexity_trajectories.csv", index=False)
     envs = _environment_complexity(repo, set(programs.environment), analyzer)
     envs.to_csv(output / "environment_complexity.csv", index=False)
-    finals = _plot_final_by_environment(programs, output)
-    evolution = _plot_evolution(trajectories, output)
     correlations = _plot_correlations(programs, envs, output)
     correlations.to_csv(output / "correlations.csv", index=False)
     pattern_paths, _ = _plot_pattern_summaries(
         programs, trajectories, correlations, output
     )
-    _gallery(output, finals, evolution, pattern_paths)
+    _gallery(output, pattern_paths)
     print(
-        f"Wrote {len(programs)} programs, {len(trajectories)} trajectory revisions, {len(envs)} environments, {len(finals)} final figures, and {len(evolution)} evolution figures"
+        f"Wrote {len(programs)} programs, {len(trajectories)} trajectory revisions, "
+        f"{len(envs)} environments, and {len(pattern_paths)} result figures"
     )
 
 
