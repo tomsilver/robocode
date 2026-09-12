@@ -1831,6 +1831,26 @@ def _record_history_episodes(
     tmp.replace(path)
 
 
+SCENE_BG = True  # replay Dynamic 3D environments with their room background
+
+
+def _with_scene_bg(cfg: Any) -> Any:
+    """Turn on the room background for replays of environments that support it.
+
+    Only configs that already carry a ``scene_bg`` key (the Dynamic 3D families,
+    at the top level or under ``constant_object_env_kwargs``) are touched, and an
+    explicit scene name is kept; plain ``false`` becomes ``true`` so kinder loads
+    the mimiclabs scene named in the task config.
+    """
+    if not SCENE_BG:
+        return cfg
+    env = cfg.environment
+    for node in (env, env.get("constant_object_env_kwargs")):
+        if node is not None and "scene_bg" in node and not node["scene_bg"]:
+            node["scene_bg"] = True
+    return cfg
+
+
 def _replay_overrides(
     run: RunInfo, load_dir: str, output_dir: str, environment: Optional[str] = None
 ) -> list[str]:
@@ -1904,9 +1924,11 @@ def _evaluate_history(run: RunInfo, job: Job, epoch: int) -> None:
                     Path(tmp) / "sandbox",
                 )
                 with initialize_config_dir(version_base=None, config_dir=conf_dir):
-                    cfg = compose(
-                        config_name="config",
-                        overrides=_replay_overrides(run, tmp, f"{tmp}/out"),
+                    cfg = _with_scene_bg(
+                        compose(
+                            config_name="config",
+                            overrides=_replay_overrides(run, tmp, f"{tmp}/out"),
+                        )
                     )
                 env = instantiate(cfg.environment)
                 primitives = build_primitives(env, cfg.primitives)
@@ -2145,11 +2167,13 @@ def _render_worker() -> None:
                 with _JOBS_LOCK:
                     job.message = "building environment and approach"
                 with initialize_config_dir(version_base=None, config_dir=conf_dir):
-                    cfg = compose(
-                        config_name="config",
-                        overrides=_replay_overrides(
-                            run, load_dir, f"{tmp}/out", environment=env_override
-                        ),
+                    cfg = _with_scene_bg(
+                        compose(
+                            config_name="config",
+                            overrides=_replay_overrides(
+                                run, load_dir, f"{tmp}/out", environment=env_override
+                            ),
+                        )
                     )
                 env = instantiate(cfg.environment)
                 primitives = build_primitives(env, cfg.primitives)
@@ -3514,13 +3538,19 @@ def main() -> None:
     )
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument(
+        "--no-scene-bg",
+        action="store_true",
+        help="replay Dynamic 3D environments on the plain ground instead of the room background",
+    )
+    ap.add_argument(
         "--host",
         default="127.0.0.1",
         help="bind address; pass 0.0.0.0 to reach the viewer from another machine",
     )
     args = ap.parse_args()
 
-    global DRIVE_SYNC  # pylint: disable=global-statement
+    global DRIVE_SYNC, SCENE_BG  # pylint: disable=global-statement
+    SCENE_BG = not args.no_scene_bg
     if args.drive_folder and args.root:
         ap.error("--root and --drive-folder cannot be used together")
     if args.drive_folder:
