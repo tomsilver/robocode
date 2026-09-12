@@ -390,17 +390,6 @@ def _trajectory_checkpoints(frame: pd.DataFrame) -> pd.DataFrame:
     result["change_pct"] = (
         100 * (result.value - result.baseline) / result.baseline.abs().clip(lower=1)
     )
-    endpoint = result.loc[
-        result.stage == 1,
-        ["method", "environment", "replicate_seed", "metric", "value"],
-    ].rename(columns={"value": "endpoint"})
-    result = result.merge(
-        endpoint,
-        on=["method", "environment", "replicate_seed", "metric"],
-        validate="many_to_one",
-    )
-    result["fraction_of_final_pct"] = 100 * result.value / result.endpoint
-    result.loc[result.endpoint == 0, "fraction_of_final_pct"] = np.nan
     return result
 
 
@@ -416,7 +405,7 @@ def _plot_cross_method_evolution(
     # missing. The ribbon then represents a 95% CI across environments.
     environment_means = (
         checkpoints.groupby(["method", "environment", "stage", "metric"])[
-            ["value", "change_pct", "fraction_of_final_pct"]
+            ["value", "change_pct"]
         ]
         .mean()
         .reset_index()
@@ -430,12 +419,6 @@ def _plot_cross_method_evolution(
             "cross_method_evolution_absolute.png",
             "Mean complexity",
             "Absolute policy complexity over synthesis",
-        ),
-        (
-            "fraction_of_final_pct",
-            "cross_method_evolution_relative.png",
-            "Fraction of final complexity (%)",
-            "Fraction of final complexity reached over synthesis",
         ),
     ):
         fig, axes = plt.subplots(2, 3, figsize=(16, 9), sharex=True)
