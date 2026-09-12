@@ -430,8 +430,7 @@ def _plot_cross_method_evolution(
         fig = plt.figure(figsize=(20, 9))
         grid = fig.add_gridspec(2, 4, width_ratios=[1, 1, 1, 0.85])
         axes = [fig.add_subplot(grid[row, col]) for row in range(2) for col in range(3)]
-        training_axis = fig.add_subplot(grid[0, 3])
-        solve_axis = fig.add_subplot(grid[1, 3])
+        solve_axis = fig.add_subplot(grid[:, 3])
         for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
             subset = environment_means[environment_means.metric == metric]
             for method, group in subset.groupby("method"):
@@ -507,53 +506,6 @@ def _plot_cross_method_evolution(
         solve_axis.set_title("Performance at endpoint only")
         solve_axis.grid(axis="x", alpha=0.25)
 
-        if "training_solve_rate" in trajectories:
-            training_rows = []
-            genplan = trajectories[
-                (trajectories.method == "llm_genplan")
-                & trajectories.environment.isin(common_environments)
-            ]
-            for (environment, seed), trajectory in genplan.groupby(
-                ["environment", "replicate_seed"]
-            ):
-                for stage in np.linspace(0, 1, 11):
-                    sample = trajectory.loc[
-                        (trajectory.revision_progress - stage).abs().idxmin()
-                    ]
-                    training_rows.append(
-                        {
-                            "environment": environment,
-                            "seed": seed,
-                            "stage": stage,
-                            "solve_rate": sample.training_solve_rate,
-                        }
-                    )
-            training = pd.DataFrame(training_rows)
-            environment_training = (
-                training.groupby(["environment", "stage"]).solve_rate.mean().reset_index()
-            )
-            stats = environment_training.groupby("stage").solve_rate.agg(["mean", "sem"])
-            ci = 1.96 * stats["sem"].fillna(0)
-            training_axis.plot(
-                100 * stats.index,
-                stats["mean"],
-                marker="o",
-                markersize=3,
-                linewidth=2,
-                color=colors["llm_genplan"],
-            )
-            training_axis.fill_between(
-                100 * stats.index,
-                stats["mean"] - ci,
-                stats["mean"] + ci,
-                color=colors["llm_genplan"],
-                alpha=0.12,
-            )
-        training_axis.set_ylim(-0.03, 1.03)
-        training_axis.set_xlabel("Synthesis progress (%)")
-        training_axis.set_ylabel("Training solve rate")
-        training_axis.set_title("GenPlan validation (10 training tasks)")
-        training_axis.grid(alpha=0.25)
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False)
         fig.suptitle(
