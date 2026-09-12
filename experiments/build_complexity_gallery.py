@@ -522,14 +522,21 @@ def _plot_cross_method_evolution(
         trajectories.environment.isin(common_environments)
     ]
     variants = (
-        ("all", "cross_method_evolution_absolute.png", pd.Series(True, index=trajectories.index)),
+        (
+            "all",
+            "All runs",
+            "cross_method_evolution_absolute.png",
+            pd.Series(True, index=trajectories.index),
+        ),
         (
             "fully_successful",
+            "100% successful runs",
             "cross_method_evolution_successful.png",
             trajectories.outcome_solve_rate.eq(1.0),
         ),
         (
             "not_fully_successful",
+            "Runs below 100% success",
             "cross_method_evolution_not_fully_successful.png",
             trajectories.outcome_solve_rate.lt(1.0),
         ),
@@ -539,7 +546,7 @@ def _plot_cross_method_evolution(
     paths = []
     summaries = []
     counts = []
-    for variant, filename, mask in variants:
+    for variant, figure_title, filename, mask in variants:
         selected = trajectories[mask]
         selected_runs = selected[
             ["method", "environment", "replicate_seed"]
@@ -592,7 +599,8 @@ def _plot_cross_method_evolution(
             axis.grid(axis="y", alpha=0.25, linewidth=0.5)
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
-        fig.tight_layout(rect=(0, 0.07, 1, 1), w_pad=0.9, h_pad=1.0)
+        fig.suptitle(figure_title, fontsize=9, fontweight="bold", y=0.995)
+        fig.tight_layout(rect=(0, 0.07, 1, 0.96), w_pad=0.9, h_pad=1.0)
         path = output / filename
         _save_figure(fig, path)
         plt.close(fig)
