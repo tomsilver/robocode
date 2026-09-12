@@ -31,6 +31,66 @@ METHOD_COLORS = {
     "llm_genplan": "#c23b43",
 }
 
+MEASUREMENTS_MD = """# Static-complexity measurements
+
+The analysis parses Python source into an abstract syntax tree (AST); it does not
+import or execute the generated programs.
+
+## Program and environment metrics
+
+| Measurement | Definition | Interpretation |
+|---|---|---|
+| Lines of code | Number of physical source lines, including blank and comment-only lines. | Overall source-file size. This is intentionally not logical LOC. |
+| AST nodes | Total nodes in Python's parsed abstract syntax tree. | Amount of syntactic structure, independent of formatting. |
+| Cyclomatic complexity | McCabe complexity of the entire module: one plus decision points from branches, loops, exception handlers, conditional expressions, Boolean terms, comprehensions, and `match` cases. | Number of independent control-flow paths in the program. |
+| Maximum function complexity | Largest cyclomatic-complexity value among the functions in the file. | Complexity concentrated in the single most complicated function. |
+| Maximum nesting depth | Deepest nesting of `if`, loops, `with`, `try`, and `match` constructs. | How deeply control structures are embedded. Function and class definitions do not themselves increase this depth. |
+| Persistent state fields | Number of distinct attributes assigned through `self.<name>`. | Size of the policy's explicit persistent object state. |
+
+All six measurements are counts. Larger values indicate more source or structural
+complexity, but none is by itself a measure of correctness, task difficulty, or
+software quality.
+
+## Environment source scopes
+
+- **Environment-owned source** contains only the source files assigned to the
+  environment itself.
+- **Local dependency closure** contains the environment-owned source plus every
+  repository-local Python module it imports, recursively. It therefore includes
+  shared base classes, utilities, simulation infrastructure, and physics wrappers.
+
+Environment-owned source is the cleaner measure of unique environment
+implementation. Dependency closure measures the total local implementation
+footprint required by an environment and can be dominated by shared infrastructure.
+
+## Figure calculations
+
+### Complexity evolution
+
+Each saved synthesis history is sampled at the nearest available revision to 0%,
+10%, ..., 100% progress. Replicate seeds are averaged within each environment
+first; the plotted line then averages environments equally. Shaded bands are 95%
+normal confidence intervals across environments (mean plus or minus 1.96 standard
+errors). Only the 21 environments represented in all four evolving methods are
+included.
+
+### Lines of code versus solve rate
+
+Each small point is a within-environment Spearman rank correlation across replicate
+seeds between final policy lines of code and final held-out solve rate. Diamonds are
+the mean correlation across environments; error bars are 95% bootstrap confidence
+intervals over environments. Correlation is descriptive and does not establish
+causality.
+
+### Environment versus policy complexity
+
+For each method and metric, the heatmap reports the Spearman rank correlation across
+environments between local-dependency-closure complexity and mean final policy
+complexity. Because dependency closures contain shared infrastructure and differ by
+environment family, these values are exploratory rather than clean estimates of
+inherent task difficulty.
+"""
+
 
 def _set_paper_style() -> None:
     plt.rcParams.update(
@@ -646,6 +706,7 @@ def _gallery(
     output: Path,
     pattern_paths: list[Path],
 ) -> None:
+    (output / "measurements.md").write_text(MEASUREMENTS_MD)
     sections = [("Complexity results", pattern_paths)]
     cards = []
     for title, paths in sections:
@@ -655,7 +716,7 @@ def _gallery(
             for path in paths
         )
     (output / "index.html").write_text(
-        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>RoboCode complexity</title><style>body{max-width:1500px;margin:auto;padding:24px;font-family:system-ui;background:#f5f7fa}article{background:white;padding:16px;margin:20px 0;border-radius:10px}img{width:100%;height:auto}a{margin-right:16px}</style><h1>RoboCode static complexity</h1><p><a href=program_complexity_all_methods.csv>Programs CSV</a><a href=environment_complexity.csv>Environments CSV</a><a href=correlations.csv>Correlations CSV</a></p>"
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>RoboCode complexity</title><style>body{max-width:1500px;margin:auto;padding:24px;font-family:system-ui;background:#f5f7fa}article{background:white;padding:16px;margin:20px 0;border-radius:10px}img{width:100%;height:auto}a{margin-right:16px}</style><h1>RoboCode static complexity</h1><p><a href=measurements.md download>Measurement definitions (Markdown)</a><a href=program_complexity_all_methods.csv>Programs CSV</a><a href=environment_complexity.csv>Environments CSV</a><a href=correlations.csv>Correlations CSV</a></p>"
         + "".join(cards)
     )
 
