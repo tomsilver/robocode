@@ -350,7 +350,10 @@ def collect_complexity(inputs: list[Path]) -> pd.DataFrame:
                 if zip_path.resolve() not in seen_zips and (
                     "__agentic__" in zip_path.name or "__llm_genplan__" in zip_path.name
                 ):
-                    rows.extend(_rows_from_zip(zip_path))
+                    try:
+                        rows.extend(_rows_from_zip(zip_path))
+                    except zipfile.BadZipFile:
+                        continue
                     seen_zips.add(zip_path.resolve())
         else:
             raise FileNotFoundError(path)

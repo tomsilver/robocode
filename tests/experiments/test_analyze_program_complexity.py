@@ -89,6 +89,14 @@ def test_collects_final_genplan_program_from_zip(tmp_path: Path) -> None:
     assert frame.loc[0, "backend"] == "claude-opus-5"
 
 
+def test_skips_malformed_archives_in_directory(tmp_path: Path) -> None:
+    (tmp_path / "broken__agentic__run.zip").write_text("not a zip")
+
+    frame = analysis.collect_complexity([tmp_path])
+
+    assert frame.empty
+
+
 def test_syntax_errors_are_reported_not_executed() -> None:
     metrics = analysis._source_metrics("raise RuntimeError('must not run')\nif:")
     assert metrics["syntax_valid"] is False
