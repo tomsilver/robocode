@@ -394,7 +394,7 @@ def _trajectory_checkpoints(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _plot_cross_method_evolution(
-    trajectories: pd.DataFrame, output: Path
+    programs: pd.DataFrame, trajectories: pd.DataFrame, output: Path
 ) -> list[Path]:
     checkpoints = _trajectory_checkpoints(trajectories)
     common_environments = set.intersection(
@@ -421,8 +421,11 @@ def _plot_cross_method_evolution(
             "Absolute policy complexity over synthesis",
         ),
     ):
-        fig, axes = plt.subplots(2, 3, figsize=(16, 9), sharex=True)
-        for axis, (metric, metric_title) in zip(axes.flat, METRICS, strict=True):
+        fig = plt.figure(figsize=(20, 9))
+        grid = fig.add_gridspec(2, 4, width_ratios=[1, 1, 1, 0.85])
+        axes = [fig.add_subplot(grid[row, col]) for row in range(2) for col in range(3)]
+        solve_axis = fig.add_subplot(grid[:, 3])
+        for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
             subset = environment_means[environment_means.metric == metric]
             for method, group in subset.groupby("method"):
                 stats = group.groupby("stage")[column].agg(["mean", "sem"])
@@ -448,7 +451,55 @@ def _plot_cross_method_evolution(
             axis.set_xlabel("Synthesis progress (%)")
             axis.set_ylabel(ylabel)
             axis.grid(alpha=0.25)
-        handles, labels = axes.flat[0].get_legend_handles_labels()
+        final = programs.copy()
+        final["method"] = final.display_method.map(
+            lambda method: (
+                "GenPlan"
+                if method == "llm_genplan/whitebox/claude-opus-5"
+                else _short_method(method)
+            )
+        )
+        short_methods = [_short_method(method) for method in methods]
+        final = final[
+            final.environment.isin(common_environments)
+            & final.method.isin(short_methods)
+        ].dropna(subset=["result_solve_rate"])
+        final = (
+            final.groupby(["method", "environment"]).result_solve_rate.mean().reset_index()
+        )
+        rng = np.random.default_rng(1)
+        short_colors = {_short_method(method): colors[method] for method in methods}
+        for position, method in enumerate(short_methods):
+            values = final.loc[final.method == method, "result_solve_rate"].to_numpy()
+            jitter = rng.uniform(-0.10, 0.10, len(values))
+            solve_axis.scatter(
+                values,
+                position + jitter,
+                color=short_colors[method],
+                alpha=0.45,
+                s=24,
+            )
+            bootstrap_means = np.mean(
+                rng.choice(values, size=(20_000, len(values)), replace=True), axis=1
+            )
+            mean = np.mean(values)
+            low, high = np.quantile(bootstrap_means, [0.025, 0.975])
+            solve_axis.errorbar(
+                mean,
+                position,
+                xerr=[[mean - low], [high - mean]],
+                fmt="D",
+                color="black",
+                markersize=7,
+                capsize=5,
+                linewidth=2,
+            )
+        solve_axis.set_xlim(-0.03, 1.03)
+        solve_axis.set_yticks(range(len(short_methods)), short_methods, fontsize=9)
+        solve_axis.set_xlabel("Final held-out solve rate")
+        solve_axis.set_title("Performance at endpoint only")
+        solve_axis.grid(axis="x", alpha=0.25)
+        handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False)
         fig.suptitle(
             f"{title} — seeds averaged within environment; "
@@ -498,7 +549,7 @@ def _plot_pattern_summaries(
     sampled = _sample_trajectories(trajectories)
     sampled.to_csv(output / "trajectory_pattern_summary.csv", index=False)
 
-    paths.extend(_plot_cross_method_evolution(trajectories, directory))
+    paths.extend(_plot_cross_method_evolution(programs, trajectories, directory))
 
     valid = programs.dropna(subset=["result_solve_rate"]).copy()
     perf_rows = []
