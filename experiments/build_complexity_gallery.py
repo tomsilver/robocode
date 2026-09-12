@@ -476,6 +476,12 @@ def _sample_trajectories(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _trajectory_checkpoints(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "method", "environment", "replicate_seed", "stage", "metric",
+        "value", "baseline", "change_pct",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
     rows = []
     for (method, environment, seed), trajectory in frame.groupby(
         ["method", "environment", "replicate_seed"], dropna=False
@@ -577,6 +583,18 @@ def _plot_cross_method_evolution(
     ) -> Any:
         fig, axes_grid = plt.subplots(3, 3, figsize=(7.2, 5.8))
         axes = list(axes_grid.flat)
+        if environment_means.empty:
+            for axis in axes:
+                axis.set_visible(False)
+            fig.text(
+                0.5,
+                0.49,
+                "No environment has a qualifying run for every approach;\n"
+                "a matched cross-method average cannot be computed.",
+                ha="center",
+                va="center",
+                fontsize=10,
+            )
         for axis in axes[len(METRICS) :]:
             axis.set_visible(False)
         for axis, (metric, metric_title) in zip(
@@ -607,14 +625,16 @@ def _plot_cross_method_evolution(
             axis.set_ylabel("Mean complexity")
             axis.grid(axis="y", alpha=0.25, linewidth=0.5)
         handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
+        if handles:
+            fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
         fig.suptitle(figure_title, fontsize=9, fontweight="bold", y=0.995)
         y = 0.965
         for line in detail_lines:
             wrapped = textwrap.fill(line, width=128)
             fig.text(0.5, y, wrapped, ha="center", va="top", fontsize=5.5)
             y -= 0.028 * (wrapped.count("\n") + 1)
-        fig.tight_layout(rect=(0, 0.065, 1, y - 0.005), w_pad=0.9, h_pad=1.0)
+        if not environment_means.empty:
+            fig.tight_layout(rect=(0, 0.065, 1, y - 0.005), w_pad=0.9, h_pad=1.0)
         return fig
 
     variant_data = []
@@ -651,8 +671,12 @@ def _plot_cross_method_evolution(
             trajectories=("replicate_seed", "size"),
             environments=("environment", "nunique"),
         )
-        for method, row in run_counts.iterrows():
-            counts.append({"subset": variant, "method": method, **row.to_dict()})
+        for method in methods:
+            row = run_counts.loc[method].to_dict() if method in run_counts.index else {
+                "trajectories": 0,
+                "environments": 0,
+            }
+            counts.append({"subset": variant, "method": method, **row})
         checkpoints = _trajectory_checkpoints(averaged)
         # Average seeds first, then average the identical environment set for each
         # method. The ribbon represents a 95% CI across those environments.
