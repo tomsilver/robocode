@@ -75,7 +75,8 @@ def test_collects_final_genplan_program_from_zip(tmp_path: Path) -> None:
         "replicate_seed: 42\n"
         "approach:\n"
         "  _target_: robocode.approaches.llm_genplan_approach.LLMGenPlanApproach\n"
-        "  model: claude-opus-5\n"
+        "  completion:\n"
+        "    model: claude-opus-5\n"
         "environment:\n  _target_: example.ExampleEnv\n"
     )
     with zipfile.ZipFile(archive_path, "w") as archive:

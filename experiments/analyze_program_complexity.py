@@ -241,7 +241,12 @@ def _metadata(
         "experiment_id": config.get("experiment_id"),
         "access": "blackbox" if approach.get("blackbox", False) else "whitebox",
         "backend": str(
-            approach.get("backend", {}).get("model", approach.get("model", "unknown"))
+            approach.get("backend", {}).get(
+                "model",
+                approach.get("completion", {}).get(
+                    "model", approach.get("model", "unknown")
+                ),
+            )
         ),
     }
     if overrides_text:
@@ -347,14 +352,18 @@ def collect_complexity(inputs: list[Path]) -> pd.DataFrame:
         elif path.is_dir():
             rows.extend(_rows_from_directory(path))
             for zip_path in sorted(path.rglob("*.zip")):
-                if zip_path.resolve() not in seen_zips and (
-                    "__agentic__" in zip_path.name or "__llm_genplan__" in zip_path.name
+                if (
+                    zip_path.resolve() in seen_zips
+                    or "__MACOSX" in zip_path.parts
+                    or zip_path.name.startswith("._")
+                    or "outdated" in zip_path.name.lower()
                 ):
-                    try:
-                        rows.extend(_rows_from_zip(zip_path))
-                    except zipfile.BadZipFile:
-                        continue
-                    seen_zips.add(zip_path.resolve())
+                    continue
+                try:
+                    rows.extend(_rows_from_zip(zip_path))
+                except zipfile.BadZipFile:
+                    continue
+                seen_zips.add(zip_path.resolve())
         else:
             raise FileNotFoundError(path)
     if not rows:

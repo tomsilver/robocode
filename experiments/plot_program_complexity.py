@@ -29,9 +29,25 @@ PANELS = [
 ]
 
 
-def plot_summary(summary_path: Path, output_path: Path) -> None:
+def plot_summary(
+    summary_path: Path,
+    output_path: Path,
+    *,
+    approach: str | None = None,
+    access: str | None = None,
+    backend: str | None = None,
+) -> None:
     """Create a six-panel horizontal mean ± sample-SD plot."""
     frame = pd.read_csv(summary_path)
+    for column, value in (
+        ("approach", approach),
+        ("access", access),
+        ("backend", backend),
+    ):
+        if value is not None:
+            frame = frame[frame[column] == value]
+    if frame.empty:
+        raise ValueError("No summary rows match the requested filters")
     labels = frame["environment"].str.replace("_generalized", "", regex=False)
     labels = labels + " (" + frame["approach"].astype(str) + ")"
     labels = labels + frame["access"].map(
@@ -40,7 +56,8 @@ def plot_summary(summary_path: Path, output_path: Path) -> None:
     y = np.arange(len(frame))
     colors = frame["access"].map({"whitebox": "#3B82C4", "blackbox": "#E07A3F"})
 
-    figure, axes = plt.subplots(2, 3, figsize=(15, 9), sharey=True)
+    figure_height = max(9, 0.38 * len(frame) + 3)
+    figure, axes = plt.subplots(2, 3, figsize=(15, figure_height), sharey=True)
     for axis, (metric, title) in zip(axes.flat, PANELS, strict=True):
         means = frame[f"{metric}_mean"]
         deviations = frame[f"{metric}_std"].fillna(0)
@@ -60,8 +77,12 @@ def plot_summary(summary_path: Path, output_path: Path) -> None:
         axis.set_yticks(y, labels, fontsize=9)
         axis.invert_yaxis()
 
+    qualifier = " / ".join(
+        value for value in (approach, access, backend) if value is not None
+    )
     figure.suptitle(
-        "Static complexity of final code policies\nMean ± 1 sample SD across seeds",
+        "Static complexity of final code policies\n"
+        f"Mean ± 1 sample SD across seeds{f' — {qualifier}' if qualifier else ''}",
         fontsize=15,
         weight="bold",
     )
@@ -89,8 +110,17 @@ def _main() -> None:
         type=Path,
         default=Path("program_complexity_summary.png"),
     )
+    parser.add_argument("--approach", choices=["agentic", "llm_genplan"])
+    parser.add_argument("--access", choices=["whitebox", "blackbox"])
+    parser.add_argument("--backend")
     args = parser.parse_args()
-    plot_summary(args.summary, args.output)
+    plot_summary(
+        args.summary,
+        args.output,
+        approach=args.approach,
+        access=args.access,
+        backend=args.backend,
+    )
     print(f"Wrote {args.output}")
 
 
