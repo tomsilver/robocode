@@ -96,6 +96,14 @@ included and excluded environments are printed above each figure. The plotted
 endpoint is the final saved implementation; solve rate is not included in the
 trajectory panels because it is reported in the paper's table.
 
+Exclusions are reported separately for environments that were not run on all four
+methods and environments that have full method coverage but do not have a
+qualifying result for every method in the selected performance subset.
+
+Per-environment figures instead average the available replicate seeds and show 95%
+normal confidence intervals across those seeds. Each page reports the actual seed
+count per method; conditional pages can contain fewer than five qualifying seeds.
+
 Three versions use the same calculation: **all runs**, runs whose final held-out
 solve rate is exactly 1.0 (**100% successful**), and runs whose final held-out solve
 rate is below 1.0 (**not 100% successful**). Runs without completed evaluation
@@ -548,6 +556,14 @@ def _plot_cross_method_evolution(
         ),
     )
     methods = sorted(trajectories.method.unique())
+    all_method_coverage = {
+        method: set(group.environment)
+        for method, group in trajectories.groupby("method")
+    }
+    covered_by_all_methods = set.intersection(
+        *(all_method_coverage.get(method, set()) for method in methods)
+    )
+    missing_method_coverage = all_environments - covered_by_all_methods
     colors = {method: METHOD_COLORS[method] for method in methods}
     paths = []
     summaries = []
@@ -611,13 +627,23 @@ def _plot_cross_method_evolution(
         included = set.intersection(
             *(available.get(method, set()) for method in methods)
         )
-        excluded = all_environments - included
+        excluded_by_criterion = covered_by_all_methods - included
         averaged = selected[selected.environment.isin(included)]
-        variant_data.append((variant, figure_title, filename, selected, included))
+        criterion_label = {
+            "all": "Excluded — no qualifying run for every method",
+            "fully_successful": "Excluded — no 100%-successful run for every method",
+            "not_fully_successful": "Excluded — no below-100% run for every method",
+        }[variant]
         detail_lines = [
             f"Included ({len(included)}): {', '.join(sorted(included)) or 'none'}",
-            f"Excluded ({len(excluded)}): {', '.join(sorted(excluded)) or 'none'}",
+            f"Excluded — not run on all methods ({len(missing_method_coverage)}): "
+            f"{', '.join(sorted(missing_method_coverage)) or 'none'}",
+            f"{criterion_label} ({len(excluded_by_criterion)}): "
+            f"{', '.join(sorted(excluded_by_criterion)) or 'none'}",
         ]
+        variant_data.append(
+            (variant, figure_title, filename, selected, included, detail_lines)
+        )
         selected_runs = averaged[
             ["method", "environment", "replicate_seed"]
         ].drop_duplicates()
@@ -647,7 +673,7 @@ def _plot_cross_method_evolution(
         paths.append(path)
 
     with PdfPages(report_path) as report:
-        for variant, figure_title, _, selected, included in variant_data:
+        for variant, figure_title, _, selected, included, detail_lines in variant_data:
             averaged = selected[selected.environment.isin(included)]
             checkpoints = _trajectory_checkpoints(averaged)
             means = (
@@ -657,37 +683,40 @@ def _plot_cross_method_evolution(
                 .mean()
                 .reset_index()
             )
-            excluded = all_environments - included
             fig = draw(
                 means,
                 f"Average: {figure_title}",
-                [
-                    f"Included ({len(included)}): {', '.join(sorted(included)) or 'none'}",
-                    f"Excluded ({len(excluded)}): {', '.join(sorted(excluded)) or 'none'}",
-                ],
+                detail_lines,
             )
             report.savefig(fig)
             plt.close(fig)
         for environment in sorted(all_environments):
-            for variant, figure_title, _, selected, _ in variant_data:
+            for variant, figure_title, _, selected, _, _ in variant_data:
                 environment_rows = selected[selected.environment.eq(environment)]
                 if environment_rows.empty:
                     continue
                 checkpoints = _trajectory_checkpoints(environment_rows)
-                means = (
-                    checkpoints.groupby(["method", "environment", "stage", "metric"])[
-                        ["value", "change_pct"]
+                seed_counts = (
+                    environment_rows[
+                        ["method", "environment", "replicate_seed"]
                     ]
-                    .mean()
-                    .reset_index()
+                    .drop_duplicates()
+                    .groupby("method")
+                    .size()
                 )
-                present = set(means.method)
+                present = set(checkpoints.method)
                 fig = draw(
-                    means,
+                    checkpoints,
                     f"{environment}: {figure_title}",
                     [
                         f"Available approaches: {', '.join(_short_method(m) for m in methods if m in present) or 'none'}",
                         f"Unavailable approaches: {', '.join(_short_method(m) for m in methods if m not in present) or 'none'}",
+                        "Seed trajectories: "
+                        + ", ".join(
+                            f"{_short_method(method)} n={int(seed_counts[method])}"
+                            for method in methods
+                            if method in seed_counts
+                        ),
                     ],
                 )
                 report.savefig(fig)
