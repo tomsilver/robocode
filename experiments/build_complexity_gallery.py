@@ -84,6 +84,13 @@ normal confidence intervals across environments (mean plus or minus 1.96 standar
 errors). Only the 21 environments represented in all four evolving methods are
 included. The plotted endpoint is the final saved implementation; solve rate is not
 included in the trajectory figure because it is reported in the paper's table.
+
+Three versions use the same calculation: **all runs**, runs whose final held-out
+solve rate is exactly 1.0 (**100% successful**), and runs whose final held-out solve
+rate is below 1.0 (**not 100% successful**). Runs without completed evaluation
+results appear only in the all-runs figure; they are excluded from both conditional
+figures. The downloadable trajectory-subset counts report the number of represented
+runs and environments for each method.
 """
 
 
