@@ -1,4 +1,4 @@
-"""Measure static complexity of final generated AgenticApproach programs.
+"""Measure static complexity of final generated Agentic and GenPlan programs.
 
 Inputs may be ordinary result directories, ZIP archives, or directories containing
 ZIP archives.  One CSV row is emitted for each final ``sandbox/approach.py``.  The
@@ -33,16 +33,22 @@ for _thread_variable in (
 import pandas as pd
 import yaml
 
-
 _DECISIONS = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.IfExp, ast.ExceptHandler)
-_NESTING = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With, ast.AsyncWith,
-            ast.Try, ast.Match)
+_NESTING = (
+    ast.If,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.Match,
+)
 
 # These are the measurements summarized across replicate seeds. Metadata and result
 # columns are deliberately excluded.
 COMPLEXITY_METRICS = [
     "source_loc",
-    "logical_loc",
     "ast_nodes",
     "function_count",
     "branch_count",
@@ -67,8 +73,6 @@ class _Metrics(ast.NodeVisitor):
         self._nesting = 0
         self.functions: list[tuple[str, int]] = []
         self.self_fields: set[str] = set()
-        self.imports: set[str] = set()
-        self.calls: set[str] = set()
         self.numeric_literals: set[float | int | complex] = set()
 
     def generic_visit(self, node: ast.AST) -> None:
@@ -98,35 +102,12 @@ class _Metrics(ast.NodeVisitor):
             self.self_fields.add(node.attr)
         self.generic_visit(node)
 
-    def visit_Import(self, node: ast.Import) -> None:
-        self.imports.update(alias.name for alias in node.names)
-        self.generic_visit(node)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self.imports.add(("." * node.level) + (node.module or ""))
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        name = _dotted_name(node.func)
-        if name:
-            self.calls.add(name)
-        self.generic_visit(node)
-
     def visit_Constant(self, node: ast.Constant) -> None:
         if isinstance(node.value, (int, float, complex)) and not isinstance(
             node.value, bool
         ):
             self.numeric_literals.add(node.value)
         self.generic_visit(node)
-
-
-def _dotted_name(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        prefix = _dotted_name(node.value)
-        return f"{prefix}.{node.attr}" if prefix else node.attr
-    return None
 
 
 def _cyclomatic_complexity(node: ast.AST) -> int:
@@ -147,19 +128,28 @@ def _cyclomatic_complexity(node: ast.AST) -> int:
 def _source_metrics(source: str) -> dict[str, Any]:
     lines = source.splitlines()
     nonblank = sum(bool(line.strip()) for line in lines)
-    comment_lines = 0
-    logical_loc = 0
     operators: Counter[str] = Counter()
     operands: Counter[str] = Counter()
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
-        comment_lines = len({t.start[0] for t in tokens if t.type == tokenize.COMMENT})
-        logical_loc = sum(t.type == tokenize.NEWLINE for t in tokens)
         for token in tokens:
             if token.type == tokenize.OP or (
-                token.type == tokenize.NAME and token.string in {
-                    "and", "or", "not", "in", "is", "if", "else", "for",
-                    "while", "return", "yield", "raise", "await",
+                token.type == tokenize.NAME
+                and token.string
+                in {
+                    "and",
+                    "or",
+                    "not",
+                    "in",
+                    "is",
+                    "if",
+                    "else",
+                    "for",
+                    "while",
+                    "return",
+                    "yield",
+                    "raise",
+                    "await",
                 }
             ):
                 operators[token.string] += 1
@@ -171,8 +161,6 @@ def _source_metrics(source: str) -> dict[str, Any]:
     base: dict[str, Any] = {
         "source_loc": len(lines),
         "nonblank_loc": nonblank,
-        "logical_loc": logical_loc,
-        "comment_lines": comment_lines,
     }
     try:
         tree = ast.parse(source)
@@ -189,22 +177,8 @@ def _source_metrics(source: str) -> dict[str, Any]:
     total_tokens = sum(operators.values()) + sum(operands.values())
     vocabulary = n1 + n2
     volume = total_tokens * math.log2(vocabulary) if vocabulary else 0.0
-    difficulty = (
-        (n1 / 2) * (sum(operands.values()) / n2) if n2 else 0.0
-    )
+    difficulty = (n1 / 2) * (sum(operands.values()) / n2) if n2 else 0.0
     effort = volume * difficulty
-    # Radon's scale-derivative of the SEI maintainability index, without its
-    # optional comment bonus.  Keep the ingredients as separate columns too.
-    mi = max(
-        0.0,
-        min(
-            100.0,
-            100.0
-            * (171 - 5.2 * math.log(max(volume, 1e-9)) - 0.23 * module_cc
-               - 16.2 * math.log(max(logical_loc, 1)))
-            / 171,
-        ),
-    )
     return {
         **base,
         "syntax_valid": True,
@@ -218,8 +192,7 @@ def _source_metrics(source: str) -> dict[str, Any]:
         ),
         "branch_count": visitor.counts["If"] + visitor.counts["IfExp"],
         "loop_count": (
-            visitor.counts["For"] + visitor.counts["AsyncFor"]
-            + visitor.counts["While"]
+            visitor.counts["For"] + visitor.counts["AsyncFor"] + visitor.counts["While"]
         ),
         "exception_handler_count": visitor.counts["ExceptHandler"],
         "max_nesting_depth": visitor.max_nesting,
@@ -232,15 +205,12 @@ def _source_metrics(source: str) -> dict[str, Any]:
         "reset_cyclomatic": named_cc.get("reset"),
         "update_cyclomatic": named_cc.get("update"),
         "persistent_state_fields": len(visitor.self_fields),
-        "unique_imports": len(visitor.imports),
-        "unique_calls": len(visitor.calls),
         "unique_numeric_literals": len(visitor.numeric_literals),
         "halstead_vocabulary": vocabulary,
         "halstead_length": total_tokens,
         "halstead_volume": volume,
         "halstead_difficulty": difficulty,
         "halstead_effort": effort,
-        "maintainability_index": mi,
     }
 
 
@@ -270,6 +240,9 @@ def _metadata(
         "replicate_seed": config.get("replicate_seed", config.get("seed")),
         "experiment_id": config.get("experiment_id"),
         "access": "blackbox" if approach.get("blackbox", False) else "whitebox",
+        "backend": str(
+            approach.get("backend", {}).get("model", approach.get("model", "unknown"))
+        ),
     }
     if overrides_text:
         for override in yaml.safe_load(overrides_text) or []:
@@ -279,13 +252,21 @@ def _metadata(
     return row
 
 
-def _is_agentic(config_text: str | None, container_name: str) -> bool:
+def _generated_approach(config_text: str | None, container_name: str) -> str | None:
     if config_text:
-        target = str((yaml.safe_load(config_text) or {}).get("approach", {}).get(
-            "_target_", ""
-        ))
-        return target.endswith("AgenticApproach")
-    return "__agentic__" in container_name
+        target = str(
+            (yaml.safe_load(config_text) or {}).get("approach", {}).get("_target_", "")
+        )
+        if target.endswith("AgenticApproach"):
+            return "agentic"
+        if target.endswith("LLMGenPlanApproach"):
+            return "llm_genplan"
+        return None
+    if "__agentic__" in container_name:
+        return "agentic"
+    if "__llm_genplan__" in container_name:
+        return "llm_genplan"
+    return None
 
 
 def _row(
@@ -316,17 +297,24 @@ def _rows_from_zip(path: Path) -> Iterable[dict[str, Any]]:
             config_name = str(run / ".hydra" / "config.yaml")
             overrides_name = str(run / ".hydra" / "overrides.yaml")
             results_name = str(run / "results.json")
-            config = archive.read(config_name).decode() if config_name in names else None
-            if not _is_agentic(config, path.name):
+            config = (
+                archive.read(config_name).decode() if config_name in names else None
+            )
+            approach = _generated_approach(config, path.name)
+            if approach is None:
                 continue
-            results = archive.read(results_name).decode() if results_name in names else None
+            results = (
+                archive.read(results_name).decode() if results_name in names else None
+            )
             overrides = (
                 archive.read(overrides_name).decode()
                 if overrides_name in names
                 else None
             )
             source = archive.read(name).decode("utf-8")
-            yield _row(source, f"{path}!/{name}", config, overrides, results)
+            row = _row(source, f"{path}!/{name}", config, overrides, results)
+            row["approach"] = approach
+            yield row
 
 
 def _rows_from_directory(path: Path) -> Iterable[dict[str, Any]]:
@@ -336,17 +324,20 @@ def _rows_from_directory(path: Path) -> Iterable[dict[str, Any]]:
         overrides_path = run / ".hydra" / "overrides.yaml"
         results_path = run / "results.json"
         config = config_path.read_text() if config_path.exists() else None
-        if not _is_agentic(config, str(path)):
+        approach = _generated_approach(config, str(path))
+        if approach is None:
             continue
         results = results_path.read_text() if results_path.exists() else None
         overrides = overrides_path.read_text() if overrides_path.exists() else None
-        yield _row(
+        row = _row(
             approach_path.read_text(), str(approach_path), config, overrides, results
         )
+        row["approach"] = approach
+        yield row
 
 
 def collect_complexity(inputs: list[Path]) -> pd.DataFrame:
-    """Collect one row per final agentic generated program."""
+    """Collect one row per final Agentic or GenPlan generated program."""
     rows: list[dict[str, Any]] = []
     seen_zips: set[Path] = set()
     for path in inputs:
@@ -356,7 +347,9 @@ def collect_complexity(inputs: list[Path]) -> pd.DataFrame:
         elif path.is_dir():
             rows.extend(_rows_from_directory(path))
             for zip_path in sorted(path.rglob("*.zip")):
-                if zip_path.resolve() not in seen_zips and "__agentic__" in zip_path.name:
+                if zip_path.resolve() not in seen_zips and (
+                    "__agentic__" in zip_path.name or "__llm_genplan__" in zip_path.name
+                ):
                     rows.extend(_rows_from_zip(zip_path))
                     seen_zips.add(zip_path.resolve())
         else:
@@ -378,7 +371,9 @@ def summarize_complexity(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
     metrics = [metric for metric in COMPLEXITY_METRICS if metric in frame.columns]
-    grouped = frame.groupby(["environment", "access"], sort=True, dropna=False)
+    grouped = frame.groupby(
+        ["approach", "environment", "access", "backend"], sort=True, dropna=False
+    )
     summary = grouped[metrics].agg(["mean", "std"])
     summary.columns = [f"{metric}_{stat}" for metric, stat in summary.columns]
     summary.insert(0, "n_programs", grouped.size())
