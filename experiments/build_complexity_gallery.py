@@ -320,10 +320,180 @@ def _plot_correlations(
     return pd.DataFrame(rows)
 
 
+def _short_method(method: str) -> str:
+    return {
+        "agentic/blackbox/claude-opus-5": "Agentic blackbox Claude",
+        "agentic/blackbox/gpt-5.6-sol": "Agentic blackbox GPT",
+        "agentic/whitebox/claude-opus-5": "Agentic whitebox Claude",
+        "llm_genplan": "GenPlan",
+        "llm_genplan/whitebox/claude-opus-5": "GenPlan final",
+        "llm_genplan_one_shot/whitebox/claude-opus-5": "GenPlan one-shot",
+    }.get(method, method)
+
+
+def _sample_trajectories(frame: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    stages = np.linspace(0, 1, 11)
+    for keys, trajectory in frame.groupby(
+        ["method", "environment", "experiment_id"], dropna=False
+    ):
+        trajectory = trajectory.sort_values("revision_progress")
+        sampled = pd.DataFrame(
+            [
+                trajectory.loc[
+                    (trajectory.revision_progress - stage).abs().idxmin()
+                ]
+                for stage in stages
+            ]
+        ).drop_duplicates("revision_progress")
+        for metric, _ in METRICS:
+            values = sampled[metric].fillna(0).astype(float).to_numpy()
+            progress = sampled.revision_progress.to_numpy()
+            rho = (
+                pd.Series(progress).rank().corr(pd.Series(values).rank())
+                if len(np.unique(values)) > 1
+                else 0.0
+            )
+            rows.append(
+                {
+                    "method": keys[0],
+                    "environment": keys[1],
+                    "experiment_id": keys[2],
+                    "metric": metric,
+                    "spearman_rho": rho,
+                    "endpoint_change_pct": 100
+                    * (values[-1] - values[0])
+                    / max(abs(values[0]), 1),
+                    "nondecreasing_step_fraction": np.mean(np.diff(values) >= 0),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _heatmap(
+    axis: Any,
+    values: pd.DataFrame,
+    title: str,
+    fmt: str = ".2f",
+    cmap: str = "RdBu_r",
+    limits: tuple[float, float] | None = (-1, 1),
+) -> None:
+    kwargs = {"cmap": cmap, "aspect": "auto"}
+    if limits:
+        kwargs |= {"vmin": limits[0], "vmax": limits[1]}
+    image = axis.imshow(values.to_numpy(), **kwargs)
+    axis.set_xticks(range(len(values.columns)), values.columns, rotation=30, ha="right")
+    axis.set_yticks(range(len(values.index)), values.index)
+    for row in range(len(values.index)):
+        for col in range(len(values.columns)):
+            value = values.iloc[row, col]
+            axis.text(col, row, format(value, fmt), ha="center", va="center", fontsize=8)
+    axis.set_title(title)
+    plt.colorbar(image, ax=axis, shrink=0.75)
+
+
+def _plot_pattern_summaries(
+    programs: pd.DataFrame,
+    trajectories: pd.DataFrame,
+    correlations: pd.DataFrame,
+    output: Path,
+) -> tuple[list[Path], pd.DataFrame]:
+    directory = output / "patterns"
+    directory.mkdir(parents=True, exist_ok=True)
+    paths = []
+    sampled = _sample_trajectories(trajectories)
+    sampled.to_csv(output / "trajectory_pattern_summary.csv", index=False)
+
+    selected = ["source_loc", "cyclomatic_total", "persistent_state_fields"]
+    summary = (
+        sampled[sampled.metric.isin(selected)]
+        .groupby(["method", "metric"])
+        .agg(
+            median_rho=("spearman_rho", "median"),
+            median_endpoint_change_pct=("endpoint_change_pct", "median"),
+        )
+        .reset_index()
+    )
+    summary["method"] = summary.method.map(_short_method)
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+    for axis, column, title in (
+        (axes[0], "median_rho", "Monotonicity over revision progress"),
+        (axes[1], "median_endpoint_change_pct", "Median first-to-final growth"),
+    ):
+        pivot = summary.pivot(index="method", columns="metric", values=column)
+        pivot = pivot.rename(columns=dict(METRICS))
+        pivot.plot.bar(ax=axis, width=0.8)
+        axis.axhline(0, color="black", linewidth=0.8)
+        axis.set_title(title)
+        axis.set_xlabel("")
+        axis.set_ylabel("Spearman ρ" if column == "median_rho" else "Change (%)")
+        if column == "median_endpoint_change_pct":
+            axis.set_yscale("symlog", linthresh=10)
+        axis.tick_params(axis="x", rotation=20)
+        axis.grid(axis="y", alpha=0.25)
+    fig.suptitle("Complexity accumulation during synthesis (10% checkpoints)")
+    fig.tight_layout()
+    path = directory / "trajectory_monotonicity_and_growth.png"
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+
+    valid = programs.dropna(subset=["result_solve_rate"]).copy()
+    perf_rows = []
+    for method, group in valid.groupby("display_method"):
+        for metric, _ in METRICS:
+            centered_x = group[metric] - group.groupby("environment")[metric].transform("mean")
+            centered_y = group.result_solve_rate - group.groupby("environment").result_solve_rate.transform("mean")
+            perf_rows.append(
+                {
+                    "method": _short_method(method),
+                    "metric": metric,
+                    "within_environment_spearman_rho": centered_x.rank().corr(centered_y.rank()),
+                }
+            )
+    performance = pd.DataFrame(perf_rows)
+    performance.to_csv(output / "performance_correlations.csv", index=False)
+    pivot = performance.pivot(index="method", columns="metric", values="within_environment_spearman_rho")
+    pivot = pivot.rename(columns=dict(METRICS))
+    fig, axis = plt.subplots(figsize=(12, 4.5))
+    _heatmap(axis, pivot, "Policy complexity vs. solve rate (within-environment Spearman ρ)")
+    fig.tight_layout()
+    path = directory / "performance_correlations.png"
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+
+    metric_columns = [metric for metric, _ in METRICS]
+    redundancy = programs[metric_columns].corr(method="spearman").rename(index=dict(METRICS), columns=dict(METRICS))
+    fig, axis = plt.subplots(figsize=(9, 7))
+    _heatmap(axis, redundancy, "Redundancy among static-complexity metrics")
+    fig.tight_layout()
+    path = directory / "metric_redundancy.png"
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+
+    env_corr = correlations.pivot(index="method", columns="metric", values="spearman_rho")
+    env_corr.index = [_short_method(value) for value in env_corr.index]
+    env_corr = env_corr.rename(columns=dict(METRICS))
+    fig, axis = plt.subplots(figsize=(12, 4.5))
+    _heatmap(axis, env_corr, "Environment closure vs. mean policy complexity (Spearman ρ)")
+    fig.tight_layout()
+    path = directory / "environment_policy_correlation_heatmap.png"
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
+    return paths, performance
+
+
 def _gallery(
-    output: Path, final_paths: list[Path], evolution_paths: list[Path]
+    output: Path,
+    final_paths: list[Path],
+    evolution_paths: list[Path],
+    pattern_paths: list[Path],
 ) -> None:
     sections = [
+        ("Cross-run patterns", pattern_paths),
         (
             "Environment vs. policy correlation",
             [output / "environment_policy_correlations.png"],
@@ -371,7 +541,10 @@ def main() -> None:
     evolution = _plot_evolution(trajectories, output)
     correlations = _plot_correlations(programs, envs, output)
     correlations.to_csv(output / "correlations.csv", index=False)
-    _gallery(output, finals, evolution)
+    pattern_paths, _ = _plot_pattern_summaries(
+        programs, trajectories, correlations, output
+    )
+    _gallery(output, finals, evolution, pattern_paths)
     print(
         f"Wrote {len(programs)} programs, {len(trajectories)} trajectory revisions, {len(envs)} environments, {len(finals)} final figures, and {len(evolution)} evolution figures"
     )
