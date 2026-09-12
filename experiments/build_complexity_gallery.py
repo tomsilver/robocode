@@ -69,12 +69,18 @@ def _genplan_trajectories(repo: Path, analyzer: Any) -> pd.DataFrame:
         if not candidates:
             continue
         for index, source in enumerate(candidates):
+            score_path = source.with_name(source.name.replace("_candidate.py", "_score.json"))
+            score_data = json.loads(score_path.read_text()) if score_path.exists() else {}
+            score = score_data.get("score")
             rows.append(
                 {
                     "environment": sandbox.parents[2].name.split("__", 1)[0],
                     "method": "llm_genplan",
                     "replicate_seed": sandbox.parent.name.removeprefix("replicate_"),
                     "revision_progress": index / max(1, len(candidates) - 1),
+                    "training_solve_rate": (
+                        score["num_solved"] / score["num_total"] if score else 0.0
+                    ),
                     **analyzer._source_metrics(source.read_text()),
                 }
             )
@@ -424,7 +430,8 @@ def _plot_cross_method_evolution(
         fig = plt.figure(figsize=(20, 9))
         grid = fig.add_gridspec(2, 4, width_ratios=[1, 1, 1, 0.85])
         axes = [fig.add_subplot(grid[row, col]) for row in range(2) for col in range(3)]
-        solve_axis = fig.add_subplot(grid[:, 3])
+        training_axis = fig.add_subplot(grid[0, 3])
+        solve_axis = fig.add_subplot(grid[1, 3])
         for axis, (metric, metric_title) in zip(axes, METRICS, strict=True):
             subset = environment_means[environment_means.metric == metric]
             for method, group in subset.groupby("method"):
@@ -499,6 +506,54 @@ def _plot_cross_method_evolution(
         solve_axis.set_xlabel("Final held-out solve rate")
         solve_axis.set_title("Performance at endpoint only")
         solve_axis.grid(axis="x", alpha=0.25)
+
+        if "training_solve_rate" in trajectories:
+            training_rows = []
+            genplan = trajectories[
+                (trajectories.method == "llm_genplan")
+                & trajectories.environment.isin(common_environments)
+            ]
+            for (environment, seed), trajectory in genplan.groupby(
+                ["environment", "replicate_seed"]
+            ):
+                for stage in np.linspace(0, 1, 11):
+                    sample = trajectory.loc[
+                        (trajectory.revision_progress - stage).abs().idxmin()
+                    ]
+                    training_rows.append(
+                        {
+                            "environment": environment,
+                            "seed": seed,
+                            "stage": stage,
+                            "solve_rate": sample.training_solve_rate,
+                        }
+                    )
+            training = pd.DataFrame(training_rows)
+            environment_training = (
+                training.groupby(["environment", "stage"]).solve_rate.mean().reset_index()
+            )
+            stats = environment_training.groupby("stage").solve_rate.agg(["mean", "sem"])
+            ci = 1.96 * stats["sem"].fillna(0)
+            training_axis.plot(
+                100 * stats.index,
+                stats["mean"],
+                marker="o",
+                markersize=3,
+                linewidth=2,
+                color=colors["llm_genplan"],
+            )
+            training_axis.fill_between(
+                100 * stats.index,
+                stats["mean"] - ci,
+                stats["mean"] + ci,
+                color=colors["llm_genplan"],
+                alpha=0.12,
+            )
+        training_axis.set_ylim(-0.03, 1.03)
+        training_axis.set_xlabel("Synthesis progress (%)")
+        training_axis.set_ylabel("Training solve rate")
+        training_axis.set_title("GenPlan validation (10 training tasks)")
+        training_axis.grid(alpha=0.25)
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False)
         fig.suptitle(
@@ -540,6 +595,7 @@ def _heatmap(
 def _plot_pattern_summaries(
     programs: pd.DataFrame,
     trajectories: pd.DataFrame,
+    environments: pd.DataFrame,
     correlations: pd.DataFrame,
     output: Path,
 ) -> tuple[list[Path], pd.DataFrame]:
@@ -550,6 +606,39 @@ def _plot_pattern_summaries(
     sampled.to_csv(output / "trajectory_pattern_summary.csv", index=False)
 
     paths.extend(_plot_cross_method_evolution(programs, trajectories, directory))
+
+    ordered = environments.sort_values("own_source_loc", ascending=True)
+    fig, axes = plt.subplots(len(METRICS), 1, figsize=(15, 42), sharey=True)
+    positions = np.arange(len(ordered))
+    for axis, (metric, title) in zip(axes, METRICS, strict=True):
+        axis.barh(
+            positions - 0.18,
+            ordered[f"own_{metric}"],
+            height=0.34,
+            label="Environment-owned source",
+            color="#2878b5",
+        )
+        axis.barh(
+            positions + 0.18,
+            ordered[f"closure_{metric}"],
+            height=0.34,
+            label="Local dependency closure",
+            color="#9ac8e2",
+        )
+        axis.set_title(title)
+        axis.set_xlabel("Static complexity")
+        axis.grid(axis="x", alpha=0.25)
+    axes[0].set_yticks(positions, ordered.environment, fontsize=8)
+    axes[0].legend(loc="lower right")
+    fig.suptitle(
+        "Static complexity of Kinder environments and their local dependencies",
+        y=0.995,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.992))
+    path = directory / "environment_static_complexity.png"
+    fig.savefig(path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    paths.append(path)
 
     valid = programs.dropna(subset=["result_solve_rate"]).copy()
     perf_rows = []
@@ -671,7 +760,7 @@ def main() -> None:
     correlations = _plot_correlations(programs, envs, output)
     correlations.to_csv(output / "correlations.csv", index=False)
     pattern_paths, _ = _plot_pattern_summaries(
-        programs, trajectories, correlations, output
+        programs, trajectories, envs, correlations, output
     )
     _gallery(output, pattern_paths)
     print(
