@@ -580,6 +580,10 @@ def _plot_cross_method_evolution(
         environment_means: pd.DataFrame,
         figure_title: str,
         detail_lines: list[str],
+        empty_message: str = (
+            "No environment has a qualifying run for every approach;\n"
+            "a matched cross-method average cannot be computed."
+        ),
     ) -> Any:
         fig, axes_grid = plt.subplots(3, 3, figsize=(7.2, 5.8))
         axes = list(axes_grid.flat)
@@ -589,8 +593,7 @@ def _plot_cross_method_evolution(
             fig.text(
                 0.5,
                 0.49,
-                "No environment has a qualifying run for every approach;\n"
-                "a matched cross-method average cannot be computed.",
+                empty_message,
                 ha="center",
                 va="center",
                 fontsize=10,
@@ -717,8 +720,6 @@ def _plot_cross_method_evolution(
         for environment in sorted(all_environments):
             for variant, figure_title, _, selected, _, _ in variant_data:
                 environment_rows = selected[selected.environment.eq(environment)]
-                if environment_rows.empty:
-                    continue
                 checkpoints = _trajectory_checkpoints(environment_rows)
                 seed_counts = (
                     environment_rows[
@@ -729,12 +730,29 @@ def _plot_cross_method_evolution(
                     .size()
                 )
                 present = set(checkpoints.method)
+                availability_labels = {
+                    "all": ("Approaches with trajectory data", "Approaches without trajectory data"),
+                    "fully_successful": ("Approaches with 100% seeds", "Approaches with no 100% seeds"),
+                    "not_fully_successful": (
+                        "Approaches with below-100% seeds",
+                        "Approaches with no below-100% seeds",
+                    ),
+                }[variant]
+                empty_message = {
+                    "all": "No trajectory seeds are available for this environment.",
+                    "fully_successful": (
+                        "No seeds got 100% eval in this environment."
+                    ),
+                    "not_fully_successful": (
+                        "No seeds got less than 100% eval in this environment."
+                    ),
+                }[variant]
                 fig = draw(
                     checkpoints,
                     f"{environment}: {figure_title}",
                     [
-                        f"Available approaches: {', '.join(_short_method(m) for m in methods if m in present) or 'none'}",
-                        f"Unavailable approaches: {', '.join(_short_method(m) for m in methods if m not in present) or 'none'}",
+                        f"{availability_labels[0]}: {', '.join(_short_method(m) for m in methods if m in present) or 'none'}",
+                        f"{availability_labels[1]}: {', '.join(_short_method(m) for m in methods if m not in present) or 'none'}",
                         "Seed trajectories: "
                         + ", ".join(
                             f"{_short_method(method)} n={int(seed_counts[method])}"
@@ -742,6 +760,7 @@ def _plot_cross_method_evolution(
                             if method in seed_counts
                         ),
                     ],
+                    empty_message=empty_message,
                 )
                 report.savefig(fig)
                 plt.close(fig)
