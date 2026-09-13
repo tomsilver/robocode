@@ -544,19 +544,19 @@ def _plot_cross_method_evolution(
     variants = (
         (
             "all",
-            "All runs",
+            "All seeds (no performance filter)",
             "cross_method_evolution_absolute.png",
             pd.Series(True, index=trajectories.index),
         ),
         (
             "fully_successful",
-            "100% successful runs",
+            "Seeds with 100% final evaluation success",
             "cross_method_evolution_successful.png",
             trajectories.outcome_solve_rate.eq(1.0),
         ),
         (
             "not_fully_successful",
-            "Runs below 100% success",
+            "Seeds below 100% final evaluation success",
             "cross_method_evolution_not_fully_successful.png",
             trajectories.outcome_solve_rate.lt(1.0),
         ),
@@ -658,6 +658,9 @@ def _plot_cross_method_evolution(
             "not_fully_successful": "Excluded — no below-100% run for every method",
         }[variant]
         detail_lines = [
+            "Aggregation: filter individual seeds by final evaluation, average "
+            "qualifying seeds within each environment, retain only environments "
+            "represented by every approach, then average environments equally.",
             f"Included ({len(included)}): {', '.join(sorted(included)) or 'none'}",
             f"Excluded — not run on all methods ({len(missing_method_coverage)}): "
             f"{', '.join(sorted(missing_method_coverage)) or 'none'}",
@@ -693,13 +696,55 @@ def _plot_cross_method_evolution(
         )
         environment_means["subset"] = variant
         summaries.append(environment_means)
-        fig = draw(environment_means, f"Average: {figure_title}", detail_lines)
+        fig = draw(
+            environment_means,
+            f"Aggregate across matched environments: {figure_title}",
+            detail_lines,
+        )
         path = output / filename
         _save_figure(fig, path)
         plt.close(fig)
         paths.append(path)
 
     with PdfPages(report_path) as report:
+        methods_fig = plt.figure(figsize=(7.2, 5.8))
+        methods_fig.suptitle(
+            "Methods: performance filtering and aggregation",
+            fontsize=13,
+            fontweight="bold",
+            y=0.94,
+        )
+        methods_text = (
+            "Filtering unit: individual seed/run\n\n"
+            "A seed is in the 100% subset when its final held-out evaluation solve "
+            "rate is exactly 1.0 (normally 100 of 100 tasks solved). A seed is in "
+            "the below-100% subset when that rate is less than 1.0. An environment "
+            "can appear in both subsets when different seeds have different outcomes.\n\n"
+            "Per-environment pages\n\n"
+            "Each page shows every approach with at least one qualifying seed for "
+            "that environment. Curves average qualifying seeds; ribbons show 95% "
+            "confidence intervals across seeds. A retained empty page explicitly "
+            "states when no seed from any approach qualifies.\n\n"
+            "Aggregate pages\n\n"
+            "Seeds are filtered first and averaged within each environment. An "
+            "environment enters the aggregate only when every approach has at least "
+            "one qualifying seed, ensuring that all approach curves use the same "
+            "environment set. The retained environments are then averaged equally; "
+            "ribbons show 95% confidence intervals across environments.\n\n"
+            "The all-seeds aggregate applies no performance filter, but it retains "
+            "the same complete cross-approach environment requirement."
+        )
+        methods_fig.text(
+            0.10,
+            0.84,
+            textwrap.fill(methods_text, width=92, replace_whitespace=False),
+            ha="left",
+            va="top",
+            fontsize=9,
+            linespacing=1.35,
+        )
+        report.savefig(methods_fig)
+        plt.close(methods_fig)
         for variant, figure_title, _, selected, included, detail_lines in variant_data:
             averaged = selected[selected.environment.isin(included)]
             checkpoints = _trajectory_checkpoints(averaged)
@@ -712,7 +757,7 @@ def _plot_cross_method_evolution(
             )
             fig = draw(
                 means,
-                f"Average: {figure_title}",
+                f"Aggregate across matched environments: {figure_title}",
                 detail_lines,
             )
             report.savefig(fig)
