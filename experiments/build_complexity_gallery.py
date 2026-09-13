@@ -54,6 +54,11 @@ PLANNER_MODEL_MODULES = {
     "transport3d_generalized": "kinematic3d/transport3d.py",
 }
 
+PDDLSTREAM_MODEL_DIRS = {
+    "motion2d_generalized": "motion2d",
+    "packing3d_generalized": "packing3d",
+}
+
 MEASUREMENTS_MD = """# Static-complexity measurements
 
 The analysis parses Python source into an abstract syntax tree (AST); it does not
@@ -105,10 +110,13 @@ complexity, but none is by itself a measure of correctness or software quality.
 ### Environment and planner ownership
 
 Environment complexity counts only the source modules that directly define an
-environment. Planner-solution complexity counts the corresponding environment-specific
-SeSamE model module in `kinder-bilevel-planning`; it excludes the generic planning
-algorithm and transitive dependencies. A missing planner bar means that kinder-baselines
-does not provide a bilevel model for that environment, not that its complexity is zero.
+environment. SeSamE planner-solution complexity counts the corresponding
+environment-specific model module in `kinder-bilevel-planning`. PDDLStream complexity
+counts the environment-specific Python `run.py` and `stream.py` modules in
+`kinder-pddlstream-planning`; PDDL text files are excluded because the Python AST-based
+metrics do not apply to them. Both exclude generic planning algorithms and transitive
+dependencies. A missing planner bar means that kinder-baselines does not provide that
+planner for the environment, not that its complexity is zero.
 
 ### Complexity evolution
 
@@ -316,6 +324,11 @@ def _environment_complexity(
         / "third-party/kinder-baselines/kinder-bilevel-planning/src"
         / "kinder_bilevel_planning/env_models"
     )
+    pddlstream_root = (
+        repo
+        / "third-party/kinder-baselines/kinder-pddlstream-planning/src"
+        / "kinder_pddlstream_planning"
+    )
     for environment in sorted(environments):
         config_path = repo / "experiments/conf/environment" / f"{environment}.yaml"
         if not config_path.exists():
@@ -363,6 +376,26 @@ def _environment_complexity(
                 )
             planner_metrics = _aggregate_sources([planner_path], analyzer)
         row.update({f"planner_{k}": v for k, v in planner_metrics.items()})
+        pddlstream_relative = PDDLSTREAM_MODEL_DIRS.get(environment)
+        if pddlstream_relative is None:
+            pddlstream_metrics = {
+                "source_file_count": np.nan,
+                **{metric: np.nan for metric, _ in METRICS},
+            }
+        else:
+            pddlstream_paths = [
+                pddlstream_root / pddlstream_relative / filename
+                for filename in ("run.py", "stream.py")
+            ]
+            missing = [path for path in pddlstream_paths if not path.exists()]
+            if missing:
+                raise FileNotFoundError(
+                    f"PDDLStream model mapped for {environment} is missing: {missing}"
+                )
+            pddlstream_metrics = _aggregate_sources(pddlstream_paths, analyzer)
+        row.update(
+            {f"pddlstream_{k}": v for k, v in pddlstream_metrics.items()}
+        )
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -905,18 +938,25 @@ def _plot_pattern_summaries(
     positions = np.arange(len(ordered))
     for axis, (metric, title) in zip(axes, METRICS, strict=True):
         axis.bar(
-            positions - 0.20,
+            positions - 0.27,
             ordered[f"own_{metric}"],
-            width=0.38,
+            width=0.25,
             label="Environment-owned source",
             color="#17658c",
         )
         axis.bar(
-            positions + 0.20,
+            positions,
             ordered[f"planner_{metric}"],
-            width=0.38,
+            width=0.25,
             label="Environment-specific planner model",
             color="#b45f24",
+        )
+        axis.bar(
+            positions + 0.27,
+            ordered[f"pddlstream_{metric}"],
+            width=0.25,
+            label="Environment-specific PDDLStream",
+            color="#3a8f6b",
         )
         axis.set_title(title)
         axis.grid(axis="y", alpha=0.25, linewidth=0.5)
@@ -930,11 +970,14 @@ def _plot_pattern_summaries(
         for value in ordered.environment
     ]
     axes[-1].set_xticks(positions, labels, rotation=58, ha="right", fontsize=5)
-    missing_planners = sorted(
-        ordered.loc[ordered.planner_source_file_count.isna(), "environment"]
+    sesame_available = sorted(
+        ordered.loc[ordered.planner_source_file_count.notna(), "environment"]
+    )
+    pddlstream_available = sorted(
+        ordered.loc[ordered.pddlstream_source_file_count.notna(), "environment"]
     )
     fig.suptitle(
-        "Owned environment source vs. kinder-baselines planner solution",
+        "Owned environment source vs. kinder-baselines planner solutions",
         fontsize=9,
         fontweight="bold",
     )
@@ -942,15 +985,18 @@ def _plot_pattern_summaries(
         0.5,
         0.965,
         textwrap.fill(
-            f"No bilevel planner model ({len(missing_planners)}): "
-            + ", ".join(missing_planners),
+            f"SeSamE available ({len(sesame_available)}): "
+            + ", ".join(sesame_available)
+            + f". PDDLStream available ({len(pddlstream_available)}): "
+            + ", ".join(pddlstream_available)
+            + ". Missing bars mean no corresponding planner implementation.",
             width=145,
         ),
         ha="center",
         va="top",
         fontsize=5.2,
     )
-    axes[0].legend(loc="upper right", ncol=2, frameon=False)
+    axes[0].legend(loc="upper right", ncol=3, frameon=False)
     fig.tight_layout(rect=(0, 0, 1, 0.935), h_pad=0.8)
     path = directory / "environment_static_complexity.png"
     _save_figure(fig, path)
