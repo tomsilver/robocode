@@ -36,6 +36,24 @@ METHOD_COLORS = {
     "llm_genplan": "#c23b43",
 }
 
+# Environment-specific SeSamE solution models shipped by kinder-baselines. These are
+# intentionally the owned model modules only, not the shared planner implementation or
+# their transitive imports, matching the owned-source treatment of environments.
+PLANNER_MODEL_MODULES = {
+    "clutteredretrieval2d_generalized": "kinematic2d/clutteredretrieval2d.py",
+    "clutteredstorage2d_generalized": "kinematic2d/clutteredstorage2d.py",
+    "dynamicshelf3d_generalized": "dynamic3d/tidybot3d_shelf3D.py",
+    "dynobstruction2d_generalized": "dynamic2d/dynobstruction2d.py",
+    "dynpushpullhook2d_generalized": "dynamic2d/dynpushpullhook2d.py",
+    "motion2d_generalized": "kinematic2d/motion2d.py",
+    "obstruction2d_generalized": "kinematic2d/obstruction2d.py",
+    "shelf3d_generalized": "kinematic3d/shelf3d.py",
+    "stickbutton2d_generalized": "kinematic2d/stickbutton2d.py",
+    "sweepintodrawer3d": "dynamic3d/tidybot3d_sweep3D.py",
+    "tossing3d_generalized": "dynamic3d/tidybot3d_tossing3D.py",
+    "transport3d_generalized": "kinematic3d/transport3d.py",
+}
+
 MEASUREMENTS_MD = """# Static-complexity measurements
 
 The analysis parses Python source into an abstract syntax tree (AST); it does not
@@ -83,6 +101,14 @@ size of the policy's explicit persistent object state.
 
 All seven measurements are counts. Larger values indicate more source or structural
 complexity, but none is by itself a measure of correctness or software quality.
+
+### Environment and planner ownership
+
+Environment complexity counts only the source modules that directly define an
+environment. Planner-solution complexity counts the corresponding environment-specific
+SeSamE model module in `kinder-bilevel-planning`; it excludes the generic planning
+algorithm and transitive dependencies. A missing planner bar means that kinder-baselines
+does not provide a bilevel model for that environment, not that its complexity is zero.
 
 ### Complexity evolution
 
@@ -285,6 +311,11 @@ def _environment_complexity(
         repo / "third-party/ss-pybullet",
     ]
     rows = []
+    planner_root = (
+        repo
+        / "third-party/kinder-baselines/kinder-bilevel-planning/src"
+        / "kinder_bilevel_planning/env_models"
+    )
     for environment in sorted(environments):
         config_path = repo / "experiments/conf/environment" / f"{environment}.yaml"
         if not config_path.exists():
@@ -318,6 +349,20 @@ def _environment_complexity(
                 for k, v in _aggregate_sources(closure, analyzer).items()
             }
         )
+        planner_relative = PLANNER_MODEL_MODULES.get(environment)
+        if planner_relative is None:
+            planner_metrics = {
+                "source_file_count": np.nan,
+                **{metric: np.nan for metric, _ in METRICS},
+            }
+        else:
+            planner_path = planner_root / planner_relative
+            if not planner_path.exists():
+                raise FileNotFoundError(
+                    f"Planner model mapped for {environment} is missing: {planner_path}"
+                )
+            planner_metrics = _aggregate_sources([planner_path], analyzer)
+        row.update({f"planner_{k}": v for k, v in planner_metrics.items()})
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -860,18 +905,18 @@ def _plot_pattern_summaries(
     positions = np.arange(len(ordered))
     for axis, (metric, title) in zip(axes, METRICS, strict=True):
         axis.bar(
-            positions,
-            ordered[f"closure_{metric}"],
-            width=0.78,
-            label="Local dependency closure",
-            color="#aab4bd",
-        )
-        axis.bar(
-            positions,
+            positions - 0.20,
             ordered[f"own_{metric}"],
-            width=0.48,
+            width=0.38,
             label="Environment-owned source",
             color="#17658c",
+        )
+        axis.bar(
+            positions + 0.20,
+            ordered[f"planner_{metric}"],
+            width=0.38,
+            label="Environment-specific planner model",
+            color="#b45f24",
         )
         axis.set_title(title)
         axis.grid(axis="y", alpha=0.25, linewidth=0.5)
@@ -885,12 +930,41 @@ def _plot_pattern_summaries(
         for value in ordered.environment
     ]
     axes[-1].set_xticks(positions, labels, rotation=58, ha="right", fontsize=5)
+    missing_planners = sorted(
+        ordered.loc[ordered.planner_source_file_count.isna(), "environment"]
+    )
+    fig.suptitle(
+        "Owned environment source vs. kinder-baselines planner solution",
+        fontsize=9,
+        fontweight="bold",
+    )
+    fig.text(
+        0.5,
+        0.965,
+        textwrap.fill(
+            f"No bilevel planner model ({len(missing_planners)}): "
+            + ", ".join(missing_planners),
+            width=145,
+        ),
+        ha="center",
+        va="top",
+        fontsize=5.2,
+    )
     axes[0].legend(loc="upper right", ncol=2, frameon=False)
-    fig.tight_layout(h_pad=0.8)
+    fig.tight_layout(rect=(0, 0, 1, 0.935), h_pad=0.8)
     path = directory / "environment_static_complexity.png"
     _save_figure(fig, path)
     plt.close(fig)
     paths.append(path)
+
+    # Include this static comparison as the final page of the downloadable report.
+    report_path = output / "complexity_evolution_report.pdf"
+    combined_path = output / ".complexity_report_with_environment.pdf"
+    subprocess.run(
+        ["pdfunite", str(report_path), str(path.with_suffix(".pdf")), str(combined_path)],
+        check=True,
+    )
+    os.replace(combined_path, report_path)
 
     valid = programs.dropna(subset=["result_solve_rate"]).copy()
     perf_rows = []
