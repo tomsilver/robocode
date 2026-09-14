@@ -1,0 +1,3 @@
+_target_: robocode.environments.kinder_geom3d_env.KinderGeom3DEnv
+env_id: kinder/BaseMotion3D-v0
+bilevel_env_name: base_motion3d
