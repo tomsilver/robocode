@@ -81,6 +81,26 @@ class TestCreateBackend:
 # ---------------------------------------------------------------------------
 
 
+def codex_usage(response_id: str, input_tokens: int = 0, output_tokens: int = 0) -> str:
+    """Native per-response ledger event (not the resettable UI counter)."""
+    return (
+        json.dumps(
+            {
+                "type": "token_usage_record",
+                "payload": {
+                    "response_id": response_id,
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "cached_input_tokens": 0,
+                        "output_tokens": output_tokens,
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
+
+
 class TestCodexBackend:
     """Tests for Codex command construction and JSONL parsing."""
 
@@ -113,6 +133,9 @@ class TestCodexBackend:
     def test_resume_uses_isolated_last_session(self, tmp_path: Path) -> None:
         """Resume the last conversation within the isolated Codex home."""
         config = SandboxConfig(sandbox_dir=tmp_path, resume_previous_session=True)
+        sessions = tmp_path / ".agent_sessions/codex"
+        sessions.mkdir(parents=True)
+        (sessions / "root.jsonl").write_text(codex_usage("root", 100))
         command = CodexBackend(DEFAULT_CODEX_CFG).build_cli_cmd(config)
         assert command[:3] == ["codex", "exec", "resume"]
         assert "--last" in command
@@ -135,13 +158,14 @@ class TestCodexBackend:
                 }
             )
 
-        session.write_text(token_event(1_000_000) + "\n")
+        session.write_text(codex_usage("before", 1_000_000))
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(
             SandboxConfig(sandbox_dir=tmp_path, resume_previous_session=True)
         )
         with session.open("a") as file:
-            file.write(token_event(1_000_100) + "\n")
+            file.write(token_event(100) + "\n")
+            file.write(codex_usage("after", 100))
         proc = MagicMock(spec=subprocess.Popen)
         proc.stdout = iter([json.dumps({"type": "turn.completed"}) + "\n"])
         proc.stderr = MagicMock()
@@ -246,20 +270,7 @@ class TestCodexBackend:
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=1))
         session_dir = tmp_path / ".agent_sessions" / "codex" / "2026" / "09"
         session_dir.mkdir(parents=True)
-        event = {
-            "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "info": {
-                    "total_token_usage": {
-                        "input_tokens": 1_000_000,
-                        "cached_input_tokens": 0,
-                        "output_tokens": 0,
-                    }
-                },
-            },
-        }
-        (session_dir / "rollout.jsonl").write_text(json.dumps(event) + "\n")
+        (session_dir / "rollout.jsonl").write_text(codex_usage("budget", 1_000_000))
         proc = MagicMock(spec=subprocess.Popen)
         proc.stdout = iter([json.dumps({"type": "thread.started"}) + "\n"])
         proc.stderr = MagicMock()
@@ -277,20 +288,15 @@ class TestCodexBackend:
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
         sessions = tmp_path / ".agent_sessions" / "codex"
-        usage = {"output_tokens": 240_000}
-        event = {
-            "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "info": {"total_token_usage": usage},
-            },
-        }
 
         def stream() -> Iterator[str]:
             yield json.dumps({"type": "turn.started"}) + "\n"
-            (sessions / "root.jsonl").write_text(json.dumps(event) + "\n")
-            usage["output_tokens"] = 160_000
-            (sessions / "subagent.jsonl").write_text(json.dumps(event) + "\n")
+            (sessions / "root.jsonl").write_text(
+                codex_usage("root", output_tokens=240_000)
+            )
+            (sessions / "subagent.jsonl").write_text(
+                codex_usage("child", output_tokens=160_000)
+            )
             time.sleep(0.2)
 
         proc = MagicMock(spec=subprocess.Popen)
@@ -314,6 +320,9 @@ class TestCodexBackend:
         """Resume an early stop without a solution confidence marker."""
         backend = CodexBackend(DEFAULT_CODEX_CFG)
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
+        (tmp_path / ".agent_sessions/codex/root.jsonl").write_text(
+            codex_usage("root", 100)
+        )
         proc = MagicMock(spec=subprocess.Popen)
         proc.stdout = iter([json.dumps({"type": "turn.completed"}) + "\n"])
         proc.stderr = MagicMock()
@@ -333,6 +342,7 @@ class TestCodexBackend:
         backend.build_cli_cmd(SandboxConfig(sandbox_dir=tmp_path, max_budget_usd=20.0))
         marker = tmp_path / ".agent_sessions" / "codex" / "solution_confident"
         marker.touch()
+        marker.with_name("root.jsonl").write_text(codex_usage("root", 100))
         proc = MagicMock(spec=subprocess.Popen)
         proc.stdout = iter([json.dumps({"type": "turn.completed"}) + "\n"])
         proc.stderr = MagicMock()
