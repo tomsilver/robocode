@@ -31,3 +31,31 @@ its per-episode results are not present in either source.
 
 `Whitebox.zip` is checksummed for provenance but is not used in this four-method
 black-box comparison.
+
+## LLM policy-structure judgment
+
+`experiments/judge_policy_structure.py` reproducibly classifies final policies
+from individually perfect synthesis seeds into one of three mutually exclusive
+categories: `planning`, `stateful`, or `direct`. It invokes the Claude Code CLI
+without tools, requires JSON-schema-constrained output, treats policy source as
+untrusted text, and records a rationale and concrete code evidence for audit.
+Judgments are cached by the policy code hash, model, and rubric version.
+
+For example, given the final-timing manifest and its extracted policy caches:
+
+```bash
+uv run python experiments/judge_policy_structure.py \
+  --manifest final_timing_3ep/manifest.json \
+  --policy-root .final-timing-cache \
+  --policy-root .final-timing-cache-v2 \
+  --cache-dir analysis/policy-structure/cache \
+  --output-csv analysis/policy-structure/judgments.csv \
+  --output-summary analysis/policy-structure/summary.json \
+  --model opus
+```
+
+The manifest must provide `method`, `environment`, `seed`, `solve_rate`, and
+`source` for each run. Only rows with `solve_rate == 1.0` are judged. The CSV is
+the auditable result; the summary JSON contains the per-method counts used in a
+compact paper table. Cached model outputs should be retained when reporting the
+result so the classifications do not silently change between runs.
