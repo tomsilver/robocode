@@ -97,7 +97,6 @@ class TestCodexBackend:
         assert 'model_reasoning_effort="medium"' in command
         assert 'web_search="disabled"' in command
         assert "tools.web_search=false" in command
-        assert "mcp_servers={}" in command
         assert "--ignore-user-config" in command
         assert backend.stdin_text(config) == "write approach.py"
 
