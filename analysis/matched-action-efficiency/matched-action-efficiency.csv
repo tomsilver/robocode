@@ -1,18 +1,291 @@
-environment,Claude Code_mean_actions,Codex_mean_actions,GenPlan_mean_actions,Planner_mean_actions,Claude Code_successful_seeds,Codex_successful_seeds,GenPlan_successful_seeds,Planner_successful_seeds
-balancebeam3d,318.66,495.905,,,24;42;424,24;42,,
-basemotion3d,3.474,,3.5660000000000003,9.95,24;42;222;424;444,,24;42;222;424;444,24;42;222;424;444
-clutteredstorage2d_generalized,348.74,,,,222;424,,,
-dynamicshelf3d_generalized,980.89,368.81,,,424,222,,
-dynamo3d_generalized,280.375,34.438,88.95,,42;222;424;444,24;42;222;424;444,24,
-dynpusht2d,209.948,473.34,,,24;42;222;424;444,424,,
-dynscooppour2d_generalized,508.99,556.92,,,424,222,,
-motion2d_generalized,65.732,82.64200000000001,78.98,,24;42;222;424;444,24;42;222;424;444,24;444,
-obstruction2d_generalized,50.470000000000006,,149.27,,24;42;222;424;444,,24,
-obstruction3d_generalized,61.27,,,,24,,,
-pr2packed_generalized,57.667500000000004,165.51,,,24;222;424;444,222,,
-pushpullhook2d,77.595,,,,24;424,,,
-rovers_generalized,24.00666666666667,31.47,,,222;424;444,42,,
-stickbutton2d_generalized,60.35600000000001,,,,24;42;222;424;444,,,
-table3d_generalized,37.40599999999999,13.754999999999999,330.52,,24;42;222;424;444,24;222;424;444,424,
-tossing3d_generalized,151.1233333333333,,,,24;42;222,,,
-transport3d_generalized,147.52333333333334,,,,24;424;444,,,
+run_group,environment,method,mean_actions,included_seeds
+all,balancebeam3d,Claude Code,365.7451466388018,24;42;222;424;444
+all,balancebeam3d,Codex,533.571955824906,24;42;222;424;444
+all,basemotion3d,Claude Code,3.474,24;42;222;424;444
+all,basemotion3d,GenPlan,3.5660000000000003,24;42;222;424;444
+all,basemotion3d,Planner,9.95,24;42;222;424;444
+all,clutteredretrieval2d_generalized,Claude Code,117.14588822101041,24;42;222;424;444
+all,clutteredretrieval2d_generalized,Codex,351.02448868778276,24;42;222;424;444
+all,clutteredretrieval2d_generalized,GenPlan,261.6648622904327,24;42;222;424;444
+all,clutteredretrieval2d_generalized,Planner,68.3921568627451,24;42;222;424;444
+all,clutteredstorage2d_generalized,Claude Code,386.3646868686868,24;42;222;424;444
+all,clutteredstorage2d_generalized,Codex,338.7039841521306,24;42;222;424;444
+all,clutteredstorage2d_generalized,GenPlan,151.5,24;42
+all,clutteredstorage2d_generalized,Planner,83.42105263157895,24;42;222;424;444
+all,constrainedcupboard3d_generalized,Claude Code,213.97352941176473,42;222
+all,constrainedcupboard3d_generalized,Codex,772.4716981132076,42
+all,dynamicshelf3d_generalized,Claude Code,718.9759271284271,24;42;222;424
+all,dynamicshelf3d_generalized,Codex,565.1978571428572,42;222
+all,dynamicshelf3d_generalized,Planner,665.472913012913,24;42;222;424;444
+all,dynamo3d_generalized,Claude Code,241.09,24;42;222;424;444
+all,dynamo3d_generalized,Codex,34.438,24;42;222;424;444
+all,dynamo3d_generalized,GenPlan,229.2349693226573,24;42;222;424;444
+all,dynobstruction2d_generalized,Claude Code,170.8907241399488,24;42;222;424;444
+all,dynobstruction2d_generalized,Codex,213.2765052231719,24;42;222;424;444
+all,dynobstruction2d_generalized,GenPlan,189.35360611610608,24;42;222;424;444
+all,dynobstruction2d_generalized,Planner,74.5,24;42;222;424;444
+all,dynpushpullhook2d_generalized,Claude Code,265.99933044831533,24;42;222;424;444
+all,dynpushpullhook2d_generalized,Codex,276.93472861180413,24;42;222;424;444
+all,dynpusht2d,Claude Code,209.948,24;42;222;424;444
+all,dynpusht2d,Codex,502.3175591371843,24;42;222;424;444
+all,dynpusht2d,GenPlan,554.9268679829655,24;222;424;444
+all,dynscooppour2d_generalized,Claude Code,555.9262733318046,24;42;222;424;444
+all,dynscooppour2d_generalized,Codex,807.7153087534296,24;42;222;424;444
+all,motion2d_generalized,Claude Code,65.732,24;42;222;424;444
+all,motion2d_generalized,Codex,82.64200000000001,24;42;222;424;444
+all,motion2d_generalized,GenPlan,82.00207053716767,24;42;222;424;444
+all,motion2d_generalized,Planner,62.740395913848204,24;42;222;424;444
+all,obstruction2d_generalized,Claude Code,50.470000000000006,24;42;222;424;444
+all,obstruction2d_generalized,Codex,209.38388426994726,24;42;222;424;444
+all,obstruction2d_generalized,GenPlan,149.531766395876,24;42;222;424;444
+all,obstruction2d_generalized,Planner,62.51219512195122,24;42;222;424;444
+all,obstruction3d_generalized,Claude Code,132.3216679797726,24;42;222;424;444
+all,obstruction3d_generalized,Codex,143.84332086751104,24;42;222;424;444
+all,packing3d_generalized,Claude Code,85.30284978577063,24;42;222;424;444
+all,packing3d_generalized,Codex,136.8773148148148,24;42;222
+all,packing3d_generalized,GenPlan,160.11494252873564,24;42
+all,pr2blocked_generalized,Claude Code,64.22798616198615,24;42;222;424;444
+all,pr2blocked_generalized,Codex,142.60411707206202,24;42;222;424;444
+all,pr2blocked_generalized,GenPlan,265.0,444
+all,pr2blocked_generalized,Planner,160.67895322276345,24;42;222;424;444
+all,pr2packed_generalized,Claude Code,53.70275,24;42;222;424;444
+all,pr2packed_generalized,Codex,195.41595042269762,24;42;222;424;444
+all,pr2packed_generalized,GenPlan,109.18149038461539,24;42;222;444
+all,pr2packed_generalized,Planner,223.14246630727763,24;42;222;424;444
+all,pushpullhook2d,Claude Code,82.34673570873571,24;42;222;424;444
+all,pushpullhook2d,Codex,225.26149766507552,24;42;222;424;444
+all,pushpullhook2d,GenPlan,462.2354808590103,24;42;222;424;444
+all,rearrange3d,Claude Code,450.9994731800766,24;42;222;424;444
+all,rearrange3d,Codex,584.5021462747778,24;42;222;424;444
+all,rovers_generalized,Claude Code,25.850464646464644,24;42;222;424;444
+all,rovers_generalized,Codex,42.93164753401361,24;42;424;444
+all,rovers_generalized,GenPlan,80.83972067608445,24;42;222;424;444
+all,rovers_generalized,Planner,310.26745706543034,24;42;222;424;444
+all,scooppour3d_generalized,Claude Code,249.5494623655914,42;424
+all,shelf3d_generalized,Claude Code,159.33853092783505,24;42;424;444
+all,shelf3d_generalized,Codex,196.96272095959597,24;42;222;444
+all,shelf3d_generalized,GenPlan,120.0,424
+all,shelf3d_generalized,Planner,364.8858250276855,24;42;222;424;444
+all,sortclutteredblocks3d_generalized,Claude Code,566.7430836707151,24;42;222;424;444
+all,stickbutton2d_generalized,Claude Code,60.35600000000001,24;42;222;424;444
+all,stickbutton2d_generalized,Codex,146.43929709179707,24;42;222;424;444
+all,stickbutton2d_generalized,GenPlan,178.28041219649916,24;42;222;424;444
+all,stickbutton2d_generalized,Planner,68.27777777777777,24;42;222;424;444
+all,table3d_generalized,Claude Code,37.40599999999999,24;42;222;424;444
+all,table3d_generalized,Codex,15.045237113402063,24;42;222;424;444
+all,table3d_generalized,GenPlan,191.00408006898252,24;42;222;424;444
+all,tossing3d_generalized,Claude Code,154.1677925170068,24;42;222;424;444
+all,tossing3d_generalized,Codex,289.29123018654917,24;42;222;444
+all,tossing3d_generalized,Planner,448.8869463869464,24;42;222;424;444
+all,transport3d_generalized,Claude Code,220.5034906511928,24;42;222;424;444
+all,transport3d_generalized,Codex,532.461320754717,24;222;444
+all,transport3d_generalized,GenPlan,635.5185185185185,24
+all,transport3d_generalized,Planner,1251.0877549306265,24;42;222;424;444
+below_100,balancebeam3d,Claude Code,436.37286659700453,222;444
+below_100,balancebeam3d,Codex,558.6832597081767,222;424;444
+below_100,clutteredretrieval2d_generalized,Claude Code,117.14588822101041,24;42;222;424;444
+below_100,clutteredretrieval2d_generalized,Codex,351.02448868778276,24;42;222;424;444
+below_100,clutteredretrieval2d_generalized,GenPlan,261.6648622904327,24;42;222;424;444
+below_100,clutteredretrieval2d_generalized,Planner,68.3921568627451,24;42;222;424;444
+below_100,clutteredstorage2d_generalized,Claude Code,411.4478114478114,24;42;444
+below_100,clutteredstorage2d_generalized,Codex,338.7039841521306,24;42;222;424;444
+below_100,clutteredstorage2d_generalized,GenPlan,151.5,24;42
+below_100,clutteredstorage2d_generalized,Planner,83.42105263157895,24;42;222;424;444
+below_100,constrainedcupboard3d_generalized,Claude Code,213.97352941176473,42;222
+below_100,constrainedcupboard3d_generalized,Codex,772.4716981132076,42
+below_100,dynamicshelf3d_generalized,Claude Code,631.6712361712362,24;42;222
+below_100,dynamicshelf3d_generalized,Codex,761.5857142857143,42
+below_100,dynamicshelf3d_generalized,Planner,665.472913012913,24;42;222;424;444
+below_100,dynamo3d_generalized,Claude Code,83.95,24
+below_100,dynamo3d_generalized,GenPlan,264.3062116533216,42;222;424;444
+below_100,dynobstruction2d_generalized,Claude Code,170.8907241399488,24;42;222;424;444
+below_100,dynobstruction2d_generalized,Codex,213.2765052231719,24;42;222;424;444
+below_100,dynobstruction2d_generalized,GenPlan,189.35360611610608,24;42;222;424;444
+below_100,dynobstruction2d_generalized,Planner,74.5,24;42;222;424;444
+below_100,dynpushpullhook2d_generalized,Claude Code,265.99933044831533,24;42;222;424;444
+below_100,dynpushpullhook2d_generalized,Codex,276.93472861180413,24;42;222;424;444
+below_100,dynpusht2d,Codex,509.5619489214803,24;42;222;444
+below_100,dynpusht2d,GenPlan,554.9268679829655,24;222;424;444
+below_100,dynscooppour2d_generalized,Claude Code,567.6603416647557,24;42;222;444
+below_100,dynscooppour2d_generalized,Codex,870.4141359417869,24;42;424;444
+below_100,motion2d_generalized,GenPlan,84.01678422861276,42;222;424
+below_100,motion2d_generalized,Planner,62.740395913848204,24;42;222;424;444
+below_100,obstruction2d_generalized,Codex,209.38388426994726,24;42;222;424;444
+below_100,obstruction2d_generalized,GenPlan,149.59720799484498,42;222;424;444
+below_100,obstruction2d_generalized,Planner,62.51219512195122,24;42;222;424;444
+below_100,obstruction3d_generalized,Claude Code,150.08458497471574,42;222;424;444
+below_100,obstruction3d_generalized,Codex,143.84332086751104,24;42;222;424;444
+below_100,packing3d_generalized,Claude Code,85.30284978577063,24;42;222;424;444
+below_100,packing3d_generalized,Codex,136.8773148148148,24;42;222
+below_100,packing3d_generalized,GenPlan,160.11494252873564,24;42
+below_100,pr2blocked_generalized,Claude Code,64.22798616198615,24;42;222;424;444
+below_100,pr2blocked_generalized,Codex,142.60411707206202,24;42;222;424;444
+below_100,pr2blocked_generalized,GenPlan,265.0,444
+below_100,pr2blocked_generalized,Planner,160.67895322276345,24;42;222;424;444
+below_100,pr2packed_generalized,Claude Code,37.84375,42
+below_100,pr2packed_generalized,Codex,202.89243802837203,24;42;424;444
+below_100,pr2packed_generalized,GenPlan,109.18149038461539,24;42;222;444
+below_100,pr2packed_generalized,Planner,223.14246630727763,24;42;222;424;444
+below_100,pushpullhook2d,Claude Code,85.51455951455951,42;222;444
+below_100,pushpullhook2d,Codex,225.26149766507552,24;42;222;424;444
+below_100,pushpullhook2d,GenPlan,462.2354808590103,24;42;222;424;444
+below_100,rearrange3d,Claude Code,450.9994731800766,24;42;222;424;444
+below_100,rearrange3d,Codex,584.5021462747778,24;42;222;424;444
+below_100,rovers_generalized,Claude Code,28.616161616161616,24;42
+below_100,rovers_generalized,Codex,46.75219671201813,24;424;444
+below_100,rovers_generalized,GenPlan,80.83972067608445,24;42;222;424;444
+below_100,rovers_generalized,Planner,310.26745706543034,24;42;222;424;444
+below_100,scooppour3d_generalized,Claude Code,249.5494623655914,42;424
+below_100,shelf3d_generalized,Claude Code,159.33853092783505,24;42;424;444
+below_100,shelf3d_generalized,Codex,196.96272095959597,24;42;222;444
+below_100,shelf3d_generalized,GenPlan,120.0,424
+below_100,shelf3d_generalized,Planner,364.8858250276855,24;42;222;424;444
+below_100,sortclutteredblocks3d_generalized,Claude Code,566.7430836707151,24;42;222;424;444
+below_100,stickbutton2d_generalized,Codex,146.43929709179707,24;42;222;424;444
+below_100,stickbutton2d_generalized,GenPlan,178.28041219649916,24;42;222;424;444
+below_100,stickbutton2d_generalized,Planner,68.27777777777777,24;42;222;424;444
+below_100,table3d_generalized,Codex,20.20618556701031,42
+below_100,table3d_generalized,GenPlan,156.12510008622814,24;42;222;444
+below_100,tossing3d_generalized,Claude Code,158.734481292517,424;444
+below_100,tossing3d_generalized,Codex,289.29123018654917,24;42;222;444
+below_100,tossing3d_generalized,Planner,448.8869463869464,24;42;222;424;444
+below_100,transport3d_generalized,Claude Code,329.97372662798193,42;222
+below_100,transport3d_generalized,Codex,532.461320754717,24;222;444
+below_100,transport3d_generalized,GenPlan,635.5185185185185,24
+below_100,transport3d_generalized,Planner,1251.0877549306265,24;42;222;424;444
+exactly_100,balancebeam3d,Claude Code,318.66,24;42;424
+exactly_100,balancebeam3d,Codex,495.905,24;42
+exactly_100,basemotion3d,Claude Code,3.474,24;42;222;424;444
+exactly_100,basemotion3d,GenPlan,3.5660000000000003,24;42;222;424;444
+exactly_100,basemotion3d,Planner,9.95,24;42;222;424;444
+exactly_100,clutteredstorage2d_generalized,Claude Code,348.74,222;424
+exactly_100,dynamicshelf3d_generalized,Claude Code,980.89,424
+exactly_100,dynamicshelf3d_generalized,Codex,368.81,222
+exactly_100,dynamo3d_generalized,Claude Code,280.375,42;222;424;444
+exactly_100,dynamo3d_generalized,Codex,34.438,24;42;222;424;444
+exactly_100,dynamo3d_generalized,GenPlan,88.95,24
+exactly_100,dynpusht2d,Claude Code,209.948,24;42;222;424;444
+exactly_100,dynpusht2d,Codex,473.34,424
+exactly_100,dynscooppour2d_generalized,Claude Code,508.99,424
+exactly_100,dynscooppour2d_generalized,Codex,556.92,222
+exactly_100,motion2d_generalized,Claude Code,65.732,24;42;222;424;444
+exactly_100,motion2d_generalized,Codex,82.64200000000001,24;42;222;424;444
+exactly_100,motion2d_generalized,GenPlan,78.98,24;444
+exactly_100,obstruction2d_generalized,Claude Code,50.470000000000006,24;42;222;424;444
+exactly_100,obstruction2d_generalized,GenPlan,149.27,24
+exactly_100,obstruction3d_generalized,Claude Code,61.27,24
+exactly_100,pr2packed_generalized,Claude Code,57.667500000000004,24;222;424;444
+exactly_100,pr2packed_generalized,Codex,165.51,222
+exactly_100,pushpullhook2d,Claude Code,77.595,24;424
+exactly_100,rovers_generalized,Claude Code,24.00666666666667,222;424;444
+exactly_100,rovers_generalized,Codex,31.47,42
+exactly_100,stickbutton2d_generalized,Claude Code,60.35600000000001,24;42;222;424;444
+exactly_100,table3d_generalized,Claude Code,37.40599999999999,24;42;222;424;444
+exactly_100,table3d_generalized,Codex,13.754999999999999,24;222;424;444
+exactly_100,table3d_generalized,GenPlan,330.52,424
+exactly_100,tossing3d_generalized,Claude Code,151.1233333333333,24;42;222
+exactly_100,transport3d_generalized,Claude Code,147.52333333333334,24;424;444
+below_80,clutteredretrieval2d_generalized,Claude Code,83.03632478632478,222;424
+below_80,clutteredretrieval2d_generalized,Codex,351.02448868778276,24;42;222;424;444
+below_80,clutteredretrieval2d_generalized,GenPlan,261.6648622904327,24;42;222;424;444
+below_80,clutteredretrieval2d_generalized,Planner,68.3921568627451,24;42;222;424;444
+below_80,clutteredstorage2d_generalized,Codex,338.7039841521306,24;42;222;424;444
+below_80,clutteredstorage2d_generalized,GenPlan,151.5,24;42
+below_80,clutteredstorage2d_generalized,Planner,83.42105263157895,24;42;222;424;444
+below_80,constrainedcupboard3d_generalized,Claude Code,213.97352941176473,42;222
+below_80,constrainedcupboard3d_generalized,Codex,772.4716981132076,42
+below_80,dynamicshelf3d_generalized,Claude Code,720.9512987012987,24;42
+below_80,dynamicshelf3d_generalized,Codex,761.5857142857143,42
+below_80,dynamicshelf3d_generalized,Planner,665.472913012913,24;42;222;424;444
+below_80,dynamo3d_generalized,Claude Code,83.95,24
+below_80,dynobstruction2d_generalized,Claude Code,124.39240506329114,42
+below_80,dynobstruction2d_generalized,Codex,278.3474358974359,42;424
+below_80,dynobstruction2d_generalized,GenPlan,189.35360611610608,24;42;222;424;444
+below_80,dynobstruction2d_generalized,Planner,74.5,24;42;222;424;444
+below_80,dynpushpullhook2d_generalized,Claude Code,261.3968253968254,24
+below_80,dynpushpullhook2d_generalized,Codex,276.93472861180413,24;42;222;424;444
+below_80,dynpusht2d,Codex,625.5753424657535,24;444
+below_80,dynpusht2d,GenPlan,554.9268679829655,24;222;424;444
+below_80,dynscooppour2d_generalized,Codex,1278.1,42
+below_80,motion2d_generalized,Planner,62.740395913848204,24;42;222;424;444
+below_80,obstruction2d_generalized,GenPlan,109.77332644094082,42;424
+below_80,obstruction2d_generalized,Planner,62.51219512195122,24;42;222;424;444
+below_80,obstruction3d_generalized,Claude Code,160.09756097560975,444
+below_80,obstruction3d_generalized,Codex,143.84332086751104,24;42;222;424;444
+below_80,packing3d_generalized,Claude Code,85.30284978577063,24;42;222;424;444
+below_80,packing3d_generalized,Codex,136.8773148148148,24;42;222
+below_80,packing3d_generalized,GenPlan,160.11494252873564,24;42
+below_80,pr2blocked_generalized,Claude Code,64.22798616198615,24;42;222;424;444
+below_80,pr2blocked_generalized,Codex,144.56043513295728,222;424
+below_80,pr2blocked_generalized,GenPlan,265.0,444
+below_80,pr2blocked_generalized,Planner,160.67895322276345,24;42;222;424;444
+below_80,pr2packed_generalized,Codex,154.82926829268294,24
+below_80,pr2packed_generalized,GenPlan,109.18149038461539,24;42;222;444
+below_80,pr2packed_generalized,Planner,223.14246630727763,24;42;222;424;444
+below_80,pushpullhook2d,Codex,263.9090320561716,24;222;424
+below_80,pushpullhook2d,GenPlan,462.2354808590103,24;42;222;424;444
+below_80,rearrange3d,Claude Code,364.94444444444446,42;424
+below_80,rearrange3d,Codex,599.3461038961038,24;42;424;444
+below_80,rovers_generalized,Planner,310.26745706543034,24;42;222;424;444
+below_80,scooppour3d_generalized,Claude Code,249.5494623655914,42;424
+below_80,shelf3d_generalized,Claude Code,166.1833333333333,24;424;444
+below_80,shelf3d_generalized,Codex,117.25833333333334,24;444
+below_80,shelf3d_generalized,GenPlan,120.0,424
+below_80,shelf3d_generalized,Planner,364.8858250276855,24;42;222;424;444
+below_80,sortclutteredblocks3d_generalized,Claude Code,566.7430836707151,24;42;222;424;444
+below_80,stickbutton2d_generalized,GenPlan,235.608658008658,24;42;444
+below_80,stickbutton2d_generalized,Planner,68.27777777777777,24;42;222;424;444
+below_80,table3d_generalized,GenPlan,326.0243902439024,444
+below_80,tossing3d_generalized,Codex,302.2124827395747,24;222;444
+below_80,tossing3d_generalized,Planner,448.8869463869464,24;42;222;424;444
+below_80,transport3d_generalized,Codex,508.6919811320755,24;444
+below_80,transport3d_generalized,GenPlan,635.5185185185185,24
+below_80,transport3d_generalized,Planner,1251.0877549306265,24;42;222;424;444
+at_least_80,balancebeam3d,Claude Code,365.7451466388018,24;42;222;424;444
+at_least_80,balancebeam3d,Codex,533.571955824906,24;42;222;424;444
+at_least_80,basemotion3d,Claude Code,3.474,24;42;222;424;444
+at_least_80,basemotion3d,GenPlan,3.5660000000000003,24;42;222;424;444
+at_least_80,basemotion3d,Planner,9.95,24;42;222;424;444
+at_least_80,clutteredretrieval2d_generalized,Claude Code,139.88559717746747,24;42;444
+at_least_80,clutteredstorage2d_generalized,Claude Code,386.3646868686868,24;42;222;424;444
+at_least_80,dynamicshelf3d_generalized,Claude Code,717.0005555555556,222;424
+at_least_80,dynamicshelf3d_generalized,Codex,368.81,222
+at_least_80,dynamo3d_generalized,Claude Code,280.375,42;222;424;444
+at_least_80,dynamo3d_generalized,Codex,34.438,24;42;222;424;444
+at_least_80,dynamo3d_generalized,GenPlan,229.2349693226573,24;42;222;424;444
+at_least_80,dynobstruction2d_generalized,Claude Code,182.51530390911321,24;222;424;444
+at_least_80,dynobstruction2d_generalized,Codex,169.89588477366257,24;222;444
+at_least_80,dynpushpullhook2d_generalized,Claude Code,267.14995671118777,42;222;424;444
+at_least_80,dynpusht2d,Claude Code,209.948,24;42;222;424;444
+at_least_80,dynpusht2d,Codex,420.1457035848047,42;222;424
+at_least_80,dynscooppour2d_generalized,Claude Code,555.9262733318046,24;42;222;424;444
+at_least_80,dynscooppour2d_generalized,Codex,690.1191359417869,24;222;424;444
+at_least_80,motion2d_generalized,Claude Code,65.732,24;42;222;424;444
+at_least_80,motion2d_generalized,Codex,82.64200000000001,24;42;222;424;444
+at_least_80,motion2d_generalized,GenPlan,82.00207053716767,24;42;222;424;444
+at_least_80,obstruction2d_generalized,Claude Code,50.470000000000006,24;42;222;424;444
+at_least_80,obstruction2d_generalized,Codex,209.38388426994726,24;42;222;424;444
+at_least_80,obstruction2d_generalized,GenPlan,176.0373930324994,24;222;444
+at_least_80,obstruction3d_generalized,Claude Code,125.37769473081329,24;42;222;424
+at_least_80,pr2blocked_generalized,Codex,141.29990503146516,24;42;444
+at_least_80,pr2packed_generalized,Claude Code,53.70275,24;42;222;424;444
+at_least_80,pr2packed_generalized,Codex,205.56262095520128,42;222;424;444
+at_least_80,pushpullhook2d,Claude Code,82.34673570873571,24;42;222;424;444
+at_least_80,pushpullhook2d,Codex,167.2901960784314,42;444
+at_least_80,rearrange3d,Claude Code,508.36949233716473,24;222;444
+at_least_80,rearrange3d,Codex,525.1263157894737,222
+at_least_80,rovers_generalized,Claude Code,25.850464646464644,24;42;222;424;444
+at_least_80,rovers_generalized,Codex,42.93164753401361,24;42;424;444
+at_least_80,rovers_generalized,GenPlan,80.83972067608445,24;42;222;424;444
+at_least_80,shelf3d_generalized,Claude Code,138.8041237113402,42
+at_least_80,shelf3d_generalized,Codex,276.66710858585856,42;222
+at_least_80,stickbutton2d_generalized,Claude Code,60.35600000000001,24;42;222;424;444
+at_least_80,stickbutton2d_generalized,Codex,146.43929709179707,24;42;222;424;444
+at_least_80,stickbutton2d_generalized,GenPlan,92.28804347826087,222;424
+at_least_80,table3d_generalized,Claude Code,37.40599999999999,24;42;222;424;444
+at_least_80,table3d_generalized,Codex,15.045237113402063,24;42;222;424;444
+at_least_80,table3d_generalized,GenPlan,157.24900252525254,24;42;222;424
+at_least_80,tossing3d_generalized,Claude Code,154.1677925170068,24;42;222;424;444
+at_least_80,tossing3d_generalized,Codex,250.52747252747253,42
+at_least_80,transport3d_generalized,Claude Code,220.5034906511928,24;42;222;424;444
+at_least_80,transport3d_generalized,Codex,580.0,222

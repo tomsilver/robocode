@@ -1,359 +1,2566 @@
 {
-  "balancebeam3d": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        424
-      ],
-      "Codex": [
-        24,
-        42
-      ],
-      "GenPlan": [],
-      "Planner": []
+  "all": {
+    "balancebeam3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "basemotion3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "clutteredretrieval2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "clutteredstorage2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "constrainedcupboard3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamicshelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424
+        ],
+        "Codex": [
+          42,
+          222
+        ],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "dynamo3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "dynobstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "dynpushpullhook2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpusht2d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "dynscooppour2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "motion2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "obstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "obstruction3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "packing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222
+        ],
+        "GenPlan": [
+          24,
+          42
+        ],
+        "Planner": []
+      }
+    },
+    "pr2blocked_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "pr2packed_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "pushpullhook2d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "rearrange3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rovers_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "scooppour3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          424
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "shelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "GenPlan": [
+          424
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "sortclutteredblocks3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "stickbutton2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "sweepintodrawer3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sweepsimple3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "table3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "tossing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "transport3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          222,
+          444
+        ],
+        "GenPlan": [
+          24
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
     }
   },
-  "basemotion3d": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
+  "below_100": {
+    "balancebeam3d": {
+      "included_seeds": {
+        "Claude Code": [
+          222,
+          444
+        ],
+        "Codex": [
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "basemotion3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "clutteredretrieval2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "clutteredstorage2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "constrainedcupboard3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamicshelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "dynamo3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24
+        ],
+        "Codex": [],
+        "GenPlan": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "dynobstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "dynpushpullhook2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpusht2d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "GenPlan": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "dynscooppour2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "motion2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [
+          42,
+          222,
+          424
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "obstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "obstruction3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "packing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222
+        ],
+        "GenPlan": [
+          24,
+          42
+        ],
+        "Planner": []
+      }
+    },
+    "pr2blocked_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "pr2packed_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42
+        ],
+        "Codex": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "pushpullhook2d": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "rearrange3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rovers_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42
+        ],
+        "Codex": [
+          24,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "scooppour3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          424
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "shelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "GenPlan": [
+          424
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "sortclutteredblocks3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "stickbutton2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "sweepintodrawer3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sweepsimple3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "table3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "tossing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "transport3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222
+        ],
+        "Codex": [
+          24,
+          222,
+          444
+        ],
+        "GenPlan": [
+          24
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
     }
   },
-  "clutteredretrieval2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
+  "exactly_100": {
+    "balancebeam3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          424
+        ],
+        "Codex": [
+          24,
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "basemotion3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "clutteredretrieval2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "clutteredstorage2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          222,
+          424
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "constrainedcupboard3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamicshelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          424
+        ],
+        "Codex": [
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamo3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24
+        ],
+        "Planner": []
+      }
+    },
+    "dynobstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpushpullhook2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpusht2d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          424
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynscooppour2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          424
+        ],
+        "Codex": [
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "motion2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "obstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [
+          24
+        ],
+        "Planner": []
+      }
+    },
+    "obstruction3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "packing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "pr2blocked_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "pr2packed_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "pushpullhook2d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          424
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rearrange3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rovers_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "scooppour3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "shelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sortclutteredblocks3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "stickbutton2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sweepintodrawer3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sweepsimple3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "table3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          424
+        ],
+        "Planner": []
+      }
+    },
+    "tossing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "transport3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
     }
   },
-  "clutteredstorage2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        222,
-        424
-      ],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
+  "below_80": {
+    "balancebeam3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "basemotion3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "clutteredretrieval2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          222,
+          424
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "clutteredstorage2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "constrainedcupboard3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamicshelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "dynamo3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynobstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42
+        ],
+        "Codex": [
+          42,
+          424
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "dynpushpullhook2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpusht2d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          444
+        ],
+        "GenPlan": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "dynscooppour2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "motion2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "obstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [
+          42,
+          424
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "obstruction3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "packing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222
+        ],
+        "GenPlan": [
+          24,
+          42
+        ],
+        "Planner": []
+      }
+    },
+    "pr2blocked_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          222,
+          424
+        ],
+        "GenPlan": [
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "pr2packed_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "pushpullhook2d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          222,
+          424
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "rearrange3d": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          424
+        ],
+        "Codex": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rovers_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "scooppour3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          424
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "shelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          444
+        ],
+        "GenPlan": [
+          424
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "sortclutteredblocks3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "stickbutton2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [
+          24,
+          42,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "sweepintodrawer3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sweepsimple3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "table3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "tossing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          222,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "transport3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          444
+        ],
+        "GenPlan": [
+          24
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
     }
   },
-  "constrainedcupboard3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "dynamicshelf3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        424
-      ],
-      "Codex": [
-        222
-      ],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "dynamo3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24
-      ],
-      "Planner": []
-    }
-  },
-  "dynobstruction2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "dynpushpullhook2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "dynpusht2d": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        424
-      ],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "dynscooppour2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        424
-      ],
-      "Codex": [
-        222
-      ],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "motion2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        444
-      ],
-      "Planner": []
-    }
-  },
-  "obstruction2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [],
-      "GenPlan": [
-        24
-      ],
-      "Planner": []
-    }
-  },
-  "obstruction3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24
-      ],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "packing3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "pr2blocked_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "pr2packed_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        222
-      ],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "pushpullhook2d": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        424
-      ],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "rearrange3d": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "rovers_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        42
-      ],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "scooppour3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "shelf3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "sortclutteredblocks3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "stickbutton2d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "sweepintodrawer3d": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "sweepsimple3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "table3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        424
-      ],
-      "Planner": []
-    }
-  },
-  "tossing3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222
-      ],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
-    }
-  },
-  "transport3d_generalized": {
-    "successful_seeds": {
-      "Claude Code": [
-        24,
-        424,
-        444
-      ],
-      "Codex": [],
-      "GenPlan": [],
-      "Planner": []
+  "at_least_80": {
+    "balancebeam3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "basemotion3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ]
+      }
+    },
+    "clutteredretrieval2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "clutteredstorage2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "constrainedcupboard3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamicshelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          222,
+          424
+        ],
+        "Codex": [
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynamo3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "dynobstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          222,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpushpullhook2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynpusht2d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          42,
+          222,
+          424
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "dynscooppour2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "motion2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "obstruction2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          222,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "obstruction3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424
+        ],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "packing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "pr2blocked_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [
+          24,
+          42,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "pr2packed_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "pushpullhook2d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          42,
+          444
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rearrange3d": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          222,
+          444
+        ],
+        "Codex": [
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "rovers_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Planner": []
+      }
+    },
+    "scooppour3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "shelf3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          42
+        ],
+        "Codex": [
+          42,
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sortclutteredblocks3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "stickbutton2d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          222,
+          424
+        ],
+        "Planner": []
+      }
+    },
+    "sweepintodrawer3d": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "sweepsimple3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [],
+        "Codex": [],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "table3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "GenPlan": [
+          24,
+          42,
+          222,
+          424
+        ],
+        "Planner": []
+      }
+    },
+    "tossing3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          42
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
+    },
+    "transport3d_generalized": {
+      "included_seeds": {
+        "Claude Code": [
+          24,
+          42,
+          222,
+          424,
+          444
+        ],
+        "Codex": [
+          222
+        ],
+        "GenPlan": [],
+        "Planner": []
+      }
     }
   }
 }

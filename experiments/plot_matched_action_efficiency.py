@@ -214,40 +214,62 @@ def select_latest(runs: Iterable[Run]) -> dict[tuple[str, str, int], Run]:
     return selected
 
 
-def fully_solved_run_actions(
+RUN_GROUPS = (
+    ("all", "All runs", lambda rate: True),
+    ("below_100", "Runs below 100% success", lambda rate: rate < 1.0),
+    ("exactly_100", "Runs with 100% success", lambda rate: rate == 1.0),
+    ("below_80", "Runs below 80% success", lambda rate: rate < 0.8),
+    ("at_least_80", "Runs with at least 80% success", lambda rate: rate >= 0.8),
+)
+
+
+def grouped_run_actions(
     runs: dict[tuple[str, str, int], Run],
-) -> tuple[dict[str, dict[str, list[float]]], dict[str, Any]]:
-    """Return per-run mean actions for final policies that solve 100/100."""
+) -> tuple[dict[str, dict[str, dict[str, list[float]]]], dict[str, Any]]:
+    """Return per-run mean actions on solved episodes for each success-rate cut."""
     environments = sorted({key[1] for key in runs})
-    successful: dict[str, dict[str, list[float]]] = {}
+    grouped = {
+        key: {environment: {method: [] for method in METHODS} for environment in environments}
+        for key, _, _ in RUN_GROUPS
+    }
     coverage: dict[str, Any] = {}
-    for environment in environments:
-        values = {method: [] for method in METHODS}
-        successful_seeds = {method: [] for method in METHODS}
-        for method in METHODS:
-            method_runs = sorted(
-                (
-                    run for (present_method, present_environment, _), run in runs.items()
-                    if present_method == method and present_environment == environment
-                ),
-                key=lambda run: run.replicate_seed,
-            )
-            for run in method_runs:
-                if len(run.per_episode) != 100 or not all(
-                    episode.get("solved") is True for episode in run.per_episode
-                ):
-                    continue
-                steps = [episode.get("num_steps") for episode in run.per_episode]
-                if not all(isinstance(value, (int, float)) and value > 0 for value in steps):
-                    continue
-                values[method].append(float(np.mean(steps)))
-                successful_seeds[method].append(run.replicate_seed)
-        coverage[environment] = {
-            "successful_seeds": successful_seeds,
+    for group_key, _, predicate in RUN_GROUPS:
+        coverage[group_key] = {}
+        for environment in environments:
+            included_seeds = {method: [] for method in METHODS}
+            for method in METHODS:
+                method_runs = sorted(
+                    (
+                        run for (present_method, present_environment, _), run in runs.items()
+                        if present_method == method and present_environment == environment
+                    ),
+                    key=lambda run: run.replicate_seed,
+                )
+                for run in method_runs:
+                    if len(run.per_episode) != 100:
+                        continue
+                    solve_rate = sum(
+                        episode.get("solved") is True for episode in run.per_episode
+                    ) / len(run.per_episode)
+                    if not predicate(solve_rate):
+                        continue
+                    solved_steps = [
+                        episode.get("num_steps") for episode in run.per_episode
+                        if episode.get("solved") is True
+                    ]
+                    if not solved_steps or not all(
+                        isinstance(value, (int, float)) and value > 0 for value in solved_steps
+                    ):
+                        continue
+                    grouped[group_key][environment][method].append(float(np.mean(solved_steps)))
+                    included_seeds[method].append(run.replicate_seed)
+            coverage[group_key][environment] = {"included_seeds": included_seeds}
+        grouped[group_key] = {
+            environment: values
+            for environment, values in grouped[group_key].items()
+            if any(values.values())
         }
-        if any(values.values()):
-            successful[environment] = values
-    return successful, coverage
+    return grouped, coverage
 
 
 def _configure_style() -> None:
@@ -280,15 +302,17 @@ def _mean_ci(values: list[float]) -> tuple[float, float]:
     return mean, float(1.96 * np.std(array, ddof=1) / np.sqrt(len(array)))
 
 
-def _draw_absolute_actions(successful: dict[str, dict[str, list[float]]]) -> plt.Figure:
-    environments = sorted(successful, key=lambda name: DISPLAY_NAMES.get(name, name), reverse=True)
+def _draw_absolute_actions(
+    values_by_environment: dict[str, dict[str, list[float]]], title: str
+) -> plt.Figure:
+    environments = sorted(values_by_environment, key=lambda name: DISPLAY_NAMES.get(name, name), reverse=True)
     positions = np.arange(len(environments), dtype=float)
     offsets = dict(zip(METHODS, (-0.24, -0.08, 0.08, 0.24), strict=True))
     fig_height = max(3.2, 0.24 * len(environments) + 1.15)
     fig, axis = plt.subplots(figsize=(3.45, fig_height), constrained_layout=True)
     for method in METHODS:
-        present = [index for index, environment in enumerate(environments) if successful[environment][method]]
-        summaries = [_mean_ci(successful[environments[index]][method]) for index in present]
+        present = [index for index, environment in enumerate(environments) if values_by_environment[environment][method]]
+        summaries = [_mean_ci(values_by_environment[environments[index]][method]) for index in present]
         means = [summary[0] for summary in summaries]
         intervals = [summary[1] for summary in summaries]
         axis.barh(
@@ -299,9 +323,9 @@ def _draw_absolute_actions(successful: dict[str, dict[str, list[float]]]) -> plt
         )
     axis.set_yticks(positions)
     axis.set_yticklabels([DISPLAY_NAMES.get(environment, environment) for environment in environments])
-    axis.set_xlabel("Mean actions in 100%-successful runs\n(lower is better)")
+    axis.set_xlabel("Mean actions on solved episodes\n(lower is better)")
     axis.set_ylabel("Environment")
-    axis.set_title("Actions for 100%-successful policies", fontweight="bold", pad=6)
+    axis.set_title(title, fontweight="bold", pad=6)
     axis.grid(True, axis="x", color="#D9D9D9", linewidth=0.45, alpha=0.8)
     handles, labels = axis.get_legend_handles_labels()
     fig.legend(handles, labels, frameon=False, ncol=2, loc="outside lower center")
@@ -310,31 +334,32 @@ def _draw_absolute_actions(successful: dict[str, dict[str, list[float]]]) -> plt
 
 
 def write_outputs(
-    successful: dict[str, dict[str, list[float]]],
+    grouped: dict[str, dict[str, dict[str, list[float]]]],
     coverage: dict[str, Any],
     output_pdf: Path,
 ) -> None:
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     _configure_style()
     with PdfPages(output_pdf) as pdf:
-        figure = _draw_absolute_actions(successful)
-        pdf.savefig(figure)
-        plt.close(figure)
+        for group_key, title, _ in RUN_GROUPS:
+            figure = _draw_absolute_actions(grouped[group_key], title)
+            pdf.savefig(figure)
+            plt.close(figure)
 
     summary_csv = output_pdf.with_suffix(".csv")
     with summary_csv.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(
-            ["environment"]
-            + [f"{method}_mean_actions" for method in METHODS]
-            + [f"{method}_successful_seeds" for method in METHODS]
+            ["run_group", "environment", "method", "mean_actions", "included_seeds"]
         )
-        for environment, values in sorted(successful.items()):
-            writer.writerow(
-                [environment]
-                + [float(np.mean(values[method])) if values[method] else "" for method in METHODS]
-                + [";".join(map(str, coverage[environment]["successful_seeds"][method])) for method in METHODS]
-            )
+        for group_key, _, _ in RUN_GROUPS:
+            for environment, values in sorted(grouped[group_key].items()):
+                for method in METHODS:
+                    if values[method]:
+                        writer.writerow([
+                            group_key, environment, method, float(np.mean(values[method])),
+                            ";".join(map(str, coverage[group_key][environment]["included_seeds"][method])),
+                        ])
     output_pdf.with_name(f"{output_pdf.stem}-coverage.json").write_text(
         json.dumps(coverage, indent=2) + "\n", encoding="utf-8"
     )
@@ -360,12 +385,9 @@ def main() -> None:
     if args.local_results_root:
         runs.extend(load_local_runs(args.local_results_root))
     selected = select_latest(runs)
-    successful, coverage = fully_solved_run_actions(selected)
-    if not successful:
-        raise RuntimeError("No 100%-successful runs found")
-    write_outputs(successful, coverage, args.output)
-    print(f"Wrote {args.output} with 1 page")
-    print(f"Included {len(successful)} environments")
+    grouped, coverage = grouped_run_actions(selected)
+    write_outputs(grouped, coverage, args.output)
+    print(f"Wrote {args.output} with {len(RUN_GROUPS)} pages")
 
 
 if __name__ == "__main__":
