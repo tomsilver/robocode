@@ -246,16 +246,16 @@ def _draw_absolute_actions(matched: dict[str, dict[str, list[float]]]) -> plt.Fi
     environments = sorted(matched, key=lambda name: DISPLAY_NAMES.get(name, name))
     positions = np.arange(len(environments), dtype=float)
     offsets = dict(zip(METHODS, (-0.24, -0.08, 0.08, 0.24), strict=True))
-    markers = dict(zip(METHODS, ("o", "s", "^", "D"), strict=True))
     fig, axis = plt.subplots(figsize=(7.0, 3.0), constrained_layout=True)
     for method in METHODS:
         summaries = [_mean_ci(matched[environment][method]) for environment in environments]
         means = [summary[0] for summary in summaries]
         intervals = [summary[1] for summary in summaries]
-        axis.errorbar(
-            positions + offsets[method], means, yerr=intervals,
-            color=COLORS[method], marker=markers[method], markersize=4,
-            linewidth=1.2, capsize=2, label=method,
+        axis.bar(
+            positions + offsets[method], means, width=0.16, yerr=intervals,
+            color=COLORS[method], edgecolor="white", linewidth=0.35,
+            error_kw={"elinewidth": 0.8, "capsize": 2, "capthick": 0.8},
+            label=method,
         )
     axis.set_xticks(positions)
     axis.set_xticklabels(
