@@ -14,9 +14,7 @@ import argparse
 import asyncio
 import json
 import time
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
 
 from omegaconf import DictConfig
 
@@ -54,6 +52,22 @@ def _parse_args() -> argparse.Namespace:
         "--results-dir", type=Path, default=Path("internet_access_results")
     )
     return parser.parse_args()
+
+
+def _stream_used_web_search(stream_path: Path) -> bool:
+    """Detect web-search events while tolerating CLI noise in the JSONL file."""
+    if not stream_path.exists():
+        return False
+    for line in stream_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if "web_search" in json.dumps(event):
+            return True
+    return False
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -98,14 +112,8 @@ async def _run(args: argparse.Namespace) -> int:
     report_path = run_dir / "sandbox" / "site_text.txt"
     report = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
     stream_path = run_dir / "stream.jsonl"
-    events: Iterable[dict[str, Any]] = ()
-    if stream_path.exists():
-        events = (
-            json.loads(line)
-            for line in stream_path.read_text(encoding="utf-8").splitlines()
-        )
     recovered = all(marker in report for marker in _LIVE_MARKERS)
-    used_web_search = any("web_search" in json.dumps(event) for event in events)
+    used_web_search = _stream_used_web_search(stream_path)
 
     print(f"Artifacts: {run_dir}")
     print(f"Sandbox result: {'success' if result.success else result.error}")
