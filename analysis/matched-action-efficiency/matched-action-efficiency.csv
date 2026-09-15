@@ -1,8 +1,9 @@
 environment,Claude Code_mean_actions,Codex_mean_actions,GenPlan_mean_actions,Planner_mean_actions,Claude Code_successful_seeds,Codex_successful_seeds,GenPlan_successful_seeds,Planner_successful_seeds
 balancebeam3d,318.66,495.905,,,24;42;424,24;42,,
+basemotion3d,3.474,,3.5660000000000003,9.95,24;42;222;424;444,,24;42;222;424;444,24;42;222;424;444
 clutteredstorage2d_generalized,348.74,,,,222;424,,,
 dynamicshelf3d_generalized,980.89,368.81,,,424,222,,
-dynamo3d_generalized,280.375,34.438,,,42;222;424;444,24;42;222;424;444,,
+dynamo3d_generalized,280.375,34.438,88.95,,42;222;424;444,24;42;222;424;444,24,
 dynpusht2d,209.948,473.34,,,24;42;222;424;444,424,,
 dynscooppour2d_generalized,508.99,556.92,,,424,222,,
 motion2d_generalized,65.732,82.64200000000001,78.98,,24;42;222;424;444,24;42;222;424;444,24;444,

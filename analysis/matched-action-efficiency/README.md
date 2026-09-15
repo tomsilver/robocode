@@ -16,8 +16,11 @@ The one-page PDF includes every environment in which at least one method has a
 
 The analysis selected the newest non-`outdated` completed result for every
 method/environment/replicate tuple in the final Taildrop archives received on
-2026-09-15. Codex Rovers contains four synthesis seeds; the missing seed is not
-replaced with an older result.
+2026-09-15, supplemented by newer completed local results for Dynamo and
+BaseMotion that are reflected in the paper table but postdate those archives.
+Codex Rovers contains four synthesis seeds; the missing seed is not replaced
+with an older result. The BaseMotion Codex bar cannot be reconstructed because
+its per-episode results are not present in either source.
 
 ## Input archive checksums
 

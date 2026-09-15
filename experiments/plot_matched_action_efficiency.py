@@ -34,6 +34,7 @@ COLORS = {
 }
 DISPLAY_NAMES = {
     "balancebeam3d": "BalanceBeam",
+    "basemotion3d": "BaseMotion",
     "clutteredretrieval2d_generalized": "ClutteredRetrieval 2D",
     "clutteredstorage2d_generalized": "ClutteredStorage 2D",
     "constrainedcupboard3d_generalized": "ConstrainedCupboard",
@@ -154,6 +155,52 @@ def load_runs(archive: Path, archive_label: str, temp_dir: Path) -> list[Run]:
                             )
                 except zipfile.BadZipFile:
                     continue
+    return runs
+
+
+def load_local_runs(root: Path) -> list[Run]:
+    """Load newer completed runs that have not yet been added to the archives."""
+    runs: list[Run] = []
+    for result_path in root.rglob("results.json"):
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        experiment_id = str(result.get("experiment_id", ""))
+        if "__llm_genplan__" in experiment_id:
+            method = "GenPlan"
+        elif "__bilevel_planning__" in experiment_id:
+            method = "Planner"
+        elif "__agentic__" in experiment_id and "__blackbox" in experiment_id:
+            if "codex" in experiment_id:
+                method = "Codex"
+            elif "claude" in experiment_id:
+                method = "Claude Code"
+            else:
+                continue
+        else:
+            continue
+        episodes = result.get("per_episode")
+        environment = _environment(result, str(result_path))
+        seed = result.get("replicate_seed")
+        if (
+            environment is None
+            or not isinstance(seed, int)
+            or not isinstance(episodes, list)
+            or not episodes
+            or result.get("eval_complete") is False
+        ):
+            continue
+        runs.append(
+            Run(
+                method,
+                environment,
+                seed,
+                tuple(episodes),
+                str(result_path),
+                (1, _timestamp(str(result_path))),
+            )
+        )
     return runs
 
 
@@ -298,6 +345,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--baselines", type=Path, required=True)
     parser.add_argument("--blackbox", type=Path, required=True)
     parser.add_argument("--whitebox", type=Path, help="accepted for provenance; not used in this plot")
+    parser.add_argument("--local-results-root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--temp-dir", type=Path)
     return parser.parse_args()
@@ -309,6 +357,8 @@ def main() -> None:
     temp_dir.mkdir(parents=True, exist_ok=True)
     runs = load_runs(args.baselines, "baselines", temp_dir)
     runs.extend(load_runs(args.blackbox, "blackbox", temp_dir))
+    if args.local_results_root:
+        runs.extend(load_local_runs(args.local_results_root))
     selected = select_latest(runs)
     successful, coverage = fully_solved_run_actions(selected)
     if not successful:

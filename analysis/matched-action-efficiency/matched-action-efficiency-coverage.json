@@ -14,6 +14,32 @@
       "Planner": []
     }
   },
+  "basemotion3d": {
+    "successful_seeds": {
+      "Claude Code": [
+        24,
+        42,
+        222,
+        424,
+        444
+      ],
+      "Codex": [],
+      "GenPlan": [
+        24,
+        42,
+        222,
+        424,
+        444
+      ],
+      "Planner": [
+        24,
+        42,
+        222,
+        424,
+        444
+      ]
+    }
+  },
   "clutteredretrieval2d_generalized": {
     "successful_seeds": {
       "Claude Code": [],
@@ -68,7 +94,9 @@
         424,
         444
       ],
-      "GenPlan": [],
+      "GenPlan": [
+        24
+      ],
       "Planner": []
     }
   },
