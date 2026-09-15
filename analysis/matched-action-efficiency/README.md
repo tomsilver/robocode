@@ -1,17 +1,18 @@
-# Absolute actions on jointly solved episodes
+# Absolute actions in fully successful runs
 
 This analysis compares the four main methods shown in the paper: Planner,
 GenPlan, Codex (black-box), and Claude Code (black-box). The Claude Code
 source-access condition is not part of the four-method comparison.
 
-An observation is keyed by environment, synthesis replicate seed, and held-out
-episode index. It is retained only when all four methods have a completed result
-for that key and all four solve the episode. The plot reports each method's mean
-absolute action count in each environment; error bars are normal-approximation
-95% confidence intervals over those matched episodes. Lower is better.
+Each method/environment bar uses only synthesis replicate seeds whose final policy
+solved all 100 held-out episodes. A method is omitted in environments where none
+of its seeds achieved 100%. First, action counts are averaged across the 100
+episodes within each successful seed. The bar is then the mean across successful
+seeds, and its error bar is a normal-approximation 95% confidence interval across
+those seed-level means. Lower is better.
 
-The one-page PDF includes each environment with at least one jointly solved
-episode. Environments without a four-way jointly solved episode are omitted.
+The one-page PDF includes every environment in which at least one method has a
+100%-successful seed; it does not require all methods to succeed in an environment.
 
 The analysis selected the newest non-`outdated` completed result for every
 method/environment/replicate tuple in the final Taildrop archives received on

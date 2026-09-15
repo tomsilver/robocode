@@ -1,4 +1,4 @@
-"""Plot absolute actions on held-out episodes solved by every main method.
+"""Plot absolute actions for method runs that solve all held-out episodes.
 
 The input archives are the three top-level ZIP files exported for the paper.
 They contain nested ZIP files. No extraction is required: result JSON files are
@@ -167,49 +167,40 @@ def select_latest(runs: Iterable[Run]) -> dict[tuple[str, str, int], Run]:
     return selected
 
 
-def match_episodes(
+def fully_solved_run_actions(
     runs: dict[tuple[str, str, int], Run],
-) -> tuple[dict[str, dict[str, list[float]]], dict[str, set[int]], dict[str, Any]]:
-    """Return absolute steps for episodes solved by all methods."""
+) -> tuple[dict[str, dict[str, list[float]]], dict[str, Any]]:
+    """Return per-run mean actions for final policies that solve 100/100."""
     environments = sorted({key[1] for key in runs})
-    matched: dict[str, dict[str, list[float]]] = {}
-    shared_seeds: dict[str, set[int]] = {}
+    successful: dict[str, dict[str, list[float]]] = {}
     coverage: dict[str, Any] = {}
     for environment in environments:
-        seeds_by_method = {
-            method: {
-                seed
-                for present_method, present_environment, seed in runs
-                if present_method == method and present_environment == environment
-            }
-            for method in METHODS
-        }
-        common_seeds = set.intersection(*(seeds_by_method[method] for method in METHODS))
         values = {method: [] for method in METHODS}
-        for seed in sorted(common_seeds):
-            method_runs = {method: runs[(method, environment, seed)] for method in METHODS}
-            episode_count = min(len(run.per_episode) for run in method_runs.values())
-            for episode_index in range(episode_count):
-                episodes = {
-                    method: method_runs[method].per_episode[episode_index]
-                    for method in METHODS
-                }
-                if not all(episode.get("solved") is True for episode in episodes.values()):
+        successful_seeds = {method: [] for method in METHODS}
+        for method in METHODS:
+            method_runs = sorted(
+                (
+                    run for (present_method, present_environment, _), run in runs.items()
+                    if present_method == method and present_environment == environment
+                ),
+                key=lambda run: run.replicate_seed,
+            )
+            for run in method_runs:
+                if len(run.per_episode) != 100 or not all(
+                    episode.get("solved") is True for episode in run.per_episode
+                ):
                     continue
-                steps = {method: episodes[method].get("num_steps") for method in METHODS}
-                if not all(isinstance(value, (int, float)) and value > 0 for value in steps.values()):
+                steps = [episode.get("num_steps") for episode in run.per_episode]
+                if not all(isinstance(value, (int, float)) and value > 0 for value in steps):
                     continue
-                for method in METHODS:
-                    values[method].append(float(steps[method]))
+                values[method].append(float(np.mean(steps)))
+                successful_seeds[method].append(run.replicate_seed)
         coverage[environment] = {
-            "available_seeds": {method: sorted(seeds_by_method[method]) for method in METHODS},
-            "shared_seeds": sorted(common_seeds),
-            "matched_episodes": len(values["Planner"]),
+            "successful_seeds": successful_seeds,
         }
-        if values["Planner"]:
-            matched[environment] = values
-            shared_seeds[environment] = common_seeds
-    return matched, shared_seeds, coverage
+        if any(values.values()):
+            successful[environment] = values
+    return successful, coverage
 
 
 def _configure_style() -> None:
@@ -242,68 +233,44 @@ def _mean_ci(values: list[float]) -> tuple[float, float]:
     return mean, float(1.96 * np.std(array, ddof=1) / np.sqrt(len(array)))
 
 
-def _draw_absolute_actions(matched: dict[str, dict[str, list[float]]]) -> plt.Figure:
-    environments = sorted(matched, key=lambda name: DISPLAY_NAMES.get(name, name))
+def _draw_absolute_actions(successful: dict[str, dict[str, list[float]]]) -> plt.Figure:
+    environments = sorted(successful, key=lambda name: DISPLAY_NAMES.get(name, name), reverse=True)
     positions = np.arange(len(environments), dtype=float)
     offsets = dict(zip(METHODS, (-0.24, -0.08, 0.08, 0.24), strict=True))
-    fig, axis = plt.subplots(figsize=(7.0, 3.0), constrained_layout=True)
+    fig_height = max(3.2, 0.24 * len(environments) + 1.15)
+    fig, axis = plt.subplots(figsize=(3.45, fig_height), constrained_layout=True)
     for method in METHODS:
-        summaries = [_mean_ci(matched[environment][method]) for environment in environments]
+        present = [index for index, environment in enumerate(environments) if successful[environment][method]]
+        summaries = [_mean_ci(successful[environments[index]][method]) for index in present]
         means = [summary[0] for summary in summaries]
         intervals = [summary[1] for summary in summaries]
-        axis.bar(
-            positions + offsets[method], means, width=0.16, yerr=intervals,
+        axis.barh(
+            np.asarray(present) + offsets[method], means, height=0.16, xerr=intervals,
             color=COLORS[method], edgecolor="white", linewidth=0.35,
             error_kw={"elinewidth": 0.8, "capsize": 2, "capthick": 0.8},
             label=method,
         )
-    axis.set_xticks(positions)
-    axis.set_xticklabels(
-        [DISPLAY_NAMES.get(environment, environment) for environment in environments],
-        rotation=30, ha="right",
-    )
-    axis.set_ylabel("Mean number of actions\n(lower is better)")
-    axis.set_xlabel("Environment")
-    axis.set_title("Actions on jointly solved held-out episodes", fontweight="bold", pad=6)
-    axis.grid(True, axis="y", color="#D9D9D9", linewidth=0.45, alpha=0.8)
-    axis.legend(frameon=False, ncol=4, loc="upper center", bbox_to_anchor=(0.5, 1.0))
-    axis.margins(x=0.025)
-    return fig
-
-
-def _draw_no_data_page(environment: str, details: dict[str, Any]) -> plt.Figure:
-    """Draw an explicit page for an environment with no four-way matched episode."""
-    fig, axis = plt.subplots(figsize=(3.45, 2.55), constrained_layout=True)
-    axis.axis("off")
-    axis.set_title(DISPLAY_NAMES.get(environment, environment), fontweight="bold", pad=8)
-    missing = [method for method in METHODS if not details["available_seeds"][method]]
-    if missing:
-        message = "No four-method comparison available"
-        explanation = "Missing results: " + ", ".join(missing)
-    elif not details["shared_seeds"]:
-        message = "No shared synthesis seeds across all four methods"
-        explanation = "Available seed coverage differs between methods."
-    else:
-        message = "No held-out episode was solved by all four methods"
-        explanation = (
-            f"All four methods share {len(details['shared_seeds'])} synthesis seeds, "
-            "but their solved-instance intersection is empty."
-        )
-    axis.text(0.5, 0.56, message, ha="center", va="center", fontsize=9, fontweight="bold", wrap=True)
-    axis.text(0.5, 0.40, explanation, ha="center", va="center", fontsize=7, color="#555555", wrap=True)
+    axis.set_yticks(positions)
+    axis.set_yticklabels([DISPLAY_NAMES.get(environment, environment) for environment in environments])
+    axis.set_xlabel("Mean actions in 100%-successful runs\n(lower is better)")
+    axis.set_ylabel("Environment")
+    axis.set_title("Actions for 100%-successful policies", fontweight="bold", pad=6)
+    axis.grid(True, axis="x", color="#D9D9D9", linewidth=0.45, alpha=0.8)
+    handles, labels = axis.get_legend_handles_labels()
+    fig.legend(handles, labels, frameon=False, ncol=2, loc="outside lower center")
+    axis.margins(y=0.015)
     return fig
 
 
 def write_outputs(
-    matched: dict[str, dict[str, list[float]]],
-    shared_seeds: dict[str, set[int]],
+    successful: dict[str, dict[str, list[float]]],
     coverage: dict[str, Any],
     output_pdf: Path,
 ) -> None:
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     _configure_style()
     with PdfPages(output_pdf) as pdf:
-        figure = _draw_absolute_actions(matched)
+        figure = _draw_absolute_actions(successful)
         pdf.savefig(figure)
         plt.close(figure)
 
@@ -311,13 +278,15 @@ def write_outputs(
     with summary_csv.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(
-            ["environment", "matched_executions", "shared_seeds"]
+            ["environment"]
             + [f"{method}_mean_actions" for method in METHODS]
+            + [f"{method}_successful_seeds" for method in METHODS]
         )
-        for environment, values in sorted(matched.items()):
+        for environment, values in sorted(successful.items()):
             writer.writerow(
-                [environment, len(values["Planner"]), ";".join(map(str, sorted(shared_seeds[environment])))]
-                + [float(np.mean(values[method])) for method in METHODS]
+                [environment]
+                + [float(np.mean(values[method])) if values[method] else "" for method in METHODS]
+                + [";".join(map(str, coverage[environment]["successful_seeds"][method])) for method in METHODS]
             )
     output_pdf.with_name(f"{output_pdf.stem}-coverage.json").write_text(
         json.dumps(coverage, indent=2) + "\n", encoding="utf-8"
@@ -328,7 +297,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baselines", type=Path, required=True)
     parser.add_argument("--blackbox", type=Path, required=True)
-    parser.add_argument("--whitebox", type=Path, help="accepted for provenance; not used in the main-method match")
+    parser.add_argument("--whitebox", type=Path, help="accepted for provenance; not used in this plot")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--temp-dir", type=Path)
     return parser.parse_args()
@@ -341,12 +310,12 @@ def main() -> None:
     runs = load_runs(args.baselines, "baselines", temp_dir)
     runs.extend(load_runs(args.blackbox, "blackbox", temp_dir))
     selected = select_latest(runs)
-    matched, shared_seeds, coverage = match_episodes(selected)
-    if not matched:
-        raise RuntimeError("No episodes were solved by all four methods")
-    write_outputs(matched, shared_seeds, coverage, args.output)
+    successful, coverage = fully_solved_run_actions(selected)
+    if not successful:
+        raise RuntimeError("No 100%-successful runs found")
+    write_outputs(successful, coverage, args.output)
     print(f"Wrote {args.output} with 1 page")
-    print(f"Matched {sum(len(values['Planner']) for values in matched.values())} executions")
+    print(f"Included {len(successful)} environments")
 
 
 if __name__ == "__main__":

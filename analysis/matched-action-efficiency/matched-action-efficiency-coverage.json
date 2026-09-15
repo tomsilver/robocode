@@ -1,178 +1,61 @@
 {
   "balancebeam3d": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
-        222,
-        424,
-        444
+        424
       ],
       "Codex": [
         24,
-        42,
-        222,
-        424,
-        444
+        42
       ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "clutteredretrieval2d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 74
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "clutteredstorage2d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
-        24,
-        42,
         222,
-        424,
-        444
+        424
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 7
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "constrainedcupboard3d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
       "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "dynamicshelf3d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
+        424
       ],
       "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
+        222
       ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 0
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "dynamo3d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
-        24,
         42,
         222,
         424,
@@ -187,80 +70,26 @@
       ],
       "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "dynobstruction2d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 25
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "dynpushpullhook2d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "dynpusht2d": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
@@ -269,53 +98,26 @@
         444
       ],
       "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
+        424
       ],
-      "GenPlan": [
-        24,
-        222,
-        424,
-        444
-      ],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "dynscooppour2d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
+        424
       ],
       "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
+        222
       ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "motion2d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
@@ -332,30 +134,13 @@
       ],
       "GenPlan": [
         24,
-        42,
-        222,
-        424,
         444
       ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 345
+      "Planner": []
+    }
   },
   "obstruction2d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
@@ -363,342 +148,113 @@
         424,
         444
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+      "Codex": [],
       "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
+        24
       ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 182
+      "Planner": []
+    }
   },
   "obstruction3d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
+        24
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+      "Codex": [],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "packing3d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "pr2blocked_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 1
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "pr2packed_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
-        42,
         222,
         424,
         444
       ],
       "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
+        222
       ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 72
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "pushpullhook2d": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
-        42,
-        222,
-        424,
-        444
+        424
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+      "Codex": [],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "rearrange3d": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "rovers_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
-        24,
-        42,
         222,
         424,
         444
       ],
       "Codex": [
-        24,
-        42,
-        424,
-        444
+        42
       ],
       "GenPlan": [],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+      "Planner": []
+    }
   },
   "scooppour3d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
       "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "shelf3d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 0
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "sortclutteredblocks3d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
       "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "stickbutton2d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
@@ -706,101 +262,29 @@
         424,
         444
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 153
-  },
-  "sweepintodrawer3d": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 0
-  },
-  "sweepsimple3d_generalized": {
-    "available_seeds": {
-      "Claude Code": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
+      "Codex": [],
       "GenPlan": [],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
+  },
+  "sweepintodrawer3d": {
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
+  },
+  "sweepsimple3d_generalized": {
+    "successful_seeds": {
+      "Claude Code": [],
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "table3d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
@@ -810,101 +294,38 @@
       ],
       "Codex": [
         24,
-        42,
         222,
         424,
         444
       ],
       "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
+        424
       ],
       "Planner": []
-    },
-    "shared_seeds": [],
-    "matched_episodes": 0
+    }
   },
   "tossing3d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
         42,
-        222,
-        424,
-        444
+        222
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 0
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   },
   "transport3d_generalized": {
-    "available_seeds": {
+    "successful_seeds": {
       "Claude Code": [
         24,
-        42,
-        222,
         424,
         444
       ],
-      "Codex": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "GenPlan": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ],
-      "Planner": [
-        24,
-        42,
-        222,
-        424,
-        444
-      ]
-    },
-    "shared_seeds": [
-      24,
-      42,
-      222,
-      424,
-      444
-    ],
-    "matched_episodes": 12
+      "Codex": [],
+      "GenPlan": [],
+      "Planner": []
+    }
   }
 }
