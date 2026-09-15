@@ -80,10 +80,7 @@ def _stream_used_mcp(stream_path: Path) -> bool:
         except json.JSONDecodeError:
             continue
         serialized = json.dumps(event)
-        if (
-            '"type": "mcp_tool_call"' in serialized
-            or '"name": "mcp__' in serialized
-        ):
+        if '"type": "mcp_tool_call"' in serialized or '"name": "mcp__' in serialized:
             return True
     return False
 
