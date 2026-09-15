@@ -70,6 +70,24 @@ def _stream_used_web_search(stream_path: Path) -> bool:
     return False
 
 
+def _stream_used_mcp(stream_path: Path) -> bool:
+    """Detect an MCP tool invocation in either Codex or Claude JSONL output."""
+    if not stream_path.exists():
+        return False
+    for line in stream_path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        serialized = json.dumps(event)
+        if (
+            '"type": "mcp_tool_call"' in serialized
+            or '"name": "mcp__' in serialized
+        ):
+            return True
+    return False
+
+
 async def _run(args: argparse.Namespace) -> int:
     run_dir = args.results_dir / time.strftime("%Y-%m-%d_%H-%M-%S")
     run_dir.mkdir(parents=True)
@@ -114,11 +132,16 @@ async def _run(args: argparse.Namespace) -> int:
     stream_path = run_dir / "stream.jsonl"
     recovered = all(marker in report for marker in _LIVE_MARKERS)
     used_web_search = _stream_used_web_search(stream_path)
+    used_mcp = _stream_used_mcp(stream_path)
 
     print(f"Artifacts: {run_dir}")
     print(f"Sandbox result: {'success' if result.success else result.error}")
     print(f"Server-side web search observed: {used_web_search}")
+    print(f"MCP tool call observed: {used_mcp}")
     print(f"Live page markers recovered: {recovered}")
+    if used_mcp:
+        print("FAIL: the strict blackbox agent invoked an MCP tool")
+        return 1
     if recovered:
         print("FAIL: the strict blackbox agent reproduced live Internet content")
         return 1

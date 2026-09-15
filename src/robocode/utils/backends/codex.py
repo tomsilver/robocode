@@ -85,6 +85,15 @@ class CodexBackend(AgentBackend):
             config.model,
             "--config",
             f"model_reasoning_effort={json.dumps(self._reasoning_effort)}",
+            # Start from no hosted web-search tool or inherited MCP servers. Runs
+            # that explicitly request Robocode MCP tools add only that server
+            # below; strict blackbox runs with mcp_tools=() expose none.
+            "--config",
+            'web_search="disabled"',
+            "--config",
+            "tools.web_search=false",
+            "--config",
+            "mcp_servers={}",
             "--ignore-user-config",
             "--dangerously-bypass-approvals-and-sandbox",
         ]
