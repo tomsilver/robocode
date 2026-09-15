@@ -1,4 +1,4 @@
-"""Plot action efficiency on held-out episodes solved by every main method.
+"""Plot absolute actions on held-out episodes solved by every main method.
 
 The input archives are the three top-level ZIP files exported for the paper.
 They contain nested ZIP files. No extraction is required: result JSON files are
@@ -170,7 +170,7 @@ def select_latest(runs: Iterable[Run]) -> dict[tuple[str, str, int], Run]:
 def match_episodes(
     runs: dict[tuple[str, str, int], Run],
 ) -> tuple[dict[str, dict[str, list[float]]], dict[str, set[int]], dict[str, Any]]:
-    """Return planner-normalized steps for episodes solved by all methods."""
+    """Return absolute steps for episodes solved by all methods."""
     environments = sorted({key[1] for key in runs})
     matched: dict[str, dict[str, list[float]]] = {}
     shared_seeds: dict[str, set[int]] = {}
@@ -199,9 +199,8 @@ def match_episodes(
                 steps = {method: episodes[method].get("num_steps") for method in METHODS}
                 if not all(isinstance(value, (int, float)) and value > 0 for value in steps.values()):
                     continue
-                planner_steps = float(steps["Planner"])
                 for method in METHODS:
-                    values[method].append(float(steps[method]) / planner_steps)
+                    values[method].append(float(steps[method]))
         coverage[environment] = {
             "available_seeds": {method: sorted(seeds_by_method[method]) for method in METHODS},
             "shared_seeds": sorted(common_seeds),
@@ -234,45 +233,41 @@ def _configure_style() -> None:
     )
 
 
-def _ecdf(values: Iterable[float], grid: np.ndarray) -> np.ndarray:
-    sorted_values = np.sort(np.asarray(tuple(values), dtype=float))
-    return np.searchsorted(sorted_values, grid, side="right") / len(sorted_values)
+def _mean_ci(values: list[float]) -> tuple[float, float]:
+    """Return the mean and normal-approximation 95% CI half-width."""
+    array = np.asarray(values, dtype=float)
+    mean = float(np.mean(array))
+    if len(array) < 2:
+        return mean, 0.0
+    return mean, float(1.96 * np.std(array, ddof=1) / np.sqrt(len(array)))
 
 
-def _draw_page(
-    values_by_method: dict[str, list[float]],
-    title: str,
-    subtitle: str,
-    environment_values: dict[str, dict[str, list[float]]] | None = None,
-) -> plt.Figure:
-    all_values = [value for values in values_by_method.values() for value in values]
-    lower = max(0.05, min(all_values) * 0.8)
-    upper = max(1.25, max(all_values) * 1.2)
-    grid = np.geomspace(lower, upper, 600)
-    fig, axis = plt.subplots(figsize=(3.45, 2.55), constrained_layout=True)
-    if environment_values is None:
-        curves = {method: _ecdf(values_by_method[method], grid) for method in METHODS}
-    else:
-        curves = {
-            method: np.mean(
-                [_ecdf(values[method], grid) for values in environment_values.values()],
-                axis=0,
-            )
-            for method in METHODS
-        }
-    for method in METHODS[:-1]:
-        axis.plot(grid, curves[method], color=COLORS[method], label=method)
-    axis.axvline(1.0, color=COLORS["Planner"], linestyle="--", linewidth=1.3, label="Planner (1×)")
-    axis.set_xscale("log")
-    axis.set_xlim(lower, upper)
-    axis.set_ylim(0.0, 1.01)
-    axis.set_xlabel("Actions relative to planner (lower is better)")
-    axis.set_ylabel("Fraction of matched\nsolved executions")
-    axis.grid(True, which="major", color="#D9D9D9", linewidth=0.45, alpha=0.8)
-    axis.grid(True, which="minor", axis="x", color="#EEEEEE", linewidth=0.35, alpha=0.65)
-    axis.set_title(title, fontweight="bold", pad=12)
-    axis.text(0.5, 1.015, subtitle, transform=axis.transAxes, ha="center", va="bottom", fontsize=7)
-    axis.legend(loc="lower right", frameon=False)
+def _draw_absolute_actions(matched: dict[str, dict[str, list[float]]]) -> plt.Figure:
+    environments = sorted(matched, key=lambda name: DISPLAY_NAMES.get(name, name))
+    positions = np.arange(len(environments), dtype=float)
+    offsets = dict(zip(METHODS, (-0.24, -0.08, 0.08, 0.24), strict=True))
+    markers = dict(zip(METHODS, ("o", "s", "^", "D"), strict=True))
+    fig, axis = plt.subplots(figsize=(7.0, 3.0), constrained_layout=True)
+    for method in METHODS:
+        summaries = [_mean_ci(matched[environment][method]) for environment in environments]
+        means = [summary[0] for summary in summaries]
+        intervals = [summary[1] for summary in summaries]
+        axis.errorbar(
+            positions + offsets[method], means, yerr=intervals,
+            color=COLORS[method], marker=markers[method], markersize=4,
+            linewidth=1.2, capsize=2, label=method,
+        )
+    axis.set_xticks(positions)
+    axis.set_xticklabels(
+        [DISPLAY_NAMES.get(environment, environment) for environment in environments],
+        rotation=30, ha="right",
+    )
+    axis.set_ylabel("Mean number of actions\n(lower is better)")
+    axis.set_xlabel("Environment")
+    axis.set_title("Actions on jointly solved held-out episodes", fontweight="bold", pad=6)
+    axis.grid(True, axis="y", color="#D9D9D9", linewidth=0.45, alpha=0.8)
+    axis.legend(frameon=False, ncol=4, loc="upper center", bbox_to_anchor=(0.5, 1.0))
+    axis.margins(x=0.025)
     return fig
 
 
@@ -307,49 +302,22 @@ def write_outputs(
 ) -> None:
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     _configure_style()
-    pooled = {
-        method: [
-            value
-            for environment_values in matched.values()
-            for value in environment_values[method]
-        ]
-        for method in METHODS
-    }
-    total_matched = len(pooled["Planner"])
     with PdfPages(output_pdf) as pdf:
-        figure = _draw_page(
-            pooled,
-            "Matched-instance action efficiency",
-            f"Equal-weight mean across {len(matched)} environments · {total_matched} matched executions",
-            environment_values=matched,
-        )
+        figure = _draw_absolute_actions(matched)
         pdf.savefig(figure)
         plt.close(figure)
-        for environment in sorted(coverage, key=lambda name: DISPLAY_NAMES.get(name, name)):
-            if environment in matched:
-                values = matched[environment]
-                seed_count = len(shared_seeds[environment])
-                figure = _draw_page(
-                    values,
-                    DISPLAY_NAMES.get(environment, environment),
-                    f"{len(values['Planner'])} matched executions · {seed_count} shared synthesis seeds",
-                )
-            else:
-                figure = _draw_no_data_page(environment, coverage[environment])
-            pdf.savefig(figure)
-            plt.close(figure)
 
     summary_csv = output_pdf.with_suffix(".csv")
     with summary_csv.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
+        writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(
             ["environment", "matched_executions", "shared_seeds"]
-            + [f"{method}_median_relative_actions" for method in METHODS]
+            + [f"{method}_mean_actions" for method in METHODS]
         )
         for environment, values in sorted(matched.items()):
             writer.writerow(
                 [environment, len(values["Planner"]), ";".join(map(str, sorted(shared_seeds[environment])))]
-                + [float(np.median(values[method])) for method in METHODS]
+                + [float(np.mean(values[method])) for method in METHODS]
             )
     output_pdf.with_name(f"{output_pdf.stem}-coverage.json").write_text(
         json.dumps(coverage, indent=2) + "\n", encoding="utf-8"
@@ -377,7 +345,7 @@ def main() -> None:
     if not matched:
         raise RuntimeError("No episodes were solved by all four methods")
     write_outputs(matched, shared_seeds, coverage, args.output)
-    print(f"Wrote {args.output} with {1 + len(coverage)} pages")
+    print(f"Wrote {args.output} with 1 page")
     print(f"Matched {sum(len(values['Planner']) for values in matched.values())} executions")
 
 

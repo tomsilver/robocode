@@ -1,4 +1,4 @@
-# Matched-instance action efficiency
+# Absolute actions on jointly solved episodes
 
 This analysis compares the four main methods shown in the paper: Planner,
 GenPlan, Codex (black-box), and Claude Code (black-box). The Claude Code
@@ -6,15 +6,12 @@ source-access condition is not part of the four-method comparison.
 
 An observation is keyed by environment, synthesis replicate seed, and held-out
 episode index. It is retained only when all four methods have a completed result
-for that key and all four solve the episode. Each method's action count is divided
-by the planner's action count on the same key. A value below 1 therefore means
-fewer actions than the planner.
+for that key and all four solve the episode. The plot reports each method's mean
+absolute action count in each environment; error bars are normal-approximation
+95% confidence intervals over those matched episodes. Lower is better.
 
-The first PDF page is an equal-weight average of the environment-level empirical
-cumulative distribution functions (ECDFs), so environments with more matched
-episodes do not dominate it. The remaining pages cover every environment in the
-two main tables. Pages without a curve distinguish missing four-method coverage
-from an empty intersection of solved episodes.
+The one-page PDF includes each environment with at least one jointly solved
+episode. Environments without a four-way jointly solved episode are omitted.
 
 The analysis selected the newest non-`outdated` completed result for every
 method/environment/replicate tuple in the final Taildrop archives received on
