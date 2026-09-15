@@ -47,6 +47,7 @@ from robocode.utils.episode import (
     summarize_count_regimes,
     summarize_eval_episodes,
 )
+from robocode.utils.genplan_validate import evaluate_held_out_tasks_parallel
 from robocode.utils.telemetry import require_registered
 
 logger = logging.getLogger(__name__)
@@ -236,57 +237,96 @@ def _main(cfg: DictConfig) -> float:
         )
         render = cfg.render_videos
         per_episode: list[dict[str, Any]] = []
-        for i, s in enumerate(eval_seeds):
-            logger.info("Evaluating episode %d/%d", i + 1, num_eval)
-            count = eval_counts[i] if eval_counts is not None else None
-            episode_max_steps = (
+        eval_workers = int(cfg.get("num_eval_workers", 1))
+        if eval_workers < 1:
+            raise ValueError("num_eval_workers must be positive")
+        parallel_generated_eval = (
+            eval_workers > 1
+            and not render
+            and cfg.approach.get("_target_", "").endswith(
+                ("LLMGenPlanApproach", "BestOfKApproach")
+            )
+        )
+        scheduled_counts: list[int | None] = (
+            list(eval_counts) if eval_counts is not None else [None] * num_eval
+        )
+        episode_max_steps = [
+            (
                 env.max_steps_for_count(count)
                 if count is not None and isinstance(env, VariableCountEnv)
                 else cfg.max_steps
             )
-            try:
-                episode_result, frames, _ = run_episode_with_timeout(
-                    env,
-                    approach,
-                    s,
-                    episode_max_steps,
-                    timeout=cfg.eval_timeout,
-                    render=render,
-                    count=count,
-                )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                # A loaded policy can raise on an unseen eval seed. It counts as
-                # unsolved, but there is no per-env worst-case return to charge it
-                # with, so it carries no reward or step count and is left out of
-                # those means rather than given an invented score.
-                logger.exception(
-                    "Eval episode (seed %d) crashed; scored unsolved, and left out "
-                    "of the reward and step means",
-                    s,
-                )
-                per_episode.append(
-                    {
-                        "total_reward": None,
-                        "num_steps": None,
-                        "solved": False,
-                        "crashed": True,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        **({"object_count": count} if count is not None else {}),
-                    }
-                )
-                continue
-            per_episode.append(episode_result)
+            for count in scheduled_counts
+        ]
+        if parallel_generated_eval:
+            load_dir = cfg.approach.get("load_dir", None)
+            policy_dir = Path(load_dir) if load_dir else output_dir
             logger.info(
-                "Episode %d/%d: solved=%s, steps=%s",
-                i + 1,
+                "Evaluating %d held-out episodes with %d workers",
                 num_eval,
-                episode_result["solved"],
-                episode_result["num_steps"],
+                eval_workers,
             )
-            if frames:
-                video_dir = output_dir / "videos"
-                video_dir.mkdir(exist_ok=True)
-                save_video(frames, video_dir / f"episode_{i}.gif")
+            per_episode = evaluate_held_out_tasks_parallel(
+                json.loads(
+                    json.dumps(OmegaConf.to_container(cfg.environment, resolve=True))
+                ),
+                policy_dir / "sandbox" / "approach.py",
+                list(cfg.primitives),
+                eval_seeds,
+                episode_max_steps,
+                scheduled_counts,
+                float(cfg.eval_timeout),
+                eval_workers,
+            )
+        else:
+            if eval_workers > 1 and render:
+                logger.warning("render_videos=true uses serial held-out evaluation")
+            for i, s in enumerate(eval_seeds):
+                logger.info("Evaluating episode %d/%d", i + 1, num_eval)
+                count = eval_counts[i] if eval_counts is not None else None
+                try:
+                    episode_result, frames, _ = run_episode_with_timeout(
+                        env,
+                        approach,
+                        s,
+                        episode_max_steps[i],
+                        timeout=cfg.eval_timeout,
+                        render=render,
+                        count=count,
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    # A loaded policy can raise on an unseen eval seed. It counts as
+                    # unsolved, but there is no per-env worst-case return to charge it
+                    # with, so it carries no reward or step count and is left out of
+                    # those means rather than given an invented score.
+                    logger.exception(
+                        "Eval episode (seed %d) crashed; scored unsolved, and left "
+                        "out of the reward and step means",
+                        s,
+                    )
+                    per_episode.append(
+                        {
+                            "total_reward": None,
+                            "num_steps": None,
+                            "solved": False,
+                            "crashed": True,
+                            "error": f"{type(exc).__name__}: {exc}",
+                            **({"object_count": count} if count is not None else {}),
+                        }
+                    )
+                    continue
+                per_episode.append(episode_result)
+                logger.info(
+                    "Episode %d/%d: solved=%s, steps=%s",
+                    i + 1,
+                    num_eval,
+                    episode_result["solved"],
+                    episode_result["num_steps"],
+                )
+                if frames:
+                    video_dir = output_dir / "videos"
+                    video_dir.mkdir(exist_ok=True)
+                    save_video(frames, video_dir / f"episode_{i}.gif")
 
         # Crashed episodes count as unsolved but carry no reward or step count, so
         # the summary reports the two on different denominators and flags the run

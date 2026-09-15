@@ -15,6 +15,9 @@ experiment_id: null
 eval_seed: null
 max_steps: 1000
 num_eval_tasks: 100
+# Independent held-out episodes use freshly constructed environments. Three workers
+# balance evaluation throughput with concurrent experiment replicates.
+num_eval_workers: 3
 # Per-instance eval wall-clock budget (seconds), shared by every approach.
 eval_timeout: 60
 render_videos: false

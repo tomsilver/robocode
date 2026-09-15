@@ -22,6 +22,7 @@ def test_repository_protocol_requires_explicit_eval_seed() -> None:
     """The public config does not contain the private evaluation seed."""
     cfg = OmegaConf.load(_MODULE_PATH.parent / "conf" / "config.yaml")
     assert cfg.eval_timeout == 60
+    assert cfg.num_eval_workers == 3
     with pytest.raises(ValueError, match="must be set explicitly"):
         run_experiment.resolve_eval_seed(cfg)
 

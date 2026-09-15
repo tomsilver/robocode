@@ -56,12 +56,20 @@ ipset create allowed-domains hash:net
 
 if [ "$STRICT" != "1" ]; then
     # Add GitHub IP ranges (web + api + git).
-    gh_ranges=$(curl -s https://api.github.com/meta)
-    echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q | while read -r cidr; do
-        if echo "$cidr" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'; then
-            ipset add allowed-domains "$cidr"
-        fi
-    done
+    # GitHub occasionally returns a proxy/rate-limit error page. Do not let jq's
+    # parse error abort an otherwise usable Anthropic-only GenPlan container.
+    if gh_ranges=$(curl -fsS --retry 3 https://api.github.com/meta) \
+        && echo "$gh_ranges" | jq -e \
+            '(.web | type == "array") and (.api | type == "array") and (.git | type == "array")' \
+            >/dev/null; then
+        echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q | while read -r cidr; do
+            if echo "$cidr" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'; then
+                ipset add allowed-domains "$cidr"
+            fi
+        done
+    else
+        echo "WARNING: GitHub meta endpoint returned no valid IP ranges; continuing without GitHub access" >&2
+    fi
 fi
 
 # Resolve and add specific domains required by Claude.
