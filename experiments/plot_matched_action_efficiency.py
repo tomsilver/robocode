@@ -30,7 +30,7 @@ COLORS = {
     "Claude Code": "#D55E00",
     "Codex": "#0072B2",
     "GenPlan": "#009E73",
-    "Planner": "#555555",
+    "Planner": "#CC79A7",
 }
 DISPLAY_NAMES = {
     "balancebeam3d": "BalanceBeam",
