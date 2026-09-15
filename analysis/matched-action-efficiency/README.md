@@ -55,7 +55,12 @@ uv run python experiments/judge_policy_structure.py \
 ```
 
 The manifest must provide `method`, `environment`, `seed`, `solve_rate`, and
-`source` for each run. Only rows with `solve_rate == 1.0` are judged. The CSV is
-the auditable result; the summary JSON contains the per-method counts used in a
-compact paper table. Cached model outputs should be retained when reporting the
-result so the classifications do not silently change between runs.
+`source` for each run. By default, only rows with `solve_rate == 1.0` are judged.
+The CSV is the auditable result; the summary JSON contains the per-method counts
+used in a compact paper table. Cached model outputs should be retained when
+reporting the result so the classifications do not silently change between runs.
+
+Pass `--success-group below-perfect` to classify the complementary set of seeds,
+or `--success-group all` to classify both groups together. The solve rate is used
+only to select policies and is not included in the judging prompt, preventing it
+from biasing the structural classification.

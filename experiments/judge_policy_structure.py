@@ -14,6 +14,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
@@ -87,16 +88,36 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, required=True)
     parser.add_argument("--model", default="opus")
     parser.add_argument("--method", action="append", default=[])
+    parser.add_argument(
+        "--success-group",
+        choices=("perfect", "below-perfect", "all"),
+        default="perfect",
+        help="Select seeds by held-out solve rate (default: perfect)",
+    )
     parser.add_argument("--max-budget-usd", type=float, default=0.25)
     parser.add_argument("--timeout-s", type=float, default=1200.0)
+    parser.add_argument(
+        "--claude-env-file",
+        type=Path,
+        help=(
+            "Read CLAUDE_CODE_OAUTH_TOKEN from a shell-style assignment without "
+            "executing the file"
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
-def _is_perfect(row: dict[str, Any]) -> bool:
-    """Return whether a manifest row passed every held-out evaluation."""
+def _matches_success_group(row: dict[str, Any], success_group: str) -> bool:
+    """Return whether a manifest row belongs to the requested success group."""
     rate = row.get("solve_rate")
-    return isinstance(rate, (int, float)) and float(rate) == 1.0
+    if not isinstance(rate, (int, float)):
+        return False
+    if success_group == "perfect":
+        return float(rate) == 1.0
+    if success_group == "below-perfect":
+        return float(rate) < 1.0
+    return True
 
 
 def _resolve_policy(
@@ -124,15 +145,18 @@ def _resolve_policy(
 
 
 def load_policies(
-    manifest_path: Path, policy_roots: list[Path], methods: set[str]
+    manifest_path: Path,
+    policy_roots: list[Path],
+    methods: set[str],
+    success_group: str = "perfect",
 ) -> list[Policy]:
-    """Load and resolve one policy for every selected perfect manifest row."""
+    """Load and resolve one policy for every selected manifest row."""
     rows = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(rows, list):
         raise ValueError("Manifest must contain a JSON list")
     selected: dict[tuple[str, str, int], Policy] = {}
     for row in rows:
-        if not isinstance(row, dict) or not _is_perfect(row):
+        if not isinstance(row, dict) or not _matches_success_group(row, success_group):
             continue
         method = str(row.get("method", ""))
         if methods and method not in methods:
@@ -230,8 +254,25 @@ def parse_claude_output(stdout: str) -> dict[str, Any]:
     return _validate_judgment(value)
 
 
+def read_oauth_token(path: Path) -> str:
+    """Read one Claude OAuth token assignment without sourcing shell code."""
+    pattern = re.compile(
+        r"^\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN=(?:['\"])?([^'\"\s]+)"
+        r"(?:['\"])?\s*$"
+    )
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = pattern.fullmatch(line)
+        if match:
+            return match.group(1)
+    raise ValueError(f"No CLAUDE_CODE_OAUTH_TOKEN assignment found in {path}")
+
+
 def invoke_claude(
-    prompt: str, model: str, max_budget_usd: float, timeout_s: float
+    prompt: str,
+    model: str,
+    max_budget_usd: float,
+    timeout_s: float,
+    claude_env_file: Path | None = None,
 ) -> dict[str, Any]:
     """Run one tool-free Claude Code judgment with schema-constrained output."""
     command = [
@@ -258,6 +299,8 @@ def invoke_claude(
         for key, value in os.environ.items()
         if not key.startswith("CLAUDECODE")
     }
+    if claude_env_file is not None:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = read_oauth_token(claude_env_file)
     completed = subprocess.run(
         command,
         input=prompt,
@@ -268,7 +311,7 @@ def invoke_claude(
         check=False,
     )
     if completed.returncode != 0:
-        error = completed.stderr.strip()
+        error = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeError(f"Claude exited with status {completed.returncode}: {error}")
     return parse_claude_output(completed.stdout)
 
@@ -284,7 +327,11 @@ def judge_policy(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
         )
     else:
         judgment = invoke_claude(
-            build_prompt(policy, code), args.model, args.max_budget_usd, args.timeout_s
+            build_prompt(policy, code),
+            args.model,
+            args.max_budget_usd,
+            args.timeout_s,
+            args.claude_env_file,
         )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(judgment, indent=2) + "\n", encoding="utf-8")
@@ -344,7 +391,9 @@ def write_outputs(
 def main() -> None:
     """Run the policy-structure judging pipeline."""
     args = _parse_args()
-    policies = load_policies(args.manifest, args.policy_root, set(args.method))
+    policies = load_policies(
+        args.manifest, args.policy_root, set(args.method), args.success_group
+    )
     if not policies:
         raise ValueError("No perfect policies matched the requested inputs")
     judgments = []

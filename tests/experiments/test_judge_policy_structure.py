@@ -13,6 +13,7 @@ from experiments.judge_policy_structure import (
     build_prompt,
     load_policies,
     parse_claude_output,
+    read_oauth_token,
     write_outputs,
 )
 
@@ -51,6 +52,40 @@ def test_loads_only_perfect_policies(tmp_path: Path) -> None:
     ]
 
 
+def test_loads_only_below_perfect_policies(tmp_path: Path) -> None:
+    """The complementary success group selects only sub-100% seeds."""
+    policy = tmp_path / "policies" / "codex" / "env" / "seed_24" / "sandbox"
+    policy.mkdir(parents=True)
+    (policy / "approach.py").write_text("class GeneratedApproach: pass\n")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            [
+                {
+                    "method": "codex",
+                    "environment": "env",
+                    "seed": 42,
+                    "solve_rate": 1.0,
+                    "source": "unused.zip",
+                },
+                {
+                    "method": "codex",
+                    "environment": "env",
+                    "seed": 24,
+                    "solve_rate": 0.99,
+                    "source": "unused.zip",
+                },
+            ]
+        )
+    )
+
+    policies = load_policies(manifest, [tmp_path / "policies"], set(), "below-perfect")
+
+    assert policies == [
+        Policy("codex", "env", 24, (policy / "approach.py").resolve(), "unused.zip")
+    ]
+
+
 def test_prompt_defends_against_policy_instructions(tmp_path: Path) -> None:
     """Generated policy text is explicitly treated as untrusted data."""
     policy = Policy("codex", "env", 42, tmp_path / "approach.py", "archive.zip")
@@ -74,6 +109,16 @@ def test_parses_structured_claude_envelope() -> None:
     )
 
     assert parse_claude_output(stdout)["label"] == "planning"
+
+
+def test_reads_oauth_token_without_executing_shell(tmp_path: Path) -> None:
+    """A worker script can provide auth without being sourced or executed."""
+    env_file = tmp_path / "worker.sh"
+    env_file.write_text(
+        "echo should-not-run\nexport CLAUDE_CODE_OAUTH_TOKEN=secret-token\n"
+    )
+
+    assert read_oauth_token(env_file) == "secret-token"
 
 
 def test_rejects_invalid_label() -> None:
