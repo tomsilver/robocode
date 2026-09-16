@@ -21,8 +21,10 @@ from tqdm import tqdm  # type: ignore[import-untyped]
 from experiments.render_cc_source_matched_summary import (
     _load,
     _render,
+    _render_dashboard,
     _summaries,
     _write_seed_tables,
+    _write_tex_table,
 )
 from experiments.run_final_timing_sample import (
     Job,
@@ -143,6 +145,17 @@ def main() -> None:
     )
     _render(
         args.output / "cc_source_efficiency.png",
+        summaries,
+        matched_count,
+        environment_count,
+    )
+    _render_dashboard(
+        args.output / "cc_source_efficiency_by_environment.png",
+        matched,
+        timings_by_seed,
+    )
+    _write_tex_table(
+        args.output / "table-efficiency.tex",
         summaries,
         matched_count,
         environment_count,
