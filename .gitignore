@@ -180,3 +180,6 @@ ref/
 # pddlstream writes its FastDownward scratch files into the working directory.
 temp/
 statistics/
+
+# Local inputs for the paper results notebook
+/paper_data/
