@@ -532,6 +532,24 @@ def test_runtime_sibling_imports_are_isolated(tmp_path: Path, method: str) -> No
         assert approach.value == value
 
 
+def test_runtime_import_does_not_silently_select_fallback(tmp_path: Path) -> None:
+    """A caught constructor import must use the saved helper, not a fallback."""
+    (tmp_path / "saved_arm_table.py").write_text("VALUE = 7\n")
+    path = tmp_path / "approach.py"
+    path.write_text(
+        "class GeneratedApproach:\n"
+        "    def __init__(self, *args, **kwargs):\n"
+        "        try:\n"
+        "            from saved_arm_table import VALUE\n"
+        "            self.value = VALUE\n"
+        "        except ImportError:\n"
+        "            self.value = 0\n"
+    )
+    space = Box(-1.0, 1.0, (2,))
+    approach = load_generated_approach(path, space, space, {}, strict_imports=True)
+    assert approach.value == 7
+
+
 def test_failed_constructor_cleans_import_state(tmp_path: Path) -> None:
     """Failed construction leaves neither a path nor cached helper for later runs."""
     (tmp_path / "failed_policy_helper.py").write_text("VALUE = 1\n")
