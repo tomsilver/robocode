@@ -1,6 +1,9 @@
 backend: codex
 model: gpt-6-astra
 reasoning_effort: high
+# Standard short-context USD/1M token rates, checked 2026-09-18:
+# https://developers.openai.com/api/docs/models/gpt-6-astra
+# These flat rates do not model long-context, cache-write, or service-tier charges.
 input_usd_per_mtok: 10.0
 cached_input_usd_per_mtok: 1.0
 output_usd_per_mtok: 50.0
