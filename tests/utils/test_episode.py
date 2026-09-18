@@ -489,14 +489,80 @@ def test_load_generated_approach_receives_primitives(
     assert approach._primitives is prims  # pylint: disable=protected-access
 
 
-def test_load_cleans_sys_path(dummy_approach_file: Path) -> None:
-    """sys.path is cleaned up after loading."""
+def test_next_load_cleans_previous_sys_path(dummy_approach_file: Path) -> None:
+    """Only the active policy retains its directory for runtime imports."""
     action_space = Box(low=-1, high=1, shape=(2,))
     obs_space = Box(low=0, high=1, shape=(4,))
     sandbox_dir = str(dummy_approach_file.parent.resolve())
 
     load_generated_approach(dummy_approach_file, action_space, obs_space, {})
+    assert sandbox_dir in sys.path
+    next_dir = dummy_approach_file.parent / "next"
+    next_dir.mkdir()
+    next_path = next_dir / "approach.py"
+    next_path.write_text(dummy_approach_file.read_text())
+    load_generated_approach(next_path, action_space, obs_space, {})
     assert sandbox_dir not in sys.path
+
+
+@pytest.mark.parametrize("method", ["__init__", "reset", "get_action"])
+def test_runtime_sibling_imports_are_isolated(tmp_path: Path, method: str) -> None:
+    """Constructor/reset/action imports work and never reuse another policy's helper."""
+    space = Box(-1.0, 1.0, (2,))
+    for name, value in (("first", 1), ("second", 2)):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "lazy_policy_helper.py").write_text(f"VALUE = {value}\n")
+        body = (
+            "        from lazy_policy_helper import VALUE\n        self.value = VALUE\n"
+        )
+        path = directory / "approach.py"
+        path.write_text(
+            "class GeneratedApproach:\n"
+            "    def __init__(self, *args, **kwargs):\n"
+            + (body if method == "__init__" else "        pass\n")
+            + "    def reset(self, *args):\n"
+            + (body if method == "reset" else "        pass\n")
+            + "    def get_action(self, *args):\n"
+            + (body if method == "get_action" else "        pass\n")
+        )
+        approach = load_generated_approach(path, space, space, {}, strict_imports=True)
+        approach.reset(None, {})
+        approach.get_action(None)
+        assert approach.value == value
+
+
+def test_failed_constructor_cleans_import_state(tmp_path: Path) -> None:
+    """Failed construction leaves neither a path nor cached helper for later runs."""
+    (tmp_path / "failed_policy_helper.py").write_text("VALUE = 1\n")
+    path = tmp_path / "approach.py"
+    path.write_text(
+        "class GeneratedApproach:\n"
+        "    def __init__(self, *args, **kwargs):\n"
+        "        import failed_policy_helper\n"
+        "        raise RuntimeError('constructor failed')\n"
+    )
+    space = Box(-1.0, 1.0, (2,))
+    with pytest.raises(RuntimeError, match="constructor failed"):
+        load_generated_approach(path, space, space, {}, strict_imports=True)
+    assert str(tmp_path.resolve()) not in sys.path
+    assert "failed_policy_helper" not in sys.modules
+
+
+def test_loader_preserves_caller_owned_path(
+    dummy_approach_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup removes only the path entry inserted by the loader."""
+    root = str(dummy_approach_file.parent.resolve())
+    monkeypatch.syspath_prepend(root)
+    space = Box(-1.0, 1.0, (2,))
+    load_generated_approach(dummy_approach_file, space, space, {})
+    next_dir = dummy_approach_file.parent / "next"
+    next_dir.mkdir()
+    path = next_dir / "approach.py"
+    path.write_text(dummy_approach_file.read_text())
+    load_generated_approach(path, space, space, {})
+    assert root in sys.path
 
 
 _APPROACH_TEMPLATE = (

@@ -67,19 +67,27 @@ def _reject_planner_references(path: Path, primitives: dict[str, Any]) -> None:
             )
 
 
-# The sibling modules a generated policy imported at load time stay cached while
-# it is active (its methods may import them again) and are removed before the next
-# policy loads, so identically named siblings in per-instance sandboxes cannot
-# collide.
+# One generated policy is active per worker. Retain its import directory and
+# sibling modules through construction and evaluation, including lazy imports.
+# Replace both before loading the next policy so helpers cannot cross runs.
 _LOADED_GENERATED_SIBLINGS: dict[str, ModuleType] = {}
+_LOADED_GENERATED_ROOT: Path | None = None
+_LOADED_GENERATED_PATH: str | None = None
 
 
 def _evict_loaded_generated_siblings() -> None:
-    """Remove sibling modules retained by the previous generated policy load."""
+    """Remove the previous policy's modules, including runtime imports, and path."""
+    global _LOADED_GENERATED_ROOT, _LOADED_GENERATED_PATH  # pylint: disable=global-statement
+    if _LOADED_GENERATED_ROOT is not None:
+        _remember_loaded_generated_siblings(_LOADED_GENERATED_ROOT, set(sys.modules))
     for name, module in _LOADED_GENERATED_SIBLINGS.items():
         if sys.modules.get(name) is module:
             del sys.modules[name]
     _LOADED_GENERATED_SIBLINGS.clear()
+    if _LOADED_GENERATED_PATH is not None and _LOADED_GENERATED_PATH in sys.path:
+        sys.path.remove(_LOADED_GENERATED_PATH)
+    _LOADED_GENERATED_ROOT = None
+    _LOADED_GENERATED_PATH = None
 
 
 def _remember_loaded_generated_siblings(root: Path, names: set[str]) -> None:
@@ -100,22 +108,26 @@ def load_generated_approach(
 ) -> Any:
     """Load a ``GeneratedApproach`` class from the given file.
 
-    Temporarily adds the parent directory of *path* to ``sys.path`` so that
-    ``approach.py`` can import sibling modules written by the agent, then
-    removes it to avoid polluting the global import path.
+    Keeps the policy directory importable during construction and evaluation so
+    methods can lazily import agent-written helpers. The next load removes the
+    previous policy's directory and cached modules. A failed load cleans up too.
+    As with sibling-module caching, one generated policy is active per worker.
 
     With ``strict_imports`` (strict blackbox), the program and its sibling modules
     are first checked against :func:`check_strict_imports`, so a program written
     without domain dependencies cannot pick them up from the host at scoring time.
     """
+    global _LOADED_GENERATED_ROOT, _LOADED_GENERATED_PATH  # pylint: disable=global-statement
     _evict_loaded_generated_siblings()
     if strict_imports:
         # sys.modules wins over sys.path.  Reject a local module that would be
         # silently replaced by an already-loaded host module during scoring.
         check_strict_imports(path, reject_cached_siblings=True)
-    sandbox_dir = str(path.parent.resolve())
+    _LOADED_GENERATED_ROOT = path.parent.resolve()
+    sandbox_dir = str(_LOADED_GENERATED_ROOT)
     if sandbox_dir not in sys.path:
         sys.path.insert(0, sandbox_dir)
+        _LOADED_GENERATED_PATH = sandbox_dir
     modules_before = set(sys.modules)
     try:
         _reject_planner_references(path, primitives)
@@ -125,13 +137,14 @@ def load_generated_approach(
         # not set this automatically unlike a normal module import.
         namespace: dict[str, Any] = {"__file__": str(path)}
         exec(compile(source, str(path), "exec"), namespace)  # pylint: disable=exec-used
-    finally:
-        _remember_loaded_generated_siblings(
-            path.parent.resolve(), set(sys.modules) - modules_before
-        )
-        sys.path.remove(sandbox_dir)
-    cls = namespace["GeneratedApproach"]
-    instance = cls(action_space, observation_space, primitives=primitives)
+        cls = namespace["GeneratedApproach"]
+        instance = cls(action_space, observation_space, primitives=primitives)
+    except BaseException:
+        _evict_loaded_generated_siblings()
+        raise
+    _remember_loaded_generated_siblings(
+        path.parent.resolve(), set(sys.modules) - modules_before
+    )
     logger.info("Loaded generated approach from %s", path)
     return instance
 
