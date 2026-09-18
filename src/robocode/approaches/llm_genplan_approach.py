@@ -33,9 +33,8 @@ from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.genplan_validate import (
     TaskScore,
+    evaluate_tasks,
     render_state,
-    score_tasks,
-    validate_tasks,
 )
 from robocode.utils.llm import LLMClient, LLMResponse, create_llm_client
 from robocode.utils.sandbox_types import resolve_container_backend
@@ -305,26 +304,27 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             failure = _check_submission_compiles(candidate, candidate_path)
             candidate_score: TaskScore | None = None
             if failure is None:
+                assert self._env is not None
                 logger.info("Validating impl%d on %d training tasks", t, len(seeds))
                 started = time.monotonic()
-                failure = self._validate(candidate_path, seeds)
+                evaluation = evaluate_tasks(
+                    self._env,
+                    candidate_path,
+                    self._action_space,
+                    self._state_space,
+                    self._primitives,
+                    seeds,
+                    self._max_steps,
+                    self._eval_timeout,
+                )
+                failure = evaluation.failure
                 logger.info(
                     "Validation impl%d finished in %.1fs",
                     t,
                     time.monotonic() - started,
                 )
-                if failure is None or failure["error_type"] != "policy-load-error":
-                    assert self._env is not None
-                    candidate_score = score_tasks(
-                        self._env,
-                        candidate_path,
-                        self._action_space,
-                        self._state_space,
-                        self._primitives,
-                        seeds,
-                        self._max_steps,
-                        self._eval_timeout,
-                    )
+                candidate_score = evaluation.score
+                if candidate_score is not None:
                     if best_score is None or _score_key(candidate_score) > _score_key(
                         best_score
                     ):
@@ -483,27 +483,6 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             self.total_cost_usd,
         )
         return result.text
-
-    # -------------------------------------------------------------- validation
-
-    def _validate(self, approach_path: Path, seeds: list[int]) -> dict[str, str] | None:
-        """Run the policy on the training tasks in-process; return first failure.
-
-        When ``container_backend`` is docker/apptainer this runs inside the
-        sandbox container (the whole loop does), so it is always isolated from
-        the host there.
-        """
-        assert self._env is not None
-        return validate_tasks(
-            self._env,
-            approach_path,
-            self._action_space,
-            self._state_space,
-            self._primitives,
-            seeds,
-            self._max_steps,
-            self._eval_timeout,
-        )
 
     # ------------------------------------------------------------- delegation
 
