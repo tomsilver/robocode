@@ -42,6 +42,7 @@ from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
     DockerSandboxConfig,
     _build_docker_auth_args,
+    _copy_kindergarden_without_tests,
     _copy_src,
     _docker_run_prefix,
     _filtered_repo_mounts,
@@ -191,6 +192,27 @@ def test_filtered_repo_mounts_default_excludes_demos() -> None:
         assert not (kindergarden / "demos").exists()
 
 
+def test_kindergarden_copy_excludes_large_assets(
+    tmp_path: Path,
+) -> None:
+    """Large read-only scene assets are not duplicated in each /tmp staging tree."""
+    source = tmp_path / "source"
+    dynamic_assets = source / "src/kinder/envs/dynamic3d/models/assets"
+    kinematic_assets = source / "src/kinder/envs/kinematic3d/assets"
+    dynamic_assets.mkdir(parents=True)
+    kinematic_assets.mkdir(parents=True)
+    (dynamic_assets / "large-mesh.bin").write_bytes(b"mesh")
+    (kinematic_assets / "large-texture.png").write_bytes(b"texture")
+    (source / "pyproject.toml").touch()
+
+    destination = tmp_path / "destination"
+    _copy_kindergarden_without_tests(source, destination)
+
+    assert (destination / "pyproject.toml").exists()
+    assert not (destination / "src/kinder/envs/dynamic3d/models/assets").exists()
+    assert not (destination / "src/kinder/envs/kinematic3d/assets").exists()
+
+
 def test_filtered_repo_mounts_default_keeps_package_skeleton() -> None:
     """The demos exclusion must not take the installable skeleton with it."""
     with _filtered_repo_mounts() as (_, kindergarden, _tmp, _ss):
@@ -308,6 +330,27 @@ def test_docker_run_prefix_adds_extra_volumes(tmp_path: Path) -> None:
     )
     assert volume in cmd
     assert cmd[cmd.index(volume) - 1] == "-v"
+
+
+def test_docker_run_prefix_mounts_kindergarden_assets_read_only(tmp_path: Path) -> None:
+    """Dynamic3D assets are shared rather than copied into per-run staging."""
+    volume = (
+        f"{tmp_path.resolve()}/assets:"
+        "/robocode/third-party/kindergarden/src/kinder/envs/dynamic3d/"
+        "models/assets:ro"
+    )
+    cmd = _docker_run_prefix(
+        "c",
+        "img",
+        tmp_path,
+        tmp_path / "src",
+        tmp_path / "kg",
+        None,
+        [],
+        [],
+        kindergarden_asset_volumes=[volume],
+    )
+    assert volume in cmd
 
 
 def test_docker_run_prefix_mounts_sandbox_not_parent_run_dir(tmp_path: Path) -> None:
