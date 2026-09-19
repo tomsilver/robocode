@@ -26,7 +26,6 @@ from robocode.utils.env_server_runtime import _dispatch, _HandleRegistry
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.strict_blackbox import (
     STRICT_ALLOWED_PACKAGES,
-    STRICT_BLACKBOX_MCP_PYTHON,
     STRICT_BLACKBOX_PYTHON,
     StrictImportError,
     check_strict_imports,
@@ -310,9 +309,8 @@ def test_strict_docker_launch_has_no_project_mounts(tmp_path: Path) -> None:
     assert "ss-pybullet" not in joined
 
 
-def test_strict_mcp_uses_separate_python_environment() -> None:
+def test_strict_mcp_uses_clean_python_environment() -> None:
     """MCP startup must not add its dependencies to the generated-code Python."""
-    assert STRICT_BLACKBOX_MCP_PYTHON != STRICT_BLACKBOX_PYTHON
     command = " ".join(
         _mcp_prestart_wrapper(["agent"], python_cmd=STRICT_BLACKBOX_PYTHON)
     )
@@ -336,7 +334,7 @@ def test_strict_container_keeps_generated_python_dependency_clean(
 def test_strict_container_mcp_renders_state_and_policy_through_host(
     container_backend: str, tmp_path: Path
 ) -> None:
-    """The isolated MCP interpreter can proxy strict renders to the host."""
+    """The clean interpreter can render states and policies through the host."""
     sandbox = tmp_path / "sandbox"
     sandbox.mkdir()
     (sandbox / "approach.py").write_text(
@@ -367,18 +365,17 @@ def test_strict_container_mcp_renders_state_and_policy_through_host(
                 strict=True,
             )
             code = (
-                "import asyncio, json; from pathlib import Path; "
-                "from robocode.mcp.server import build_blackbox_server; "
-                "srv=build_blackbox_server(['render_state','render_policy'], "
-                "Path('/sandbox/env_spaces.json')); "
-                "_,state=asyncio.run(srv.call_tool('render_state', {'seed': 3})); "
-                "_,policy=asyncio.run(srv.call_tool('render_policy', "
-                "{'seed': 3, 'max_steps': 2})); "
-                "print(json.dumps({'state': state['result'], "
-                "'policy': policy['result']}))"
+                "import sys,json; from pathlib import Path; "
+                "sys.path.insert(0, '/opt/robocode-render'); "
+                "from strict_server import RenderTools; "
+                "srv=RenderTools(Path('/sandbox/env_spaces.json'), "
+                "['render_state','render_policy']); "
+                "state=srv.call('render_state', {'seed': 3}); "
+                "policy=srv.call('render_policy', {'seed': 3, 'max_steps': 2}); "
+                "print(json.dumps({'state': state, 'policy': policy}))"
             )
             result = _strict_container_run(
-                container_backend, STRICT_BLACKBOX_MCP_PYTHON, code, sandbox=sandbox
+                container_backend, STRICT_BLACKBOX_PYTHON, code, sandbox=sandbox
             )
     finally:
         env.close()

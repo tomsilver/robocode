@@ -114,6 +114,7 @@ class CodexBackend(AgentBackend):
                 mcp_env_config_path,
                 log_path,
                 blackbox=config.blackbox,
+                strict_blackbox=getattr(config, "blackbox_strict", False),
                 transport=mcp_transport,
                 port=mcp_port,
             )

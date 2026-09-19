@@ -289,9 +289,11 @@ named `robocode-tools`) have two implementations, selected at MCP-config time by
   and steps the env over the protocol), then renders each visited state via
   `render_state`. The host therefore never executes `approach.py`.
 
-Strict blackbox uses that same proxy protocol, but runs the MCP server with a
-separate `/opt/robocode-mcp/bin/python`; the generated-code interpreter remains
-dependency-clean. Its host connection permits `render_state` but still rejects raw
+Strict blackbox uses that same proxy protocol, with a standalone stdlib MCP
+HTTP server at `/opt/robocode-render/strict_server.py`. Both rendering and agent
+scripts use `/opt/robocode-strict/bin/python`; no project or MCP framework package
+is installed. A second virtualenv would not prevent agents from importing its
+packages by changing `sys.path`. Its host connection permits `render_state` but still rejects raw
 `get_state` snapshots and all other helpers. Consequently, strict `render_policy`
 renders the observations returned by `reset`/`step` rather than requesting hidden
 state snapshots.
