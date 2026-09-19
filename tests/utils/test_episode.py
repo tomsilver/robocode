@@ -13,6 +13,7 @@ import threading
 import time
 from functools import partial
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable
 
 import imageio.v3 as iio
@@ -548,6 +549,29 @@ def test_runtime_import_does_not_silently_select_fallback(tmp_path: Path) -> Non
     space = Box(-1.0, 1.0, (2,))
     approach = load_generated_approach(path, space, space, {}, strict_imports=True)
     assert approach.value == 7
+
+
+def test_loader_cleanup_does_not_query_lazy_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unrelated lazy modules must not fabricate metadata during policy cleanup."""
+    lazy = ModuleType("lazy_host_module")
+    queried = []
+
+    def missing_attribute(name: str) -> object:
+        queried.append(name)
+        return object()
+
+    monkeypatch.setattr(lazy, "__getattr__", missing_attribute, raising=False)
+    monkeypatch.setitem(sys.modules, "lazy_host_module", lazy)
+    path = tmp_path / "approach.py"
+    path.write_text(
+        "class GeneratedApproach:\n    def __init__(self, *args, **kwargs): pass\n"
+    )
+    space = Box(-1.0, 1.0, (2,))
+    for _ in range(2):
+        load_generated_approach(path, space, space, {})
+    assert not queried
 
 
 def test_failed_constructor_cleans_import_state(tmp_path: Path) -> None:
