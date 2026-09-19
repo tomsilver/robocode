@@ -37,7 +37,6 @@ _FORBIDDEN_MODULES: frozenset[str] = _DYNAMIC_IMPORT_MODULES | {"env_client"}
 
 STRICT_BLACKBOX_IMAGE = "robocode-strict-blackbox"
 STRICT_BLACKBOX_PYTHON = "/opt/robocode-strict/bin/python"
-STRICT_BLACKBOX_MCP_PYTHON = "/opt/robocode-mcp/bin/python"
 
 
 class StrictImportError(ValueError):

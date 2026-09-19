@@ -90,7 +90,6 @@ from robocode.utils.sandbox import (
     _stream_result_to_sandbox_result,
     agent_stdin,
 )
-from robocode.utils.strict_blackbox import STRICT_BLACKBOX_MCP_PYTHON
 from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
@@ -362,7 +361,7 @@ async def run_agent_in_apptainer_sandbox(
         # Under strict the agent's scripts run in the dependency-clean venv and
         # the render proxy in its own, so MCP packages never reach the former.
         agent_python = container_python(strict_blackbox)
-        mcp_python = STRICT_BLACKBOX_MCP_PYTHON if strict_blackbox else agent_python
+        mcp_python = agent_python
         agent_cmd = backend.build_cli_cmd(
             config,
             mcp_python_cmd=mcp_python,

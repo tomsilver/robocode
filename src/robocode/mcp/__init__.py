@@ -341,6 +341,7 @@ def setup_mcp_config(
     blackbox: bool = False,
     transport: str = "stdio",
     port: int = MCP_HTTP_PORT,
+    strict_blackbox: bool = False,
 ) -> Path:
     """Write MCP server config into ``sandbox_dir/.mcp/``.
 
@@ -375,8 +376,15 @@ def setup_mcp_config(
         # <container_sandbox>/.mcp/env_config.json; the env_spaces.json the
         # approach wrote sits at the sandbox root.
         env_spaces_path = Path(env_config_path).parent.parent / "env_spaces.json"
+        entrypoint = (
+            "/opt/robocode-render/strict_server.py"
+            if strict_blackbox
+            else "-m robocode.mcp.server"
+        )
+        if strict_blackbox and transport != "http":
+            raise ValueError("Strict rendering requires HTTP transport")
         server_cmd = (
-            f"{python_cmd} -m robocode.mcp.server"
+            f"{python_cmd} {entrypoint}"
             f" --env-spaces {env_spaces_path}"
             f" --tools {','.join(tool_names)}"
             f" --log-file {log_file_path}"
