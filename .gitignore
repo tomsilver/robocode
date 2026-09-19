@@ -182,3 +182,6 @@ temp/
 statistics/
 
 .apptainer-env-cache/
+
+# Network isolation audit logs and downloaded test artifacts.
+network_audit_results/

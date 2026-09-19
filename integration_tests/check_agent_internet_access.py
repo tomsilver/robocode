@@ -47,11 +47,29 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--backend", choices=("codex", "claude"), default="codex")
     parser.add_argument("--model")
+    parser.add_argument("--strict-sif-path", type=Path)
     parser.add_argument("--max-budget-usd", type=float, default=3.0)
     parser.add_argument(
         "--results-dir", type=Path, default=Path("internet_access_results")
     )
     return parser.parse_args()
+
+
+def _is_web_call(value: object) -> bool:
+    """Identify actual structured tool events, ignoring mentions in prose."""
+    if isinstance(value, dict):
+        if value.get("type") in {"web_search", "web_search_call"}:
+            return True
+        if value.get("type") == "tool_use" and value.get("name") in {
+            "WebSearch",
+            "WebFetch",
+            "web.run",
+        }:
+            return True
+        return any(_is_web_call(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_is_web_call(child) for child in value)
+    return False
 
 
 def _stream_used_web_search(stream_path: Path) -> bool:
@@ -65,7 +83,8 @@ def _stream_used_web_search(stream_path: Path) -> bool:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if "web_search" in json.dumps(event):
+
+        if _is_web_call(event):
             return True
     return False
 
@@ -116,6 +135,8 @@ async def _run(args: argparse.Namespace) -> int:
         "blackbox_strict": True,
     }
     if args.container == "apptainer":
+        if args.strict_sif_path is not None:
+            common["strict_sif_path"] = args.strict_sif_path
         result = await run_agent_in_apptainer_sandbox(
             ApptainerSandboxConfig(**common), backend
         )
@@ -136,6 +157,9 @@ async def _run(args: argparse.Namespace) -> int:
     print(f"Server-side web search observed: {used_web_search}")
     print(f"MCP tool call observed: {used_mcp}")
     print(f"Live page markers recovered: {recovered}")
+    if used_web_search:
+        print("FAIL: the agent invoked server-side web search")
+        return 1
     if used_mcp:
         print("FAIL: the strict blackbox agent invoked an MCP tool")
         return 1
@@ -143,8 +167,11 @@ async def _run(args: argparse.Namespace) -> int:
         print("FAIL: the strict blackbox agent reproduced live Internet content")
         return 1
     if report.strip() == "BLOCKED":
-        print("PASS: the strict blackbox agent reported that access was blocked")
-        return 0
+        print(
+            "INCONCLUSIVE: the agent reported BLOCKED; "
+            "this does not prove network enforcement"
+        )
+        return 2
     print(
         "INCONCLUSIVE: live markers were absent, but the agent did not report BLOCKED"
     )
