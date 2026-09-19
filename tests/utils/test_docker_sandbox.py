@@ -25,6 +25,7 @@ build it with ``bash docker/build.sh`` to run them.
 """
 
 import json
+import py_compile
 import shutil
 import subprocess
 import tempfile
@@ -1097,3 +1098,21 @@ def test_filtered_repo_mounts_tolerates_missing_ss_pybullet(monkeypatch) -> None
     with _filtered_repo_mounts() as (src, _kg, _kb, ss_pybullet):
         assert ss_pybullet is None
         assert src.exists()
+
+
+def test_source_filter_removes_withheld_bytecode(tmp_path: Path) -> None:
+    """A removed description remains readable in .pyc unless all caches are stripped."""
+    source = tmp_path / "source"
+    package = source / "robocode"
+    (package / "approaches").mkdir(parents=True)
+    (package / "approaches" / "base_approach.py").write_text("class Approach: pass\n")
+    hidden = package / "primitive_descriptions.py"
+    hidden.write_text("SECRET_DESCRIPTION = 'withheld primitive documentation'\n")
+    py_compile.compile(str(hidden), doraise=True)
+    py_compile.compile(str(hidden), cfile=str(hidden.with_suffix(".pyc")), doraise=True)
+    destination = tmp_path / "filtered"
+    _copy_src(source, destination)
+    assert not list(destination.rglob("*.pyc"))
+    assert not list(destination.rglob("__pycache__"))
+    assert not (destination / "robocode" / hidden.name).exists()
+    assert (destination / "robocode/approaches/base_approach.py").exists()
