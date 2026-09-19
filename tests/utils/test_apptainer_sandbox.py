@@ -7,8 +7,8 @@ command line. No SIF or apptainer binary is invoked.
 """
 
 import asyncio
+import json
 import subprocess
-from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -18,18 +18,18 @@ from robocode.mcp import MCP_START_SCRIPT
 from robocode.utils.apptainer_sandbox import (
     APPTAINER_PYTHON,
     ApptainerSandboxConfig,
-    _build_apptainer_auth_args,
     _build_apptainer_cmd,
+    _isolated_transport,
     run_agent_in_apptainer_sandbox,
-    run_genplan_in_apptainer,
     sif_path_for,
 )
 from robocode.utils.backends import create_backend
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
-    GENPLAN_CONTAINER_TIMEOUT_S,
     _find_repo_root,
 )
+from robocode.utils.isolated_transport import UnixRelay
+from robocode.utils.model_broker import BrokerUpstream
 from robocode.utils.strict_blackbox import (
     STRICT_BLACKBOX_PYTHON,
 )
@@ -81,8 +81,6 @@ def test_build_cmd_strict_has_no_project_mounts(tmp_path: Path) -> None:
         src_abs=None,
         kindergarden_abs=None,
         kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=[],
         agent_cmd=["claude"],
     )
     joined = " ".join(cmd)
@@ -90,7 +88,7 @@ def test_build_cmd_strict_has_no_project_mounts(tmp_path: Path) -> None:
     assert str(config.sif_path) not in cmd
     assert "/host/sandbox:/sandbox" in cmd
     assert "--containall" in cmd
-    assert "ROBOCODE_SKIP_FIREWALL=1" in cmd
+    assert not any("ROBOCODE_SKIP_FIREWALL" in arg for arg in cmd)
     assert "/robocode/src" not in joined
     assert "kindergarden" not in joined
     assert "ss-pybullet" not in joined
@@ -104,10 +102,14 @@ class _Launched(Exception):
 def test_strict_run_uses_only_clean_interpreter(  # type: ignore
     tmp_path: Path, monkeypatch
 ) -> None:
-    """The agent's scripts use the strict venv and the render proxy its own."""
+    """Agent scripts and render tools share only the strict numerical dependencies."""
     strict_sif_path = tmp_path / "robocode-strict-blackbox.sif"
     strict_sif_path.touch()
     sandbox_dir = tmp_path / "run" / "sandbox"
+    metadata_path = tmp_path / "env_spaces.json"
+    metadata_path.write_text(
+        json.dumps({"host": "attacker.invalid", "port": 9999}), encoding="utf-8"
+    )
     config = ApptainerSandboxConfig(
         sandbox_dir=sandbox_dir,
         sif_path=tmp_path / "robocode-sandbox.sif",
@@ -117,17 +119,30 @@ def test_strict_run_uses_only_clean_interpreter(  # type: ignore
         mcp_tools=("render_state",),
         prompt="hello",
         output_filename="approach.py",
+        env_server_port=12345,
+        init_files={"env_spaces.json": metadata_path},
     )
     monkeypatch.setattr(
-        "robocode.utils.apptainer_sandbox._build_apptainer_auth_args",
-        lambda _backend: nullcontext(([], {})),
+        "robocode.utils.apptainer_sandbox.load_broker_upstream",
+        lambda _: BrokerUpstream("messages", "api.anthropic.com", "/v1", {}),
     )
+    targets: list[tuple[str, int]] = []
+
+    def capture_relay(path: str, target: tuple[str, int]) -> UnixRelay:
+        targets.append(target)
+        return UnixRelay(path, target)
+
+    monkeypatch.setattr("robocode.utils.apptainer_sandbox.UnixRelay", capture_relay)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "host-only-test-secret")
     launched: list[list[str]] = []
     real_popen = subprocess.Popen
 
     def fake_popen(cmd: list[str], **kwargs):  # type: ignore
         if cmd[0] != "apptainer":  # the sandbox's own git commands
             return real_popen(cmd, **kwargs)
+        assert kwargs["start_new_session"] is True
+        assert "host-only-test-secret" not in str(kwargs)
+        assert ".credentials.json" not in " ".join(cmd)
         launched.append(cmd)
         raise _Launched
 
@@ -136,13 +151,16 @@ def test_strict_run_uses_only_clean_interpreter(  # type: ignore
     with pytest.raises(_Launched):
         asyncio.run(run_agent_in_apptainer_sandbox(config, backend))
 
+    assert targets == [("127.0.0.1", 12345)]
+    metadata = json.loads((sandbox_dir / "env_spaces.json").read_text(encoding="utf-8"))
+    assert (metadata["host"], metadata["port"]) == ("127.0.0.1", 18081)
     assert len(launched) == 1
     cmd = launched[0]
     joined = " ".join(cmd)
     assert str(strict_sif_path) in cmd
     assert "/robocode/src" not in joined
-    # The render-server probe and CLAUDE.md name the strict interpreter; the MCP
-    # start script the render proxy's separate one.
+    # Agent scripts, the render server, and the startup probe use the same
+    # dependency-clean interpreter.
     assert f"{STRICT_BLACKBOX_PYTHON} -c" in joined
     assert STRICT_BLACKBOX_PYTHON in (sandbox_dir / "CLAUDE.md").read_text()
     start_script = (sandbox_dir / ".mcp" / MCP_START_SCRIPT).read_text()
@@ -167,8 +185,6 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
         kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=[],
         agent_cmd=["claude", "--print", "hello"],
     )
 
@@ -188,8 +204,8 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
     # Env vars are passed as `--env KEY=val` pairs.
     assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192" in cmd
     assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70" in cmd
-    # init-firewall.sh is skipped (apptainer can't grant CAP_NET_ADMIN).
-    assert "ROBOCODE_SKIP_FIREWALL=1" in cmd
+    # Apptainer uses the isolated namespace, not the Docker firewall entrypoint.
+    assert not any("ROBOCODE_SKIP_FIREWALL" in arg for arg in cmd)
     # Headless container has no GPU: mujoco's Dynamic3D renderer must use OSMesa
     # (software), so the sandbox forces it; EGL device displays would crash.
     assert "MUJOCO_GL=osmesa" in cmd
@@ -202,7 +218,11 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
 
     # SIF path appears before the entrypoint invocation.
     sif_idx = cmd.index(str(config.sif_path))
-    entrypoint_idx = cmd.index("/usr/local/bin/entrypoint.sh")
+    entrypoint_idx = cmd.index("/usr/bin/setpriv")
+    assert "--net" in cmd
+    assert cmd[cmd.index("--network") + 1] == "none"
+    assert "--userns" in cmd
+    assert "/usr/local/bin/entrypoint.sh" not in cmd
     assert sif_idx < entrypoint_idx
 
     # Agent command is appended at the end.
@@ -210,7 +230,7 @@ def test_build_cmd_basic_shape(tmp_path: Path) -> None:
 
 
 def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
-    """The kinder-baselines bind and --extra bilevel sync appear only when requested."""
+    """Bilevel source is conditional; dependency installation is a separate phase."""
 
     def build(kinder_baselines_abs: str | None) -> list[str]:
         return _build_apptainer_cmd(
@@ -219,8 +239,6 @@ def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
             src_abs="/host/src",
             kindergarden_abs="/host/kindergarden",
             kinder_baselines_abs=kinder_baselines_abs,
-            auth_args=[],
-            firewall_domains=[],
             agent_cmd=["claude"],
         )
 
@@ -230,7 +248,7 @@ def test_build_cmd_bilevel_conditional(tmp_path: Path) -> None:
 
     on = build("/host/kinder-baselines")
     assert "/host/kinder-baselines:/robocode/third-party/kinder-baselines" in on
-    assert "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel" in on
+    assert not any("ROBOCODE_UV_EXTRA_ARGS" in arg for arg in on)
 
 
 def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
@@ -247,8 +265,6 @@ def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
         kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=[],
         agent_cmd=["claude"],
     )
     default_cmd = _build_apptainer_cmd(
@@ -257,8 +273,6 @@ def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
         src_abs="/host/src",
         kindergarden_abs="/host/kindergarden",
         kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=[],
         agent_cmd=["claude"],
     )
     assert "--containall" in blackbox_cmd
@@ -268,154 +282,29 @@ def test_build_cmd_always_adds_containall(tmp_path: Path) -> None:
     assert "--pid" in default_cmd
 
 
-def test_genplan_cmd_adds_containall(
-    tmp_path: Path, monkeypatch  # type: ignore
-) -> None:
-    """GenPlan gets the same default-bind isolation as the agentic path."""
-    sandbox_dir = tmp_path / "sandbox"
-    sandbox_dir.mkdir()
-    sif_path = tmp_path / "robocode-sandbox.sif"
-    sif_path.touch()
-    filtered_src = tmp_path / "src"
-    filtered_kindergarden = tmp_path / "kindergarden"
-    filtered_src.mkdir()
-    filtered_kindergarden.mkdir()
+def test_metadata_cannot_select_an_environment_destination(tmp_path: Path) -> None:
+    """Only the explicit host config can authorize a relay, including on resume."""
+    (tmp_path / "env_spaces.json").write_text(
+        json.dumps({"host": "127.0.0.1", "port": 9999}), encoding="utf-8"
+    )
+    config = ApptainerSandboxConfig(sandbox_dir=tmp_path)
+    upstream = BrokerUpstream("messages", "api.anthropic.com", "/v1", {})
+    with pytest.raises(RuntimeError, match="explicit trusted env_server_port"):
+        with _isolated_transport(config, upstream):
+            pytest.fail("Untrusted metadata enabled a host relay")
 
-    monkeypatch.setattr(
-        "robocode.utils.apptainer_sandbox._filtered_repo_mounts",
-        lambda **_kwargs: nullcontext(
-            (filtered_src, filtered_kindergarden, None, None)
-        ),
+
+def test_unsupported_backend_never_sets_up_an_agent(tmp_path, monkeypatch) -> None:
+    """Removing the old OpenCode auth path cannot cause an unbrokered fallback."""
+    image = tmp_path / "image.sif"
+    image.touch()
+    config = ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox", sif_path=image)
+    backend = create_backend(
+        DictConfig({"backend": "opencode", "model": "openai/test"})
     )
     monkeypatch.setattr(
-        "robocode.utils.apptainer_sandbox._build_apptainer_auth_args",
-        lambda _backend: nullcontext(([], {})),
+        "robocode.utils.apptainer_sandbox._setup_sandbox_dir",
+        lambda _: pytest.fail("Unsupported backend reached agent setup"),
     )
-    monkeypatch.setattr(
-        "robocode.utils.apptainer_sandbox.firewall_domains_for_provider",
-        lambda *_args: [],
-    )
-    calls: list[list[str]] = []
-
-    timeouts: list[float] = []
-
-    def fake_run(cmd: list[str], **kwargs) -> None:
-        calls.append(cmd)
-        timeouts.append(kwargs["timeout"])
-
-    monkeypatch.setattr("robocode.utils.apptainer_sandbox.subprocess.run", fake_run)
-
-    run_genplan_in_apptainer(
-        sandbox_dir,
-        {"provider": "cli"},
-        sif_path=sif_path,
-    )
-
-    assert len(calls) == 1
-    assert timeouts == [GENPLAN_CONTAINER_TIMEOUT_S]
-    assert calls[0][:3] == ["apptainer", "exec", "--containall"]
-    assert "--pid" in calls[0]
-
-
-def test_build_cmd_firewall_domains(tmp_path: Path) -> None:
-    """Firewall domains, when present, are forwarded via --env."""
-    config = ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    cmd = _build_apptainer_cmd(
-        config,
-        sandbox_abs="/host/sandbox",
-        src_abs="/host/src",
-        kindergarden_abs="/host/kindergarden",
-        kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=["api.example.com", "cdn.example.com"],
-        agent_cmd=["claude"],
-    )
-    assert "ROBOCODE_FIREWALL_EXTRA_DOMAINS=api.example.com,cdn.example.com" in cmd
-
-
-def test_build_cmd_no_firewall_when_empty(tmp_path: Path) -> None:
-    """When no extra domains are requested, the env var is not added."""
-    config = ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    cmd = _build_apptainer_cmd(
-        config,
-        sandbox_abs="/host/sandbox",
-        src_abs="/host/src",
-        kindergarden_abs="/host/kindergarden",
-        kinder_baselines_abs=None,
-        auth_args=[],
-        firewall_domains=[],
-        agent_cmd=["claude"],
-    )
-    assert not any("ROBOCODE_FIREWALL_EXTRA_DOMAINS" in arg for arg in cmd)
-
-
-def test_build_cmd_auth_args_inserted(tmp_path: Path) -> None:
-    """Caller-supplied auth args (e.g. a --bind) appear in the cmd."""
-    config = ApptainerSandboxConfig(sandbox_dir=tmp_path / "sandbox")
-    auth_args = ["--bind", "/home/u/.claude:/home/node/.claude"]
-    cmd = _build_apptainer_cmd(
-        config,
-        sandbox_abs="/host/sandbox",
-        src_abs="/host/src",
-        kindergarden_abs="/host/kindergarden",
-        kinder_baselines_abs=None,
-        auth_args=auth_args,
-        firewall_domains=[],
-        agent_cmd=["claude"],
-    )
-    assert "/home/u/.claude:/home/node/.claude" in cmd
-
-
-def test_opencode_auth_passes_api_keys(monkeypatch) -> None:  # type: ignore
-    """Provider API keys are forwarded via APPTAINERENV_ env vars, not argv."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-value")
-    with _build_apptainer_auth_args("opencode") as (args, env):
-        assert env.get("APPTAINERENV_ANTHROPIC_API_KEY") == "sk-test-value"
-        # The secret must not appear on the command line.
-        assert not any("sk-test-value" in a for a in args)
-
-
-def test_codex_auth_passes_codex_api_key(monkeypatch) -> None:  # type: ignore
-    """Forward the Codex key through the container environment."""
-    monkeypatch.setenv("CODEX_API_KEY", "sk-test-value")
-
-    with _build_apptainer_auth_args("codex") as (args, env):
-        assert not args
-        assert env == {"APPTAINERENV_CODEX_API_KEY": "sk-test-value"}
-
-
-def test_claude_auth_uses_env_token(monkeypatch) -> None:  # type: ignore
-    """CLAUDE_CODE_OAUTH_TOKEN is forwarded via APPTAINERENV_, never on argv."""
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
-    with _build_apptainer_auth_args("claude") as (args, env):
-        assert env.get("APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-test"
-        # The token must not appear on the command line (visible via `ps`).
-        assert not any("sk-ant-oat01-test" in a for a in args)
-        assert not any("--bind" in a for a in args)
-
-
-def test_claude_auth_binds_credentials_only(  # type: ignore
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The fallback mount is a throwaway credentials-only copy."""
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-    # Force the resolver to report no token (avoid Keychain hit on dev macOS).
-    monkeypatch.setattr(
-        "robocode.utils.apptainer_sandbox._get_claude_oauth_token",
-        lambda: None,
-    )
-    host = tmp_path / ".claude"
-    (host / "projects").mkdir(parents=True)
-    (host / "projects" / "past.jsonl").write_text("past")
-    (host / ".credentials.json").write_text("credentials")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(host))
-
-    with _build_apptainer_auth_args("claude") as (args, env):
-        assert not env
-        bind = next(arg for arg in args if arg.endswith(":/home/node/.claude"))
-        mounted = Path(bind.split(":", 1)[0])
-        assert mounted != host
-        assert [path.name for path in mounted.iterdir()] == [".credentials.json"]
-        copied = mounted
-
-    assert not copied.exists()
+    with pytest.raises(RuntimeError, match="does not support 'opencode'"):
+        asyncio.run(run_agent_in_apptainer_sandbox(config, backend))

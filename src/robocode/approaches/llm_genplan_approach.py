@@ -28,7 +28,6 @@ from relational_structs.spaces import ObjectCentricStateSpace
 from robocode import prompts
 from robocode.approaches.base_approach import BaseApproach
 from robocode.primitive_descriptions import format_primitives_description
-from robocode.utils.apptainer_sandbox import _DEFAULT_SIF, run_genplan_in_apptainer
 from robocode.utils.docker_sandbox import run_genplan_in_docker
 from robocode.utils.episode import load_generated_approach
 from robocode.utils.genplan_validate import (
@@ -88,7 +87,6 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         use_docker: bool = True,
         container_backend: str | None = None,
         docker_image: str = "robocode-sandbox",
-        sif_path: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -102,6 +100,12 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._container_backend = resolve_container_backend(
             container_backend, use_docker
         )
+        if self._container_backend == "apptainer":
+            raise ValueError(
+                "GenPlan/Best-of-K does not support the isolated Apptainer transport. "
+                "Use an agentic Codex/Claude approach on Apptainer. "
+                "GenPlan's existing Docker backend remains supported."
+            )
         # Sandboxed runs build the client inside the container, so the host
         # needs no client/key.
         self._client: LLMClient | None = (
@@ -119,7 +123,6 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         self._chain_of_thought = chain_of_thought
         self._eval_timeout = eval_timeout
         self._docker_image = docker_image
-        self._sif_path = Path(sif_path) if sif_path is not None else _DEFAULT_SIF
         self._generated: Any = None
         self.total_cost_usd: float | None = None
         # Number of LLM generations made (debug attempts for genplan, candidates
@@ -136,9 +139,9 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
             "(max_debug_attempts / max_generation_steps)"
         )
 
-        # Sandboxed: run the whole loop inside one container (docker/apptainer)
+        # Sandboxed: run the whole loop inside one Docker container
         # via the genplan driver; the driver reruns train() locally inside.
-        if self._container_backend in ("docker", "apptainer"):
+        if self._container_backend == "docker":
             self._train_in_container()
             self._load_generated(self._output_dir / "sandbox" / "approach.py")
             return
@@ -222,20 +225,12 @@ class LLMGenPlanApproach(BaseApproach[_ObsType, _ActType]):
         config = self._driver_config(completion)
         (sandbox_dir / "genplan_config.json").write_text(json.dumps(config))
         include_bilevel = "bilevel_models" in self._primitives
-        if self._container_backend == "apptainer":
-            run_genplan_in_apptainer(
-                sandbox_dir,
-                completion,
-                sif_path=self._sif_path,
-                include_bilevel=include_bilevel,
-            )
-        else:
-            run_genplan_in_docker(
-                sandbox_dir,
-                completion,
-                image=self._docker_image,
-                include_bilevel=include_bilevel,
-            )
+        run_genplan_in_docker(
+            sandbox_dir,
+            completion,
+            image=self._docker_image,
+            include_bilevel=include_bilevel,
+        )
         cost = json.loads((sandbox_dir / "cost.json").read_text(encoding="utf-8"))
         self.total_cost_usd = cost["total_cost_usd"]
         self.num_generations = cost.get("num_generations")

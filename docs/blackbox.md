@@ -195,7 +195,8 @@ The approach, in `train()`:
    `{host, port, token, observation_space, action_space, max_steps}`.
    `host` is `host.docker.internal` for Docker (mapped via
    `--add-host host.docker.internal:host-gateway`) or `127.0.0.1` for the
-   apptainer and local backends.
+   Apptainer and local backends. Apptainer then rewrites the port to a private
+   loopback relay pinned to the separately configured host `env_server_port`.
 4. Mounts a filtered copy of the repo that strips `environments/`, the kinder
    `envs/` and `demos/`, plus the always-excluded `oracles/`, `primitives/`,
    `tests/`, and `docs/`.
@@ -230,10 +231,10 @@ makes blackbox meaningful differs:
   many `apptainer.conf` setups still bind the host `/home`, so the agent could
   read the real source straight off `/home/<user>/.../environments`.
   `--containall` is what fixes this, dropping all default binds (home, tmp, cwd)
-  so the stripped source is the only source present. It reaches the env server
-  over `127.0.0.1` (apptainer shares the host network namespace, so no
-  `--add-host`/firewall is needed; note this also means apptainer does not apply
-  the default-deny network firewall). Run
+  so the stripped source is the only source present. Its network namespace has
+  only loopback. A Unix-socket relay reaches one pinned host env-server port, and
+  a separate broker permits validated model inference. See
+  [network isolation](apptainer-network-isolation.md). Run
   `python integration_tests/red_team_sandbox.py --apptainer-blackbox` (needs
   `robocode-sandbox.sif` built) to verify env source stays unreachable.
 - **local**: best-effort ONLY, isolation is NOT enforced. The OS-level sandbox
@@ -251,15 +252,16 @@ makes blackbox meaningful differs:
   only for quick local iteration, not for results that depend on the agent not
   having read the source. Use `docker` or `apptainer` for enforced isolation.
 
-Strict mode runs under Docker or Apptainer during synthesis. The strict image gets
-one writable mount (`/sandbox`). Under Docker its firewall allows the model provider
-plus only the exact host TCP port of the environment server; GitHub, SSH, package
-registries, and other host ports are not allowed. Under Apptainer the same image runs
-as `robocode-strict-blackbox.sif` with the sandbox as its only mount, but, as in
-legacy blackbox, unprivileged Apptainer cannot install the firewall, so that network
-restriction is not enforced there: the strict ablation then rests on the
-dependency-clean image, the strict env server, and the scoring-time import allowlist.
-Scoring needs no container: the import allowlist check
+Strict mode runs under Docker or Apptainer during synthesis. Under Docker its
+firewall allows the model provider plus only the exact host TCP port of the
+environment server; GitHub, SSH, package registries, and other host ports are not
+allowed. Under Apptainer the dependency-clean `robocode-strict-blackbox.sif` runs
+in a disconnected namespace with the sandbox, session directory, and read-only
+broker socket directory mounted. Only validated model inference and the pinned
+environment-server relay cross that network boundary.
+
+Final scoring currently runs on the host. Its import allowlist check is a
+methodological guardrail, not a network or hostile-code sandbox. The check
 runs before the program is loaded, so an approach that imports `pybullet_helpers`,
 `tomsgeoms2d`, `robocode`, `kinder`, or any other undeclared dependency fails the
 run with a message naming the import instead of silently succeeding from the host
@@ -324,7 +326,7 @@ state snapshots.
   |                   |                       sandbox_dir/mcp_renders/*.png
   +-------------------+---------------------------------------^---------+
                       |  host.docker.internal:port (docker)   | bind mount
-                      |  127.0.0.1:port (apptainer/local)      | (rw)
+                      |  127.0.0.1:port (local only)          | (rw)
   ====================+======= container boundary (firewall:   | =========
                       |         default-DROP + allow host /24) |
                       |                                        |
@@ -351,6 +353,11 @@ state snapshots.
   Withheld:  environments/ , kinder envs+demos , oracles/ , primitives/ , tests/ , docs/
 ```
 
+Apptainer uses the same JSON protocol through a different transport: private
+container loopback → mounted Unix socket → one pinned host environment-server
+port. Its namespace has no external interface. The diagram's Docker firewall
+and direct local connection do not describe Apptainer's network boundary.
+
 ## Key takeaways
 
 - **One protocol, two consumers inside the sandbox.** The agent's own test
@@ -361,7 +368,8 @@ state snapshots.
   host into the shared `mcp_renders/` mount; only relative paths travel back over
   the socket.
 - **Isolation is layered.** Withheld source mounts, JSON-only codec, per-run
-  token, per-connection fresh env, and a default-deny firewall. The `local`
+  token, per-connection fresh env, and Docker's firewall or Apptainer's
+  disconnected namespace with restricted relays. The `local`
   backend is best-effort only.
 
 ## Red-teaming strict blackbox
@@ -371,21 +379,21 @@ Build the strict image, then run its dedicated live adversarial suite:
 ```bash
 bash docker/build_strict_blackbox.sh
 python integration_tests/red_team_sandbox.py --strict-blackbox
-# Apptainer: the same suite minus the network probe (no firewall there).
+# Apptainer: the same suite, including network and package-install probes.
 bash docker/build_strict_blackbox_sif.sh
 python integration_tests/red_team_sandbox.py --apptainer-strict-blackbox
 ```
 
 The suite first proves the allowed surface works: the generated-program
 interpreter can import NumPy and SciPy and can reset and step the environment, and
-the separate MCP interpreter renders a state through the host.
+the same dependency-clean interpreter renders a state through the host.
 It then asks an agent to attack the same configuration used in production and
 fails if any of these boundaries break:
 
 - the generated-program interpreter imports RoboCode, KinDER, MCP, Gymnasium,
   geometry, or simulator packages, or installs a package from the network;
-- the separate MCP interpreter exposes environment, primitive, simulator, or
-  robotics modules;
+- changing interpreters/package paths, or executing a policy through MCP,
+  exposes withheld project, framework, environment, or simulator packages;
 - environment source, the host-side canary, or arbitrary Internet content is
   reachable through filesystem or network probing;
 - withheld client methods or raw protocol commands such as `get_state`,
@@ -406,14 +414,19 @@ after scoring begins.
 Blackbox mode is a *methodological* constraint first: it stops the agent from
 reading environment source so it must discover the dynamics empirically. The
 isolation behind it (withheld mounts, JSON-only codec, per-run token,
-per-connection env, default-deny firewall) is real. The host never executes
-agent code: the only things it runs are env stepping and `render_state`, both
-trusted. `render_policy` deliberately runs in the container, so an agent that
+per-connection env, and backend-specific network restrictions) applies during
+agent execution. The environment server runs trusted env stepping and
+`render_state`, never agent code. `render_policy` deliberately runs in the container, so an agent that
 writes a malicious `approach.py` cannot reach the env source through rendering
-(there is no env source in the container, and the host never execs the file).
+(there is no env source in the container, and the environment server never
+executes the file).
 The `blackbox_render_*` red-team tests exercise exactly this path.
 
-One limit is worth stating plainly:
+Final policy scoring is a separate host-side execution path and is not contained
+by these agent-runtime protections. Full experiment network isolation requires
+addressing that path too.
+
+Another limit:
 
 - **The env server listens on all interfaces.** It binds
   `0.0.0.0:<ephemeral>` and the container firewall opens the host's `/24`, so

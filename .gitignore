@@ -180,3 +180,5 @@ ref/
 # pddlstream writes its FastDownward scratch files into the working directory.
 temp/
 statistics/
+
+.apptainer-env-cache/
