@@ -13,10 +13,16 @@ import numpy as np
 import pytest
 from kinder.envs.kinematic2d.object_types import RectangleType
 from omegaconf import OmegaConf
+from relational_structs import Object, ObjectCentricState, Type
+from relational_structs.spaces import ObjectCentricStateSpace
 
 from robocode.environments.variable_object_count_env import VariableObjectCountEnv
 from robocode.primitives import blackbox_primitive_manifest
 from robocode.utils import env_server
+from robocode.utils.env_client import (
+    _ObjectCentricObservationSpace,
+    _ocs_from_payload,
+)
 from robocode.utils.env_server import env_server_running, write_env_spaces
 from robocode.utils.env_server_runtime import _HandleRegistry, decode_ref
 from robocode.utils.object_centric_codec import (
@@ -140,6 +146,36 @@ def test_serialize_object_centric_space_has_types_and_parents() -> None:
         )
     finally:
         env.close()
+
+
+@pytest.mark.parametrize("name", ["rover", "robot", "target_block", "a'b", 'a"b'])
+def test_sandbox_type_strings_match_native_state_and_space(name: str) -> None:
+    """The wire must not change type strings seen by generated policies."""
+    parent = Type("entity")
+    typ = Type(name, parent)
+    features = {parent: [], typ: ["x"]}
+    obj = Object("obj0", typ)
+    state = ObjectCentricState({obj: np.array([1.0])}, features)
+    native_space = ObjectCentricStateSpace(features)
+    local_space = _ObjectCentricObservationSpace(
+        json.loads(json.dumps(serialize_object_centric_space(features)))
+    )
+    local_state = _ocs_from_payload(
+        json.loads(json.dumps(encode_object_centric_state(state)))
+    )
+    local_type = local_state.get_object_from_name("obj0").type
+    assert str(local_type) == str(typ)
+    assert repr(local_type) == repr(typ)
+    assert repr(local_space.get_type(name)) == repr(typ)
+    assert repr(local_type.parent) == repr(parent)
+
+    # This parsing behavior appeared in a saved Rovers policy. Previously
+    # it produced different keys in the sandbox and evaluator, hiding a failure
+    # during synthesis. Even brittle string parsing must see identical inputs.
+    def parsed_keys(space: Any) -> set[str]:
+        return {str(t).rsplit("(", maxsplit=1)[-1].rstrip(")") for t in space.types}
+
+    assert parsed_keys(local_space) == parsed_keys(native_space)
 
 
 def _load_env_client(metadata_path: pathlib.Path):

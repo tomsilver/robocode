@@ -6,7 +6,9 @@ etc.) to the shared sandbox runner.
 To add a new provider, add an entry to :data:`PROVIDERS` below. The
 ``domains`` list is used by the Docker firewall whitelist, and
 ``api_key_env`` is the environment variable forwarded into Docker
-containers for authentication.
+containers for authentication. Registering a provider here does not enable it
+in the Apptainer broker: that transport requires an explicitly validated API
+protocol in ``model_broker.py``.
 """
 
 from dataclasses import dataclass, field
@@ -75,19 +77,26 @@ class ProviderInfo:
     api_key_env: str = ""
 
 
+# Fixed provider hosts shared by Docker's domain list and the inference broker.
+# These constants are destinations, not interchangeable network policies.
+OPENAI_API_HOST = "api.openai.com"
+ANTHROPIC_API_HOST = "api.anthropic.com"
+CODEX_CHATGPT_HOST = "chatgpt.com"
+
+
 # ---- Provider registry ----
 # Add new providers here. The key is the provider prefix used in model
 # strings (e.g. "openai" in "openai/gpt-4o").
 PROVIDERS: dict[str, ProviderInfo] = {
     "openai": ProviderInfo(
-        domains=["api.openai.com"],
+        domains=[OPENAI_API_HOST],
         api_key_env="OPENAI_API_KEY",
     ),
     "codex": ProviderInfo(
-        domains=["api.openai.com", "chatgpt.com", "ab.chatgpt.com"],
+        domains=[OPENAI_API_HOST, CODEX_CHATGPT_HOST, "ab.chatgpt.com"],
     ),
     "anthropic": ProviderInfo(
-        domains=["api.anthropic.com"],
+        domains=[ANTHROPIC_API_HOST],
         api_key_env="ANTHROPIC_API_KEY",
     ),
     "google": ProviderInfo(

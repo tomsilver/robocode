@@ -1,96 +1,65 @@
-"""Apptainer/Singularity-based sandboxed agent runner.
+"""Apptainer agent runner with an isolated network and host inference broker.
 
-Mirror of :mod:`robocode.utils.docker_sandbox` for environments where the
-Docker daemon is unavailable (typical on HPC clusters). The SIF image is
-built from the existing ``docker/Dockerfile`` via ``docker/build_sif.sh``
-(podman build + apptainer build) -- no separate definition file.
+Agents run without root in a fresh user/network/PID/IPC namespace using
+``--net --network none``, filtered mounts, a clean environment, and no-new-privileges.
+A supervisor verifies the network and capability boundary before starting the CLI.
+The host broker accepts only validated model inference over a mounted Unix socket;
+provider credentials remain on the host. A separate socket relays to one pinned
+experiment environment server. Neither relay provides general internet access.
 
-The container interior (entrypoint, firewall script, /robocode/.venv,
-bind-mount layout) is byte-for-byte identical to the Docker image. The
-only differences are at the host invocation layer:
-
-* ``--bind`` instead of ``-v``
-* ``--env KEY=val`` instead of ``-e KEY=val``
-* ``--pwd`` instead of ``-w``
-* ``--writable-tmpfs`` so the entrypoint's ``uv sync`` can write to
-  ``/robocode/.venv`` (the SIF rootfs is read-only)
-* ``--containall`` so administrator-configured home, tmp, and cwd binds do not
-  expose host files beyond the explicit filtered mounts
-* ``--no-home`` so the host home doesn't shadow ``/home/node``
-* ``--cleanenv`` so the host env doesn't leak in
-* ``--pid`` so the container gets its own PID namespace (Docker does this by
-  default; apptainer shares the host's unless asked)
-
-Namespaces: the filesystem, PID, and IPC namespaces are the container's own.
-The NETWORK namespace is still the host's: ``--net`` needs
-privileges the unprivileged cluster install does not have, which is also why the
-firewall is skipped. So host loopback services stay reachable from the sandbox,
-and the render http server must pick a free host port (see ``_free_port``).
-
-``init-firewall.sh`` is skipped via ``ROBOCODE_SKIP_FIREWALL=1``: the
-unprivileged apptainer install on the target cluster can't grant real
-``CAP_NET_ADMIN``, so iptables would fail.
-
-The image ENTRYPOINT is invoked explicitly rather than via
-``apptainer run`` so behaviour does not depend on Apptainer's runscript
-translation of Docker images.
-
-Strict blackbox runs (``blackbox_strict=True``) execute in
-``robocode-strict-blackbox.sif`` instead, built from
-``docker/Dockerfile.strict-blackbox`` via ``docker/build_strict_blackbox_sif.sh``.
-No project code is bound into it: the sandbox is the only mount. The strict
-firewall (model provider plus the env server's port) cannot be installed here
-for the same reason the regular one is skipped, so under Apptainer the strict
-ablation rests on the dependency-clean image, the strict env server, and the
-host-side import allowlist at scoring time.
+Regular Python dependencies are prepared in a trusted installer phase and mounted
+read-only; the agent phase never runs the network-dependent image entrypoint.
+Strict runs use the dependency-clean strict SIF. Unsupported backend/GenPlan paths
+fail closed. See ``docs/apptainer-network-isolation.md`` for evidence and limits.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import os
+import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from robocode.mcp import MCP_STARTUP_TIMEOUT_MS
-from robocode.utils.backends import (
-    PROVIDERS,
-    AgentBackend,
-    firewall_domains_for_provider,
-    provider_from_model,
+from robocode.utils.apptainer_environment import (
+    clean_apptainer_env,
+    prepared_environment,
 )
-from robocode.utils.claude_auth import (
-    sandbox_claude_session_store,
-    throwaway_claude_config,
-)
-from robocode.utils.codex_auth import sandbox_codex_sessions, throwaway_codex_home
+from robocode.utils.backends import AgentBackend
+from robocode.utils.claude_auth import sandbox_claude_session_store
+from robocode.utils.codex_auth import sandbox_codex_sessions
 from robocode.utils.docker_sandbox import (
     DOCKER_PYTHON,
-    GENPLAN_CONTAINER_TIMEOUT_S,
     _filtered_repo_mounts,
     _find_repo_root,
-    _get_claude_oauth_token,
     _mcp_prestart_wrapper,
     container_python,
+)
+from robocode.utils.isolated_transport import UnixRelay
+from robocode.utils.model_broker import (
+    BROKER_DIR,
+    MODEL_PORT,
+    BrokerUpstream,
+    load_broker_upstream,
+    model_broker,
 )
 from robocode.utils.sandbox import (
     SandboxConfig,
     SandboxResult,
     _final_commit,
-    _free_port,
     _initial_commit,
     _setup_sandbox_dir,
     _stream_result_to_sandbox_result,
     agent_stdin,
 )
-from robocode.utils.strict_blackbox import STRICT_BLACKBOX_MCP_PYTHON
 from robocode.utils.telemetry import container_launch
 
 logger = logging.getLogger(__name__)
@@ -134,72 +103,13 @@ class ApptainerSandboxConfig(SandboxConfig):
     sif_path: Path = _DEFAULT_SIF
     blackbox_strict: bool = False
     strict_sif_path: Path = _DEFAULT_STRICT_SIF
+    # Trusted host destination. Never inferred from agent-writable metadata.
+    env_server_port: int | None = None
 
 
 def sif_path_for(config: ApptainerSandboxConfig) -> Path:
     """The image a run executes in: the dependency-clean one under strict."""
     return config.strict_sif_path if config.blackbox_strict else config.sif_path
-
-
-@contextmanager
-def _build_apptainer_auth_args(
-    backend_name: str,
-) -> Iterator[tuple[list[str], dict[str, str]]]:
-    """Yield Apptainer CLI args and env vars for backend authentication.
-
-    Mirrors :func:`docker_sandbox._build_docker_auth_args`. Secrets (the
-    Claude OAuth token, provider API keys) are returned as host env vars
-    with Apptainer's ``APPTAINERENV_`` prefix rather than inline ``--env``
-    flags: Apptainer injects ``APPTAINERENV_*`` into the container even
-    under ``--cleanenv``, and the value never reaches argv (world-readable
-    via ``ps`` / ``/proc/<pid>/cmdline`` on shared nodes). Only non-secret
-    bind mounts are returned as CLI args.
-
-    The credentials fallback uses a writable throwaway copy, never the live
-    host config, so experiment reads and writes cannot leak across runs or into
-    the operator's Claude history.
-    """
-    apptainer_args: list[str] = []
-    extra_env: dict[str, str] = {}
-
-    with ExitStack() as stack:
-        if backend_name == "claude":
-            oauth_token = _get_claude_oauth_token()
-            if oauth_token:
-                # APPTAINERENV_ prefix, not an inline --env flag, so the secret is
-                # injected into the container (surviving --cleanenv) without ever
-                # appearing on the command line.
-                extra_env["APPTAINERENV_CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-            else:
-                logger.warning(
-                    "No Claude OAuth token found; falling back to a throwaway "
-                    "credentials-only config. Run `claude login` on the host "
-                    "if the container cannot authenticate."
-                )
-                claude_copy = stack.enter_context(throwaway_claude_config())
-                apptainer_args += ["--bind", f"{claude_copy}:/home/node/.claude"]
-        elif backend_name == "codex":
-            if os.environ.get("CODEX_API_KEY"):
-                extra_env["APPTAINERENV_CODEX_API_KEY"] = os.environ["CODEX_API_KEY"]
-            else:
-                codex_home = stack.enter_context(throwaway_codex_home())
-                apptainer_args += ["--bind", f"{codex_home}:/home/node/.codex"]
-        else:
-            opencode_data = Path.home() / ".local" / "share" / "opencode"
-            if opencode_data.exists():
-                apptainer_args += [
-                    "--bind",
-                    f"{opencode_data}:/home/node/.local/share/opencode",
-                ]
-
-            for info in PROVIDERS.values():
-                if info.api_key_env:
-                    val = os.environ.get(info.api_key_env)
-                    if val:
-                        # APPTAINERENV_ keeps the key off argv (see above).
-                        extra_env[f"APPTAINERENV_{info.api_key_env}"] = val
-
-        yield apptainer_args, extra_env
 
 
 def _apptainer_exec_prefix() -> list[str]:
@@ -210,6 +120,10 @@ def _apptainer_exec_prefix() -> list[str]:
     return [
         "apptainer",
         "exec",
+        "--userns",
+        "--net",
+        "--network",
+        "none",
         "--containall",
         # Apptainer shares the host PID namespace by default, so a `pkill -f`
         # inside the container could otherwise reach the harness, concurrent
@@ -230,8 +144,6 @@ def _build_apptainer_cmd(
     src_abs: str | None,
     kindergarden_abs: str | None,
     kinder_baselines_abs: str | None,
-    auth_args: list[str],
-    firewall_domains: list[str],
     agent_cmd: list[str],
     extra_binds: list[str] | None = None,
     ss_pybullet_abs: str | None = None,
@@ -241,8 +153,9 @@ def _build_apptainer_cmd(
     Split out from :func:`run_agent_in_apptainer_sandbox` so unit tests
     can inspect the constructed command without running anything.
 
-    A strict blackbox launch passes ``None`` for the repo mounts: its image holds
-    no project code, so the sandbox is the only mount.
+    Strict blackbox launches omit project source mounts. The high-level runner
+    adds the broker and session mounts. This builder never installs dependencies
+    or forwards provider credentials and firewall settings.
     """
     cmd = _apptainer_exec_prefix()
     cmd += [
@@ -254,8 +167,6 @@ def _build_apptainer_cmd(
         # tools (--containall drops the host env, so this must be explicit).
         "--env",
         f"MCP_TIMEOUT={MCP_STARTUP_TIMEOUT_MS}",
-        "--env",
-        "ROBOCODE_SKIP_FIREWALL=1",
         # Headless container has no GPU, so mujoco's Dynamic3D offscreen renderer
         # must use OSMesa (software); EGL device displays fail without a GPU.
         "--env",
@@ -263,19 +174,6 @@ def _build_apptainer_cmd(
         "--env",
         "PYOPENGL_PLATFORM=osmesa",
     ]
-
-    if firewall_domains:
-        cmd += [
-            "--env",
-            f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
-        ]
-
-    # Only when the bilevel_models primitive is in play: sync the bilevel extra
-    # (the bind is added below). Otherwise no bilevel source/deps enter the sandbox.
-    if kinder_baselines_abs is not None:
-        cmd += ["--env", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
-
-    cmd += auth_args
 
     cmd += ["--bind", f"{sandbox_abs}:/sandbox"]
     if src_abs is not None:
@@ -293,23 +191,116 @@ def _build_apptainer_cmd(
         cmd += ["--bind", bind]
     cmd += [
         str(sif_path_for(config)),
-        "/usr/local/bin/entrypoint.sh",
+        "/usr/bin/setpriv",
+        "--no-new-privs",
+        "--",
     ]
     cmd += agent_cmd
     return cmd
+
+
+@contextmanager
+def _isolated_transport(
+    config: ApptainerSandboxConfig, provider: BrokerUpstream
+) -> Iterator[Path]:
+    """Own the broker and optional pinned environment relay for one agent run."""
+    with ExitStack() as isolation:
+        bridge = Path(
+            isolation.enter_context(tempfile.TemporaryDirectory(prefix="robocode-net-"))
+        )
+        isolation.enter_context(
+            model_broker(bridge, provider, config.sandbox_dir.parent / "broker.jsonl")
+        )
+        shutil.copyfile(
+            Path(__file__).with_name("isolated_transport.py"), bridge / "transport.py"
+        )
+        listeners = [{"port": MODEL_PORT, "socket": f"{BROKER_DIR}/model.sock"}]
+        # Only immutable host configuration selects a destination. Sandbox metadata
+        # describes the client view and never authorizes a host connection.
+        metadata_path = config.sandbox_dir / "env_spaces.json"
+        port = config.env_server_port
+        if metadata_path.exists() and port is None:
+            raise RuntimeError(
+                "env_spaces.json requires an explicit trusted env_server_port"
+            )
+        if port is not None:
+            if (
+                isinstance(port, bool)
+                or not isinstance(port, int)
+                or not 1 <= port <= 65535
+            ):
+                raise RuntimeError("Invalid trusted environment server port")
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            relay = isolation.enter_context(
+                UnixRelay(str(bridge / "environment.sock"), ("127.0.0.1", port))
+            )
+            thread = threading.Thread(target=relay.serve_forever, daemon=True)
+            thread.start()
+            isolation.callback(thread.join, 5)
+            isolation.callback(relay.shutdown)
+            listeners.append(
+                {"port": MODEL_PORT + 1, "socket": f"{BROKER_DIR}/environment.sock"}
+            )
+            metadata.update(host="127.0.0.1", port=MODEL_PORT + 1)
+            (config.sandbox_dir / "env_spaces.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+        (bridge / "transport.json").write_text(
+            json.dumps(
+                {"listeners": listeners, "strict_blackbox": config.blackbox_strict}
+            ),
+            encoding="utf-8",
+        )
+        yield bridge
+
+
+def _model_client(
+    backend_name: str, agent_cmd: list[str]
+) -> tuple[list[str], dict[str, str]]:
+    """Point a CLI at the local broker using inert tokens; never load real auth."""
+    agent_cmd = list(agent_cmd)
+    local_token = "local-broker-no-provider-secret"
+    client_env = {
+        "APPTAINERENV_ROBOCODE_MODEL_TOKEN": local_token,
+        "APPTAINERENV_UV_OFFLINE": "1",
+        "APPTAINERENV_PIP_NO_INDEX": "1",
+    }
+    if backend_name == "claude":
+        client_env.update(
+            {
+                "APPTAINERENV_ANTHROPIC_BASE_URL": f"http://127.0.0.1:{MODEL_PORT}",
+                "APPTAINERENV_ANTHROPIC_AUTH_TOKEN": local_token,
+                "APPTAINERENV_CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            }
+        )
+    if backend_name == "codex":
+        # Explicit custom provider avoids giving the CLI any real credential.
+        # Transport is SSE; websocket upgrades are rejected at the broker.
+        overrides = {
+            "model_provider": "robocode",
+            "model_providers.robocode.name": "Robocode isolated broker",
+            "model_providers.robocode.base_url": f"http://127.0.0.1:{MODEL_PORT}/v1",
+            "model_providers.robocode.wire_api": "responses",
+            "model_providers.robocode.env_key": "ROBOCODE_MODEL_TOKEN",
+            "model_providers.robocode.supports_websockets": False,
+            "features.responses_websockets": False,
+            "features.responses_websockets_v2": False,
+        }
+        for key, value in overrides.items():
+            agent_cmd[-1:-1] = ["--config", f"{key}={json.dumps(value)}"]
+    return agent_cmd, client_env
 
 
 async def run_agent_in_apptainer_sandbox(
     config: ApptainerSandboxConfig,
     backend: AgentBackend,
 ) -> SandboxResult:
-    """Run an agent inside the ``robocode-sandbox`` SIF via apptainer.
-
-    Step-for-step parallel of
-    :func:`~robocode.utils.docker_sandbox.run_agent_in_docker_sandbox`.
-    See the module docstring for the docker -> apptainer flag mapping.
-    """
+    """Run a supported agent with isolated networking and validated inference."""
     backend_name = backend.name
+    if getattr(backend, "_base_url", ""):
+        raise RuntimeError(
+            "Custom model endpoints are not supported by the isolated broker"
+        )
     strict_blackbox = config.blackbox_strict
 
     sif_path = sif_path_for(config)
@@ -323,13 +314,13 @@ async def run_agent_in_apptainer_sandbox(
             f"SIF image not found at {sif_path}; build it with: bash {build_script}"
         )
 
+    provider = load_broker_upstream(backend_name)
     _setup_sandbox_dir(config)
 
     sandbox_abs = str(config.sandbox_dir.resolve())
     run_id = f"apptainer-sandbox-{uuid.uuid4().hex[:8]}"
 
-    # The strict image holds no project code, so nothing is mounted beside the
-    # sandbox.
+    # The strict image needs no project source mounts.
     mounts = (
         nullcontext((None, None, None, None))
         if strict_blackbox
@@ -345,24 +336,33 @@ async def run_agent_in_apptainer_sandbox(
             filtered_kinder_baselines,
             ss_pybullet,
         ),
-        _build_apptainer_auth_args(backend_name) as (auth_args, auth_env),
+        _isolated_transport(config, provider) as bridge,
     ):
-        firewall_domains: list[str] = []
-        if backend_name in {"opencode", "codex"}:
-            firewall_domains = firewall_domains_for_provider(
-                "codex"
-                if backend_name == "codex"
-                else provider_from_model(config.model)
+        transport_binds = [f"{bridge}:{BROKER_DIR}:ro"]
+        if not strict_blackbox:
+            preparation_binds = [
+                f"{filtered_src}:/robocode/src",
+                f"{filtered_kindergarden}:/robocode/third-party/kindergarden",
+                f"{_find_repo_root() / 'pyproject.toml'}:/robocode/pyproject.toml:ro",
+                f"{_find_repo_root() / 'uv.lock'}:/robocode/uv.lock:ro",
+            ]
+            if filtered_kinder_baselines is not None:
+                preparation_binds.append(
+                    f"{filtered_kinder_baselines}:/robocode/third-party/kinder-baselines"
+                )
+            venv = prepared_environment(
+                sif_path,
+                preparation_binds,
+                include_bilevel=filtered_kinder_baselines is not None,
             )
-
-        # Apptainer shares the host network namespace (even with --containall and
-        # --pid), so use a free loopback port for the render http server to avoid
-        # colliding with the host or a concurrent run.
-        mcp_port = _free_port()
-        # Under strict the agent's scripts run in the dependency-clean venv and
-        # the render proxy in its own, so MCP packages never reach the former.
+            transport_binds += [
+                f"{venv}:/robocode/.venv:ro",
+                f"{venv}:/prepared/venv:ro",
+            ]
+        mcp_port = MODEL_PORT + 2
+        # Strict rendering uses the same dependency-clean interpreter as agents.
         agent_python = container_python(strict_blackbox)
-        mcp_python = STRICT_BLACKBOX_MCP_PYTHON if strict_blackbox else agent_python
+        mcp_python = agent_python
         agent_cmd = backend.build_cli_cmd(
             config,
             mcp_python_cmd=mcp_python,
@@ -372,6 +372,7 @@ async def run_agent_in_apptainer_sandbox(
             mcp_transport="http",
             mcp_port=mcp_port,
         )
+        agent_cmd, client_env = _model_client(backend_name, agent_cmd)
         # Start and health-check the render server before the CLI (same wrapper
         # as docker) so its tools are connected on the agent's first turn.
         if config.mcp_tools:
@@ -381,7 +382,7 @@ async def run_agent_in_apptainer_sandbox(
 
         # Persist the CLI session store under the sandbox dir (survives the
         # ephemeral container) so a rate-limited run can be resumed via
-        # --continue in a fresh retry container. Claude only.
+        # the backend resume command in a fresh retry container.
         session_binds: list[str] = []
         if backend_name == "claude":
             sessions_dir = sandbox_claude_session_store(config.sandbox_dir)
@@ -408,10 +409,13 @@ async def run_agent_in_apptainer_sandbox(
                 if filtered_kinder_baselines is not None
                 else None
             ),
-            auth_args=auth_args,
-            firewall_domains=firewall_domains,
-            agent_cmd=agent_cmd,
-            extra_binds=session_binds + tel_binds,
+            agent_cmd=[
+                agent_python,
+                f"{BROKER_DIR}/transport.py",
+                f"{BROKER_DIR}/transport.json",
+                *agent_cmd,
+            ],
+            extra_binds=session_binds + tel_binds + transport_binds,
         )
 
         backend.setup_sandbox_files(
@@ -421,7 +425,8 @@ async def run_agent_in_apptainer_sandbox(
         )
         _initial_commit(config.sandbox_dir)
 
-        env = backend.build_env(config, auth_env if auth_env else None)
+        env = clean_apptainer_env()
+        env.update(client_env)
         env.update(tel_env)
 
         logger.info(
@@ -445,12 +450,18 @@ async def run_agent_in_apptainer_sandbox(
                 stdout=subprocess.PIPE,
                 stderr=stderr_file,
                 text=True,
+                # Claude stops capped runs via killpg(proc.pid); own the group.
+                start_new_session=True,
             )
 
             stream = backend.parse_stream(
                 proc,
                 stream_log_path=config.sandbox_dir.parent / "stream.jsonl",
                 stderr_file=stderr_file,
+            )
+            stderr_file.seek(0)
+            (config.sandbox_dir.parent / "container.stderr").write_text(
+                stderr_file.read(), encoding="utf-8"
             )
         wall_time_s = time.monotonic() - wall_start
 
@@ -469,95 +480,4 @@ async def run_agent_in_apptainer_sandbox(
             config.sandbox_dir,
             config.output_filename,
             wall_time_s=wall_time_s,
-        )
-
-
-def run_genplan_in_apptainer(
-    sandbox_dir: Path,
-    completion_cfg: dict[str, Any],
-    sif_path: Path = _DEFAULT_SIF,
-    timeout: float = GENPLAN_CONTAINER_TIMEOUT_S,
-    include_bilevel: bool = False,
-) -> None:
-    """Apptainer analog of :func:`docker_sandbox.run_genplan_in_docker`.
-
-    Mirrors the docker function: runs the whole LLM-GenPlan loop inside one
-    sandbox container via the genplan driver, which reads
-    ``sandbox_dir/genplan_config.json`` and writes ``sandbox_dir/approach.py``
-    and ``sandbox_dir/cost.json``. Keeps ``primitives`` in the source mount so
-    the policy can build/use them as eval does on the host. With *include_bilevel*
-    (the genplan config requested ``bilevel_models``), the kinder-baselines source
-    is mounted and ``uv sync --extra bilevel`` runs so the models are importable.
-    """
-    if not sif_path.exists():
-        raise RuntimeError(
-            f"SIF image not found at {sif_path}; build it with: bash docker/build_sif.sh"
-        )
-    run_id = f"apptainer-genplan-{uuid.uuid4().hex[:8]}"
-    auth_backend = "claude" if completion_cfg["provider"] == "cli" else "opencode"
-    with (
-        _filtered_repo_mounts(
-            keep_primitives=True, include_bilevel=include_bilevel
-        ) as (
-            filtered_src,
-            filtered_kindergarden,
-            filtered_kinder_baselines,
-            ss_pybullet,
-        ),
-        _build_apptainer_auth_args(auth_backend) as (auth_args, auth_env),
-    ):
-        firewall_domains = firewall_domains_for_provider(
-            completion_cfg["provider"], completion_cfg.get("base_url", "")
-        )
-        firewall_env: list[str] = []
-        if firewall_domains:
-            firewall_env = [
-                "--env",
-                f"ROBOCODE_FIREWALL_EXTRA_DOMAINS={','.join(firewall_domains)}",
-            ]
-        # With bilevel_models, mount the kinder-baselines path deps and tell the
-        # entrypoint to `uv sync --extra bilevel` (mirrors _docker_run_prefix).
-        bilevel_env: list[str] = []
-        bilevel_bind: list[str] = []
-        ss_pybullet_bind: list[str] = []
-        if ss_pybullet is not None:
-            ss_pybullet_bind = [
-                "--bind",
-                f"{ss_pybullet.resolve()}:/robocode/third-party/ss-pybullet:ro",
-            ]
-        if filtered_kinder_baselines is not None:
-            bilevel_env = ["--env", "ROBOCODE_UV_EXTRA_ARGS=--extra bilevel"]
-            bilevel_bind = [
-                "--bind",
-                f"{filtered_kinder_baselines.resolve()}"
-                ":/robocode/third-party/kinder-baselines",
-            ]
-        apptainer_cmd = [
-            *_apptainer_exec_prefix(),
-            "--env",
-            "ROBOCODE_SKIP_FIREWALL=1",
-            *firewall_env,
-            *bilevel_env,
-            *auth_args,
-            "--bind",
-            f"{sandbox_dir.resolve()}:/sandbox",
-            "--bind",
-            f"{filtered_src.resolve()}:/robocode/src",
-            "--bind",
-            f"{filtered_kindergarden.resolve()}:/robocode/third-party/kindergarden",
-            *ss_pybullet_bind,
-            *bilevel_bind,
-            str(sif_path),
-            "/usr/local/bin/entrypoint.sh",
-            APPTAINER_PYTHON,
-            "-m",
-            "robocode.approaches.genplan_driver",
-        ]
-        logger.info("Starting genplan Apptainer run %s sif=%s", run_id, sif_path)
-        subprocess.run(
-            apptainer_cmd,
-            env={**os.environ, **auth_env},
-            stdin=subprocess.DEVNULL,
-            check=True,
-            timeout=timeout,
         )

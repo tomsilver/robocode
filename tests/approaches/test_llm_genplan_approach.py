@@ -600,3 +600,19 @@ def test_generalized_source_includes_underlying_mechanics(module_name, class_nam
             assert Path(path).read_text(encoding="utf-8") in source
     finally:
         env.close()
+
+
+def test_apptainer_rejected_before_generation(tmp_path):
+    """An unsupported transport is a configuration error, never a host fallback."""
+    env = _ToyEnv()
+    with pytest.raises(ValueError, match="does not support the isolated Apptainer"):
+        LLMGenPlanApproach(
+            action_space=env.action_space,
+            observation_space=env.observation_space,
+            seed=0,
+            primitives={},
+            completion=DictConfig({"provider": "cli"}),
+            container_backend="apptainer",
+            output_dir=str(tmp_path),
+        )
+    assert not list(tmp_path.iterdir())

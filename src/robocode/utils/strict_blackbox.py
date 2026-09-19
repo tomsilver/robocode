@@ -37,7 +37,6 @@ _FORBIDDEN_MODULES: frozenset[str] = _DYNAMIC_IMPORT_MODULES | {"env_client"}
 
 STRICT_BLACKBOX_IMAGE = "robocode-strict-blackbox"
 STRICT_BLACKBOX_PYTHON = "/opt/robocode-strict/bin/python"
-STRICT_BLACKBOX_MCP_PYTHON = "/opt/robocode-mcp/bin/python"
 
 
 class StrictImportError(ValueError):
@@ -60,10 +59,13 @@ def module_locations(module: ModuleType) -> list[Path]:
     Empty for built-in and other location-less modules.
     """
     locations: list[Path] = []
-    module_file = getattr(module, "__file__", None)
+    # Read stored import metadata without triggering module-level __getattr__.
+    # Lazy modules such as torch.classes fabricate objects for missing names.
+    namespace = vars(module) if module is not None else {}
+    module_file = namespace.get("__file__")
     if module_file is not None:
         locations.append(Path(module_file))
-    locations.extend(Path(str(entry)) for entry in getattr(module, "__path__", ()))
+    locations.extend(Path(str(entry)) for entry in namespace.get("__path__", ()))
     return [location.resolve() for location in locations]
 
 
