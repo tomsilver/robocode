@@ -83,7 +83,9 @@ class _Type:
         return hash(self.name)
 
     def __repr__(self) -> str:
-        return f"Type({self.name})"
+        # Match relational_structs.Type's dataclass repr, including name quoting.
+        # Policies must see the same strings during synthesis and evaluation.
+        return f"Type(name={self.name!r})"
 
 
 class _Object:
