@@ -818,6 +818,11 @@ class TestProviderUtils:
 
     def test_firewall_domains_for_known_providers(self) -> None:
         """Known providers return their API domains."""
+        assert firewall_domains_for_provider("codex") == [
+            "api.openai.com",
+            "chatgpt.com",
+            "ab.chatgpt.com",
+        ]
         assert firewall_domains_for_provider("openai") == ["api.openai.com"]
         assert firewall_domains_for_provider("anthropic") == ["api.anthropic.com"]
         assert firewall_domains_for_provider("google") == [

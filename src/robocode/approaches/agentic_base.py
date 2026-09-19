@@ -18,6 +18,7 @@ import logging
 import sys
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -334,6 +335,8 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                         ),
                         strict=self._blackbox_strict,
                     )
+                if self._blackbox and apptainer_config is not None:
+                    apptainer_config = replace(apptainer_config, env_server_port=port)
                 result = run_with_rate_limit_retry(
                     docker_config,
                     config,

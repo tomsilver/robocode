@@ -13,8 +13,7 @@ max_debug_attempts: 4  # step cap: 1 initial attempt + this many debug attempts
 max_budget_usd: 20.0  # dollar cap; only bounds cost-reporting backends (null -> step cap only)
 chain_of_thought: true  # summary -> strategy -> code; false: single prompt -> code
 # The per-episode validation timeout is the shared top-level eval_timeout.
-# Run the whole genplan loop inside one sandbox container (like the agentic
-# approach), so generated code never executes on the host. local runs in-process.
-container_backend: docker  # docker | apptainer | local
+# Run generation and debugging in Docker. Final scoring still loads the policy
+# on the host; local also runs generation in-process.
+container_backend: docker  # docker | local; Apptainer transport is unsupported
 docker_image: robocode-sandbox
-sif_path: null  # null -> <repo_root>/robocode-sandbox.sif
