@@ -30,13 +30,13 @@ if [ "$(id -u)" -eq 0 ]; then
     HOME=/home/node USER=node LOGNAME=node \
         "${run_as_node[@]}" uv sync --frozen --python python3.11 "${uv_extra_args[@]}"
 else
-    # Unprivileged Apptainer runs preserve the host UID.
+    # Preserve non-root invocation behavior when firewall setup is explicitly skipped.
     uv sync --frozen --python python3.11 "${uv_extra_args[@]}"
 fi
 cd /sandbox
 
-# Skipped under unprivileged Apptainer, which cannot grant CAP_NET_ADMIN;
-# ROBOCODE_SKIP_FIREWALL=1 is set by apptainer_sandbox.py.
+# Docker firewall setup. Preserve the existing explicit skip override.
+# Apptainer does not invoke this entrypoint; it uses a disconnected namespace.
 if [ "${ROBOCODE_SKIP_FIREWALL:-0}" = "1" ]; then
     echo "entrypoint: ROBOCODE_SKIP_FIREWALL=1, skipping firewall init" >&2
 else

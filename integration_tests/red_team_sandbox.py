@@ -858,6 +858,11 @@ async def _run_agent(
     """Run the agent using Apptainer, Docker, or OS-level sandboxing."""
     if use_apptainer:
         apptainer_config = ApptainerSandboxConfig(
+            env_server_port=(
+                json.loads((SANDBOX_DIR / "env_spaces.json").read_text())["port"]
+                if blackbox and (SANDBOX_DIR / "env_spaces.json").exists()
+                else None
+            ),
             sandbox_dir=SANDBOX_DIR,
             prompt=prompt,
             output_filename="output.txt",
@@ -1622,9 +1627,8 @@ async def _run_firewall_reinit() -> None:
 def _apptainer_firewall_reinit_probe() -> subprocess.CompletedProcess[str]:
     """Try to initialize the firewall from the normal Apptainer agent process.
 
-    Apptainer intentionally skips firewall initialization and shares the host network
-    namespace. Unlike the Docker probe, this cannot assert that outbound traffic is
-    blocked. It instead verifies the relevant privilege boundary: the non-fakeroot agent
+    Apptainer uses a disconnected network namespace instead of iptables. This probe
+    verifies the privilege boundary separately from the network audit: the agent
     cannot regain UID 0, use iptables, or invoke the firewall script successfully.
     """
     script = r"""
@@ -1675,8 +1679,6 @@ fi
             src_abs=str(src.resolve()),
             kindergarden_abs=str(kindergarden.resolve()),
             kinder_baselines_abs=None,
-            auth_args=[],
-            firewall_domains=[],
             agent_cmd=["bash", "-c", script],
         )
         return subprocess.run(
@@ -1836,8 +1838,6 @@ def _sandbox_launcher(backend: str) -> Iterator[Callable[[Path, str], list[str]]
                     src_abs=str(src.resolve()),
                     kindergarden_abs=str(kindergarden.resolve()),
                     kinder_baselines_abs=None,
-                    auth_args=[],
-                    firewall_domains=[],
                     agent_cmd=["bash", "-c", script],
                 )
             return _docker_run_prefix(
