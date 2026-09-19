@@ -31,7 +31,6 @@ from robocode.utils.docker_sandbox import (
     _find_repo_root,
 )
 from robocode.utils.strict_blackbox import (
-    STRICT_BLACKBOX_MCP_PYTHON,
     STRICT_BLACKBOX_PYTHON,
 )
 
@@ -102,7 +101,7 @@ class _Launched(Exception):
     """Raised by the fake launcher once the command line has been captured."""
 
 
-def test_strict_run_wires_separate_interpreters(  # type: ignore
+def test_strict_run_uses_only_clean_interpreter(  # type: ignore
     tmp_path: Path, monkeypatch
 ) -> None:
     """The agent's scripts use the strict venv and the render proxy its own."""
@@ -147,7 +146,10 @@ def test_strict_run_wires_separate_interpreters(  # type: ignore
     assert f"{STRICT_BLACKBOX_PYTHON} -c" in joined
     assert STRICT_BLACKBOX_PYTHON in (sandbox_dir / "CLAUDE.md").read_text()
     start_script = (sandbox_dir / ".mcp" / MCP_START_SCRIPT).read_text()
-    assert f"{STRICT_BLACKBOX_MCP_PYTHON} -m robocode.mcp.server" in start_script
+    assert (
+        f"{STRICT_BLACKBOX_PYTHON} /opt/robocode-render/strict_server.py"
+        in start_script
+    )
     assert APPTAINER_PYTHON not in start_script
 
 
