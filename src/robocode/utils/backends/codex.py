@@ -85,6 +85,12 @@ class CodexBackend(AgentBackend):
             config.model,
             "--config",
             f"model_reasoning_effort={json.dumps(self._reasoning_effort)}",
+            # Disable Codex's hosted web tool. MCP servers are added below only
+            # when the run explicitly requests Robocode MCP tools.
+            "--config",
+            'web_search="disabled"',
+            "--config",
+            "tools.web_search=false",
             "--ignore-user-config",
             "--dangerously-bypass-approvals-and-sandbox",
         ]

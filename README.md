@@ -435,6 +435,13 @@ python integration_tests/red_team_sandbox.py --strict-blackbox  # strict blackbo
 python integration_tests/red_team_sandbox.py --apptainer-strict-blackbox  # Apptainer strict
 ```
 
+Probe whether a real Codex run can recover live Internet content from the strict
+Apptainer sandbox (paid, opt-in; exits nonzero on a leak):
+
+```bash
+uv run python integration_tests/check_agent_internet_access.py
+```
+
 ## Experiments
 
 Set the private evaluation-suite seed in your shell before using any experiment

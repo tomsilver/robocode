@@ -168,6 +168,7 @@ cython_debug/
 CLAUDE.md
 .vscode
 unit_test_artifacts
+internet_access_results/
 
 # Curated collection of runs to browse with experiments/results_viewer.py
 viewer_runs*/

@@ -95,6 +95,8 @@ class TestCodexBackend:
         assert command[-1] == "-"
         assert "write approach.py" not in command
         assert 'model_reasoning_effort="medium"' in command
+        assert 'web_search="disabled"' in command
+        assert "tools.web_search=false" in command
         assert "--ignore-user-config" in command
         assert backend.stdin_text(config) == "write approach.py"
 
