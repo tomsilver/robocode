@@ -329,3 +329,97 @@ def test_codex_session_auth_stays_on_host(tmp_path, monkeypatch):
     assert (upstream.host, upstream.base_path) == ("chatgpt.com", "/backend-api/codex")
     assert upstream.headers["ChatGPT-Account-ID"] == "trusted-account"
     assert "host-session-secret" not in repr(upstream)
+
+
+@pytest.fixture
+def chatgpt_broker(broker, tmp_path):
+    """Serve the ChatGPT transport using the existing fake upstream."""
+    _, requests, response = broker
+    directory = tmp_path / "chatgpt"
+    directory.mkdir()
+    provider = BrokerUpstream(
+        "responses",
+        "api.openai.com",
+        "/v1",
+        {"Authorization": "Bearer host-secret"},
+        chatgpt=True,
+    )
+    with model_broker(directory, provider, directory / "audit.jsonl") as path:
+        yield path, requests, response
+
+
+def test_cache_session_only_forwarded(chatgpt_broker):
+    """Preserve cache affinity without forwarding arbitrary client authority."""
+    address, requests, _ = chatgpt_broker
+    session = "01a0bb44-3526-7a93-bc54-037d443037f0"
+    conn = _UnixHTTP(str(address))
+    conn.request(
+        "POST",
+        "/v1/responses",
+        body=_body(prompt_cache_key=session),
+        headers={
+            "Session-ID": session,
+            "Authorization": "Bearer attacker",
+            "Host": "evil.invalid",
+            "X-Forwarded-Host": "evil.invalid",
+            "thread-id": session,
+            "x-codex-turn-state": "untrusted-opaque",
+        },
+    )
+    assert conn.getresponse().status == 200
+    conn.close()
+    headers = requests[0][3]
+    assert headers["session-id"] == session
+    assert headers["Authorization"] == "Bearer host-secret"
+    assert set(headers) == {"Content-Type", "Accept", "Authorization", "session-id"}
+    assert json.loads(requests[0][2])["prompt_cache_key"] == session
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        "",
+        "https://evil.invalid/",
+        "x" * 8192,
+        "01a0bb4435267a93bc54037d443037f0",
+        "01a0bb44-3526-7a93-bc54-037d443037fz",
+    ],
+)
+def test_invalid_cache_session_denied(chatgpt_broker, session):
+    """Malformed session identifiers fail before contacting the upstream."""
+    address, requests, _ = chatgpt_broker
+    conn = _UnixHTTP(str(address))
+    conn.request("POST", "/v1/responses", body=_body(), headers={"session-id": session})
+    assert conn.getresponse().status == 403
+    conn.close()
+    assert not requests
+
+
+def test_duplicate_cache_session_denied(chatgpt_broker):
+    """Ambiguous duplicate session headers fail closed."""
+    address, requests, _ = chatgpt_broker
+    conn = _UnixHTTP(str(address))
+    body = _body()
+    conn.putrequest("POST", "/v1/responses")
+    conn.putheader("Content-Length", str(len(body)))
+    for _ in range(2):
+        conn.putheader("session-id", "01a0bb44-3526-7a93-bc54-037d443037f0")
+    conn.endheaders(body)
+    assert conn.getresponse().status == 403
+    conn.close()
+    assert not requests
+
+
+def test_api_key_transport_does_not_gain_session_header(broker):
+    """Keep session metadata out of the separate API-key transport."""
+    address, requests, _ = broker
+    conn = _UnixHTTP(str(address))
+    conn.request(
+        "POST",
+        "/v1/responses",
+        body=_body(),
+        headers={"session-id": "01a0bb44-3526-7a93-bc54-037d443037f0"},
+    )
+    assert conn.getresponse().status == 200
+    conn.close()
+    assert "session-id" not in requests[0][3]

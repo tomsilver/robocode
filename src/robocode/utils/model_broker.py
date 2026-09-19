@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from robocode.utils.backends import (
     ANTHROPIC_API_HOST,
@@ -420,6 +421,18 @@ class _Handler(BaseHTTPRequestHandler):
                 raise BrokerPolicyError("incomplete body")
             provider = self.server.provider
             data = validate_request(provider.protocol, self.path, raw)
+            # Codex's ChatGPT upstream uses this stable session identifier for
+            # cache affinity. Never forward arbitrary client headers or URLs.
+            session_headers: dict[str, str] = {}
+            session_ids = self.headers.get_all("session-id", [])
+            if provider.chatgpt and session_ids:
+                if (
+                    len(session_ids) != 1
+                    or len(session_ids[0]) != 36
+                    or str(UUID(session_ids[0])) != session_ids[0].lower()
+                ):
+                    raise BrokerPolicyError("single UUID session-id required")
+                session_headers["session-id"] = session_ids[0]
             # The ChatGPT Codex endpoint only accepts streaming, unstored inference.
             if provider.protocol == "responses":
                 data["store"] = False
@@ -440,6 +453,7 @@ class _Handler(BaseHTTPRequestHandler):
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
             **provider.headers,
+            **session_headers,
         }
         conn = http.client.HTTPSConnection(
             provider.host, timeout=120, context=ssl.create_default_context()
