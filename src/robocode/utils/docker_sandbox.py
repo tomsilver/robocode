@@ -501,6 +501,8 @@ def _copy_src(
         skip = ("oracles", "primitives", "primitive_descriptions.py", "approaches")
     if blackbox:
         skip += ("environments",)
+    # Bytecode retains the same withheld source strings even after .py is omitted.
+    skip += ("__pycache__", "*.pyc", "*.pyo")
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
     if "approaches" in skip:
         approaches = dest / "robocode" / "approaches"
