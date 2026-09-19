@@ -169,11 +169,11 @@ def test_sandbox_type_strings_match_native_state_and_space(name: str) -> None:
     assert repr(local_space.get_type(name)) == repr(typ)
     assert repr(local_type.parent) == repr(parent)
 
-    # This exact parsing pattern appeared in a saved Rovers policy. Previously
+    # This parsing behavior appeared in a saved Rovers policy. Previously
     # it produced different keys in the sandbox and evaluator, hiding a failure
     # during synthesis. Even brittle string parsing must see identical inputs.
     def parsed_keys(space: Any) -> set[str]:
-        return {str(t).split("(")[-1].rstrip(")") for t in space.types}
+        return {str(t).rsplit("(", maxsplit=1)[-1].rstrip(")") for t in space.types}
 
     assert parsed_keys(local_space) == parsed_keys(native_space)
 
