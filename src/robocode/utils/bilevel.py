@@ -31,7 +31,8 @@ class BilevelFamily:
     # Object-count kwarg of that module's create_bilevel_planning_models. It can
     # differ from the env's own count kwarg (Transport3D takes num_cubes, its model
     # num_objects).
-    count_kwarg: str
+    # None when the model has no object-count parameter (e.g. BaseMotion3D).
+    count_kwarg: str | None
 
 
 _FAMILIES: tuple[BilevelFamily, ...] = (
@@ -104,19 +105,21 @@ _FAMILIES: tuple[BilevelFamily, ...] = (
     ),
     # Single registered variant (five cubes), so no count-taking class.
     BilevelFamily("SweepIntoDrawer3D", None, "tidybot3d_sweep3D", "num_objects"),
+    BilevelFamily("BaseMotion3D", None, "base_motion3d", None),
 )
 _BY_ID_FAMILY = {family.id_family: family for family in _FAMILIES}
 _BY_ENV_PATH = {family.env_path: family for family in _FAMILIES if family.env_path}
 _BY_NAME = {family.bilevel_env_name: family for family in _FAMILIES}
 
-# e.g. "kinder/Obstruction2D-o2-v0" -> family="Obstruction2D", count=2.
-_ENV_ID_RE = re.compile(r"kinder/([A-Za-z0-9]+)-[a-z](\d+)-v\d+")
+# The count suffix is absent for fixed-size families such as BaseMotion3D.
+_ENV_ID_RE = re.compile(r"kinder/([A-Za-z0-9]+)(?:-[a-z](\d+))?-v\d+")
 
 
 def infer_bilevel_mapping(env_id: str) -> tuple[str | None, dict[str, int]]:
     """Infer ``(bilevel_env_name, model_kwargs)`` from a kinder env id.
 
     e.g. ``"kinder/Obstruction2D-o2-v0" -> ("obstruction2d", {"num_obstructions": 2})``.
+    Fixed-size families such as ``"kinder/BaseMotion3D-v0"`` use empty kwargs.
     Returns ``(None, {})`` for env ids that have no bilevel planning model (e.g.
     Obstruction3D, Packing3D, pushpullhook, mazes). Used as a fallback so a plain
     ``KinderGeom2DEnv``/``KinderGeom3DEnv`` (e.g. one the agent builds to test) can use
@@ -129,7 +132,12 @@ def infer_bilevel_mapping(env_id: str) -> tuple[str | None, dict[str, int]]:
     family = _BY_ID_FAMILY.get(match.group(1))
     if family is None:
         return None, {}
-    return family.bilevel_env_name, {family.count_kwarg: int(match.group(2))}
+    count = match.group(2)
+    if family.count_kwarg is None:
+        return (family.bilevel_env_name, {}) if count is None else (None, {})
+    if count is None:
+        return None, {}
+    return family.bilevel_env_name, {family.count_kwarg: int(count)}
 
 
 def infer_bilevel_env_name_from_path(env_path: str) -> str | None:
@@ -146,6 +154,9 @@ def bilevel_count_kwarg(bilevel_env_name: str) -> str:
         f"{bilevel_env_name!r} is not a known bilevel env family; add it to "
         "robocode.utils.bilevel._FAMILIES"
     )
+    assert (
+        family.count_kwarg is not None
+    ), f"{bilevel_env_name!r} has no object-count parameter"
     return family.count_kwarg
 
 
