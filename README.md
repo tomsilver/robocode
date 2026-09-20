@@ -84,7 +84,7 @@ python experiments/run_experiment.py approach=agentic \
     replicate_seed=0 eval_seed="$EVAL_SEED"
 ```
 
-With login-file authentication, Docker and Apptainer copy only `auth.json` into a throwaway Codex home. Host `config.toml`, `AGENTS.md`, skills, and session history are not mounted. Each fresh experiment starts with an empty sandbox-local session directory; only an automatic retry of that same experiment can resume it.
+With login-file authentication, Docker copies only `auth.json` into a throwaway Codex home. Apptainer keeps authentication on the host in its inference broker and mounts no real credentials. Neither mounts host `config.toml`, `AGENTS.md`, skills, or session history. Each fresh experiment starts with an empty sandbox-local session directory; only an automatic retry of that same experiment can resume it.
 
 #### OpenCode (multi-provider)
 
@@ -379,7 +379,7 @@ The agent runs inside a Docker container (`robocode-sandbox`) that provides full
 | Network | `init-firewall.sh` whitelists API endpoints for the configured provider (Anthropic, OpenAI, Google, etc.), GitHub IPs, and telemetry; blocks everything else via iptables. Extra domains are passed via `ROBOCODE_FIREWALL_EXTRA_DOMAINS`. |
 | Write hook | Claude backend: `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox`. Codex and OpenCode rely on the enclosing Docker filesystem boundary. |
 
-The Apptainer backend (`container_backend=apptainer`, for HPC clusters with no Docker daemon) keeps the same filesystem isolation but has **no network firewall**: unprivileged Apptainer cannot grant `CAP_NET_ADMIN`, so `init-firewall.sh` is skipped and generated code runs with unrestricted network egress. Use Docker where the iptables allowlist matters.
+The Apptainer backend (`container_backend=apptainer`, for HPC clusters without Docker) now runs Codex and Claude in a disconnected network namespace (`--userns --net --network none`). A host broker permits validated model inference, and a separate relay reaches only the experiment environment server. Agent processes cannot use general internet access, and provider credentials stay outside the container. See [setup and isolation boundaries](docs/apptainer-network-isolation.md). Unsupported Apptainer backends and GenPlan fail closed.
 
 ### What the agent sees
 

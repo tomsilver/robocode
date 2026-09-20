@@ -16,6 +16,7 @@ from robocode.utils.bilevel import (
 )
 
 _ID_CASES = [
+    ("kinder/BaseMotion3D-v0", "base_motion3d", {}),
     ("kinder/DynObstruction2D-o2-v0", "dynobstruction2d", {"num_obstructions": 2}),
     ("kinder/DynPushPullHook2D-o5-v0", "dynpushpullhook2d", {"num_obstructions": 5}),
     ("kinder/Transport3D-o2-v0", "transport3d", {"num_objects": 2}),
@@ -64,6 +65,31 @@ def test_count_kwarg_differs_from_env_kwarg_for_kinematic3d() -> None:
     assert bilevel_count_kwarg("obstruction2d") == "num_obstructions"
     with pytest.raises(AssertionError, match="not a known bilevel env family"):
         bilevel_count_kwarg("packing3d")
+    with pytest.raises(AssertionError, match="no object-count parameter"):
+        bilevel_count_kwarg("base_motion3d")
+
+
+@pytest.mark.parametrize(
+    "env_id", ["kinder/BaseMotion3D-o2-v0", "kinder/Transport3D-v0"]
+)
+def test_count_suffix_must_match_family(env_id: str) -> None:
+    """Do not infer models for unsupported count variants or missing counts."""
+    assert infer_bilevel_mapping(env_id) == (None, {})
+
+
+def test_basemotion3d_infers_mapping_and_builds_models() -> None:
+    """The count-free BaseMotion ID yields models that accept its observation."""
+    env = KinderGeom3DEnv("kinder/BaseMotion3D-v0")
+    try:
+        assert env.bilevel_env_name == "base_motion3d"
+        assert env.bilevel_env_model_kwargs == {}
+        models = build_sesame_models(env)
+        assert models.skills
+        obs, _ = env.reset(seed=0)
+        state = models.observation_to_state(obs)
+        assert models.state_abstractor(state) is not None
+    finally:
+        env.close()
 
 
 def test_kinder_geom3d_env_infers_mapping_and_builds_models() -> None:

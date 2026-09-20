@@ -180,3 +180,8 @@ ref/
 # pddlstream writes its FastDownward scratch files into the working directory.
 temp/
 statistics/
+
+# Network isolation audit logs and downloaded test artifacts.
+network_audit_results/
+
+.apptainer-env-cache/

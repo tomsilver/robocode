@@ -80,7 +80,6 @@ from robocode.utils.sandbox import (
 )
 from robocode.utils.strict_blackbox import (
     STRICT_BLACKBOX_IMAGE,
-    STRICT_BLACKBOX_MCP_PYTHON,
     STRICT_BLACKBOX_PYTHON,
 )
 from robocode.utils.telemetry import container_launch
@@ -501,6 +500,8 @@ def _copy_src(
         skip = ("oracles", "primitives", "primitive_descriptions.py", "approaches")
     if blackbox:
         skip += ("environments",)
+    # Bytecode retains the same withheld source strings even after .py is omitted.
+    skip += ("__pycache__", "*.pyc", "*.pyo")
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns(*skip))
     if "approaches" in skip:
         approaches = dest / "robocode" / "approaches"
@@ -725,7 +726,7 @@ async def run_agent_in_docker_sandbox(
             env_server_port = int(metadata["port"])
         docker_image = STRICT_BLACKBOX_IMAGE if strict_blackbox else config.docker_image
         docker_python = container_python(strict_blackbox)
-        mcp_python = STRICT_BLACKBOX_MCP_PYTHON if strict_blackbox else docker_python
+        mcp_python = docker_python
         docker_cmd = _docker_run_prefix(
             container_name,
             docker_image,

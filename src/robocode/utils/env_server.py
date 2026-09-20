@@ -234,8 +234,10 @@ def write_env_spaces(
     """Write ``env_spaces.json``, the metadata the sandbox's env_client reads.
 
     The host is ``host.docker.internal`` for Docker (mapped to the host
-    gateway via ``--add-host``) and ``127.0.0.1`` for the apptainer and local
-    backends, which share the host's loopback. *primitives_manifest* (from
+    gateway via ``--add-host``) and ``127.0.0.1`` for local and Apptainer. Local
+    uses host loopback directly; Apptainer rewrites the port to its private
+    loopback relay using the explicit trusted ``env_server_port`` config.
+    *primitives_manifest* (from
     :func:`robocode.primitives.blackbox_primitive_manifest`) tells the sandbox
     how to rebuild the eval-time primitives; the caller passes it rather than
     this module importing the primitives package, keeping the host process
