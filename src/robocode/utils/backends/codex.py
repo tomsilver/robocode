@@ -380,6 +380,8 @@ class CodexBackend(AgentBackend):
         if stream_log:
             stream_log.close()
         stderr = read_stderr(proc, stderr_file)
+        if proc.returncode and accounting_error and stderr:
+            error_text = f"{error_text}; stderr: {stderr[:1000]}"
         if proc.returncode and not is_error:
             is_error = True
             error_text = stderr[:1000] or f"Process exited with {proc.returncode}"

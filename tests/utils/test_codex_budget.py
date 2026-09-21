@@ -164,6 +164,19 @@ def test_missing_or_invalid_ledger_fails_closed(tmp_path, contents):
     assert not result.unconfirmed_solution
 
 
+def test_startup_failure_preserves_stderr_without_usage(tmp_path):
+    """Report the startup cause while still rejecting missing accounting."""
+    backend, _ = setup(tmp_path)
+    proc = process()
+    proc.returncode = 1
+    proc.stderr.read.return_value = "render MCP server did not bind port 8765"
+    result = backend.parse_stream(proc)
+    assert result.stop_reason == "error_budget_accounting"
+    assert result.total_cost is None
+    assert "No authoritative token_usage_record" in result.error_text
+    assert "render MCP server did not bind port 8765" in result.error_text
+
+
 def test_no_usage_timeout_kills_instead_of_running_unmetered(tmp_path):
     """An invocation without timely authoritative usage is stopped."""
     backend, _ = setup(tmp_path, usage_start_timeout_s=0)
