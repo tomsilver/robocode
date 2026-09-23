@@ -1,4 +1,4 @@
-# Generic coding image for the strict blackbox ablation.
+# Generic coding image for the paper's strict black-box setting.
 #
 # Deliberately never copies project metadata, environment/KinDER/simulator code,
 # or robotics/geometry packages. Generated programs use only Python's standard

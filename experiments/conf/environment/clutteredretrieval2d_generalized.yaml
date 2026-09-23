@@ -1,7 +1,7 @@
 # ClutteredRetrieval2D with a variable object count. This is the strongest
 # degradation curve: the number of obstructions scales up to 25, where the bilevel
 # planner's per-instance search slows down and then fails, while one generated
-# program should keep working. Design counts are small; held-out counts go far
+# program should keep working. Unpinned-reset counts are small; evaluation counts go far
 # beyond them.
 _target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
 constant_object_env_path: kinder.envs.kinematic2d.clutteredretrieval2d:ClutteredRetrieval2DEnv

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Historical/preliminary launcher, not the current paper protocol.
+# See docs/preliminary-experiments.md before adapting paths and settings.
 # Run the launch.json "Record Approach History" config from the command line
 set -e
 : "${EVAL_SEED:?Set EVAL_SEED to the private evaluation-suite seed}"

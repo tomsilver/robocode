@@ -1,4 +1,6 @@
 #!/bin/bash
+# Historical/preliminary launcher, not the current paper protocol.
+# See docs/preliminary-experiments.md before adapting paths and settings.
 # Re-run evaluation for all runs missing results.json using approach.load_dir
 set -e
 : "${EVAL_SEED:?Set EVAL_SEED to the private evaluation-suite seed}"

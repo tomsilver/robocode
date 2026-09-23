@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Historical/preliminary launcher, not the current paper protocol.
+# See docs/preliminary-experiments.md before adapting paths and settings.
 set -euo pipefail
 : "${EVAL_SEED:?Set EVAL_SEED to the private evaluation-suite seed}"
 

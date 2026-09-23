@@ -10,7 +10,7 @@
 #   bash docker/build_strict_blackbox_sif.sh
 #
 # Rebuild when the strict Dockerfile, its entrypoint, or the copied MCP proxy
-# sources change: unlike the regular image, nothing is bind-mounted at runtime.
+# sources change: strict images do not bind-mount project source at runtime.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

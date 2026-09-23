@@ -1,6 +1,6 @@
 # ClutteredStorage2D with a variable object count. The number of blocks must be
 # ODD (the family splits them between the shelf and the outside), so all configured
-# counts are odd. Design counts are small; held-out counts (11, 15) are larger.
+# counts are odd. Unpinned resets use the smaller counts; evaluation also includes 11 and 15.
 _target_: robocode.environments.variable_object_count_env.VariableObjectCountEnv
 constant_object_env_path: kinder.envs.kinematic2d.clutteredstorage2d:ClutteredStorage2DEnv
 count_kwarg: num_blocks

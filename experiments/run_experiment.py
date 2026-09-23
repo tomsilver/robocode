@@ -1,28 +1,9 @@
 """Run an experiment with a given approach and environment.
 
-Example usage:
-
-    python experiments/run_experiment.py approach=agentic environment=motion2d_easy \
-        eval_seed="$EVAL_SEED"
-    python experiments/run_experiment.py approach=agentic \
-        approach.container_backend=docker primitive_level=none \
-        environment=motion2d_easy eval_seed="$EVAL_SEED"
-
-The sandbox backend is selected with approach.container_backend=docker|apptainer|local
-(default docker for agentic and llm_genplan; local runs unsandboxed in-process).
-
-Parallel sweep with joblib launcher:
-
-    python experiments/run_experiment.py -m \
-        approach=agentic \
-        approach.container_backend=docker \
-        replicate_seed=42,24,424,444,222 \
-        eval_seed="$EVAL_SEED" \
-        primitive_level=none \
-        environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy \
-        'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
-        'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
-        hydra/launcher=joblib hydra.launcher.n_jobs=4
+See README.md for the paper's strict-black-box commands, five-replicate sweeps, planner
+settings, and reevaluation. The runner rejects the legacy local transport for generated-
+code experiments. Docker supports agentic and LLMGenPlan runs; isolated Apptainer
+supports Claude/Codex agentic runs.
 """
 
 import json
@@ -170,8 +151,9 @@ def _main(cfg: DictConfig) -> float:
 
     # A variable-count env sweeps its configured object counts evenly across the eval
     # set, so program and planner face the same (seed, count) instances and a
-    # solve-rate-vs-count curve can be reported. Held-out counts reach the env only
-    # here, pinned per episode; unpinned resets stay in the design range.
+    # solve-rate-vs-count curve can be reported. Unpinned resets sample
+    # design_counts; explicit reset options can request other counts during
+    # synthesis too, so the configured split is not evidence of non-exposure.
     eval_counts: list[int] | None = None
     if isinstance(env, VariableCountEnv):
         count_pool = list(env.eval_counts)

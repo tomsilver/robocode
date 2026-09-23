@@ -47,7 +47,7 @@ class KinderGeom3DEnv(BaseEnv[NDArray[Any], NDArray[Any]]):
         # (or True) loads a realistic room with floor/wall textures. It only
         # applies to dynamic3d envs, so it is only forwarded when set. The
         # mimiclabs assets are gitignored and must be fetched once via
-        # third-party/kindergarden/scripts/download_mimiclabs_assets.py (README).
+        # third-party/kindergarden/scripts/download_mimiclabs_assets.py (docs/preliminary-experiments.md).
         make_kwargs: dict[str, Any] = {}
         if scene_bg is not None:
             make_kwargs["scene_bg"] = scene_bg

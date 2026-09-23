@@ -42,8 +42,8 @@ bilevel = [
     "kinder_bilevel_planning",
     "kinder_models",
 ]
-# PDDLStream baseline on the kinder families that ship a PDDLStream domain
-# (Packing3D). pddlstream is the PRPL packaged fork, whose install compiles
+# PDDLStream baseline for KinDER Packing3D and the PR2 Packing/Blocked and Rovers
+# adapters. pddlstream is the PRPL packaged fork, whose install compiles
 # FastDownward (needs make and a C++ compiler). Host only; never in the sandbox.
 pddlstream = [
     "kinder_pddlstream_planning",
