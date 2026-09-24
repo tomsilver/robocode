@@ -2,6 +2,21 @@
 
 These paths remain in the repository for future experiments and development. **They are not used in the current paper**, except where this guide explicitly links to a paper method. This is an inventory of implemented/configured paths, not a claim that every provider/model or optional dependency has been rerun recently. Installation and the main paper protocol are in the [README](../README.md).
 
+## Non-strict black box
+
+Early experiments used **non-strict (legacy) black box**: environment source was withheld, but the agent could still use installed robotics/geometry libraries and environment helpers. The paper uses **strict black box** to study programs built from simulator interaction without that additional scaffolding.
+
+| | Non-strict black box (preliminary) | Strict black box (paper) |
+| --- | --- | --- |
+| Access flags | `approach.blackbox=true approach.blackbox_strict=false` | `approach.blackbox=true approach.blackbox_strict=true` |
+| Environment source | Withheld | Withheld |
+| Program dependencies | Installed libraries remain available | Python standard library, NumPy, SciPy |
+| Environment interface | `reset`/`step`, rendering, and helpers such as state access and observation conversion; configured primitives can also be exposed | `reset`/`step` and rendering; no state snapshots, state setting, or helper calls |
+| Injected primitives | Selected by `primitive_level` | `primitive_level=none` |
+| Container image | Regular image (`bash docker/build.sh`) | Strict image (`bash docker/build_strict_blackbox.sh`) |
+
+Setting `primitive_level=none` in non-strict mode only removes injected primitives; it does not remove installed dependencies or restrict the environment interface to the strict surface. To reproduce the paper's black-box condition, use all three strict settings above. See [black-box access and protocol](blackbox.md) for implementation details.
+
 ## Alternative agent backends and models
 
 Use `approach/backend=<preset>` with an agentic approach. The paper presets are `claude_opus5`, `codex_gpt56sol`, and `codex_gpt6`; all other checked-in presets are listed below. A configured model ID is not a guarantee of continuing provider availability.
@@ -58,7 +73,7 @@ The `cli_claude` preset uses the moving `sonnet` alias; the model-specific CLI p
 | `approach=oracle` | Handwritten solvability/reference policies for the choices in [ORACLE_TARGETS](../src/robocode/approaches/oracle_approach.py). These are separate from the paper planner baselines. |
 | `primitive_level=low_level` | Injects `check_action_collision` and `BiRRT`; outside the paper's no-primitives condition. |
 | `primitive_level=bilevel` | Injects benchmark planning models; requires the `bilevel` extra and a supported environment. |
-| `approach.blackbox=true approach.blackbox_strict=false` | Legacy helper-rich black box; retains dependencies/protocol helpers excluded from the main paper setting. |
+| `approach.blackbox=true approach.blackbox_strict=false` | [Non-strict black box](#non-strict-black-box); withholds environment source but retains libraries and helpers. |
 | `approach.geometry_prompt=true` | Optional geometry prompt for compatible agentic approaches. |
 | `approach.modular_code_prompt=true`, `approach.token_budget_prompt=true` | Optional agentic/per-instance prompt variants; leave false for the main commands. |
 

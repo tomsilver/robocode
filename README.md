@@ -288,6 +288,6 @@ Keep the parent run and `impl0_response.txt` as provenance. If an older run lack
 
 ## Preliminary experiments
 
-The repository retains useful paths that are **not used in the current paper**: OpenCode, older/alternative Claude presets, local-model completion backends, CDL, per-instance agentic synthesis, Best-of-K, random and oracle approaches, maze environments, fixed-difficulty variants, kinematic Shelf, injected primitive variants, LIBERO-PRO, and the CaP-X submodule. They remain available for exploration; their presence is not evidence of paper evaluation or a fresh compatibility test against each external provider.
+The repository retains useful paths that are **not used in the current paper**: [non-strict black box](docs/preliminary-experiments.md#non-strict-black-box), OpenCode, older/alternative Claude presets, local-model completion backends, CDL, per-instance agentic synthesis, Best-of-K, random and oracle approaches, maze environments, fixed-difficulty variants, kinematic Shelf, injected primitive variants, LIBERO-PRO, and the CaP-X submodule. They remain available for exploration; their presence is not evidence of paper evaluation or a fresh compatibility test against each external provider.
 
 The [preliminary guide](docs/preliminary-experiments.md) inventories these configurations and preserves their setup instructions, examples, and existing limitations. Paper-analysis notebooks are a separate follow-up release.

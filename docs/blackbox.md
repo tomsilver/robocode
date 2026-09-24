@@ -29,7 +29,8 @@ under Docker or Apptainer. It provides these boundaries:
 paper condition that allows reading the filtered implementation and reusing its
 helpers. **Legacy black box** (`blackbox=true`, `blackbox_strict=false`) withholds
 environment source but retains installed dependencies and configured helpers.
-It is a retained preliminary mode, not the paper's main setting. `AgenticCDLApproach`
+See the [preliminary guide](preliminary-experiments.md#non-strict-black-box) for a
+comparison with strict mode. `AgenticCDLApproach`
 supports this legacy mode but not strict mode.
 
 Build the strict image before a strict run (Docker), or its SIF for the Apptainer
