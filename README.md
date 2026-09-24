@@ -1,30 +1,30 @@
 # Coding Agents for Generalized Task and Motion Planning Problems
 
+![workflow](https://github.com/tomsilver/robocode/actions/workflows/ci.yml/badge.svg)
+
 [Project website and videos](https://agenticgentamp.github.io/) · [Paper](https://agenticgentamp.github.io/assets/paper.pdf) · [Code](https://github.com/tomsilver/robocode)
 
 RoboCode is the experiment code for **AgenticGenPlan**, our study of coding agents for generalized task and motion planning (TAMP). Given a task description and simulator access, an agent probes the environment, writes and tests Python, and returns one program that solves new instances of the task. We freeze that program and evaluate it without further LLM calls.
 
 The main setting is **strict black box**: no environment source, injected primitives, or robotics libraries. Programs use Python's standard library, NumPy, and SciPy; the agent interacts through `reset`/`step` and render tools. Source access is an additional condition. This is a study of off-the-shelf coding agents, with no prescribed symbolic representation or planning algorithm.
 
-The current manuscript compares Claude Code with Opus 5 and Codex with GPT-5.6 Sol and GPT-6 Astra across **28 environments** (25 KinDER, three PDDLStream). Their mean success rates are **74%, 51%, and 86%**, respectively, versus 28% for LLMGenPlan across all environments. Hand-engineered planners average 47% on the 16 environments they cover; the agents average 82%, 56%, and 95% on that same subset. Synthesized programs exploit task regularities to reduce computation as object counts grow, and logs show calibration, edge-case testing, and strategy refinement. Hard dynamic 3D tasks remain challenging. The linked public PDF may lag the manuscript's latest Astra additions.
-
 ## Installation
 
-Use **Python 3.11**, pinned in [.python-version](.python-version) and used by CI and the container images. Run the commands below from the repository root in Bash.
+Use **Python 3.11**. Run the commands below from the repository root in Bash.
 
 ### Host dependencies
 
 | Dependency | When needed |
 | --- | --- |
-| Git and [uv](https://docs.astral.sh/uv/getting-started/installation/) | All installations; uv can provision Python 3.11 |
-| Docker with a running daemon | The Docker synthesis commands below; the current user must be able to run `docker` |
-| Apptainer and Podman | Alternative to Docker for Claude/Codex agentic synthesis; Podman builds the SIF images |
+| Git and [uv](https://docs.astral.sh/uv/getting-started/installation/) | All installations |
+| Docker with a running daemon | Docker synthesis runs |
+| Apptainer and Podman | Alternative to Docker for Claude/Codex agentic synthesis |
 | C/C++ toolchain, `make`, CMake | Planner dependencies, including the FastDownward build |
-| EGL/OpenGL runtime libraries | Headless MuJoCo/PyBullet environments and rendering; on Debian/Ubuntu install `libegl1 libgl1` |
-| Node.js/npm | Host CLI installation commands below; not needed when using only an API key and container-provided CLIs |
-| Host Claude or Codex CLI | Login-based authentication for that backend; agent CLIs are also installed inside the images |
+| EGL/OpenGL runtime libraries | Headless MuJoCo/PyBullet environments and rendering |
+| Node.js/npm | Host CLI installation |
+| Host Claude or Codex CLI | Login-based authentication |
 
-For a Debian/Ubuntu host, install the build tools and libraries used by CI with `sudo apt-get install build-essential cmake liblapack-dev libblas-dev libegl1 libgl1 libglu1-mesa`. Install uv and the selected container runtime separately.
+On Debian/Ubuntu, install the build tools and runtime libraries with `sudo apt-get install build-essential cmake liblapack-dev libblas-dev libegl1 libgl1 libglu1-mesa`.
 
 ```bash
 git clone https://github.com/tomsilver/robocode.git
@@ -34,11 +34,11 @@ uv sync --dev
 source .venv/bin/activate
 ```
 
-This installs the core environment/agent stack. Optional extras in [pyproject.toml](pyproject.toml) are `bilevel`, `pddlstream`, `tracker`, `develop`, and `libero`. The convenience command `bash install.sh` initializes submodules and installs **all extras except `libero`**, including planners, tracker, and development tools; it therefore needs the planner build prerequisites. LIBERO-PRO's Python stack is opt-in even though its submodule is initialized. The stock comparison-only PDDLStream submodule has `update = none` and requires explicit initialization when used.
+This installs the core environment/agent stack. Optional extras in [pyproject.toml](pyproject.toml) are `bilevel`, `pddlstream`, `tracker`, `develop`, and `libero`. Alternatively, `bash install.sh` initializes submodules and installs **all extras except `libero`**, including planners, tracker, and development tools.
 
 ### Authentication and images
 
-For login-based authentication, install the selected CLI on the host (the Codex version below matches the container build):
+For login-based authentication, install the selected CLI on the host:
 
 ```bash
 # Choose the backend(s) you will use:
@@ -46,9 +46,9 @@ npm install -g @anthropic-ai/claude-code
 npm install -g @openai/codex@0.153.4
 ```
 
-For Claude, authenticate the [Claude Code CLI](https://code.claude.com/docs/en/setup) with `claude auth login`, or supply `ANTHROPIC_API_KEY`. For Codex, use the [Codex CLI](https://developers.openai.com/codex/cli/) and run `codex login`, or supply `CODEX_API_KEY`. Use an account authorized for the selected model. Subscription access and API billing differ; the experiment budget is tracked model usage, not a promise of free usage or an exact invoice amount.
+For Claude, authenticate the [Claude Code CLI](https://code.claude.com/docs/en/setup) with `claude auth login`, or set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. For Codex, use the [Codex CLI](https://developers.openai.com/codex/cli/) and run `codex login`, or set `CODEX_API_KEY`.
 
-Docker forwards the selected backend's authentication; its Codex login-file path copies only `auth.json` into a throwaway home. Apptainer keeps real credentials in the host inference broker. Neither Codex path mounts host skills, instructions, configuration, or past sessions. See the [Apptainer guide](docs/apptainer-network-isolation.md) for its namespace requirements and supported providers.
+See the [Apptainer guide](docs/apptainer-network-isolation.md) for its setup requirements.
 
 ```bash
 # Main paper setting:
@@ -57,9 +57,7 @@ bash docker/build_strict_blackbox.sh
 bash docker/build.sh
 ```
 
-For Apptainer agentic runs, build the corresponding SIF with `bash docker/build_strict_blackbox_sif.sh` or `bash docker/build_sif.sh`, and use `approach.container_backend=apptainer`. The build scripts create large temporary OCI archives; set `TMPDIR` to a disk-backed location if `/tmp` is RAM-backed. LLMGenPlan/Best-of-K and OpenCode do not support the isolated Apptainer transport.
-
-Rebuild regular images when their Dockerfile or dependency inputs change. Rebuild strict images when the strict Dockerfile, entrypoint, or copied render/client sources change. Updating an image does not update launcher code in a different checkout.
+For Apptainer agentic runs, build the corresponding SIF with `bash docker/build_strict_blackbox_sif.sh` or `bash docker/build_sif.sh`, and use `approach.container_backend=apptainer`. Use Docker for LLMGenPlan.
 
 ### Planner setup
 
@@ -67,13 +65,13 @@ Rebuild regular images when their Dockerfile or dependency inputs change. Rebuil
 uv sync --extra bilevel --extra pddlstream --dev
 ```
 
-`bilevel` installs KinDER's SeSamE models/planner. `pddlstream` installs KinDER's Packing3D domain and the packaged PDDLStream fork, whose installation builds FastDownward. The PR2 Packing/Blocked and Rovers adapters also use the vendored `third-party/ss-pybullet` stack. Agentic runs do not need these optional planner extras.
+`bilevel` installs KinDER's SeSamE models/planner. `pddlstream` installs the PDDLStream planner dependencies and builds FastDownward.
 
-The pinned PDDLStream revision can fail to compile with GCC 13+ or recent Clang because of its bundled `tl::optional<T&>::emplace`. If encountered, use a compatible toolchain or a separately patched checkout installed with `uv pip install --no-deps /path/to/patched-pddlstream`; record that patch and compiler with your results. Keep the compiled dependency and its provenance with the run environment.
+If PDDLStream fails to compile with GCC 13+ or recent Clang at `tl::optional<T&>::emplace`, use a compatible toolchain or a patched checkout installed with `uv pip install --no-deps /path/to/patched-pddlstream`.
 
 ## Quickstart
 
-Choose your own nonnegative integer evaluation-suite seed, keep it fixed across methods and replicates, and keep it outside agent-visible inputs. The prompt avoids putting it in shell history:
+The paper's evaluation seed is **available from the authors upon request**. We keep it out of the public repository to reduce the risk of exposing evaluation instances to future coding agents. You can also choose your own nonnegative integer seed. Keep it fixed across methods and replicates, and outside agent-visible inputs.
 
 ```bash
 read -rsp "Evaluation-suite seed (nonnegative integer): " EVAL_SEED
@@ -142,26 +140,24 @@ Start from the quickstart's common protocol (`primitive_level=none`, $20, 100 in
 | Codex Sol | `approach=agentic approach/backend=codex_gpt56sol` | Strict black box, all 28; medium reasoning |
 | Codex Astra | `approach=agentic approach/backend=codex_gpt6` | Strict black box, all 28; high reasoning |
 | Claude + source | `approach=agentic approach/backend=claude_opus5` | `approach.blackbox=false approach.blackbox_strict=false`, all 28 |
-| Astra + source | `approach=agentic approach/backend=codex_gpt6` | Both black-box flags false; **only** `sweepsimple3d_generalized` and `scooppour3d_generalized` |
+| Astra + source | `approach=agentic approach/backend=codex_gpt6` | `approach.blackbox=false approach.blackbox_strict=false`, all 28 |
 | LLMGenPlan | `approach=llm_genplan approach/completion=cli_opus5` | Full environment source, fixed validation/feedback loop, no agent tools |
 | One-shot | First LLMGenPlan program | Same source and initial prompting; no refinement |
 | Planner | `approach=bilevel_planning` or `approach=pddlstream_planning` | 16 supported environments above; no LLM usage |
 
 The manuscript labels Opus agentic runs as high effort. The checked-in Claude agent backend delegates effort to the installed CLI; it does not pin an effort flag. Sol and Astra presets explicitly set `reasoning_effort: medium` and `high`. Preserve CLI versions and resolved settings when comparing runs. LLMGenPlan uses the separate **completion** config group; `cli_opus5` currently sets `max_thinking_tokens: 0`.
 
-For example, the two supplementary Astra + source environments can be run as:
+For example, run five Astra + source replicates on Motion2D, then substitute any environment from the table above:
 
 ```bash
 python experiments/run_experiment.py -m \
   approach=agentic approach/backend=codex_gpt6 \
-  environment=sweepsimple3d_generalized,scooppour3d_generalized \
+  environment=motion2d_generalized \
   primitive_level=none approach.container_backend=docker \
   approach.blackbox=false approach.blackbox_strict=false \
   approach.max_budget_usd=20.0 replicate_seed=42,24,424,444,222 \
   eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60
 ```
-
-These are supplementary source-access runs, not an additional full 28-environment Astra condition. The manuscript reports Astra improving from 3% to 44% on SweepSimple and from 14% to 42% on ScoopPour3D with source access.
 
 LLMGenPlan's checked-in default stops after four debug attempts or $20, whichever comes first. For a budget-limited run, remove that step cap explicitly:
 
@@ -199,7 +195,7 @@ PDDLStream also supports `packing3d_generalized`, `pr2blocked_generalized`, and 
 | `transport3d_generalized`, `shelf3d_generalized` (preliminary) | `approach.max_skill_horizon=1000` |
 | `tossing3d_generalized` | `approach.max_abstract_plans=1 approach.samples_per_step=5 approach.max_skill_horizon=400` |
 
-Consult each archived run's `.hydra/config.yaml` for its exact planner settings. The pinned Tossing3D planner supports **one cube only**, while the checked-in generalized config evaluates counts 1 and 2. Count 2 is scored unsolved with `planner_unsupported`; the current config therefore cannot recover the paper's reported Tossing planner score without its historical model revision/settings. The wrapper uses the same flag for any count whose model raises `NotImplementedError`. Keep those episodes in the denominator and recover the original configuration before claiming historical reproduction.
+Consult each archived run's `.hydra/config.yaml` for its exact planner settings. Tossing3D multi-cube planner support is pending upstream PRs as of 2026-09-24; use the updated dependency revision once those changes merge.
 
 ## Running and evaluating
 
@@ -219,13 +215,9 @@ python experiments/run_experiment.py -m \
 
 This schedules five independent synthesis runs (up to $100 tracked usage). Hydra runs them sequentially by default. For parallel execution, append `hydra/launcher=joblib hydra.launcher.n_jobs=2`, allowing for a separate container and simulator load per job. Use a new output directory for each campaign.
 
-`replicate_seed` seeds randomness controlled by RoboCode and identifies a replicate; it does **not** make remote model generation deterministic. A fixed model name, seed, or session ID cannot reproduce a generated program exactly. Codex tracks root-agent and subagent usage against the shared synthesis budget using the rates in its preset; those estimates do not capture every billing tier or context-length adjustment.
+`replicate_seed` seeds randomness controlled by RoboCode and identifies a replicate. Coding-agent generation remains stochastic, even with the same seed and model.
 
-`eval_seed` seeds NumPy's derivation of the common ordered episode suite. Keep the master seed, environment config, count schedule, and episode count identical across methods. The paper uses five runs per method/environment, 100 evaluation instances per program sampled from the same initial-state distribution used during synthesis, and a 60-second per-instance timeout. Current software still distinguishes unpinned-reset and evaluation count pools, as detailed below; preserve historical overrides when reproducing that distribution. It samples evaluation seeds to make accidental synthesis reuse unlikely, then checks retrospectively that they were not used. New user-selected seeds reproduce the protocol, not the paper's exact historical instances.
-
-**Current count behavior:** checked-in configs still contain `design_counts`. Unpinned `reset` calls sample those counts; `options={"object_count": k}` can explicitly request another valid count. `eval_counts` sets the evaluation schedule. The emitted `count_regimes`, `design_count_solve_rate`, and `held_out_count_solve_rate` describe that configured split, **not evidence that an agent never tried a count**. The paper asks for programs supporting all valid counts and verifies exposure from synthesis records. Preserve and inspect reset telemetry/logs when making unseen-instance or unseen-count claims; do not infer them from field names.
-
-A fresh run on current `main` is not an exact historical rerun. Preserve the run's resolved Hydra configuration, source and submodule SHAs, dependency lockfile, container identity, CLI/model versions, prompts, frozen program with sibling modules, and original seed protocol. The repository does not supply a complete historical campaign/archive manifest or the paper's private evaluation seed. Environment fixes, policy loading, isolation, model serving, and candidate selection have evolved; report such changes when reevaluating old policies.
+`eval_seed` determines the common ordered evaluation suite. Keep it, the environment config, count schedule, and episode count identical across methods. The paper uses five runs per method/environment, 100 evaluation instances per program sampled from the same initial-state distribution used during synthesis, and a 60-second per-instance timeout. There is no design-count versus evaluation-count split in the paper protocol. Request the paper's seed to recover its evaluation instances; a new seed gives a new suite under the same protocol.
 
 ### Saved artifacts and inspection
 
