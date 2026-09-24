@@ -8,6 +8,16 @@ RoboCode is the experiment code for **AgenticGenPlan**, our study of coding agen
 
 The main setting is **strict black box**: no environment source, injected primitives, or robotics libraries. Programs use Python's standard library, NumPy, and SciPy; the agent interacts through `reset`/`step` and render tools. Source access is an additional condition. This is a study of off-the-shelf coding agents, with no prescribed symbolic representation or planning algorithm.
 
+<table>
+  <tr>
+    <td align="center"><img src="docs/media/rollouts/tossing3d.gif" alt="A synthesized policy throws a cube across a barrier into a bin" width="300"><br><b>Tossing3D</b> · 2.5× playback</td>
+    <td align="center"><img src="docs/media/rollouts/shelf3d.gif" alt="A synthesized policy picks up cubes and places them on a shelf" width="300"><br><b>Dynamic3D Shelf</b> · 3× playback</td>
+    <td align="center"><img src="docs/media/rollouts/packing3d.gif" alt="A synthesized policy packs objects into a tray" width="300"><br><b>Packing3D</b> · 2× playback</td>
+  </tr>
+</table>
+
+Example rollouts from programs synthesized by Claude Code Opus 5 in strict black box. [More videos](https://agenticgentamp.github.io/).
+
 ## Installation
 
 Use **Python 3.11**. Run the commands below from the repository root in Bash.
@@ -68,6 +78,16 @@ uv sync --extra bilevel --extra pddlstream --dev
 `bilevel` installs KinDER's SeSamE models/planner. `pddlstream` installs the PDDLStream planner dependencies and builds FastDownward.
 
 If PDDLStream fails to compile with GCC 13+ or recent Clang at `tl::optional<T&>::emplace`, use a compatible toolchain or a patched checkout installed with `uv pip install --no-deps /path/to/patched-pddlstream`.
+
+### Optional 3D backgrounds
+
+Dynamic3D environments can use MimicLabs scene backgrounds for rendering. Download the assets from the initialized KinDER submodule:
+
+```bash
+python third-party/kindergarden/scripts/download_mimiclabs_assets.py
+```
+
+The download is about 1 GB. Add `environment.scene_bg=mimiclabs-lab2` to a compatible run or reevaluation command. For variable-count wrappers, use `environment.constant_object_env_kwargs.scene_bg=mimiclabs-lab2` instead. The results viewer also has a scene-background setting.
 
 ## Quickstart
 

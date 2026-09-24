@@ -108,7 +108,7 @@ commit either credential file.
 
 `record_approach_history=true` uses [approach_history.py](../src/robocode/utils/approach_history.py) to replay commits containing `approach.py` from the sandbox Git repository. It renders one episode per snapshot using the replicate seed and its helper's step budget; it does not run each snapshot through the paper's common 100-instance suite. For a comparable score, recover the complete desired snapshot (including siblings) into a separate `sandbox/` and use the README's `approach.load_dir` workflow.
 
-The viewer can render selected episodes and inspect saved history. Keep original generation results separate from reevaluation results so generation cost/provenance is not overwritten. The historical `scripts/analysis_history.sh` and `scripts/run_missing_evals.sh` contain specific CDL paths and are not general paper reevaluation launchers.
+The viewer can render selected episodes and inspect saved history. Keep original generation results separate from reevaluation results so generation cost/provenance is not overwritten.
 
 ## Older LLMGenPlan submissions
 

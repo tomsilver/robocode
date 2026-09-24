@@ -135,17 +135,7 @@ python experiments/run_experiment.py \
 
 Maze agentic runs use the same runner with `approach=agentic`; choose a container, authenticate, and build its image first. The old maze policy listing and embedded agent transcript have been removed from the main README; the environment implementation/configs and tests remain.
 
-The fixed-count PR2 environments use flat observations; their generalized variants use object-centric states. Packing places all blocks on the plate; Blocked retrieves any green block, so more spare green blocks can make that task easier. `design_counts` controls unpinned resets in current software, not a guaranteed holdout boundary. See the [count protocol](../README.md#five-replicates-and-evaluation-protocol).
-
-### Optional 3D backgrounds
-
-Dynamic3D environments can use MimicLabs scene assets for visualization. They are not required for the paper commands, whose relevant configs disable scene backgrounds. Download them from the initialized KinDER submodule:
-
-```bash
-python third-party/kindergarden/scripts/download_mimiclabs_assets.py
-```
-
-The assets are large (about 1 GB) and gitignored. Set `scene_bg: mimiclabs-lab2` in a compatible environment config, or its `constant_object_env_kwargs` for a variable-count wrapper. The preliminary `constrainedcupboard3d_easy` config requests these assets already and errors if they are absent.
+The fixed-count PR2 environments use flat observations; their generalized variants use object-centric states. Packing places all blocks on the plate; Blocked retrieves any green block, so more spare green blocks can make that task easier.
 
 ## LIBERO-PRO
 
@@ -198,22 +188,3 @@ This is an optional upstream rollout/test path; there is no first-party LIBERO H
 ## CaP-X
 
 The [CaP-X submodule](../third-party/cap-x) is retained for exploratory work and has its own setup, environment configs, and web UI. Follow its upstream README after initializing submodules. It is not wired into a first-party `environment=...` or `approach=...` choice here, and is not part of the current paper. Its third-party documentation and dependencies are left intact.
-
-## Historical launchers and diagnostic assets
-
-The following scripts remain as prior experiment records/templates. Read and adapt their environment, output paths, access flags, and budget before using them. They do not encode the current paper sweep:
-
-- `scripts/run_easy2d_no_primitives*.sh`: fixed-difficulty source-access sweeps, including older budget and geometry variants.
-- `scripts/run_codex_blackbox_obstruction2d_seed42.sh`: a legacy non-strict black-box Codex run.
-- `scripts/run_debug.sh`, `scripts/analysis_history.sh`, `scripts/run_missing_evals.sh`: specific earlier CDL runs; the latter writes evaluation into its specified old output directory.
-
-The [PR2 rollout comparison](../scripts/compare_pddlstream_rollout.py) remains a differential diagnostic against stock PDDLStream. It needs the comparison submodule explicitly initialized:
-
-```bash
-git submodule update --init --recursive third-party/pddlstream
-python scripts/compare_pddlstream_rollout.py --policy oracle --render outputs/pr2-comparison
-```
-
-It returns success when the compared values agree within its tolerance. This is not the planner benchmark command. The generalized [3D](../scripts/render_generalized_3d_initial_states.py) and [dynamic 2D](../scripts/render_generalized_dynamic2d_initial_states.py) initial-state renderers remain useful visualization utilities; inspect `--help` for their CLI.
-
-The five GIFs in [docs/media/pr2packed](media/pr2packed) depict oracle demonstrations for counts 1 through 5. They are retained as preliminary reference media, not paper result evidence. Their historical provenance would need checking before reusing them as current-version results.
