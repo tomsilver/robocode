@@ -1,882 +1,313 @@
-# RoboCode
+# Coding Agents for Generalized Task and Motion Planning Problems
 
 ![workflow](https://github.com/tomsilver/robocode/actions/workflows/ci.yml/badge.svg)
 
-Agents for robot physical reasoning.
+[Project website and videos](https://agenticgentamp.github.io/) · [Paper](https://agenticgentamp.github.io/assets/paper.pdf) · [Code](https://github.com/tomsilver/robocode)
 
-Work in progress.
+RoboCode is the experiment code for **AgenticGenPlan**, our study of coding agents for generalized task and motion planning (TAMP). Given a task description and simulator access, an agent probes the environment, writes and tests Python, and returns one program that solves new instances of the task. We freeze that program and evaluate it without further LLM calls.
+
+The main setting is **strict black box**: no environment source, injected primitives, or robotics libraries. Programs use Python's standard library, NumPy, and SciPy; the agent interacts through `reset`/`step` and render tools. Source access is an additional condition. This is a study of off-the-shelf coding agents, with no prescribed symbolic representation or planning algorithm.
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/media/rollouts/tossing3d.gif" alt="A synthesized policy throws a cube across a barrier into a bin" width="300"><br><b>Tossing3D</b> · 2.5× playback</td>
+    <td align="center"><img src="docs/media/rollouts/shelf3d.gif" alt="A synthesized policy picks up cubes and places them on a shelf" width="300"><br><b>Dynamic3D Shelf</b> · 3× playback</td>
+    <td align="center"><img src="docs/media/rollouts/packing3d.gif" alt="A synthesized policy packs objects into a tray" width="300"><br><b>Packing3D</b> · 2× playback</td>
+  </tr>
+</table>
+
+Example rollouts from programs synthesized by Claude Code Opus 5 in strict black box. [More videos](https://agenticgentamp.github.io/).
 
 ## Installation
+
+Use **Python 3.11**. Run the commands below from the repository root in Bash.
+
+### Host dependencies
+
+| Dependency | When needed |
+| --- | --- |
+| Git and [uv](https://docs.astral.sh/uv/getting-started/installation/) | All installations |
+| Docker with a running daemon | Docker synthesis runs |
+| Apptainer and Podman | Alternative to Docker for Claude/Codex agentic synthesis |
+| C/C++ toolchain, `make`, CMake | Planner dependencies, including the FastDownward build |
+| EGL/OpenGL runtime libraries | Headless MuJoCo/PyBullet environments and rendering |
+| Node.js/npm | Host CLI installation |
+| Host Claude or Codex CLI | Login-based authentication |
+
+On Debian/Ubuntu, install the build tools and runtime libraries with `sudo apt-get install build-essential cmake liblapack-dev libblas-dev libegl1 libgl1 libglu1-mesa`.
+
 ```bash
 git clone https://github.com/tomsilver/robocode.git
 cd robocode
-bash install.sh
+git submodule update --init --recursive
+uv sync --dev
+source .venv/bin/activate
 ```
 
-This installs everything except the optional [LIBERO-PRO](#libero-pro-manipulation-benchmark-optional-extra) extra, which is opt-in.
+This installs the core environment/agent stack. Optional extras in [pyproject.toml](pyproject.toml) are `bilevel`, `pddlstream`, `tracker`, `develop`, and `libero`. Alternatively, `bash install.sh` initializes submodules and installs **all extras except `libero`**, including planners, tracker, and development tools.
 
-### Python version
+### Authentication and images
 
-**Use Python 3.11.**
-It is pinned in `.python-version`, so `uv` picks it up automatically and `install.sh` needs no flags.
-If `uv` has no 3.11 on hand it downloads one.
-
-3.11 is the only version actually exercised: the CI matrix is `["3.11"]`, and the Docker image installs `python3.11` and syncs against it.
-3.12 resolves and would probably work, but nothing tests it, and a local/sandbox version split is a bad trade in a project where agent code runs in the container.
-Moving to 3.12 means updating the CI matrix and the Dockerfile first.
-
-3.13 and newer cannot work at all, because the `kindergarden` submodule declares `requires-python = ">=3.10,<3.13"`.
-`robocode` mirrors that ceiling in its own `requires-python` so `uv` rejects a too-new interpreter up front instead of failing deep in a build.
-
-### System prerequisites
-
-The following tools are **not** installed by `install.sh` / `uv sync` and must be set up separately:
-
-| Tool | Required for | Install |
-|---|---|---|
-| [Ollama](https://ollama.com/) | Local model serving (Claude + Ollama, OpenCode + Ollama) | `curl -fsSL https://ollama.com/install.sh \| sh` |
-| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | `claude` backend (default) | `curl -fsSL https://claude.ai/install.sh \| bash` |
-| [Codex CLI](https://developers.openai.com/codex/cli/) | `codex` backend | `npm install -g @openai/codex@latest` |
-| [OpenCode CLI](https://opencode.ai) | `opencode` backend (multi-provider) | `curl -fsSL https://opencode.ai/install \| bash` |
-| [vLLM](https://docs.vllm.ai/) | Serving models via OpenAI-compatible API | `pip install vllm` (in a separate env) |
-| [Docker](https://www.docker.com/) | Docker sandbox (recommended for isolation) | See [Docker docs](https://docs.docker.com/get-docker/) |
-
-For local model serving with Ollama, pull a model after installing:
+For login-based authentication, install the selected CLI on the host:
 
 ```bash
-ollama pull gemma4:31b
+# Choose the backend(s) you will use:
+npm install -g @anthropic-ai/claude-code
+npm install -g @openai/codex@0.153.4
 ```
 
-### Agent backend setup
+For Claude, authenticate the [Claude Code CLI](https://code.claude.com/docs/en/setup) with `claude auth login`, or set `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. For Codex, use the [Codex CLI](https://developers.openai.com/codex/cli/) and run `codex login`, or set `CODEX_API_KEY`.
 
-The agentic approach supports three backends: **Claude Code CLI** (default), **Codex CLI**, and **OpenCode** (for GPT, Gemini, open-source models via vLLM/Ollama, etc.).
-
-#### Claude Code CLI (default)
-
-The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) is the default backend. Authenticate via one of:
-
-- **Subscription (free usage):** `claude auth login`
-- **API key:** set `ANTHROPIC_API_KEY` in your environment
-
-Optionally set `ROBOCODE_CLAUDE_CMD` to point to a specific `claude` binary (defaults to `claude` on `PATH`).
-
-The `model` parameter in `agentic.yaml` takes a full model ID. Override per-run with e.g. `approach/backend=claude_sonnet5`.
-
-| Backend preset | Model ID |
-|---|---|
-| `claude_opus5` (default) | `claude-opus-5` |
-| `claude_sonnet5` | `claude-sonnet-5` |
-| `claude_opus48` | `claude-opus-4-8` |
-| `claude_sonnet46` | `claude-sonnet-4-6` |
-| `claude_haiku45` | `claude-haiku-4-5-20251001` |
-
-See [Anthropic models overview](https://platform.claude.com/docs/en/about-claude/models/overview) for the full list.
-
-#### Codex CLI
-
-[Codex CLI](https://developers.openai.com/codex/cli/) runs OpenAI coding models directly. Install it with `npm install -g @openai/codex@latest` (it is also pre-installed in both Docker images), then authenticate with either `codex login` or a `CODEX_API_KEY` environment variable.
-
-Use the `codex_gpt6` preset for GPT-6 Astra with medium reasoning:
+See the [Apptainer guide](docs/apptainer-network-isolation.md) for its setup requirements.
 
 ```bash
-python experiments/run_experiment.py approach=agentic \
-    approach/backend=codex_gpt6 environment=motion2d_generalized \
-    replicate_seed=0 eval_seed="$EVAL_SEED"
-```
-
-With login-file authentication, Docker copies only `auth.json` into a throwaway Codex home. Apptainer keeps authentication on the host in its inference broker and mounts no real credentials. Neither mounts host `config.toml`, `AGENTS.md`, skills, or session history. Each fresh experiment starts with an empty sandbox-local session directory; only an automatic retry of that same experiment can resume it.
-
-#### OpenCode (multi-provider)
-
-[OpenCode](https://opencode.ai) supports 75+ providers including OpenAI, Google, Anthropic, and local models served via Ollama or vLLM.
-
-Install: `curl -fsSL https://opencode.ai/install | bash` (also pre-installed in the Docker image).
-
-Authenticate with your provider:
-
-```bash
-# API key (set the appropriate env var for your provider)
-export OPENAI_API_KEY=sk-...
-export GOOGLE_API_KEY=...
-
-# Or use OpenCode's interactive auth
-opencode providers login
-```
-
-Optionally set `ROBOCODE_OPENCODE_CMD` to point to a specific `opencode` binary.
-
-Models use the `provider/model` format:
-
-| Model | Provider |
-|---|---|
-| `openai/gpt-4o` | OpenAI |
-| `google/gemini-2.5-pro` | Google |
-| `anthropic/claude-sonnet-5` | Anthropic |
-| `ollama/qwen3.5:latest` | Ollama (local) |
-
-For local models (Ollama, vLLM), create an `opencode.json` config with your provider:
-
-```json
-{
-  "provider": {
-    "ollama": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://localhost:11434/v1" },
-      "models": { "qwen3.5:latest": { "name": "Qwen 3.5" } }
-    }
-  }
-}
-```
-
-## Environments
-
-All environments are available as Hydra configs via `environment=<config_name>`.
-
-### Maze (discrete)
-
-| Config | Description |
-|---|---|
-| `small_maze` | Small grid maze |
-| `large_maze` | Large grid maze |
-
-### 2D Kinematic (continuous, kinder geom2d)
-
-| Config | Kinder ID | Difficulty |
-|---|---|---|
-| `motion2d_easy` | `kinder/Motion2D-p0-v0` | Easy (0 passages) |
-| `motion2d_medium` | `kinder/Motion2D-p1-v0` | Medium (1 passage) |
-| `motion2d_hard` | `kinder/Motion2D-p3-v0` | Hard (3 passages) |
-| `obstruction2d_easy` | `kinder/Obstruction2D-o0-v0` | Easy (0 obstructions) |
-| `obstruction2d_medium` | `kinder/Obstruction2D-o2-v0` | Medium (2 obstructions) |
-| `obstruction2d_hard` | `kinder/Obstruction2D-o4-v0` | Hard (4 obstructions) |
-| `clutteredretrieval2d_easy` | `kinder/ClutteredRetrieval2D-o1-v0` | Easy (1 obstruction) |
-| `clutteredretrieval2d_medium` | `kinder/ClutteredRetrieval2D-o10-v0` | Medium (10 obstructions) |
-| `clutteredretrieval2d_hard` | `kinder/ClutteredRetrieval2D-o25-v0` | Hard (25 obstructions) |
-| `clutteredstorage2d_easy` | `kinder/ClutteredStorage2D-b1-v0` | Easy (1 block) |
-| `clutteredstorage2d_medium` | `kinder/ClutteredStorage2D-b3-v0` | Medium (3 blocks) |
-| `clutteredstorage2d_hard` | `kinder/ClutteredStorage2D-b7-v0` | Hard (7 blocks) |
-| `stickbutton2d_easy` | `kinder/StickButton2D-b1-v0` | Easy (1 button) |
-| `stickbutton2d_medium` | `kinder/StickButton2D-b3-v0` | Medium (3 buttons) |
-| `stickbutton2d_hard` | `kinder/StickButton2D-b5-v0` | Hard (5 buttons) |
-| `pushpullhook2d` | `kinder/PushPullHook2D-v0` | Single variant |
-
-### 3D Kinematic (continuous, kinder geom3d)
-
-| Config | Kinder ID | Difficulty |
-|---|---|---|
-| `obstruction3d_easy` | `kinder/Obstruction3D-o0-v0` | Easy (0 obstructions) |
-| `obstruction3d_medium` | `kinder/Obstruction3D-o2-v0` | Medium (2 obstructions) |
-| `obstruction3d_hard` | `kinder/Obstruction3D-o4-v0` | Hard (4 obstructions) |
-| `shelf3d_easy` | `kinder/KinematicShelf3D-o1-v0` | Easy (1 cube) |
-| `shelf3d_medium` | `kinder/KinematicShelf3D-o3-v0` | Medium (3 cubes) |
-| `shelf3d_hard` | `kinder/KinematicShelf3D-o5-v0` | Hard (5 cubes) |
-| `transport3d_easy` | `kinder/Transport3D-o1-v0` | Easy (1 cube) |
-| `transport3d_hard` | `kinder/Transport3D-o2-v0` | Hard (2 cubes) |
-| `packing3d_easy` | `kinder/Packing3D-p1-v0` | Easy (1 part) |
-| `packing3d_medium` | `kinder/Packing3D-p2-v0` | Medium (2 parts) |
-| `packing3d_hard` | `kinder/Packing3D-p3-v0` | Hard (3 parts) |
-
-> **Realistic 3D backgrounds (optional):** dynamic3d / TidyBot envs (e.g. `ConstrainedCupboard3D`) render on a plain white background by default. For the realistic room scene (floor/wall textures), download the MimicLabs assets once (~1 GB, gitignored): `python third-party/kindergarden/scripts/download_mimiclabs_assets.py`, then set `scene_bg: mimiclabs-lab2` in the env config (already set for `constrainedcupboard3d_easy`).
-
-### PR2 TAMP (continuous, ss-pybullet)
-
-Two of PDDLStream's own PR2 benchmarks, `packed` and `blocked`, re-exposed as
-closed-loop gymnasium environments. They share the robot, the kinematic dynamics and
-the action space; what differs is the scene, the goal, and the grasp.
-
-#### `packed`
-
-PDDLStream's [`packed`](https://github.com/caelan/pddlstream) benchmark, re-exposed as a
-closed-loop gymnasium environment: a PR2 must pick every block off the table and place it
-on a green plate. The scene and goal are carried over verbatim so instances line up with
-the `packed -n` conditions in the [LLM-PDDLStream](https://github.com/jorge-a-mendez/llm-pddlstream)
-paper, but the PDDL domain, the stream samplers, and the planner are deliberately left
-behind: robocode's approaches synthesize their own task and motion planning.
-
-| Config | Blocks | Observation |
-|---|---|---|
-| `pr2packed_easy` | 3 | `Box(72,)` |
-| `pr2packed_medium` | 4 | `Box(83,)` |
-| `pr2packed_hard` | 5 | `Box(94,)` |
-| `pr2packed_generalized` | 1-5 (varies per reset) | `ObjectCentricState` |
-
-`pr2packed_generalized` is the generalization axis: it keeps one backend per count and
-returns object-centric observations, so a single frozen program spans every instance
-size. It implements `VariableCountEnv` (`src/robocode/environments/variable_count.py`),
-the shared contract the runner's count-sweep lifecycle keys off — `design_counts` are
-what an approach is built against, `eval_counts` adds held-out larger instances, and
-the results carry `by_count` and a design/held-out `count_regimes` split. The kinder
-`VariableObjectCountEnv` implements the same contract.
-
-The action space matches kinder's 3D mobile-manipulation envs exactly — `Box(11,)` of
-delta base pose, delta arm joints, and gripper open/close — so approaches and prompts
-written against `obstruction3d` and friends transfer without a new interface to learn.
-Dynamics are kinematic: joints are set rather than servoed, and a motion that would put
-the robot or a held block in collision is rejected. Closing the gripper attaches a block
-rigidly to the tool frame, but only when the fingers are actually around it — hovering
-above a block does not grasp it. Opening drops the held block straight down, and the drop
-is refused if it would land overlapping something, leaving the block held. Reward is -1
-per step and the episode terminates once every block rests on the plate **and no two
-blocks overlap**: the plate is small enough to force a packing, so dropping them all at
-one spot does not count.
-
-**Verifying against stock PDDLStream.** `scripts/compare_pddlstream_rollout.py` rolls
-episodes in our environment and replays every state visited into a scene built from
-stock `examples.pybullet.tamp.problems.packed`, comparing the stock library's own
-collision / placement / kinematics results against ours, and optionally rendering the
-two side by side. The stock tree is pinned as a submodule but **not cloned by
-default** — its nested submodule is a second copy of ss-pybullet at the commit we
-already vendor (~590MB). Opt in with:
-
-```bash
-git submodule update --init --recursive third-party/pddlstream
-python scripts/compare_pddlstream_rollout.py --policy oracle --render /tmp/cmp
-```
-
-Exit code 0 means every recorded value agreed to 1e-9; 1 prints a per-value diff.
-
-**Oracle.** Run it with `approach=oracle`:
-
-```bash
-python experiments/run_experiment.py approach=oracle environment=pr2packed_generalized \
-    eval_seed="$EVAL_SEED"
-```
-
-`approach=oracle` dispatches on the environment choice name
-(`robocode.approaches.oracle_approach.ORACLE_TARGETS`), so it also runs the existing
-kinder oracles (`obstruction2d_medium`, `clutteredstorage2d_medium`,
-`stickbutton2d_medium`, `pushpullhook2d`). An oracle is a solvability check and a
-reference row to compare synthesized approaches against, not a scored method.
-
-`robocode.oracles.pr2packed` is a reference TAMP policy: for each block it
-samples a base pose that can reach both the block and a free plate cell (inverse
-reachability), solves arm IK there, plans collision-free joint paths, and tracks them
-with the environment's bounded delta actions, resampling a block's plan when a stage
-fails. It exists to confirm the task is solvable — it solves 60/60 episodes across
-3/4/5 blocks (means of 136/185/237 steps), comfortably inside `max_steps_for_count`.
-`tests/oracles/pr2packed/` is that check.
-
-Every candidate configuration and path is validated against the environment's own
-collision test rather than the planner's, because ss-pybullet configures the two
-separately and a path the planner accepts is not automatically one the environment
-will execute.
-
-#### `blocked`
-
-PDDLStream's [`blocked`](https://github.com/caelan/pddlstream) benchmark, exposed the
-same way. A green block sits on the near table inside a three-sided pen of walls with a
-red block standing in the one gap, and the goal is to get **any** green block onto the
-plate. Spare green blocks, if the instance has any, wait on a second table nine metres
-away.
-
-| Config | Spares | Observation |
-|---|---|---|
-| `pr2blocked_easy` | 2 | `Box(93,)` |
-| `pr2blocked_medium` | 1 | `Box(82,)` |
-| `pr2blocked_hard` | 0 | `Box(71,)` |
-| `pr2blocked_generalized` | 0-4 (varies per reset) | `ObjectCentricState` |
-
-What makes this a different problem rather than a re-skin of `packed` is the grasp.
-`blocked` is a *side*-grasp task: the pen walls are as tall as the block, so the only
-approach that clears them is horizontal, and the red block occupies the one horizontal
-direction left open. The robot therefore either moves the blocker aside and takes the
-penned block, or drives to the far table and hauls a spare back. `tests/environments/`
-asserts that premise directly — with the blocker in place no side grasp of the target is
-reachable, and with it moved away some are — because an environment where the blocker
-does not block would be a plain pick-and-place wearing this benchmark's name.
-
-The count axis runs **opposite** to every other generalized env here. The goal is
-existential, so spares are alternatives rather than extra work: zero spares is the
-hardest instance, because the penned block is then the only green one and the blocker
-*must* be moved. `design_counts` therefore starts at zero, so an approach is built
-against the case that forces the blocking manipulation, and `max_steps_for_count` is
-nearly flat in the count.
-
-The red block is movable and graspable — relocating it is the task — but it is not a
-green block, so parking it on the plate does not finish the episode.
-
-**Oracle.** `approach=oracle environment=pr2blocked_generalized`.
-`robocode.oracles.pr2blocked` prefers the penned block, since it and the plate share a
-table while a spare costs a nine-metre drive each way. It relocates the blocker to a
-spot that is on the table, off the plate, and clear of the pen, then side-grasps the
-target and releases it over the plate. Each candidate parking spot is checked by
-planning the penned pick with the blocker where it *would* end up, and discarded if that
-does not free it — most of the table fails that test, so moving the blocker somewhere
-merely tidy is not enough. It solves every configured count inside
-`max_steps_for_count` (65-148 steps observed); `tests/oracles/pr2blocked/` is that
-check.
-
-Unlike `packed`, a transfer needs two base poses rather than one — the plate's centre is
-0.6m from the penned block and nine metres from the spares, so no single base pose
-reaches both. That mirrors upstream's own plans for this problem, which are
-`move_base, pick, move_base, place`. The scene-agnostic planning machinery is shared
-between the two oracles in `robocode/oracles/pr2_tamp_planning.py`, and the environments
-share `robocode/environments/pr2_tamp_base.py`.
-
-Geometry, grasping, and collision checking come from
-[ss-pybullet](https://github.com/caelan/ss-pybullet), vendored as a submodule under
-`third-party/ss-pybullet/` along with its own nested
-[motion-planners](https://github.com/caelan/motion-planners) submodule. Neither ships
-packaging metadata, so they are imported off `sys.path` by
-`robocode/environments/ss_pybullet.py` rather than installed by `uv`; `install.sh` already
-runs `git submodule update --init --recursive`, which is all the setup they need. Nothing
-here requires a FastDownward build, because nothing here runs the PDDLStream planner.
-
-### LIBERO-PRO (manipulation benchmark, optional extra)
-
-[LIBERO-PRO](https://github.com/uynitsuj/LIBERO-PRO) is a Franka tabletop manipulation benchmark (~80 task suites covering goal / spatial / object / 10-task mixes plus OOD and perturbation variants) built on MuJoCo via robosuite. It is vendored as a submodule under `third-party/LIBERO-PRO/` and gated behind the optional `libero` extra — it is **not** installed by default because it pins old upstreams (`robosuite==1.4.0`, `gym==0.25.2`, `robomimic==0.2.0`, `bddl==1.0.1`) and drags in a CUDA-enabled torch.
-
-`install.sh` passes `--no-extra libero`, so the default install skips it entirely.
-
-**Linux only.**
-The extra cannot be installed on macOS: `robomimic 0.2.0` depends on `egl-probe`, which compiles an EGL loader, and EGL has no macOS implementation.
-Use the Docker sandbox to run LIBERO from a Mac.
-
-Install (into the same venv as the rest of robocode):
-
-```bash
-sudo apt-get install -y libegl1 libgl1 cmake  # EGL/GL runtime for MuJoCo; cmake builds egl-probe
-uv sync --all-extras --dev                    # ~60 extra Python packages, several GB
-```
-
-First use of the `libero` package runs an interactive `input()` prompt asking where to store datasets; the test harness writes `~/.libero/config.yaml` automatically. If you hit the prompt manually, answer `N` — the default paths are fine for env rollouts (pre-recorded demos are not required).
-
-List available benchmark suites:
-
-```python
-from libero import benchmark
-print(list(benchmark.get_benchmark_dict().keys()))  # ~80 suites
-```
-
-Minimal rollout on `libero_goal` task 0:
-
-```python
-from libero import benchmark
-from libero.envs import OffScreenRenderEnv
-
-task_suite = benchmark.get_benchmark_dict()["libero_goal"]()
-bddl = task_suite.get_task_bddl_file_path(0)
-env = OffScreenRenderEnv(bddl_file_name=bddl, camera_heights=128, camera_widths=128)
-env.seed(0)
-obs = env.reset()   # dict with agentview_image, robot state, per-object poses, ...
-obs, reward, done, info = env.step([0.0] * 7)
-env.close()
-```
-
-Smoke tests live at `tests/environments/test_libero.py` (benchmark dict + rollout); they skip cleanly if the extra isn't installed.
-
-Note on OpenGL: LIBERO's MuJoCo needs to coexist in-process with kinder's pybullet. `src/robocode/environments/kinder_geom2d_env.py` and `kinder_geom3d_env.py` pin `MUJOCO_GL=egl` / `PYOPENGL_PLATFORM=egl` before kinder loads so PyOpenGL latches to the EGL platform — without this, later robosuite imports in the same process fail with `'NoneType' object has no attribute 'glGetError'`. If you see that error, confirm `libegl1` is installed.
-
-## Sandbox
-
-The agent runs inside a Docker container (`robocode-sandbox`) that provides full filesystem isolation, a restricted network, and a pre-built Python environment.
-
-### Security model
-
-| Layer | Mechanism |
-|---|---|
-| Filesystem | Docker bind-mount: agent can only write to `/sandbox` (the run's output dir) |
-| Network | `init-firewall.sh` whitelists API endpoints for the configured provider (Anthropic, OpenAI, Google, etc.), GitHub IPs, and telemetry; blocks everything else via iptables. Extra domains are passed via `ROBOCODE_FIREWALL_EXTRA_DOMAINS`. |
-| Write hook | Claude backend: `PreToolUse` hook in `.claude/settings.json` double-checks Write/Edit paths stay inside `/sandbox`. Codex and OpenCode rely on the enclosing Docker filesystem boundary. |
-
-The Apptainer backend (`container_backend=apptainer`, for HPC clusters without Docker) now runs Codex and Claude in a disconnected network namespace (`--userns --net --network none`). A host broker permits validated model inference, and a separate relay reaches only the experiment environment server. Agent processes cannot use general internet access, and provider credentials stay outside the container. See [setup and isolation boundaries](docs/apptainer-network-isolation.md). Unsupported Apptainer backends and GenPlan fail closed.
-
-### What the agent sees
-
-| Path | Contents |
-|---|---|
-| `/sandbox/` | Working directory — agent writes `approach.py`, test scripts, etc. here |
-| `/sandbox/primitives/` | Source files from `src/robocode/primitives/` (read reference) |
-| `/robocode/.venv/bin/python` | Python 3.11 with all robocode dependencies pre-installed |
-| `/robocode/third-party/kindergarden/` | The kinder env package, bind-mounted read-only from the host submodule |
-
-### Whitebox and blackbox Docker modes
-
-| Mode | Required overrides | Image and visibility |
-|---|---|---|
-| Whitebox (default) | none | `robocode-sandbox`; filtered robocode and environment source are readable |
-| Blackbox | `approach.blackbox=true` | `robocode-sandbox`; environment source is removed and interaction goes through the host env server |
-| Strict blackbox | `approach.blackbox=true approach.blackbox_strict=true primitive_level=none` | `robocode-sandbox-strict-blackbox`; no project/environment packages, reset/step and render tools only |
-
-### Start docker
-
-#### Mac OS
-
-Simply open the Docker Desktop application.
-Look for the status indicator in the bottom-left corner of the GUI; it should say "Docker Engine Running".
-
-#### Linux
-```
-sudo systemctl start docker
-sudo systemctl enable docker
-```
-
-### Building the image
-
-Build once from the repo root (rebuild when `pyproject.toml` / `uv.lock` change; not needed for `third-party/kindergarden` code changes):
-
-```bash
+# Main paper setting:
+bash docker/build_strict_blackbox.sh
+# Source-access conditions and LLMGenPlan:
 bash docker/build.sh
 ```
 
-The strict blackbox ablation (`approach.blackbox_strict=true`) uses a separate
-dependency-clean image instead; build it with `bash docker/build_strict_blackbox.sh`
-(Docker) or `bash docker/build_strict_blackbox_sif.sh` (Apptainer SIF).
+For Apptainer agentic runs, build the corresponding SIF with `bash docker/build_strict_blackbox_sif.sh` or `bash docker/build_sif.sh`, and use `approach.container_backend=apptainer`. Use Docker for LLMGenPlan.
 
-### Using the OS-level sandbox (legacy)
+### Planner setup
 
-The original macOS Seatbelt / Linux bubblewrap sandbox is still available (`container_backend: local` in `agentic.yaml`) but has a known limitation: it restricts filesystem *writes* but allows *reads* of the entire host filesystem.
-
-Red team the sandbox:
 ```bash
-python integration_tests/red_team_sandbox.py           # OS-level
-python integration_tests/red_team_sandbox.py --docker  # Docker
-python integration_tests/red_team_sandbox.py --strict-blackbox  # strict blackbox
-python integration_tests/red_team_sandbox.py --apptainer-strict-blackbox  # Apptainer strict
+uv sync --extra bilevel --extra pddlstream --dev
 ```
 
-Probe whether a real Codex run can recover live Internet content from the strict
-Apptainer sandbox (paid, opt-in; exits nonzero on a leak):
+`bilevel` installs KinDER's SeSamE models/planner. `pddlstream` installs the PDDLStream planner dependencies and builds FastDownward.
+
+If PDDLStream fails to compile with GCC 13+ or recent Clang at `tl::optional<T&>::emplace`, use a compatible toolchain or a patched checkout installed with `uv pip install --no-deps /path/to/patched-pddlstream`.
+
+### Optional 3D backgrounds
+
+Dynamic3D environments can use MimicLabs scene backgrounds for rendering. Download the assets from the initialized KinDER submodule:
 
 ```bash
-uv run python integration_tests/check_agent_internet_access.py
+python third-party/kindergarden/scripts/download_mimiclabs_assets.py
 ```
 
-## Experiments
+The download is about 1 GB. Add `environment.scene_bg=mimiclabs-lab2` to a compatible run or reevaluation command. For variable-count wrappers, use `environment.constant_object_env_kwargs.scene_bg=mimiclabs-lab2` instead. The results viewer also has a scene-background setting.
 
-Set the private evaluation-suite seed in your shell before using any experiment
-command or checked-in launcher. The prompt avoids saving it in shell history:
+## Quickstart
+
+The paper's evaluation seed is **available from the authors upon request**. We keep it out of the public repository to reduce the risk of exposing evaluation instances to future coding agents. You can also choose your own nonnegative integer seed. Keep it fixed across methods and replicates, and outside agent-visible inputs.
 
 ```bash
-read -rsp "Private evaluation seed: " EVAL_SEED
-echo
+read -rsp "Evaluation-suite seed (nonnegative integer): " EVAL_SEED
+printf '\n'
 export EVAL_SEED
+
+python experiments/run_experiment.py \
+  approach=agentic approach/backend=claude_opus5 \
+  environment=motion2d_generalized primitive_level=none \
+  approach.container_backend=docker \
+  approach.blackbox=true approach.blackbox_strict=true \
+  approach.max_budget_usd=20.0 \
+  replicate_seed=42 eval_seed="$EVAL_SEED" \
+  num_eval_tasks=100 eval_timeout=60 \
+  hydra.run.dir=outputs/paper-motion-opus-r42
 ```
 
-Run an experiment:
-```bash
-python experiments/run_experiment.py approach=random environment=small_maze replicate_seed=0 eval_seed="$EVAL_SEED"
-```
+This synthesizes **one generalized policy**, then evaluates it on 100 instances with a 60-second episode timeout. It can consume $20 in model usage. To inspect the composed configuration without synthesis or evaluation, append `--cfg job --resolve`. The paper's strict setting must be explicit: the software defaults still select `approach=random`, `environment=small_maze`, and `primitive_level=low_level`; `approach=agentic` alone uses source access.
 
-Run a sweep over multiple seeds and environments:
-```bash
-python experiments/run_experiment.py -m replicate_seed=0,1,2 eval_seed="$EVAL_SEED" environment=small_maze,large_maze approach=random
-```
+## Paper experiments
 
-Analyze results from one or more runs:
-```bash
-python experiments/analyze_results.py multirun/
-```
+### Environment map
 
-Browse runs in the browser (metrics, per-episode GIFs, and the sandbox git history of the generated `approach.py`), then open http://localhost:8000. The history view charts replay solve rate and per-commit effort, and can replay the same failed seed across versions to show where it was fixed:
-```bash
-python -m experiments.results_viewer --root . --port 8000
-```
+Each row is one paper environment, not one object count. Use the linked config's filename without `.yaml` as `environment=...`. A dash means there is no planner baseline for that paper environment. SeSamE uses `approach=bilevel_planning`; PDDLStream uses `approach=pddlstream_planning`.
 
-The viewer can also read ZIP result archives recursively from a Google Drive
-folder. The recommended backend is [rclone](https://rclone.org/drive/), which
-provides browser login without requiring every collaborator to create a Google
-Cloud project. Install rclone from its official downloads on Linux or with
-Homebrew on macOS:
+| Family | Paper environment | Hydra environment config | Planner |
+| --- | --- | --- | --- |
+| Kinematic 2D | StickButton | [stickbutton2d_generalized](experiments/conf/environment/stickbutton2d_generalized.yaml) | SeSamE |
+| Kinematic 2D | Obstruction | [obstruction2d_generalized](experiments/conf/environment/obstruction2d_generalized.yaml) | SeSamE |
+| Kinematic 2D | ClutteredStorage | [clutteredstorage2d_generalized](experiments/conf/environment/clutteredstorage2d_generalized.yaml) | SeSamE |
+| Kinematic 2D | ClutteredRetrieval | [clutteredretrieval2d_generalized](experiments/conf/environment/clutteredretrieval2d_generalized.yaml) | SeSamE |
+| Kinematic 2D | Motion | [motion2d_generalized](experiments/conf/environment/motion2d_generalized.yaml) | SeSamE |
+| Kinematic 2D | PushPullHook | [pushpullhook2d](experiments/conf/environment/pushpullhook2d.yaml) | – |
+| Dynamic 2D | Obstruction | [dynobstruction2d_generalized](experiments/conf/environment/dynobstruction2d_generalized.yaml) | SeSamE |
+| Dynamic 2D | PushPullHook | [dynpushpullhook2d_generalized](experiments/conf/environment/dynpushpullhook2d_generalized.yaml) | SeSamE |
+| Dynamic 2D | PushT | [dynpusht2d](experiments/conf/environment/dynpusht2d.yaml) | – |
+| Dynamic 2D | ScoopPour | [dynscooppour2d_generalized](experiments/conf/environment/dynscooppour2d_generalized.yaml) | – |
+| Kinematic 3D | Obstruction | [obstruction3d_generalized](experiments/conf/environment/obstruction3d_generalized.yaml) | – |
+| Kinematic 3D | Packing | [packing3d_generalized](experiments/conf/environment/packing3d_generalized.yaml) | PDDLStream |
+| Kinematic 3D | Transport | [transport3d_generalized](experiments/conf/environment/transport3d_generalized.yaml) | SeSamE |
+| Kinematic 3D | Table | [table3d_generalized](experiments/conf/environment/table3d_generalized.yaml) | – |
+| Kinematic 3D | BaseMotion | [basemotion3d](experiments/conf/environment/basemotion3d.yaml) | SeSamE |
+| Dynamic 3D | BalanceBeam | [balancebeam3d](experiments/conf/environment/balancebeam3d.yaml) | – |
+| Dynamic 3D | ConstrainedCupboard | [constrainedcupboard3d_generalized](experiments/conf/environment/constrainedcupboard3d_generalized.yaml) | – |
+| Dynamic 3D | Dynamo | [dynamo3d_generalized](experiments/conf/environment/dynamo3d_generalized.yaml) | – |
+| Dynamic 3D | Rearrange | [rearrange3d](experiments/conf/environment/rearrange3d.yaml) | – |
+| Dynamic 3D | ScoopPour | [scooppour3d_generalized](experiments/conf/environment/scooppour3d_generalized.yaml) | – |
+| Dynamic 3D | Shelf | [dynamicshelf3d_generalized](experiments/conf/environment/dynamicshelf3d_generalized.yaml) | SeSamE |
+| Dynamic 3D | SortClutteredBlocks | [sortclutteredblocks3d_generalized](experiments/conf/environment/sortclutteredblocks3d_generalized.yaml) | – |
+| Dynamic 3D | SweepIntoDrawer | [sweepintodrawer3d](experiments/conf/environment/sweepintodrawer3d.yaml) | SeSamE |
+| Dynamic 3D | SweepSimple | [sweepsimple3d_generalized](experiments/conf/environment/sweepsimple3d_generalized.yaml) | – |
+| Dynamic 3D | Tossing | [tossing3d_generalized](experiments/conf/environment/tossing3d_generalized.yaml) | SeSamE |
+| PDDLStream | Packing | [pr2packed_generalized](experiments/conf/environment/pr2packed_generalized.yaml) | PDDLStream |
+| PDDLStream | Blocked | [pr2blocked_generalized](experiments/conf/environment/pr2blocked_generalized.yaml) | PDDLStream |
+| PDDLStream | Rovers | [rovers_generalized](experiments/conf/environment/rovers_generalized.yaml) | PDDLStream |
 
-```bash
-# Linux: https://rclone.org/downloads/
-# macOS:
-brew install rclone
+The paper's Dynamic3D Shelf is `dynamicshelf3d_generalized`; `shelf3d_generalized` is a separate, preliminary **kinematic** Shelf environment. Configured `eval_counts` are cycled across the 100 evaluation episodes, and count-dependent step limits come from the environment wrapper. Fixed-size environments use the top-level `max_steps`.
 
-rclone config
-```
+### Methods and settings
 
-In `rclone config`, create a remote named `robocode-drive`, choose Google
-Drive, leave the client ID and secret blank, choose read-only access, and allow
-browser authentication. The resulting token stays in rclone's user config
-outside the repository. Then launch:
+Start from the quickstart's common protocol (`primitive_level=none`, $20, 100 instances, 60 seconds) and change the method/environment as follows:
 
-```bash
-python -m experiments.results_viewer --drive-folder "<Google Drive folder URL>"
-```
+| Paper condition | Approach and model selection | Access / scope |
+| --- | --- | --- |
+| Claude Opus | `approach=agentic approach/backend=claude_opus5` | Strict black box, all 28 |
+| Codex Sol | `approach=agentic approach/backend=codex_gpt56sol` | Strict black box, all 28; medium reasoning |
+| Codex Astra | `approach=agentic approach/backend=codex_gpt6` | Strict black box, all 28; high reasoning |
+| Claude + source | `approach=agentic approach/backend=claude_opus5` | `approach.blackbox=false approach.blackbox_strict=false`, all 28 |
+| Astra + source | `approach=agentic approach/backend=codex_gpt6` | `approach.blackbox=false approach.blackbox_strict=false`, all 28 |
+| LLMGenPlan | `approach=llm_genplan approach/completion=cli_opus5` | Full environment source, fixed validation/feedback loop, no agent tools |
+| One-shot | First LLMGenPlan program | Same source and initial prompting; no refinement |
+| Planner | `approach=bilevel_planning` or `approach=pddlstream_planning` | 16 supported environments above; no LLM usage |
 
-Only `.zip` files are downloaded. Name each archive `<Experiment ID>.zip` so
-the tracker ID, Drive result, and local cache directory match without manual
-renaming. Archives are extracted under the user's cache directory, and the
-viewer scans that local copy. The Refresh button checks Drive again, downloads
-changed archives, removes archives deleted remotely, and rescans the cache.
-Unchanged extracted archives are left in place, so GIFs rendered by the viewer
-stay local and survive refreshes. The Drive folder URL and rclone configuration
-are runtime configuration and must not be committed. Their locations can be
-overridden with
-`ROBOCODE_RESULTS_DRIVE_FOLDER`, `ROBOCODE_RESULTS_CACHE`,
-`ROBOCODE_RCLONE_REMOTE`, and `RCLONE_CONFIG`. The same viewer command works on
-Linux and macOS as long as `rclone` is on `PATH`.
+The manuscript labels Opus agentic runs as high effort. The checked-in Claude agent backend delegates effort to the installed CLI; it does not pin an effort flag. Sol and Astra presets explicitly set `reasoning_effort: medium` and `high`. Preserve CLI versions and resolved settings when comparing runs. LLMGenPlan uses the separate **completion** config group; `cli_opus5` currently sets `max_thinking_tokens: 0`.
 
-Rclone currently warns that its shared Google Drive OAuth client is scheduled
-for retirement during 2026. The blank-client-ID setup is therefore a convenient
-prototype path, not a permanent team dependency. Configure a team-owned OAuth
-client on the same rclone remote before Google disables the shared client; the
-viewer command and archive layout do not change.
+For example, run five Astra + source replicates on Motion2D, then substitute any environment from the table above:
 
-### Agentic approach
-
-The `agentic` approach launches a coding agent during `train()`. In whitebox mode it reads the filtered environment source; in blackbox mode it infers dynamics through the isolated env server. It writes a `GeneratedApproach` class that is used at evaluation time and can run test scripts against the real environment before committing.
-
-By default the agent uses the Claude Code CLI backend and runs in the whitebox Docker sandbox (requires `bash docker/build.sh` once):
-
-```bash
-python experiments/run_experiment.py approach=agentic environment=motion2d_easy eval_seed="$EVAL_SEED"
-```
-
-Set `approach.blackbox=true` to hide the environment source and force the agent to discover the dynamics empirically through a host-side env server instead of reading code. Add `approach.blackbox_strict=true primitive_level=none` to also remove environment dependencies and non-render helper APIs: the generated program uses a generic Python environment with only the standard library, NumPy, and SciPy, can interact through `reset` and `step`, and may use the configured MCP tools to render states. The frozen program is checked against the same import allowlist before scoring. See [docs/blackbox.md](docs/blackbox.md) for the architecture.
-
-The default hard generation budget is $20 per experiment. Codex charges the root
-agent and all of its subagents against that one shared threshold.
-
-Codex experiment templates (replace the environment and seeds as needed):
-
-```bash
-# Whitebox
-python experiments/run_experiment.py approach=agentic \
-    approach/backend=codex_gpt6 environment=motion2d_generalized \
-    approach.max_budget_usd=20.0 replicate_seed=0 eval_seed="$EVAL_SEED"
-
-# Blackbox
-python experiments/run_experiment.py approach=agentic \
-    approach/backend=codex_gpt6 environment=motion2d_generalized \
-    approach.blackbox=true approach.max_budget_usd=20.0 \
-    replicate_seed=0 eval_seed="$EVAL_SEED"
-```
-
-To use a different backend/model, override the `approach/backend` config:
-
-```bash
-# GPT-5.4 via OpenCode
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_gpt54 eval_seed="$EVAL_SEED"
-
-# GPT-5.6 Sol (medium reasoning) via Codex
-python experiments/run_experiment.py approach=agentic approach/backend=codex_gpt6 eval_seed="$EVAL_SEED"
-
-# Local Ollama model
-python experiments/run_experiment.py approach=agentic approach/backend=opencode_qwen eval_seed="$EVAL_SEED"
-
-# Or override individual fields
-python experiments/run_experiment.py approach=agentic approach.backend.backend=opencode approach.backend.model=google/gemini-2.5-pro eval_seed="$EVAL_SEED"
-```
-
-Available backend presets: `claude_opus5` (default), `claude_sonnet5`, `claude_opus48`, `claude_sonnet46`, `claude_haiku45`, `claude_ollama_qwen`, `codex_gpt6`, `opencode_gpt54`, `opencode_gpt4omini`, `opencode_gpt5nano`, `opencode_qwen`.
-
-The experiment runner rejects the legacy local sandbox for generated-code
-methods because that sandbox permits host filesystem reads. Use Docker or
-Apptainer so experimenter-only evaluation configuration is outside the
-synthesis sandbox.
-
-To skip re-generation and load a previously generated approach:
-```bash
-python experiments/run_experiment.py approach=agentic environment=small_maze \
-    eval_seed="$EVAL_SEED" \
-    approach.load_dir=outputs/2026-02-16/16-00-41
-```
-
-Parallel sweeps each get their own container (named `robocode-sandbox-<uuid>`), so multiple runs never interfere:
-```bash
-python experiments/run_experiment.py -m replicate_seed=0,1,2 eval_seed="$EVAL_SEED" environment=small_maze,large_maze approach=agentic
-```
-
-Use the [joblib launcher](https://hydra.cc/docs/plugins/joblib_launcher/) to run jobs in parallel locally:
 ```bash
 python experiments/run_experiment.py -m \
-    approach=agentic \
-    approach.container_backend=docker \
-    replicate_seed=42,24,424,444,222 \
-    eval_seed="$EVAL_SEED" \
-    primitive_level=none \
-    environment=motion2d_easy,obstruction2d_easy,clutteredretrieval2d_easy,clutteredstorage2d_easy,stickbutton2d_easy,pushpullhook2d \
-    'hydra.sweep.dir=multirun/2026-02-23/no_primitives_5d_s42_24_424_444_222' \
-    'hydra.sweep.subdir=r${replicate_seed}/${hydra:runtime.choices.environment}' \
-    hydra/launcher=joblib hydra.launcher.n_jobs=4
+  approach=agentic approach/backend=codex_gpt6 \
+  environment=motion2d_generalized \
+  primitive_level=none approach.container_backend=docker \
+  approach.blackbox=false approach.blackbox_strict=false \
+  approach.max_budget_usd=20.0 replicate_seed=42,24,424,444,222 \
+  eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60
 ```
 
-### Experiment tracker
-
-Hydra defines executable choices, while small campaign files select the conditions
-intended for one study. Keep exploratory or smoke-test campaigns local, and commit
-only study definitions that should be shared. Generate a local CSV without running
-experiments:
+LLMGenPlan's checked-in default stops after four debug attempts or $20, whichever comes first. For a budget-limited run, remove that step cap explicitly:
 
 ```bash
-python -m experiments.tracker.generate \
-    path/to/campaign.yaml \
-    --eval-seed "$EVAL_SEED" --dry-run
-python -m experiments.tracker.generate \
-    path/to/campaign.yaml \
-    --eval-seed "$EVAL_SEED" \
-    --output experiments/generated/my_campaign.csv
+python experiments/run_experiment.py \
+  approach=llm_genplan approach/completion=cli_opus5 \
+  environment=motion2d_generalized primitive_level=none \
+  approach.container_backend=docker approach.max_budget_usd=20.0 \
+  approach.max_debug_attempts=null approach.chain_of_thought=true \
+  replicate_seed=42 eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60 \
+  hydra.run.dir=outputs/paper-motion-genplan-r42
 ```
 
-Campaign files call the repeated runs `replicate_seeds`; they never contain the
-private evaluation seed. The generator requires that fixed seed explicitly and places
-it in the ignored local CSV and shared Sheet. Each condition becomes one row whose
-Hydra command sweeps every replicate while holding the evaluation suite fixed.
-The generated Experiment ID is passed into Hydra, recorded in every `results.json`,
-and used as the exact parent directory under `multirun/`. Each invocation creates a
-timestamped run beneath that parent with one `replicate_<replicate_seed>` directory
-per replicate, so the condition folder can be uploaded to Drive without renaming it.
-The ID fingerprints the complete Hydra-composed condition and both seed fields. Hydra
-defaults such as access mode, model/backend, and the 60-second evaluation timeout are
-materialized in every generated command. Editing any executable setting or seed
-protocol therefore appends a distinct run instead of relabeling earlier results.
-Study campaigns use the named `primitive_level=none|low_level|bilevel` config choices,
-which resolve to the primitive list consumed by `build_primitives()`. Explicit
-constraints exclude invalid cells such as `primitive_level=bilevel` with
-`approach.blackbox=true`, and Hydra composition catches missing config choices.
+The loop can stop early when its training tasks are solved. Current code selects the best validated candidate for `sandbox/approach.py`, retaining the final candidate separately. Cost is checked between generations, so $20 is a stopping threshold rather than an exact bill. Use archived settings and submissions for historical comparisons.
 
-Install the optional Google client and synchronize the generated CSV:
+### Planner commands
 
 ```bash
-uv sync --extra tracker
-python -m experiments.tracker.sync_google_sheet \
-    experiments/generated/my_campaign.csv --sheet-id SPREADSHEET_ID
+python experiments/run_experiment.py \
+  approach=bilevel_planning environment=transport3d_generalized \
+  primitive_level=none approach.max_skill_horizon=1000 \
+  replicate_seed=42 eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60
+
+python experiments/run_experiment.py \
+  approach=pddlstream_planning environment=pr2packed_generalized \
+  primitive_level=none replicate_seed=42 eval_seed="$EVAL_SEED" \
+  num_eval_tasks=100 eval_timeout=60
 ```
 
-The sync uses Experiment ID as its key. It updates generated columns only for the exact
-same canonical run, appends changed conditions or seed protocols, marks removed
-conditions from the synchronized campaign inactive, and never writes existing Owner,
-Status, Progress, Priority, Notes, Results, or Git SHA cells. It also rejects a
-same-ID seed change as malformed input. New Sheets receive a native table with People,
-file, and dropdown column types.
-Generated categorical columns such as Campaign, Environment, Method, Primitive Level,
-Access, Model / Backend, and Active are dropdown chips whose choices refresh from all
-rows in the tracker, including inactive experiments from older campaigns. Priority is
-placed immediately after Replicate Seeds and Evaluation Seed. Dropdown-chip colors can
-be customized directly in the Google Sheets UI without changing the cells'
-backgrounds; an unchanged sync preserves that native chip styling.
-Status and Owner are the first two columns so the Sheet reads as a work queue at a
-glance.
+PDDLStream also supports `packing3d_generalized`, `pr2blocked_generalized`, and `rovers_generalized`. Current SeSamE defaults are 10 abstract plans, 10 samples per step, and a 100-step skill horizon. Useful upstream planner overrides retained from the experiment setup are:
 
-Authentication uses gspread's desktop OAuth flow. By default it reads
-`~/.config/gspread/credentials.json` and stores the authorized-user token outside the
-repository. Override those paths with `--credentials` / `--authorized-user` or the
-`GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_AUTHORIZED_USER` environment variables. Never
-commit either credential file.
+| Environment | Overrides |
+| --- | --- |
+| `dynpushpullhook2d_generalized` | `approach.samples_per_step=20 approach.max_abstract_plans=5` |
+| `transport3d_generalized`, `shelf3d_generalized` (preliminary) | `approach.max_skill_horizon=1000` |
+| `tossing3d_generalized` | `approach.max_abstract_plans=1 approach.samples_per_step=5 approach.max_skill_horizon=400` |
 
-The generated `approach.py` and full agent log are saved under `sandbox/` in the run's output directory (e.g. `outputs/2026-02-16/16-00-41/sandbox/`).
+Consult each archived run's `.hydra/config.yaml` for its exact planner settings. Tossing3D multi-cube planner support is pending upstream PRs as of 2026-09-24; use the updated dependency revision once those changes merge.
 
-### Plain-LLM approaches
+## Running and evaluating
 
-`llm_genplan` and `best_of_k` call a model directly (messages in, code out) with no tools and no agent loop. They take their model from the `approach/completion` config group, which is separate from the `approach/backend` group the agentic approach uses:
+### Five replicates and evaluation protocol
 
 ```bash
-# Default: Opus 5 through the Claude CLI
-python experiments/run_experiment.py approach=llm_genplan environment=small_maze eval_seed="$EVAL_SEED"
-
-# Same approach on a different model
-python experiments/run_experiment.py approach=best_of_k approach/completion=cli_sonnet5 eval_seed="$EVAL_SEED"
+python experiments/run_experiment.py -m \
+  approach=agentic approach/backend=codex_gpt6 \
+  environment=motion2d_generalized primitive_level=none \
+  approach.container_backend=docker \
+  approach.blackbox=true approach.blackbox_strict=true \
+  approach.max_budget_usd=20.0 replicate_seed=42,24,424,444,222 \
+  eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60 \
+  hydra.sweep.dir=multirun/paper-motion-astra \
+  'hydra.sweep.subdir=r${replicate_seed}'
 ```
 
-The `cli_*` presets drive the same authenticated Claude CLI as the agentic backend, so these runs need `claude auth login` (or `ANTHROPIC_API_KEY`) and no separate setup. The CLI applies an irreducible ~2k-token system prompt that cannot be stripped, so these baselines are prompted with that preamble present; the `anthropic_*` presets call the Messages API directly when a prompt with nothing else in it is required.
+This schedules five independent synthesis runs (up to $100 tracked usage). Hydra runs them sequentially by default. For parallel execution, append `hydra/launcher=joblib hydra.launcher.n_jobs=2`, allowing for a separate container and simulator load per job. Use a new output directory for each campaign.
 
-| Completion preset | Provider | Model |
-|---|---|---|
-| `cli_opus5` (default) | Claude CLI | `claude-opus-5` |
-| `cli_sonnet5` | Claude CLI | `claude-sonnet-5` |
-| `cli_opus48` | Claude CLI | `claude-opus-4-8` |
-| `cli_sonnet46` | Claude CLI | `claude-sonnet-4-6` |
-| `cli_claude` | Claude CLI | `sonnet` (alias; the CLI picks the generation) |
-| `anthropic_opus` | Messages API | `claude-opus-4-8` |
-| `anthropic_sonnet` | Messages API | `claude-sonnet-4-6` |
-| `ollama_qwen` | OpenAI-compatible | `qwen3.6` (local Ollama) |
-| `vllm` | OpenAI-compatible | `Qwen/Qwen3.6-35B-A3B` (local vLLM) |
+`replicate_seed` seeds randomness controlled by RoboCode and identifies a replicate. Coding-agent generation remains stochastic, even with the same seed and model.
 
-The `anthropic_*` presets bill the Messages API and need `ANTHROPIC_API_KEY`; their `input_cost_per_mtok` / `output_cost_per_mtok` fields turn reported token usage into an estimated `cost_usd`, which bounds `approach.max_budget_usd`. The CLI reports its own cost, and the local presets report none.
+`eval_seed` determines the common ordered evaluation suite. Keep it, the environment config, count schedule, and episode count identical across methods. The paper uses five runs per method/environment, 100 evaluation instances per program sampled from the same initial-state distribution used during synthesis, and a 60-second per-instance timeout. There is no design-count versus evaluation-count split in the paper protocol. Request the paper's seed to recover its evaluation instances; a new seed gives a new suite under the same protocol.
 
-### Planner baselines
+### Saved artifacts and inspection
 
-Two per-instance planners solve each evaluation seed from scratch, with no LLM in the loop; they report `planning_time` and `plan_found` per episode and spend no budget. Both plan within the shared `eval_timeout`.
+Hydra writes runs beneath `outputs/` or `multirun/` unless overridden. Keep the complete run directory:
 
-`bilevel_planning` runs kinder-baselines' SeSamE planner on every family for which `kinder_bilevel_planning` ships models: the kinematic-2D families, DynObstruction2D, DynPushPullHook2D, Transport3D, the kinematic Shelf3D, and Tossing3D (one cube only; other counts score as unsolved with a `planner_unsupported` flag). The family mapping is inferred from the env (`src/robocode/utils/bilevel.py`), so no env config needs a key. Some families need the planner settings their upstream configs use, passed as approach overrides:
+| Artifact | Contents |
+| --- | --- |
+| `.hydra/config.yaml`, `overrides.yaml`, `hydra.yaml` | Experiment configuration and Hydra choices |
+| `sandbox/approach.py` and sibling files | Frozen policy and its local dependencies |
+| `sandbox/agent_log.txt` | Agentic synthesis log; backend session/usage files may also be present |
+| `sandbox/implN_candidate.py`, `implN_response.txt`, `implN_score.json` | LLMGenPlan submissions, responses, and validation results |
+| `sandbox/best_score.json`, `final_score.json` | LLMGenPlan's selected-best and literal-final generation indices |
+| `results.json` | Per-episode outcomes, solve rate, timeouts/crashes, count summaries, and available generation cost/usage |
+| `env_description.md` | Environment description supplied to the approach |
 
 ```bash
-python experiments/run_experiment.py approach=bilevel_planning primitive_level=none \
-    environment=transport3d_generalized approach.max_skill_horizon=1000 eval_seed="$EVAL_SEED"
-# dynpushpullhook2d: approach.samples_per_step=20 approach.max_abstract_plans=5
-# shelf3d:           approach.max_skill_horizon=1000
-# tossing3d:         approach.max_abstract_plans=1 approach.samples_per_step=5 approach.max_skill_horizon=400
+python experiments/analyze_results.py multirun/
+python -m experiments.results_viewer --root outputs/ --port 8000
 ```
 
-`pddlstream_planning` runs the PDDLStream domain that kinder-baselines ships for Packing3D (`kinder-pddlstream-planning`) on a twin simulator and replays the plan against the evaluated environment in lockstep. It needs the `pddlstream` extra, whose install compiles FastDownward (`make` and a C++ compiler required):
+Open `http://localhost:8000` for the viewer. `render_videos=true` saves rollout videos. `approach.telemetry=true` records synthesis environment interactions (source-access telemetry requires a registered environment class). `record_approach_history=true` replays sandbox Git snapshots for inspection; it is not the 100-instance paper evaluation of each historical program. See [advanced operations](docs/advanced-operations.md).
+
+### Reevaluating a frozen program
+
+`approach.load_dir` expects a **run directory containing `sandbox/approach.py`** and skips synthesis. Preserve sibling modules and match the original environment, primitives, access restrictions, and evaluation protocol. Write reevaluation to a new directory:
 
 ```bash
-uv sync --extra bilevel --extra pddlstream
-python experiments/run_experiment.py approach=pddlstream_planning primitive_level=none \
-    environment=packing3d_generalized eval_seed="$EVAL_SEED"
+python experiments/run_experiment.py \
+  approach=agentic approach/backend=claude_opus5 \
+  environment=motion2d_generalized primitive_level=none \
+  approach.container_backend=docker \
+  approach.blackbox=true approach.blackbox_strict=true \
+  approach.load_dir=outputs/paper-motion-opus-r42 \
+  replicate_seed=42 eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60 \
+  hydra.run.dir=outputs/paper-motion-opus-r42-reeval
 ```
 
-The pinned pddlstream fork bundles a FastDownward whose `search/ext/optional.hh` does not compile with GCC 13+ or recent clang (`tl::optional<T&>` carries a stale `emplace`; removing that member is the fix upstream FastDownward applied). Until the fork carries the fix, build it from a patched checkout and install it with `uv pip install --no-deps <path>`. PDDLStream writes its scratch files to `temp/` and `statistics/` in the working directory; both are ignored.
+For LLMGenPlan, use `approach=llm_genplan approach/completion=cli_opus5` with its original run's `load_dir`; do not pass the agentic black-box flags. Final policy scoring runs on the host. Strict import checks enforce the allowed dependencies but are not hostile-code containment.
 
-### Replicates and the evaluation suite
+### One-shot from LLMGenPlan
 
-`replicate_seed` and `eval_seed` have deliberately different roles:
+The paper's **One-shot is the first program generated by LLMGenPlan**, after its initial summary/strategy prompts when enabled. It is not the first coding-agent commit, Best-of-K, or a new synthesis run.
 
-- `replicate_seed` identifies one independent replicate and seeds randomness
-  controlled by Robocode, such as an approach's NumPy generator and action-space
-  sampling. It does not seed Claude or make an agentic run reproducible.
-- `eval_seed` is a fixed team value supplied explicitly in final-run commands.
-  Robocode uses it to derive the same ordered evaluation episode suite for every
-  method and replicate, so score differences are not caused by different sampled
-  test suites. The checked-in default is `null`, and the runner fails if a command
-  omits the value. Keep it out of public configs and agent-visible inputs.
+For current runs, copy the saved first submission into a separate loadable run:
 
-The generalized synthesis agent does not receive `eval_seed` or the derived
-episode seeds. Hydra's full configuration remains on the experimenter side, and
-only the child `sandbox/` directory plus filtered source are mounted into Docker
-or Apptainer. Per-instance methods are a separate protocol: they receive the one
-derived episode seed they are solving, but not the master `eval_seed` used to
-construct the suite.
+```bash
+GENPLAN_RUN=outputs/paper-motion-genplan-r42
+ONESHOT_RUN=outputs/paper-motion-oneshot-r42
+mkdir -p "$ONESHOT_RUN/sandbox"
+cp "$GENPLAN_RUN/sandbox/impl0_candidate.py" "$ONESHOT_RUN/sandbox/approach.py"
 
-For variable-object-count environments, evaluation sweeps the configured design
-and held-out counts on that fixed episode schedule. `results.json` retains the
-per-count curve and also reports `design_count_solve_rate` and
-`held_out_count_solve_rate` separately.
-
-The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/cli-usage)
-and [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages/create)
-do not expose a sampling-seed control. Consequently, replicates capture
-uncontrolled model-generation variation even when `replicate_seed` is held
-fixed; session IDs and model names are not random seeds.
-
-This isolation boundary protects the synthesis process and its tool calls. The
-generated policy is currently loaded by the trusted experiment runner for
-rollout; it is reviewed as an experiment artifact rather than treated as
-hostile code. Protecting the host from a deliberately malicious generated
-policy would require running policy inference behind a separate process or
-container boundary as well.
-
-#### Example: small_maze
-
-On `small_maze`, the agent independently discovered A* pathfinding and achieved a **100% solve rate with optimal path lengths** (mean 2.3 steps across 10 episodes):
-
-```json
-{
-  "mean_eval_reward": -2.3,
-  "mean_eval_steps": 2.3,
-  "solve_rate": 1.0,
-  "num_eval_tasks": 10
-}
+python experiments/run_experiment.py \
+  approach=llm_genplan approach/completion=cli_opus5 \
+  environment=motion2d_generalized primitive_level=none \
+  approach.container_backend=docker approach.load_dir="$ONESHOT_RUN" \
+  replicate_seed=42 eval_seed="$EVAL_SEED" num_eval_tasks=100 eval_timeout=60 \
+  hydra.run.dir=outputs/paper-motion-oneshot-r42-eval
 ```
 
-<details>
-<summary>Generated <code>approach.py</code> (A* pathfinding)</summary>
+Keep the parent run and `impl0_response.txt` as provenance. If an older run lacks `impl0_candidate.py`, parse its `impl0_response.txt` with the repository's `_parse_python_code` helper, as shown in [advanced operations](docs/advanced-operations.md#older-llmgenplan-submissions). Never substitute the selected best or last submission. An invalid first program remains a failed first program: the loader can fail before writing `results.json`, so preserve the error and account for it explicitly instead of dropping that replicate. Setting `approach.max_debug_attempts=0` launches a new first-attempt run; it does not recover the historical One-shot artifact.
 
-```python
-"""Optimal approach for MazeEnv using A* pathfinding algorithm."""
+## Further documentation
 
-import heapq
-from typing import Optional
+- [Black-box access and protocol](docs/blackbox.md)
+- [Apptainer network isolation](docs/apptainer-network-isolation.md) and [red-teaming](docs/apptainer-red-teaming.md)
+- [Advanced operations](docs/advanced-operations.md): tracker, Drive viewer, history, and older saved submissions
+- [Preliminary experiments and alternative configurations](docs/preliminary-experiments.md)
 
+## Preliminary experiments
 
-class GeneratedApproach:
-    """Optimal maze solver using A* pathfinding."""
+The repository retains useful paths that are **not used in the current paper**: [non-strict black box](docs/preliminary-experiments.md#non-strict-black-box), OpenCode, older/alternative Claude presets, local-model completion backends, CDL, per-instance agentic synthesis, Best-of-K, random and oracle approaches, maze environments, fixed-difficulty variants, kinematic Shelf, injected primitive variants, LIBERO-PRO, and the CaP-X submodule. They remain available for exploration; their presence is not evidence of paper evaluation or a fresh compatibility test against each external provider.
 
-    def __init__(self, action_space, observation_space):
-        self.action_space = action_space
-        self.observation_space = observation_space
-        self.planned_path: Optional[list[tuple[int, int]]] = None
-        self.path_index = 0
-
-        self.UP = 0
-        self.DOWN = 1
-        self.LEFT = 2
-        self.RIGHT = 3
-
-        self.action_to_delta = {
-            self.UP: (-1, 0),
-            self.DOWN: (1, 0),
-            self.LEFT: (0, -1),
-            self.RIGHT: (0, 1)
-        }
-
-    def reset(self, state, info):
-        self.planned_path = self._astar_search(state)
-        self.path_index = 0
-
-    def get_action(self, state):
-        if self.planned_path and self.path_index < len(self.planned_path) - 1:
-            next_pos = self.planned_path[self.path_index + 1]
-            dr = next_pos[0] - state.agent[0]
-            dc = next_pos[1] - state.agent[1]
-            for action, (delta_r, delta_c) in self.action_to_delta.items():
-                if (dr, dc) == (delta_r, delta_c):
-                    self.path_index += 1
-                    return action
-        return self._greedy_action(state)
-
-    def _astar_search(self, state) -> Optional[list[tuple[int, int]]]:
-        start, goal = state.agent, state.goal
-        heap = [(self._heuristic(start, goal), start, 0, [start])]
-        visited = set()
-        while heap:
-            _, current, g_score, path = heapq.heappop(heap)
-            if current in visited:
-                continue
-            visited.add(current)
-            if current == goal:
-                return path
-            r, c = current
-            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nr, nc = r + dr, c + dc
-                neighbor = (nr, nc)
-                if (0 <= nr < state.height and 0 <= nc < state.width
-                    and neighbor not in state.obstacles
-                    and neighbor not in visited):
-                    new_g = g_score + 1
-                    heapq.heappush(heap, (
-                        new_g + self._heuristic(neighbor, goal),
-                        neighbor, new_g, path + [neighbor]
-                    ))
-        return None
-
-    def _heuristic(self, pos1, pos2) -> int:
-        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
-
-    def _greedy_action(self, state) -> int:
-        dr = state.goal[0] - state.agent[0]
-        dc = state.goal[1] - state.agent[1]
-        if abs(dr) >= abs(dc):
-            return self.DOWN if dr > 0 else self.UP
-        return self.RIGHT if dc > 0 else self.LEFT
-```
-</details>
-
-<details>
-<summary>Agent log (19 turns, $0.36)</summary>
-
-The agent's workflow:
-1. Explored the sandbox directory and read `maze_env.py` and `base_env.py`
-2. Analyzed the state type (`_MazeState` with `agent`, `goal`, `obstacles`, `height`, `width`), action space (4 directional moves), and reward structure (-1 per step)
-3. Identified this as a shortest-path problem and implemented A* with Manhattan distance heuristic
-4. Wrote and ran three test scripts verifying correctness on simple mazes, complex mazes with obstacles, impossible mazes (graceful fallback), and optimality of path lengths
-5. Cleaned up test files and produced the final `approach.py`
-
-```
-18:32:05 Agent: I'll analyze the environment source files and create an optimal approach.py.
-18:32:06 Tool call: Glob({'pattern': '**/*.py'})
-18:32:08 Agent: Let me explore the main environment files to understand the structure:
-18:32:09 Tool call: Read({'.../maze_env.py'})
-18:32:09 Tool call: Read({'.../base_env.py'})
-18:32:11 Agent: [Analyzed state/action space, identified A* as optimal strategy]
-18:32:40 Tool call: Write({'.../approach.py'})
-18:32:43 Agent: Now let me create a simple test script to verify the approach works:
-18:33:00 Tool call: Write({'.../test_approach.py'})
-18:33:03 Tool call: Bash({'command': 'python test_approach.py'})
-18:33:07 Agent: Excellent! Testing on a more complex maze...
-18:33:22 Tool call: Write({'.../test_complex_maze.py'})
-18:33:26 Tool call: Bash({'command': 'python test_complex_maze.py'})
-18:33:31 Agent: A* correctly found optimal 12-step path around all obstacles.
-18:33:39 Tool call: Write({'.../test_real_state.py'})
-18:33:54 Tool call: Bash({'command': 'python test_real_state.py'})
-18:33:58 Agent: Works with actual _MazeState class.
-18:34:09 Tool call: Write({'.../test_optimality.py'})
-18:34:11 Tool call: Bash({'command': 'python test_optimality.py'})
-18:34:13 Agent: All test cases produce optimal solutions.
-18:34:14 Tool call: Bash({'command': 'rm test_*.py'})
-18:34:25 Session done: turns=19, cost=$0.3628055, error=False
-```
-</details>
+The [preliminary guide](docs/preliminary-experiments.md) inventories these configurations and preserves their setup instructions, examples, and existing limitations. Paper-analysis notebooks are a separate follow-up release.

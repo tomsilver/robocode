@@ -1,0 +1,32 @@
+{
+  "description": "Existing Claude Code Opus 5 strict-black-box policy rollouts rendered for the paper video, converted to looping GIFs without altering the simulated behavior. Scene backgrounds are enabled.",
+  "clips": [
+    {
+      "gif": "tossing3d.gif",
+      "source_clip": "tossing-blackbox-r24-ep37.mp4",
+      "source_sha256": "bb7fccc2add3aaebde8fa4156012d6c77cda21bebfb15d7afeb9b4f77e6280e5",
+      "playback_speed": 2.5,
+      "width": 480,
+      "height": 300,
+      "fps": 15
+    },
+    {
+      "gif": "shelf3d.gif",
+      "source_clip": "shelf-wide-main-r222-ep1.mp4",
+      "source_sha256": "be35c181e751020b2203c14ad69357483448a645c0927566728246df05dbe96d",
+      "playback_speed": 3,
+      "width": 480,
+      "height": 300,
+      "fps": 15
+    },
+    {
+      "gif": "packing3d.gif",
+      "source_clip": "packing3d-main-r42-ep2.mp4",
+      "source_sha256": "e322e41e9537b272afc16ac2ebdc5598cd128c4e3496bdd08d50626029a166d9",
+      "playback_speed": 2,
+      "width": 480,
+      "height": 300,
+      "fps": 15
+    }
+  ]
+}

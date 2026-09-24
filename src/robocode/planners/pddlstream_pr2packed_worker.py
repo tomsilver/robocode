@@ -7,8 +7,8 @@ including its own vendored copy of ss-pybullet under
 module robocode imports as ``pybullet_tools`` (see
 :mod:`robocode.environments.ss_pybullet`), and the two disagree about which
 physics client is live, so the stock tree must never be imported into a process
-that holds a robocode environment. Running it here, behind a JSON pipe, is the
-same isolation ``scripts/compare_pddlstream_rollout.py`` uses.
+that holds a robocode environment. Running it here, behind a JSON pipe,
+keeps the two module instances isolated.
 
 It reads one instance on stdin -- the evaluated episode's block poses and robot
 configuration -- restores that state into a stock ``packed`` scene, plans, and

@@ -9,7 +9,7 @@
 # to be photographed from somewhere with a clear line to it, then radioed from
 # somewhere with a clear line to the lander. The sample half of the goal does not grow
 # with the count. The scene has four mounds to stand objectives on, so four is the
-# ceiling; design_counts stay below it and 4 is held out.
+# ceiling; unpinned resets use 1-3 and evaluation also includes 4.
 _target_: robocode.environments.rovers_variable_count_env.RoversVariableCountEnv
 design_counts: [1, 2, 3]
 eval_counts: [1, 2, 3, 4]
