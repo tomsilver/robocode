@@ -203,6 +203,8 @@ class ClaudeBackend(AgentBackend):
         # by the usage cap can be continued. --continue resumes the most recent
         # conversation in the working directory, which is unique to this
         # generation, so it reattaches to exactly this run's context.
+        if config.effort:
+            args += ["--effort", config.effort]
         if config.resume_previous_session:
             args.append("--continue")
         if config.system_prompt:

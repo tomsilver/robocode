@@ -31,6 +31,7 @@ podman build \
     --file "${REPO_ROOT}/docker/Dockerfile" \
     --build-arg "USER_UID=$(id -u)" \
     --build-arg "USER_GID=$(id -g)" \
+    --build-arg "CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION:-latest}" \
     "${REPO_ROOT}"
 
 echo "[2/3] Saving OCI image to ${TAR_PATH} ..."

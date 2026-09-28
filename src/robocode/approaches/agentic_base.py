@@ -95,6 +95,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
         self._backend_cfg = backend
         self._backend = create_backend(backend)
         self._model = backend["model"]
+        self._effort = backend.get("effort", "")
         self._max_budget_usd = max_budget_usd
         self._max_turns = max_turns
         self._output_dir = Path(output_dir)
@@ -255,6 +256,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 prompt=prompt,
                 system_prompt=system_prompt,
                 model=self._model,
+                effort=self._effort,
                 max_budget_usd=max_budget_usd,
                 max_turns=self._max_turns,
                 primitive_names=tuple(self._primitives),
@@ -274,6 +276,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 prompt=prompt,
                 system_prompt=system_prompt,
                 model=self._model,
+                effort=self._effort,
                 max_budget_usd=max_budget_usd,
                 max_turns=self._max_turns,
                 primitive_names=tuple(self._primitives),
@@ -293,6 +296,7 @@ class GeneratedProgramApproach(BaseApproach[_ObsType, _ActType]):
                 prompt=prompt,
                 system_prompt=system_prompt,
                 model=self._model,
+                effort=self._effort,
                 max_budget_usd=max_budget_usd,
                 max_turns=self._max_turns,
                 mcp_tools=self._mcp_tools,

@@ -1,0 +1,4 @@
+backend: claude
+model: claude-opus-5-5
+# Opus 5.5 defaults to medium effort in the CLI; the campaign pins high.
+effort: high

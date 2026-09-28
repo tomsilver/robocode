@@ -40,6 +40,9 @@ class SandboxConfig:
     prompt: str = ""
     output_filename: str = ""
     model: str = "sonnet"
+    # Reasoning effort passed to the CLI (low/medium/high/xhigh/max); empty keeps
+    # the CLI's own default, which is model dependent.
+    effort: str = ""
     max_budget_usd: float = 20.0
     max_turns: int = 0  # 0 = unlimited
     system_prompt: str = ""

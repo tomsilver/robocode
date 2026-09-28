@@ -419,6 +419,16 @@ class TestClaudeBackend:
         cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
         assert "--max-budget-usd" not in cmd
 
+    def test_build_cli_cmd_effort(self, tmp_path: Path) -> None:
+        """--effort is passed through when configured and omitted otherwise."""
+        config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi", effort="high")
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(config)
+        assert cmd[cmd.index("--effort") + 1] == "high"
+        cmd = ClaudeBackend(DEFAULT_BACKEND_CFG).build_cli_cmd(
+            SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
+        )
+        assert "--effort" not in cmd
+
     def test_build_cli_cmd_persists_session_by_default(self, tmp_path: Path) -> None:
         """Sessions persist (resumable) and no --continue without a resume request."""
         config = SandboxConfig(sandbox_dir=tmp_path, prompt="hi")
