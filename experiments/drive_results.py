@@ -47,6 +47,7 @@ class SyncReport:
     unchanged: int = 0
     removed: int = 0
     ignored: int = 0
+    skipped_links: int = 0
 
 
 def parse_drive_folder_id(folder: str) -> str:
@@ -125,8 +126,14 @@ class RcloneResultsSync:
             temporary.unlink(missing_ok=True)
 
     @staticmethod
-    def _safe_extract(archive_path: Path, destination: Path) -> None:
+    def _safe_extract(archive_path: Path, destination: Path) -> int:
+        """Extract an archive and return the number of symlinks left out.
+
+        Symlinks are kept only when they resolve inside the extracted archive.
+        """
         with zipfile.ZipFile(archive_path) as bundle:
+            files: list[zipfile.ZipInfo] = []
+            links: list[zipfile.ZipInfo] = []
             for info in bundle.infolist():
                 member = PurePosixPath(info.filename)
                 if (
@@ -139,12 +146,18 @@ class RcloneResultsSync:
                     raise DriveSyncError(
                         f"unsafe path in {archive_path.name}: {info.filename!r}"
                     )
-                mode = info.external_attr >> 16
-                if stat.S_ISLNK(mode):
-                    raise DriveSyncError(
-                        f"symbolic link in {archive_path.name}: {info.filename!r}"
-                    )
-            bundle.extractall(destination)
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    links.append(info)
+                else:
+                    files.append(info)
+            # zipfile would write link entries as regular files holding the target.
+            bundle.extractall(destination, members=files)
+            created = [
+                link
+                for info in links
+                if (link := _extract_symlink(bundle, info, destination)) is not None
+            ]
+        return len(links) - len(_keep_contained_symlinks(created, destination))
 
     def _target_for(self, archive: RemoteArchive) -> Path:
         relative = PurePosixPath(archive.relative_path)
@@ -154,7 +167,7 @@ class RcloneResultsSync:
             raise DriveSyncError(f"unsafe cache target for {archive.relative_path}")
         return resolved
 
-    def _replace_from_archive(self, archive: RemoteArchive, target: Path) -> None:
+    def _replace_from_archive(self, archive: RemoteArchive, target: Path) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, download_name = tempfile.mkstemp(
             prefix=f".{target.name}-", suffix=".zip", dir=target.parent
@@ -165,7 +178,7 @@ class RcloneResultsSync:
         backup = target.with_name(f".{target.name}-previous")
         try:
             self._download(archive, download)
-            self._safe_extract(download, extracted)
+            skipped_links = self._safe_extract(download, extracted)
             if backup.exists():
                 shutil.rmtree(backup)
             if target.exists():
@@ -173,6 +186,7 @@ class RcloneResultsSync:
             extracted.replace(target)
             if backup.exists():
                 shutil.rmtree(backup)
+            return skipped_links
         except Exception:
             if backup.exists() and not target.exists():
                 backup.replace(target)
@@ -204,6 +218,7 @@ class RcloneResultsSync:
             current: dict[str, dict[str, str]] = {}
             downloaded = 0
             unchanged = 0
+            skipped_links = 0
             for archive, target in zip(archives, targets, strict=True):
                 relative_target = str(target.relative_to(self.cache_root))
                 old = previous.get(archive.file_id)
@@ -215,7 +230,7 @@ class RcloneResultsSync:
                 ):
                     unchanged += 1
                 else:
-                    self._replace_from_archive(archive, target)
+                    skipped_links += self._replace_from_archive(archive, target)
                     downloaded += 1
                     if old and old.get("target") != relative_target:
                         self._remove_target(str(old.get("target", "")))
@@ -231,7 +246,7 @@ class RcloneResultsSync:
                     self._remove_target(str(old.get("target", "")))
                     removed += 1
             self._write_manifest(current)
-            return SyncReport(downloaded, unchanged, removed, ignored)
+            return SyncReport(downloaded, unchanged, removed, ignored, skipped_links)
 
     def _run_rclone(self, arguments: list[str]) -> str:
         command = [self.rclone_binary, *arguments]
@@ -317,3 +332,50 @@ class RcloneResultsSync:
                 *self._root_folder_arguments(),
             ]
         )
+
+
+def _extract_symlink(
+    bundle: zipfile.ZipFile, info: zipfile.ZipInfo, destination: Path
+) -> Path | None:
+    """Recreate one relative symlink entry unless it could leave ``destination``."""
+    parts = PurePosixPath(info.filename).parts
+    link = destination.joinpath(*parts)
+    try:
+        target = bundle.read(info).decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if (
+        not target
+        or PurePosixPath(target).is_absolute()
+        or link.exists()
+        or link.is_symlink()
+        # Never create a link by passing through another link.
+        or any(
+            destination.joinpath(*parts[:i]).is_symlink() for i in range(1, len(parts))
+        )
+    ):
+        return None
+    link.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, link)
+    if not _resolves_inside(link, destination):
+        link.unlink()
+        return None
+    return link
+
+
+def _keep_contained_symlinks(links: list[Path], destination: Path) -> list[Path]:
+    """Unlink links that leave ``destination`` once all exist; return the rest.
+
+    Repeats because a link can change how an earlier link resolves.
+    """
+    while True:
+        escaping = [link for link in links if not _resolves_inside(link, destination)]
+        if not escaping:
+            return links
+        for link in escaping:
+            link.unlink()
+        links = [link for link in links if link not in escaping]
+
+
+def _resolves_inside(path: Path, root: Path) -> bool:
+    return Path(os.path.realpath(path)).is_relative_to(os.path.realpath(root))

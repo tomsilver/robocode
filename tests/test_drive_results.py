@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import stat
 import zipfile
 from pathlib import Path
 
@@ -16,10 +17,28 @@ from experiments.drive_results import (
 )
 
 
-def _archive(path: Path, files: dict[str, str]) -> None:
+def _archive(
+    path: Path, files: dict[str, str], links: dict[str, str] | None = None
+) -> None:
     with zipfile.ZipFile(path, "w") as bundle:
         for name, content in files.items():
             bundle.writestr(name, content)
+        for name, target in (links or {}).items():
+            info = zipfile.ZipInfo(name)
+            info.external_attr = (stat.S_IFLNK | 0o777) << 16
+            bundle.writestr(info, target)
+
+
+def _listing(name: str, archive: Path) -> list[dict[str, object]]:
+    return [
+        {
+            "Path": name,
+            "Name": name,
+            "Size": archive.stat().st_size,
+            "ModTime": "2026-08-12T10:00:00Z",
+            "Hashes": {"MD5": f"{name}-content"},
+        }
+    ]
 
 
 def _sync(
@@ -80,6 +99,63 @@ def test_safe_extract_rejects_parent_traversal(
         sync.sync()
 
     assert not (tmp_path / "outside.txt").exists()
+
+
+def test_sync_recreates_symlinks_that_stay_inside_the_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sandbox link to a sibling file is extracted as the same link."""
+    archive = tmp_path / "linked.zip"
+    _archive(
+        archive,
+        {"s424/sandbox/env_client.py": "CLIENT = 1\n"},
+        {"s424/sandbox/dev/env_client.py": "../env_client.py"},
+    )
+    sync = _sync(
+        tmp_path, monkeypatch, _listing("linked.zip", archive), {"linked.zip": archive}
+    )
+
+    report = sync.sync()
+
+    link = sync.runs_dir / "linked" / "s424" / "sandbox" / "dev" / "env_client.py"
+    assert report.skipped_links == 0
+    assert link.is_symlink()
+    assert link.readlink() == Path("../env_client.py")
+    assert link.read_text() == "CLIENT = 1\n"
+
+
+def test_sync_leaves_out_symlinks_that_point_outside_the_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Escaping links are dropped while the rest of the archive still loads."""
+    archive = tmp_path / "escaping.zip"
+    _archive(
+        archive,
+        {"s42/results.json": "{}"},
+        {
+            "s42/sandbox/libblas.a": "/robocode/.venv/lib/libopenblas.so",
+            "s42/sandbox/up": "../../..",
+            # Resolves inside on its own, but leaves once ``s42/d`` exists.
+            "s42/x": "d/../..",
+            "s42/d": ".",
+        },
+    )
+    sync = _sync(
+        tmp_path,
+        monkeypatch,
+        _listing("escaping.zip", archive),
+        {"escaping.zip": archive},
+    )
+
+    report = sync.sync()
+
+    run = sync.runs_dir / "escaping" / "s42"
+    assert report.skipped_links == 3
+    assert (run / "results.json").is_file()
+    assert (run / "d").is_symlink()
+    for name in ("sandbox/libblas.a", "sandbox/up", "x"):
+        assert not (run / name).exists()
+        assert not (run / name).is_symlink()
 
 
 def test_sync_recurses_and_preserves_local_gifs_for_unchanged_archives(

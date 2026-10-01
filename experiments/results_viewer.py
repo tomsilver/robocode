@@ -465,7 +465,13 @@ def sync_drive_and_refresh() -> dict[str, int]:
         sync_report = DRIVE_SYNC.sync()
         report = {
             key: int(getattr(sync_report, key))
-            for key in ("downloaded", "unchanged", "removed", "ignored")
+            for key in (
+                "downloaded",
+                "unchanged",
+                "removed",
+                "ignored",
+                "skipped_links",
+            )
         }
     refresh_runs()
     return report
@@ -3556,6 +3562,11 @@ def main() -> None:
             f"{drive_report['removed']} removed, "
             f"{drive_report['ignored']} non-ZIP files ignored"
         )
+        if drive_report["skipped_links"]:
+            print(
+                f"Drive sync: left out {drive_report['skipped_links']} unsafe symlinks "
+                "from the archives"
+            )
 
     threading.Thread(target=_render_worker, daemon=True).start()
 

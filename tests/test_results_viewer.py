@@ -47,6 +47,7 @@ def test_sync_drive_and_refresh_syncs_before_discovery(
         unchanged = 2
         removed = 0
         ignored = 3
+        skipped_links = 0
 
     class _Sync:
         @staticmethod
@@ -66,7 +67,13 @@ def test_sync_drive_and_refresh_syncs_before_discovery(
     report = viewer.sync_drive_and_refresh()
 
     assert events == ["sync", "discover"]
-    assert report == {"downloaded": 1, "unchanged": 2, "removed": 0, "ignored": 3}
+    assert report == {
+        "downloaded": 1,
+        "unchanged": 2,
+        "removed": 0,
+        "ignored": 3,
+        "skipped_links": 0,
+    }
 
 
 def _assistant(subject: str, tokens: tuple[int, int]) -> dict:
