@@ -185,3 +185,6 @@ statistics/
 network_audit_results/
 
 .apptainer-env-cache/
+
+# Cluster site settings for checkpoint re-evaluation (accounts, private seed)
+experiments/reeval/slurm/site/*.env
