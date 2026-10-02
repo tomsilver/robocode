@@ -5,10 +5,14 @@ the runner module is loaded from its path.
 """
 
 import importlib.util
+import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
+from gymnasium import Env
+from gymnasium.spaces import Box
 from omegaconf import OmegaConf
 
 _MODULE_PATH = Path(__file__).resolve().parents[2] / "experiments" / "run_experiment.py"
@@ -16,6 +20,163 @@ _SPEC = importlib.util.spec_from_file_location("run_experiment", _MODULE_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 run_experiment: Any = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(run_experiment)
+
+
+class _IncrementEnv(Env):  # type: ignore[type-arg]
+    """A tiny env whose step count is set by the approach's action magnitude.
+
+    ``step`` advances ``_pos`` by the action and terminates once ``_pos`` reaches
+    1.0, so the episode length equals ``ceil(1.0 / action)``. A deterministic
+    approach (fixed action) therefore always takes the same number of steps,
+    while one that changes its action between resets produces replays that
+    disagree.
+    """
+
+    def __init__(self) -> None:
+        self.observation_space = Box(0.0, 10.0, shape=(1,), dtype=np.float32)
+        self.action_space = Box(0.0, 1.0, shape=(1,), dtype=np.float32)
+        self._pos = 0.0
+
+    def reset(self, *, seed: Any = None, options: Any = None) -> Any:
+        super().reset(seed=seed)
+        self._pos = 0.0
+        return np.array([self._pos], dtype=np.float32), {}
+
+    def step(self, action: Any) -> Any:
+        self._pos += float(np.asarray(action).item())
+        obs = np.array([self._pos], dtype=np.float32)
+        return obs, 0.0, self._pos >= 1.0, False, {}
+
+    def render(self) -> None:
+        return None
+
+
+class _FixedActionApproach:
+    """Always acts with the same magnitude, so every replay takes the same steps."""
+
+    def __init__(self, action: float) -> None:
+        self._action = action
+
+    def reset(self, state: Any, info: Any) -> None:
+        """Start an episode; the action is fixed so length never varies."""
+        del state, info
+
+    def step(self) -> Any:
+        """Return the fixed action that always ends the episode in two steps."""
+        return np.array([self._action], dtype=np.float32)
+
+    def update(self, state: Any, reward: float, done: bool, info: Any) -> None:
+        """Record the outcome, matching the BaseApproach interface."""
+        del state, reward, done, info
+
+
+class _AlternatingActionApproach:
+    """Alternates its action magnitude across resets, so replays disagree.
+
+    The first reset in a fresh sequence uses a large action (short episode) and the
+    second a small one (long episode), which is the same shape as a policy whose per-
+    plan-call budget is decided by wall clock.
+    """
+
+    def __init__(self) -> None:
+        self._reset_count = 0
+
+    def reset(self, state: Any, info: Any) -> None:
+        """Start an episode, flipping the action for the next replay."""
+        del state, info
+        self._reset_count += 1
+
+    def step(self) -> Any:
+        """Return the action whose magnitude sets the episode length."""
+        action = 0.5 if self._reset_count % 2 else 0.25
+        return np.array([action], dtype=np.float32)
+
+    def update(self, state: Any, reward: float, done: bool, info: Any) -> None:
+        """Record the outcome, matching the BaseApproach interface."""
+        del state, reward, done, info
+
+
+@pytest.fixture(autouse=True)
+def _in_process_episodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run replays in-process so the test is not platform-dependent.
+
+    The forked path copies the approach into a child per replay, which would hide the
+    alternating approach's cross-reset state. The in-process path keeps the same
+    instance, so the two replays observe the state change.
+    """
+    monkeypatch.setattr("robocode.utils.episode._EPISODE_FORK_SAFE", False)
+
+
+def test_determinism_check_reports_full_agreement() -> None:
+    """A fixed-action policy replays to the same step count every time."""
+    env = _IncrementEnv()
+    approach = _FixedActionApproach(0.5)  # 2 steps every episode
+    result = run_experiment.run_determinism_check(
+        env,
+        approach,
+        [10, 11, 12],
+        num_episodes=3,
+        max_steps=100,
+        timeout=30,
+    )
+    assert result["determinism_check_num_episodes"] == 3
+    assert result["determinism_check_agreement_rate"] == 1.0
+    assert result["determinism_check"]["num_episodes"] == 3
+    assert all(e["agrees"] for e in result["determinism_check"]["episodes"])
+
+
+def test_determinism_check_flags_a_nondeterministic_policy() -> None:
+    """An approach whose step count varies across replays drops the agreement rate."""
+    env = _IncrementEnv()
+    approach = _AlternatingActionApproach()
+    result = run_experiment.run_determinism_check(
+        env,
+        approach,
+        [10, 11],
+        num_episodes=2,
+        max_steps=100,
+        timeout=30,
+    )
+    assert result["determinism_check_num_episodes"] == 2
+    assert result["determinism_check_agreement_rate"] == 0.0
+    # The two replays of the first seed disagree: one is short, one is long.
+    first = result["determinism_check"]["episodes"][0]
+    assert first["agrees"] is False
+    assert first["num_steps"] != first["replay2_num_steps"]
+
+
+def test_determinism_check_clamps_to_available_seeds() -> None:
+    """Requesting more replays than eval seeds replays every seed once."""
+    env = _IncrementEnv()
+    approach = _FixedActionApproach(0.5)
+    result = run_experiment.run_determinism_check(
+        env,
+        approach,
+        [10, 11],
+        num_episodes=10,
+        max_steps=100,
+        timeout=30,
+    )
+    assert result["determinism_check_num_episodes"] == 2
+    assert result["determinism_check"]["num_episodes"] == 2
+
+
+def test_determinism_check_disabled_returns_empty() -> None:
+    """num_episodes=0 records no replays and no agreement."""
+    env = _IncrementEnv()
+    approach = _FixedActionApproach(0.5)
+    result = run_experiment.run_determinism_check(
+        env,
+        approach,
+        [10, 11],
+        num_episodes=0,
+        max_steps=100,
+        timeout=30,
+    )
+    assert result["determinism_check_num_episodes"] == 0
+    assert result["determinism_check"]["num_episodes"] == 0
+    assert result["determinism_check"]["episodes"] == []
+    assert math.isnan(result["determinism_check_agreement_rate"])
 
 
 def test_repository_protocol_requires_explicit_eval_seed() -> None:

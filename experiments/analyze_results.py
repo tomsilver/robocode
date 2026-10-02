@@ -47,7 +47,12 @@ def collect_results(search_dirs: list[Path]) -> pd.DataFrame:
             for key, value in results.items():
                 # These nested structures stay in results.json; their headline
                 # metrics are surfaced through separate flat fields below.
-                if key in ("per_episode", "gen_model_usage", "count_regimes"):
+                if key in (
+                    "per_episode",
+                    "gen_model_usage",
+                    "count_regimes",
+                    "determinism_check",
+                ):
                     continue
                 # by_count is a nested {count: {...}} dict; flatten its solve rates to
                 # numeric solve_rate@<count> columns so they aggregate across seeds.

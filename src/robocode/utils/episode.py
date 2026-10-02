@@ -670,6 +670,51 @@ def summarize_eval_episodes(per_episode: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+# Fields compared across an episode's two replays. The policy is judged on what a
+# reader of results.json can observe: whether it solved and how many steps it took.
+# A wall-clock-budgeted policy can vary in step count without flipping solved, so
+# both are part of the agreement signal.
+_DETERMINISM_COMPARED_FIELDS = ("solved", "num_steps")
+
+
+def _replay_signature(metrics: dict[str, Any]) -> tuple[Any, ...]:
+    """The observable outcome a determinism replay is compared on."""
+    return tuple(metrics.get(field) for field in _DETERMINISM_COMPARED_FIELDS)
+
+
+def summarize_determinism_replays(
+    replays: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> dict[str, Any]:
+    """Aggregate paired replay outcomes into an agreement rate.
+
+    ``replays`` holds one ``(first, second)`` metrics pair per replayed episode, in
+    eval-seed order. An episode agrees when both replays produced the same outcome
+    (same solved flag and step count). Crashed or timed-out replays still compare on
+    their recorded metrics, so a policy that nondeterministically times out is caught
+    exactly like one that nondeterministically changes its step count.
+    """
+    agreed = 0
+    per_episode: list[dict[str, Any]] = []
+    for first, second in replays:
+        agrees = _replay_signature(first) == _replay_signature(second)
+        agreed += int(agrees)
+        per_episode.append(
+            {
+                "solved": first.get("solved"),
+                "num_steps": first.get("num_steps"),
+                "replay2_solved": second.get("solved"),
+                "replay2_num_steps": second.get("num_steps"),
+                "agrees": agrees,
+            }
+        )
+    num_replayed = len(replays)
+    return {
+        "num_episodes": num_replayed,
+        "agreement_rate": agreed / num_replayed if num_replayed else float("nan"),
+        "episodes": per_episode,
+    }
+
+
 def run_per_instance_eval(
     env: Any,
     approach: BaseApproach,

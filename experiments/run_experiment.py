@@ -26,6 +26,7 @@ from robocode.utils.episode import (
     save_video,
     summarize_by_count,
     summarize_count_regimes,
+    summarize_determinism_replays,
     summarize_eval_episodes,
 )
 from robocode.utils.telemetry import require_registered
@@ -71,6 +72,71 @@ def validate_eval_seed_isolation(cfg: DictConfig) -> None:
             "container_backend=local cannot isolate eval_seed from generated-code "
             "methods; use docker or apptainer"
         )
+
+
+def run_determinism_check(
+    env: Any,
+    approach: Any,
+    eval_seeds: list[int],
+    *,
+    num_episodes: int,
+    max_steps: int,
+    timeout: float,
+    eval_counts: list[int] | None = None,
+) -> dict[str, Any]:
+    """Replay the first eval episodes twice and report their agreement rate.
+
+    A generated policy that budgets its own search on wall clock is a function of
+    (state, seed, machine speed, current load) rather than of (state, seed): two
+    replays of the same episode on the same host can disagree in step count without
+    flipping solved. Replaying the first ``num_episodes`` eval seeds twice and
+    comparing each pair's outcome surfaces that nondeterminism in the run's
+    artifacts instead of leaving it to be discovered during analysis.
+
+    The replays go through the exact eval path (``run_episode_with_timeout`` with
+    the same timeout and per-count max steps), so a wall-clock-budgeted policy is
+    measured the way it runs for real. The agreement rate is over replay-vs-replay:
+    comparing to the recorded run would conflate host differences with policy
+    nondeterminism, and two fresh local passes agreeing is the signal that rules
+    the replay path out.
+
+    Returns a results dict ready to merge into ``results.json``, with the headline
+    as flat numeric fields (so analyze_results aggregates them across replicates)
+    and the per-episode detail nested under ``determinism_check``.
+    """
+    replayed = min(num_episodes, len(eval_seeds))
+    if replayed <= 0:
+        return {
+            "determinism_check_num_episodes": 0,
+            "determinism_check_agreement_rate": float("nan"),
+            "determinism_check": {
+                "num_episodes": 0,
+                "agreement_rate": float("nan"),
+                "episodes": [],
+            },
+        }
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for i in range(replayed):
+        seed = eval_seeds[i]
+        count = eval_counts[i] if eval_counts is not None else None
+        episode_max_steps = (
+            env.max_steps_for_count(count)
+            if count is not None and isinstance(env, VariableCountEnv)
+            else max_steps
+        )
+        first, _, _ = run_episode_with_timeout(
+            env, approach, seed, episode_max_steps, timeout=timeout, count=count
+        )
+        second, _, _ = run_episode_with_timeout(
+            env, approach, seed, episode_max_steps, timeout=timeout, count=count
+        )
+        pairs.append((first, second))
+    summary = summarize_determinism_replays(pairs)
+    return {
+        "determinism_check_num_episodes": summary["num_episodes"],
+        "determinism_check_agreement_rate": summary["agreement_rate"],
+        "determinism_check": summary,
+    }
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -293,6 +359,36 @@ def _main(cfg: DictConfig) -> float:
             results["by_count"] = by_count
             results["largest_count_all_solved"] = largest_all
             results["largest_count_any_solved"] = largest_any
+
+    # A determinism check replays a few eval episodes twice and records the
+    # agreement rate. Defaulted on because it is cheap (no LLM cost; only the
+    # frozen policy is rolled out) and it is the only way a wall-clock-budgeted
+    # policy becomes visible in the run rather than during analysis. Set
+    # determinism_check_num_episodes=0 to disable. Per-instance approaches are
+    # skipped: re-running them spends eval-time agent budget per seed, which is
+    # a different (paid) measurement rather than a free replay.
+    determinism_num = cfg.get("determinism_check_num_episodes", 10)
+    if not approach.per_instance and determinism_num > 0:
+        logger.info(
+            "Running determinism check: replaying %d eval episodes twice",
+            min(determinism_num, num_eval),
+        )
+        results.update(
+            run_determinism_check(
+                env,
+                approach,
+                eval_seeds,
+                num_episodes=determinism_num,
+                max_steps=cfg.max_steps,
+                timeout=cfg.eval_timeout,
+                eval_counts=eval_counts,
+            )
+        )
+        logger.info(
+            "Determinism check: %.3f agreement over %d replayed episodes",
+            results["determinism_check_agreement_rate"],
+            results["determinism_check_num_episodes"],
+        )
     if isinstance(env, VariableCountEnv):
         count_regimes = summarize_count_regimes(results["by_count"], env.design_counts)
         results["count_regimes"] = count_regimes

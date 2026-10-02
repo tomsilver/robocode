@@ -250,7 +250,7 @@ Hydra writes runs beneath `outputs/` or `multirun/` unless overridden. Keep the 
 | `sandbox/agent_log.txt` | Agentic synthesis log; backend session/usage files may also be present |
 | `sandbox/implN_candidate.py`, `implN_response.txt`, `implN_score.json` | LLMGenPlan submissions, responses, and validation results |
 | `sandbox/best_score.json`, `final_score.json` | LLMGenPlan's selected-best and literal-final generation indices |
-| `results.json` | Per-episode outcomes, solve rate, timeouts/crashes, count summaries, and available generation cost/usage |
+| `results.json` | Per-episode outcomes, solve rate, timeouts/crashes, determinism-check agreement, count summaries, and available generation cost/usage |
 | `env_description.md` | Environment description supplied to the approach |
 
 ```bash
@@ -258,7 +258,7 @@ python experiments/analyze_results.py multirun/
 python -m experiments.results_viewer --root outputs/ --port 8000
 ```
 
-Open `http://localhost:8000` for the viewer. `render_videos=true` saves rollout videos. `approach.telemetry=true` records synthesis environment interactions (source-access telemetry requires a registered environment class). `record_approach_history=true` replays sandbox Git snapshots for inspection; it is not the 100-instance paper evaluation of each historical program. See [advanced operations](docs/advanced-operations.md).
+Open `http://localhost:8000` for the viewer. `render_videos=true` saves rollout videos. `approach.telemetry=true` records synthesis environment interactions (source-access telemetry requires a registered environment class). `record_approach_history=true` replays sandbox Git snapshots for inspection; it is not the 100-instance paper evaluation of each historical program. `determinism_check_num_episodes` (default 10, 0 to disable) replays that many eval episodes twice and records the agreement rate, so a generated policy that budgets its search on wall clock is visible in the run rather than during analysis. See [advanced operations](docs/advanced-operations.md).
 
 ### Reevaluating a frozen program
 
