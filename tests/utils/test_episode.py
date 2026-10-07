@@ -36,6 +36,7 @@ from robocode.utils.episode import (
     save_video,
     summarize_by_count,
     summarize_count_regimes,
+    summarize_determinism_replays,
     summarize_eval_episodes,
 )
 from robocode.utils.scored_env_guard import ScoredEnvMutationError, readonly_view
@@ -135,6 +136,52 @@ def test_summarize_eval_episodes_handles_an_empty_suite() -> None:
     assert math.isnan(summary["solve_rate"])
     assert summary["num_eval_tasks"] == 0
     assert summary["eval_complete"] is True
+
+
+def test_summarize_determinism_replays_counts_an_agreement() -> None:
+    """Identical replays agree; the agreement rate counts solved+steps pairs."""
+    replays = [
+        ({"solved": True, "num_steps": 12}, {"solved": True, "num_steps": 12}),
+        ({"solved": False, "num_steps": 30}, {"solved": False, "num_steps": 30}),
+    ]
+    summary = summarize_determinism_replays(replays)
+    assert summary["num_episodes"] == 2
+    assert summary["agreement_rate"] == 1.0
+    assert summary["episodes"][0]["agrees"] is True
+    assert summary["episodes"][1]["agrees"] is True
+
+
+def test_summarize_determinism_replays_flags_a_step_count_change() -> None:
+    """A policy that varies its step count without flipping solved is caught."""
+    replays = [
+        ({"solved": True, "num_steps": 12}, {"solved": True, "num_steps": 17}),
+        ({"solved": False, "num_steps": 30}, {"solved": False, "num_steps": 30}),
+    ]
+    summary = summarize_determinism_replays(replays)
+    assert summary["num_episodes"] == 2
+    assert summary["agreement_rate"] == pytest.approx(0.5)
+    assert summary["episodes"][0]["agrees"] is False
+    assert summary["episodes"][0]["num_steps"] == 12
+    assert summary["episodes"][0]["replay2_num_steps"] == 17
+    assert summary["episodes"][1]["agrees"] is True
+
+
+def test_summarize_determinism_replays_flags_a_solved_flip() -> None:
+    """A solved/unsolved flip between replays is a disagreement."""
+    replays = [
+        ({"solved": True, "num_steps": 12}, {"solved": False, "num_steps": 30}),
+    ]
+    summary = summarize_determinism_replays(replays)
+    assert summary["agreement_rate"] == pytest.approx(0.0)
+    assert summary["episodes"][0]["agrees"] is False
+
+
+def test_summarize_determinism_replays_handles_empty() -> None:
+    """No replayed episodes yields nan rather than dividing by zero."""
+    summary = summarize_determinism_replays([])
+    assert summary["num_episodes"] == 0
+    assert math.isnan(summary["agreement_rate"])
+    assert not summary["episodes"]
 
 
 def test_summarize_by_count_uses_full_scheduled_denominator() -> None:

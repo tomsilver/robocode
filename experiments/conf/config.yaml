@@ -17,6 +17,9 @@ max_steps: 1000
 num_eval_tasks: 100
 # Per-instance eval wall-clock budget (seconds), shared by every approach.
 eval_timeout: 60
+# Replay this many eval episodes twice and record the agreement rate, so a policy
+# that budgets its search on wall clock is visible in the run. 0 disables.
+determinism_check_num_episodes: 10
 render_videos: false
 record_approach_history: false
 mcp_tools:
