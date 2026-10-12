@@ -6,7 +6,7 @@ import numpy as np
 from gymnasium import Env
 from gymnasium.spaces import Box
 
-from robocode.utils.genplan_validate import score_tasks, validate_tasks
+from robocode.utils.genplan_validate import evaluate_tasks, score_tasks, validate_tasks
 
 
 class _ToyEnv(Env):
@@ -136,3 +136,26 @@ def test_score_distinguishes_unsolved_from_crash(tmp_path):
     # Crash: no completed rollout -> num_completed 0 (so it ranks below a stall),
     # and mean_reward 0.0 over no completed rollouts.
     assert _score(tmp_path, "raise ValueError('boom')", seeds=[0]) == (0, 0, 1, 0.0)
+
+
+def test_evaluate_returns_first_failure_and_score_from_same_rollouts(tmp_path):
+    """Combined evaluation preserves seed-ordered feedback and aggregate scoring."""
+    env = _ToyEnv()
+    approach_path = tmp_path / "approach.py"
+    approach_path.write_text(
+        f"{_HEADER}    def get_action(self, state):\n"
+        "        return np.array([0.0], dtype=np.float32)\n"
+    )
+    evaluation = evaluate_tasks(
+        env,
+        approach_path,
+        env.action_space,
+        env.observation_space,
+        primitives={},
+        seeds=[7, 8],
+        max_steps=10,
+        timeout=10.0,
+    )
+    assert evaluation.failure is not None
+    assert "seed 7" in evaluation.failure["feedback"]
+    assert evaluation.score == (0, 2, 2, -10.0)

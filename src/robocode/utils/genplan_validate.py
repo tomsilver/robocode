@@ -124,6 +124,64 @@ class TaskScore(NamedTuple):
     mean_reward: float  # mean reward over completed rollouts (0.0 if none)
 
 
+class TaskEvaluation(NamedTuple):
+    """First seed-ordered failure and aggregate score from one set of rollouts."""
+
+    failure: dict[str, str] | None
+    score: TaskScore | None
+
+
+def evaluate_tasks(
+    env: gymnasium.Env,
+    approach_path: Path,
+    action_space: Space[Any],
+    observation_space: Space[Any],
+    primitives: dict[str, Callable[..., Any]],
+    seeds: list[int],
+    max_steps: int,
+    timeout: float,
+) -> TaskEvaluation:
+    """Evaluate every task once, returning feedback and a score from those outcomes.
+
+    Feedback remains the first failure in the caller's seed order. A policy-load
+    failure is candidate-wide, so no additional seeds are run and no score is
+    reported, matching the previous validation-then-scoring behavior.
+    """
+    ctx = mp.get_context("fork")  # fork: workers inherit the live env
+    first_failure: dict[str, str] | None = None
+    num_solved = 0
+    completed_rewards: list[float] = []
+    with ctx.Manager() as manager:
+        for seed in seeds:
+            result = _validate_episode(
+                env,
+                approach_path,
+                action_space,
+                observation_space,
+                primitives,
+                seed,
+                max_steps,
+                timeout,
+                ctx,
+                manager,
+            )
+            if not result["solved"] and first_failure is None:
+                first_failure = {
+                    "error_type": result["error_type"],
+                    "feedback": result["feedback"],
+                }
+                if result["error_type"] == "policy-load-error":
+                    return TaskEvaluation(first_failure, None)
+            num_solved += int(result["solved"])
+            if result["solved"] or result.get("error_type") == "not-solved":
+                completed_rewards.append(float(result["total_reward"]))
+    mean_reward = (
+        sum(completed_rewards) / len(completed_rewards) if completed_rewards else 0.0
+    )
+    score = TaskScore(num_solved, len(completed_rewards), len(seeds), mean_reward)
+    return TaskEvaluation(first_failure, score)
+
+
 def score_tasks(
     env: gymnasium.Env,
     approach_path: Path,
