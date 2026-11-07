@@ -94,7 +94,8 @@ class PlotTests(unittest.TestCase):
                 )
 
     def test_unresolved_and_unpatched_cases_do_not_invent_evidence(self):
-        """A reactive route has no tree; an unprobed supported case has no comparison."""
+        """A reactive route has no tree; an unprobed supported case has no
+        comparison."""
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             message = self.render("conditional", "validation-0-0", output)
@@ -122,7 +123,10 @@ class PlotTests(unittest.TestCase):
             **record,
             "observed_output": other_action,
             "passed": False,
-            "observed_roles": {**record["observed_roles"], "scores": [99.75, -99.75]},
+            "observed_roles": {
+                **record["observed_roles"],
+                "evaluations": [99.75, -99.75],
+            },
         }
         figure = plot.comparison_figure(
             report, row, explanation, roles, [(num, record)]
@@ -131,5 +135,5 @@ class PlotTests(unittest.TestCase):
         self.assertIn("failed check", observed.get_title())
         self.assertIn(f"Action {other_action}", observed.texts[0].get_text())
         self.assertNotEqual(predicted.texts[0].get_text(), observed.texts[0].get_text())
-        self.assertTrue(any("Score 99.75" in t.get_text() for t in observed.texts))
-        self.assertFalse(any("Score 99.75" in t.get_text() for t in predicted.texts))
+        self.assertTrue(any("U 99.75" in t.get_text() for t in observed.texts))
+        self.assertFalse(any("U 99.75" in t.get_text() for t in predicted.texts))

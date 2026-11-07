@@ -1,30 +1,41 @@
-"""Bounded hypothesis/mapping enumeration and paired causal experiments.
+"""Hypothesis search and paired causal experiments.
 
-Candidate mappings only select trace values. Task-model computations live here,
-outside measured execution. No source names or fixture identities are consulted.
+Candidate mappings only select trace values. Task-model computations live here, outside
+measured execution. No source names or fixture identities are consulted.
+
+The search is factorized. Every model coordinate (one state, evaluation or score) is
+matched and patch-tested on its own: any recorded numeric value, at any expression,
+visit or container element, that equals the model's value in every discovery run.
+Complete mappings are then assembled from survivors that are pairwise compatible
+(patching one leaves the other with the value the model predicts). The full paired
+test is a conjunction of exactly these single-location and pairwise checks, so the
+cost grows with the number of candidate locations instead of their product.
 """
 
 # Exclude booleans and arbitrary subclasses from numeric mapping coordinates.
 # pylint: disable=unidiomatic-typecheck
 
 import hashlib
-import itertools
 import json
-from collections import defaultdict
-from dataclasses import asdict, dataclass
+from collections import Counter, defaultdict
+from dataclasses import asdict, dataclass, replace
 from math import isfinite
 
 from .instrument import Patch, Selector
-from .task import backup, choose, rollout
+from .task import ROLES, action_values, backup, choose, rollout
+
+RUN_ERRORS = (KeyError, IndexError, TypeError, ValueError, RuntimeError)
+_MISSING = object()
+_EXAMPLES = 16
 
 
 @dataclass(frozen=True)
 class Limits:
     """Explicit search and evidence budgets, recorded in the report."""
 
-    series: int = 256
-    permutations: int = 4096
-    candidates: int = 128
+    locations: int = 64  # matching locations kept per coordinate
+    candidates: int = 128  # complete mappings checked for a decision effect
+    steps: int = 100_000  # partial assignments explored while assembling
     intervention_cases: int = 2
 
     def __post_init__(self):
@@ -34,11 +45,18 @@ class Limits:
 
 @dataclass(frozen=True)
 class Explanation:
-    """A frozen computation and selection-only alignment for one route."""
+    """A frozen computation and selection-only alignment for one route.
+
+    ``mapping`` names one recorded location per model coordinate. ``interchangeable``
+    lists ``(role, coordinate, locations)``: other locations that passed the same
+    tests when swapped in for that single coordinate. They are copies of the same
+    quantity read at different moments, not different computations.
+    """
 
     route: str
     horizon: int
     mapping: tuple
+    interchangeable: tuple = ()
 
     @property
     def identifier(self):
@@ -55,6 +73,24 @@ class Explanation:
         return {
             role: [s.read(trace) for s in selectors] for role, selectors in self.mapping
         }
+
+    def swaps(self):
+        """Yield each single-coordinate substitution of an interchangeable location."""
+        for role, coordinate, locations in self.interchangeable:
+            for location in locations:
+                mapping = tuple(
+                    (
+                        name,
+                        tuple(
+                            location if (name, i) == (role, coordinate) else selector
+                            for i, selector in enumerate(selectors)
+                        ),
+                    )
+                    for name, selectors in self.mapping
+                )
+                yield role, coordinate, location, replace(
+                    self, mapping=mapping, interchangeable=()
+                )
 
 
 @dataclass(frozen=True)
@@ -86,25 +122,41 @@ def leaves(value, path=()):
             yield from leaves(value[key], path + (key,))
 
 
-def inventory(trace, limit):
-    """Group scalar occurrences at one site/path or leaves of one container.
-
-    This intentionally does not enumerate arbitrary subsets of all checkpoints.
-    Values assembled across unrelated sites are outside this first search space.
-    """
-    grouped = defaultdict(list)
-    vectors = []
+def value_table(trace):
+    """Every recorded numeric scalar, keyed by checkpoint, visit and container path."""
+    table = {}
     for event in trace.events:
-        locations = [
-            Selector(event.site, event.occurrence, path) for path in leaves(event.value)
-        ]
-        if len(locations) in (2, 4):
-            vectors.append(tuple(locations))
-        for selector in locations:
-            grouped[(selector.site, selector.path)].append(selector)
-    vectors.extend(tuple(v) for v in grouped.values() if len(v) in (2, 4))
-    vectors = list(dict.fromkeys(vectors))
-    return vectors[:limit], len(vectors) > limit, len(vectors)
+        for path in leaves(event.value):
+            value = event.value
+            for key in path:
+                value = value[key]
+            table[Selector(event.site, event.occurrence, path)] = value
+    return table
+
+
+def order_constraints(horizon):
+    """Temporal requirements as ``(reason, earlier, later, strict)`` coordinates."""
+    constraints = []
+    for action in (0, 1):
+        for i in [action] if horizon == 1 else [2 * action, 2 * action + 1]:
+            if horizon == 2:
+                constraints.append(
+                    ("state_order", ("states_1", action), ("states_2", i), True)
+                )
+            constraints.append(
+                ("evaluation_order", (f"states_{horizon}", i), ("evaluations", i), True)
+            )
+            if horizon == 2:
+                constraints.append(
+                    ("backup_order", ("evaluations", i), ("scores", action), False)
+                )
+    return constraints
+
+
+def out_of_order(trace, earlier, later, strict):
+    """Whether ``earlier`` fails to precede ``later`` in this execution."""
+    first, second = trace.event(earlier).index, trace.event(later).index
+    return first > second or (strict and first == second)
 
 
 def ordinary(explanation, case, trace):
@@ -122,76 +174,21 @@ def ordinary(explanation, case, trace):
                 "observed": observed,
             }
         mapping = explanation.selectors()
-        times = {
-            r: [trace.event(s).index for s in selectors]
-            for r, selectors in mapping.items()
-        }
-        horizon = explanation.horizon
-        for action in (0, 1):
-            indices = [action] if horizon == 1 else [2 * action, 2 * action + 1]
-            for i in indices:
-                if horizon == 2 and times["states_1"][action] >= times["states_2"][i]:
-                    return {"reason": "state_order", "case": case.label}
-                if times[f"states_{horizon}"][i] >= times["evaluations"][i]:
-                    return {"reason": "evaluation_order", "case": case.label}
-                if times["evaluations"][i] > times["scores"][action]:
-                    return {"reason": "backup_order", "case": case.label}
-        if trace.output != choose(expected["scores"]):
+        for reason, (r1, i1), (r2, i2), strict in order_constraints(
+            explanation.horizon
+        ):
+            if out_of_order(trace, mapping[r1][i1], mapping[r2][i2], strict):
+                return {"reason": reason, "case": case.label}
+        if trace.output != choose(action_values(expected)):
             return {
                 "reason": "ordinary_output",
                 "case": case.label,
-                "predicted": choose(expected["scores"]),
+                "predicted": choose(action_values(expected)),
                 "observed": trace.output,
             }
     except (KeyError, IndexError, TypeError) as exc:
         return {"reason": "missing_location", "case": case.label, "detail": str(exc)}
     return None
-
-
-def role_options(series, role, horizon, runs, limits, audit):
-    """Enumerate rearrangements and reject semantically inconsistent mappings."""
-    expected = [
-        rollout(c.state, c.transitions, c.utilities, horizon)[role] for c, _ in runs
-    ]
-    found = []
-    tried = 0
-    for vector in series:
-        if len(vector) != len(expected[0]):
-            continue
-        for selectors in itertools.permutations(vector):
-            if tried == limits.permutations:
-                audit["truncated"] = True
-                return found
-            tried += 1
-            mismatch = None
-            for (case, trace), predicted in zip(runs, expected):
-                try:
-                    observed = [s.read(trace) for s in selectors]
-                except (KeyError, IndexError, TypeError):
-                    observed = None
-                if observed != predicted:
-                    mismatch = {
-                        "case": case.label,
-                        "predicted": predicted,
-                        "observed": observed,
-                    }
-                    break
-            audit["role_mappings_tested"] += 1
-            if mismatch:
-                audit["role_mappings_rejected"] += 1
-                # A diagnostic sample, not every failed permutation.
-                if len(audit["role_rejection_examples"]) < 16:
-                    audit["role_rejection_examples"].append(
-                        {
-                            "role": role,
-                            "horizon": horizon,
-                            "mapping": [asdict(s) for s in selectors],
-                            **mismatch,
-                        }
-                    )
-            else:
-                found.append(selectors)
-    return list(dict.fromkeys(found))
 
 
 def predict_patch(case, horizon, role, index, value):
@@ -204,23 +201,23 @@ def predict_patch(case, horizon, role, index, value):
         predicted["evaluations"] = [
             case.utilities[s] for s in predicted[f"states_{horizon}"]
         ]
-    if role != "scores":
-        predicted["scores"] = backup(predicted["evaluations"], horizon)
+    if horizon == 2 and role != "scores":
+        predicted["scores"] = backup(predicted["evaluations"])
     return predicted
+
+
+def replacements(role, current, case):
+    """Two other states for a state, or values below and above every utility."""
+    if role.startswith("states_"):
+        return ((int(current) + 1) % 6, (int(current) + 3) % 6)
+    return (min(case.utilities) - 100, max(case.utilities) + 100)
 
 
 def interventions(explanation, case, trace):
     """State substitutions and low/high value substitutions for every role."""
-    low, high = min(case.utilities) - 100, max(case.utilities) + 100
     for role, selectors in explanation.mapping:
         for i, selector in enumerate(selectors):
-            current = selector.read(trace)
-            values = (
-                ((int(current) + 1) % 6, (int(current) + 3) % 6)
-                if role.startswith("states_")
-                else (low, high)
-            )
-            for value in values:
+            for value in replacements(role, selector.read(trace), case):
                 yield role, i, Patch(selector, value)
 
 
@@ -237,7 +234,7 @@ def paired_test(program, explanation, case, trace):
             "old_value": patch.selector.read(trace),
             "replacement": patch.value,
             "baseline_output": trace.output,
-            "predicted_output": choose(predicted["scores"]),
+            "predicted_output": choose(action_values(predicted)),
             "predicted_roles": predicted,
         }
         try:
@@ -272,7 +269,7 @@ def paired_test(program, explanation, case, trace):
                     and all(c["predicted"] == c["observed"] for c in checks),
                 }
             )
-        except (KeyError, IndexError, TypeError, ValueError, RuntimeError) as exc:
+        except RUN_ERRORS as exc:
             record.update({"passed": False, "error": f"{type(exc).__name__}: {exc}"})
         records.append(record)
         if not record["passed"]:
@@ -283,6 +280,350 @@ def paired_test(program, explanation, case, trace):
     if not any(r["output_changed"] for r in records):
         return records, {"reason": "no_decision_effect", "case": case.label}
     return records, None
+
+
+class _BudgetExhausted(Exception):
+    """A search budget ran out before the search reached a conclusion."""
+
+
+def _coordinate_name(coordinate):
+    return f"{coordinate[0]}[{coordinate[1]}]"
+
+
+class HorizonSearch:
+    """Factorized search for one route and one model depth.
+
+    1. The program's ordinary outputs must equal the model's decisions. This does
+       not depend on any mapping, so a wrong depth is rejected before matching.
+    2. Each coordinate is matched to every recorded value equal to the model's value
+       in all of the route's discovery runs.
+    3. Each matching location is patched on its own; the action must change exactly
+       as the model predicts. The patched runs are kept.
+    4. Survivors are assembled into one complete mapping by backtracking. Every
+       chosen pair must respect the model's temporal order and be compatible: under
+       each patch of one, the other must hold the model's predicted value.
+    5. Other survivors that fit in place of one coordinate are interchangeable.
+    6. The assembled mapping is re-checked with the full ``ordinary`` and
+       ``paired_test`` functions, which also produce the reported evidence.
+    """
+
+    def __init__(self, program, route, horizon, runs, limits):
+        self.program = program
+        self.route = route
+        self.horizon = horizon
+        self.runs = runs
+        self.limits = limits
+        self.cases = runs[: limits.intervention_cases]
+        self.expected = [
+            rollout(c.state, c.transitions, c.utilities, horizon) for c, _ in runs
+        ]
+        self.coordinates = [
+            (role, i)
+            for role in ROLES[horizon]
+            for i in range(len(self.expected[0][role]))
+        ]
+        self.constraints = defaultdict(list)
+        for reason, earlier, later, strict in order_constraints(horizon):
+            self.constraints[frozenset((earlier, later))].append(
+                (reason, earlier, strict)
+            )
+        self.effects = {}
+        self.survivors = {}
+        self._pairs = {}
+        self._undecided = 0
+        self.audit = {
+            "horizon": horizon,
+            "result": None,
+            "truncated": False,
+            "coordinates": [],
+            "rejected_locations": [],
+            "conflicts": {},
+            "conflict_examples": [],
+            "candidates_tested": 0,
+            "steps": 0,
+            "explanation": None,
+            "interchangeable": 0,
+            "interventions": [],
+        }
+
+    def run(self):
+        """Return a verified explanation, or None; ``audit`` records why."""
+        for (case, trace), roles in zip(self.runs, self.expected):
+            if trace.output != choose(action_values(roles)):
+                return self._finish(
+                    "ordinary_output",
+                    counterexample={
+                        "case": case.label,
+                        "predicted": choose(action_values(roles)),
+                        "observed": trace.output,
+                    },
+                )
+        candidates = self._match()
+        missing = [c for c in self.coordinates if not candidates[c]]
+        if missing:
+            return self._finish(
+                "no_matching_location", missing=[_coordinate_name(c) for c in missing]
+            )
+        self._screen(candidates)
+        dead = [c for c in self.coordinates if not self.survivors[c]]
+        if dead:
+            return self._finish(
+                "no_surviving_location", dead=[_coordinate_name(c) for c in dead]
+            )
+        try:
+            chosen = self._assemble([])
+        except _BudgetExhausted:
+            self.audit["truncated"] = True
+            return self._finish("budget")
+        if chosen is None:
+            return self._finish("no_compatible_mapping")
+        explanation = self._explanation(dict(chosen))
+        failure = next(
+            (f for c, t in self.runs if (f := ordinary(explanation, c, t))), None
+        )
+        evidence = []
+        for case, trace in [] if failure else self.cases:
+            records, failure = paired_test(self.program, explanation, case, trace)
+            evidence.extend(records)
+            if failure:
+                break
+        if failure:
+            # The factorized checks and the full test disagree: report, never hide.
+            return self._finish("verification_failed", counterexample=failure)
+        self.audit.update(
+            explanation=explanation.identifier,
+            interchangeable=sum(
+                len(locs) for _, _, locs in explanation.interchangeable
+            ),
+            interventions=evidence,
+        )
+        self._finish("supported")
+        return explanation
+
+    def _finish(self, result, **details):
+        """Record the outcome; unsupported outcomes return no explanation."""
+        counts = Counter(c["reason"] for c in self._pairs.values() if c)
+        if self._undecided:
+            counts["no_decision_effect"] = self._undecided
+        self.audit.update(result=result, conflicts=dict(counts), **details)
+
+    def _match(self):
+        tables = [value_table(trace) for _, trace in self.runs]
+        first = self.runs[0][1]
+
+        def rank(selector):
+            # Whole expression results before container elements, then earliest.
+            return (bool(selector.path), first.event(selector).index, repr(selector))
+
+        candidates = {}
+        for role, i in self.coordinates:
+            values = [roles[role][i] for roles in self.expected]
+            found = sorted(
+                (
+                    selector
+                    for selector in tables[0]
+                    if all(
+                        table.get(selector, _MISSING) == value
+                        for table, value in zip(tables, values)
+                    )
+                ),
+                key=rank,
+            )
+            if len(found) > self.limits.locations:
+                self.audit["truncated"] = True
+                found = found[: self.limits.locations]
+            candidates[(role, i)] = found
+        return candidates
+
+    def _screen(self, candidates):
+        for coordinate in self.coordinates:
+            self.survivors[coordinate] = []
+            for selector in candidates[coordinate]:
+                effects, counterexample = self._patch_effects(coordinate, selector)
+                if counterexample:
+                    self.audit["rejected_locations"].append(
+                        {
+                            "role": coordinate[0],
+                            "coordinate": coordinate[1],
+                            "location": asdict(selector),
+                            "counterexample": counterexample,
+                        }
+                    )
+                else:
+                    self.effects[(coordinate, selector)] = effects
+                    self.survivors[coordinate].append(selector)
+            self.audit["coordinates"].append(
+                {
+                    "role": coordinate[0],
+                    "coordinate": coordinate[1],
+                    "matched": len(candidates[coordinate]),
+                    "survived": len(self.survivors[coordinate]),
+                }
+            )
+
+    def _patch_effects(self, coordinate, selector):
+        """Patch one location; the action must follow the model's prediction."""
+        role, index = coordinate
+        effects = []
+        for case, trace in self.cases:
+            old = selector.read(trace)
+            for value in replacements(role, old, case):
+                predicted = predict_patch(case, self.horizon, role, index, value)
+                record = {
+                    "case": case.label,
+                    "role": role,
+                    "coordinate": index,
+                    "target": asdict(selector),
+                    "old_value": old,
+                    "replacement": value,
+                    "baseline_output": trace.output,
+                    "predicted_output": choose(action_values(predicted)),
+                }
+                try:
+                    patched = self.program.run(case, Patch(selector, value))
+                except RUN_ERRORS as exc:
+                    return None, {**record, "error": f"{type(exc).__name__}: {exc}"}
+                record.update(
+                    observed_output=patched.output, patch_count=patched.patch_count
+                )
+                if (
+                    patched.patch_count != 1
+                    or patched.output != record["predicted_output"]
+                ):
+                    return None, record
+                effects.append(
+                    {
+                        "case": case.label,
+                        "trace": trace,
+                        "patched": patched,
+                        "predicted": predicted,
+                        "replacement": value,
+                        "changed": patched.output != trace.output,
+                    }
+                )
+        return effects, None
+
+    def _mismatch(self, source, target):
+        """How patching ``source`` contradicts the model at ``target``, if at all."""
+        source_coordinate, source_location = source
+        target_coordinate, target_location = target
+        for effect in self.effects[source]:
+            trace = effect["trace"]
+            if target_location != source_location and (
+                trace.event(target_location).index <= trace.event(source_location).index
+            ):
+                continue  # Earlier snapshots are historical facts.
+            try:
+                observed = target_location.read(effect["patched"])
+            except (KeyError, IndexError, TypeError):
+                observed = "absent"
+            predicted = effect["predicted"][target_coordinate[0]][target_coordinate[1]]
+            if observed != predicted:
+                return {
+                    "case": effect["case"],
+                    "patched": _coordinate_name(source_coordinate),
+                    "replacement": effect["replacement"],
+                    "checked": _coordinate_name(target_coordinate),
+                    "predicted": predicted,
+                    "observed": observed,
+                }
+        return None
+
+    def _conflict(self, first, second):
+        """An order violation or patch-effect contradiction between two choices."""
+        key = frozenset((first, second))
+        if key not in self._pairs:
+            conflict = None
+            for reason, earlier, strict in self.constraints.get(
+                frozenset((first[0], second[0])), ()
+            ):
+                before, after = (
+                    (first, second) if first[0] == earlier else (second, first)
+                )
+                if any(
+                    out_of_order(trace, before[1], after[1], strict)
+                    for _, trace in self.runs
+                ):
+                    conflict = {"reason": reason}
+                    break
+            if conflict is None:
+                detail = self._mismatch(first, second) or self._mismatch(second, first)
+                if detail:
+                    conflict = {"reason": "intervention_mismatch", **detail}
+            if conflict and len(self.audit["conflict_examples"]) < _EXAMPLES:
+                self.audit["conflict_examples"].append(
+                    {
+                        **conflict,
+                        "locations": {
+                            _coordinate_name(c): asdict(s) for c, s in (first, second)
+                        },
+                    }
+                )
+            self._pairs[key] = conflict
+        return self._pairs[key]
+
+    def _fits(self, item, chosen):
+        return all(self._conflict(other, item) is None for other in chosen)
+
+    def _decides(self, items):
+        """On every intervention case, some patch must change the action."""
+        return all(
+            any(
+                effect["changed"]
+                for item in items
+                for effect in self.effects[item]
+                if effect["case"] == case.label
+            )
+            for case, _ in self.cases
+        )
+
+    def _assemble(self, chosen):
+        if len(chosen) == len(self.coordinates):
+            self.audit["candidates_tested"] += 1
+            if self._decides(chosen):
+                return list(chosen)
+            self._undecided += 1
+            if self.audit["candidates_tested"] >= self.limits.candidates:
+                raise _BudgetExhausted
+            return None
+        coordinate = self.coordinates[len(chosen)]
+        for selector in self.survivors[coordinate]:
+            self.audit["steps"] += 1
+            if self.audit["steps"] > self.limits.steps:
+                raise _BudgetExhausted
+            item = (coordinate, selector)
+            if self._fits(item, chosen):
+                found = self._assemble(chosen + [item])
+                if found:
+                    return found
+        return None
+
+    def _explanation(self, representative):
+        mapping = tuple(
+            (
+                role,
+                tuple(
+                    representative[(role, i)]
+                    for i in range(len(self.expected[0][role]))
+                ),
+            )
+            for role in ROLES[self.horizon]
+        )
+        interchangeable = []
+        for coordinate in self.coordinates:
+            others = [
+                (c, representative[c]) for c in self.coordinates if c != coordinate
+            ]
+            locations = tuple(
+                selector
+                for selector in self.survivors[coordinate]
+                if selector != representative[coordinate]
+                and self._fits((coordinate, selector), others)
+                and self._decides(others + [(coordinate, selector)])
+            )
+            if locations:
+                interchangeable.append((coordinate[0], coordinate[1], locations))
+        return Explanation(self.route, self.horizon, mapping, tuple(interchangeable))
 
 
 def discover(program, inputs, limits=Limits()):
@@ -296,77 +637,45 @@ def discover(program, inputs, limits=Limits()):
     audit = {"limits": asdict(limits), "routes": {}, "observation_checks": len(runs)}
     accepted = []
     for route, route_runs in routes.items():
-        series, truncated, available = inventory(route_runs[0][1], limits.series)
-        details = {
+        searches = [
+            HorizonSearch(program, route, horizon, route_runs, limits)
+            for horizon in ROLES
+        ]
+        accepted.extend(e for e in (s.run() for s in searches) if e is not None)
+        audit["routes"][route] = {
             "branches": route_runs[0][1].branches,
             "cases": [c.label for c, _ in route_runs],
-            "inventory": [[asdict(s) for s in v] for v in series],
-            "available_series": available,
-            "truncated": truncated,
-            "role_mappings_tested": 0,
-            "role_mappings_rejected": 0,
-            "role_rejection_examples": [],
-            "candidates_tested": 0,
-            "rejected_candidates": [],
-            "supported_candidates": [],
+            "truncated": any(s.audit["truncated"] for s in searches),
+            "horizons": [s.audit for s in searches],
         }
-        audit["routes"][route] = details
-        exhausted = False
-        for horizon in (1, 2):
-            roles = ["states_1"] + (["states_2"] if horizon == 2 else [])
-            roles += ["evaluations", "scores"]
-            options = [
-                role_options(series, role, horizon, route_runs, limits, details)
-                for role in roles
-            ]
-            for combination in itertools.product(*options):
-                if details["candidates_tested"] == limits.candidates:
-                    details["truncated"] = True
-                    exhausted = True
-                    break
-                explanation = Explanation(
-                    route, horizon, tuple(zip(roles, combination))
-                )
-                details["candidates_tested"] += 1
-                rejection = None
-                evidence = []
-                for case, trace in route_runs:
-                    rejection = ordinary(explanation, case, trace)
-                    if rejection:
-                        break
-                if not rejection:
-                    for case, trace in route_runs[: limits.intervention_cases]:
-                        records, rejection = paired_test(
-                            program, explanation, case, trace
-                        )
-                        evidence.extend(records)
-                        if rejection:
-                            break
-                entry = {
-                    "id": explanation.identifier,
-                    "explanation": asdict(explanation),
-                }
-                if rejection:
-                    details["rejected_candidates"].append({**entry, **rejection})
-                else:
-                    accepted.append(explanation)
-                    details["supported_candidates"].append(
-                        {
-                            **entry,
-                            "ordinary_cases": len(route_runs),
-                            "interventions": evidence,
-                        }
-                    )
-            if exhausted:
-                break
     return FrozenBank(program.digest, tuple(inputs), tuple(accepted), audit)
+
+
+def _full_test(program, explanation, matching, intervention_cases):
+    """Ordinary checks on every matching run, then paired tests on the first few."""
+    failures = [
+        failure
+        for c, t in matching
+        if (failure := ordinary(explanation, c, t)) is not None
+    ]
+    records = []
+    if not failures:
+        for case, trace in matching[:intervention_cases]:
+            evidence, failure = paired_test(program, explanation, case, trace)
+            records.extend(evidence)
+            if failure:
+                failures.append(failure)
+                break
+    status = "supported" if matching and not failures and records else "unresolved"
+    return ("rejected" if failures else status), records, failures
 
 
 def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
     """Validate frozen mappings and describe ordinary execution features.
 
-    No enumeration or mapping repair happens here. Unknown routes remain unknown.
-    State weights define the ordinary population, never the patched experiments.
+    No enumeration or mapping repair happens here. Unknown routes remain unknown. State
+    weights define the ordinary population, never the patched experiments. Each frozen
+    interchangeable location is re-tested as a single-coordinate swap.
     """
     if program.digest != bank.program_digest:
         raise ValueError("Frozen explanations belong to a different program")
@@ -401,26 +710,31 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
         raise ValueError("Missing validation inputs for a positive-mass state")
     validations = []
     supported = defaultdict(list)
+    has_supported_swap = {}
     for explanation in bank.explanations:
         matching = [(c, t) for c, t in runs if t.route == explanation.route]
-        failures = [
-            failure
-            for c, t in matching
-            if (failure := ordinary(explanation, c, t)) is not None
-        ]
-        records = []
-        if not failures:
-            for case, trace in matching[:intervention_cases]:
-                evidence, failure = paired_test(program, explanation, case, trace)
-                records.extend(evidence)
-                if failure:
-                    failures.append(failure)
-                    break
-        status = "supported" if matching and not failures and records else "unresolved"
-        if failures:
-            status = "rejected"
+        status, records, failures = _full_test(
+            program, explanation, matching, intervention_cases
+        )
         if status == "supported":
             supported[explanation.route].append(explanation)
+        swaps = []
+        for role, coordinate, location, variant in explanation.swaps():
+            swap_status, _, swap_failures = _full_test(
+                program, variant, matching, intervention_cases
+            )
+            swaps.append(
+                {
+                    "role": role,
+                    "coordinate": coordinate,
+                    "location": asdict(location),
+                    "status": swap_status,
+                    "counterexamples": swap_failures,
+                }
+            )
+        has_supported_swap[explanation.identifier] = any(
+            s["status"] == "supported" for s in swaps
+        )
         validations.append(
             {
                 "id": explanation.identifier,
@@ -428,6 +742,7 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                 "ordinary_cases": len(matching),
                 "interventions": records,
                 "counterexamples": failures,
+                "interchangeable": swaps,
             }
         )
     population = []
@@ -452,7 +767,8 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                     "root_actions": [2] if explanations else [],
                     "amount_if_unresolved": None,
                 },
-                "ambiguity": len(explanations) > 1,
+                "ambiguity": len(explanations) > 1
+                or any(has_supported_swap[e.identifier] for e in explanations),
             }
         )
     return {

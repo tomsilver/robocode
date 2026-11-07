@@ -13,18 +13,23 @@ from .task import Case
 
 LIMITATIONS = [
     "Empirical support within a restricted hypothesis and mapping family, not a proof.",
-    "Hypotheses: exhaustive depth-1/depth-2 search, maximum backup, first-action ties.",
-    "Mappings: complete 2/4-value site-occurrence series or container leaves, permuted.",
-    "No arbitrary cross-site scalar combinations, helpers, recursion, imports, or comprehensions.",
+    "Hypotheses: exhaustive depth-1/depth-2 search, first-action ties; depth 1 compares leaf utilities directly, depth 2 uses a maximum backup.",
+    "Mappings: each coordinate selects one recorded numeric value (any expression, visit or container element) that equals the model's value in every discovery run of the route. Values are never combined or computed by a mapping.",
+    "No helpers, recursion, imports, comprehensions or while loops in analyzed programs.",
     "Routes are executed if-statement decisions; unseen or unvalidated routes stay unresolved.",
     "Two state replacements and low/high value replacements per mapped coordinate are tested.",
     "Only the configured number of cases per route receives paired interventions.",
-    "Multiple alignments may describe the same computation; their feature counts are not added.",
+    "Interchangeable locations are copies of one quantity; each is validated as a single-coordinate swap, and combinations of swaps are not separately tested.",
     "A selected value is an observed occurrence, not a count of unique arithmetic operations.",
     "The action cache and analyzer rollouts are external preparation, never counted as planning.",
     "Evidence coverage is not planningness. Unresolved amount is null, not zero.",
     "Trusted small programs only: syntax restrictions and event budget are not a security sandbox.",
 ]
+
+
+# 2: depth-1 models have no "scores" role, and explanations list interchangeable
+# locations found by per-coordinate search.
+SCHEMA_VERSION = 2
 
 
 def write_json(path, value):
@@ -40,7 +45,7 @@ def write_json(path, value):
 def frozen_payload(bank):
     """Serialize exactly what is fixed before fresh validation starts."""
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "digest": bank.digest,
         "program_digest": bank.program_digest,
         "discovery_inputs": [asdict(c) for c in bank.discovery_inputs],
@@ -51,21 +56,23 @@ def frozen_payload(bank):
 def load_frozen(path):
     """Restore a saved bank for validation without repeating discovery."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload["schema_version"] != 1:
-        raise ValueError("Unsupported frozen-bank schema")
+    if payload["schema_version"] != SCHEMA_VERSION:
+        raise ValueError("Unsupported frozen-bank schema; rerun discovery")
+
+    def selector(s):
+        return Selector(s["site"], s["occurrence"], tuple(s["path"]))
+
     explanations = tuple(
         Explanation(
             e["route"],
             e["horizon"],
             tuple(
-                (
-                    role,
-                    tuple(
-                        Selector(s["site"], s["occurrence"], tuple(s["path"]))
-                        for s in selectors
-                    ),
-                )
+                (role, tuple(selector(s) for s in selectors))
                 for role, selectors in e["mapping"]
+            ),
+            tuple(
+                (role, coordinate, tuple(selector(s) for s in locations))
+                for role, coordinate, locations in e["interchangeable"]
             ),
         )
         for e in payload["explanations"]
@@ -92,6 +99,67 @@ def selector_text(selector, sites):
     return (
         f"`{site['expression']}` (L{site['line']}, C{site['column']}, "
         f"visit {selector['occurrence']}, path `{selector['path']}`)"
+    )
+
+
+MAX_ROWS = 40
+
+
+def patch_text(record):
+    """One patch experiment as a short sentence."""
+    text = (
+        f"{record['case']}: ← {record['replacement']}; predicted action "
+        f"{record['predicted_output']}, observed {record.get('observed_output', 'error')}"
+    )
+    if "error" in record:
+        text += f" ({record['error']})"
+    elif record.get("patch_count", 1) != 1:
+        text += f" (patch applied {record['patch_count']} times)"
+    return text
+
+
+def search_summary(search):
+    """Why one route-and-depth search ended as it did, in one sentence."""
+    result = search["result"]
+    if result == "supported":
+        matched = sum(c["matched"] for c in search["coordinates"])
+        survived = sum(c["survived"] for c in search["coordinates"])
+        return (
+            f"supported (`{search['explanation']}`). {matched} matching locations "
+            f"across {len(search['coordinates'])} coordinates; {survived} passed their "
+            f"own patch test; {search['candidates_tested']} complete mapping(s) "
+            f"checked; {search['interchangeable']} interchangeable locations."
+        )
+    if result == "ordinary_output":
+        example = search["counterexample"]
+        return (
+            f"rejected before matching: on `{example['case']}` the program returns "
+            f"{example['observed']}, the depth-{search['horizon']} model chooses "
+            f"{example['predicted']}."
+        )
+    if result == "no_matching_location":
+        return (
+            "unresolved: no recorded value matches "
+            f"{', '.join(search['missing'])} in every discovery run."
+        )
+    if result == "no_surviving_location":
+        return (
+            "unresolved: every matching location for "
+            f"{', '.join(search['dead'])} failed its own patch test."
+        )
+    if result == "no_compatible_mapping":
+        return (
+            "unresolved: every coordinate has surviving locations, but no complete "
+            f"combination is consistent (conflicts: {search['conflicts']})."
+        )
+    if result == "budget":
+        return (
+            f"unresolved: search budget exhausted after {search['candidates_tested']} "
+            f"complete mappings and {search['steps']} steps."
+        )
+    return (
+        "internal check failed: the assembled mapping did not pass the full test "
+        f"({search['counterexample'].get('reason')}). Please report this."
     )
 
 
@@ -124,51 +192,49 @@ def markdown(report):
             f"{row['output']} | {row['status']} | {row['features']['supported_horizons']} | "
             f"{row['features']['evaluated_alternatives']} | {len(row['supported_explanations'])} |"
         )
-    lines += ["", "## Discovery and rejected candidates", ""]
+    lines += ["", "## Discovery", ""]
+    lines += [
+        "Each model coordinate is matched on its own to every recorded value that equals "
+        "the model's value in all discovery runs of the route, then patched on its own. "
+        "Survivors are assembled into one mapping when every pair is compatible.",
+        "",
+    ]
+    sites = report["checkpoints"]
     for route, audit in report["discovery"]["routes"].items():
         lines += [
             f"### Route `{route}`",
             "",
-            f"Branch decisions: `{audit['branches']}`. Inventory: "
-            f"{len(audit['inventory'])}/{audit['available_series']} series; "
-            f"{audit['role_mappings_tested']} role mappings tested; "
-            f"{audit['candidates_tested']} complete hypotheses tested; "
-            f"search truncated: **{audit['truncated']}**.",
+            f"Branch decisions: `{audit['branches']}`. Discovery inputs on this route: "
+            f"{len(audit['cases'])}. Search truncated: **{audit['truncated']}**.",
             "",
         ]
-        if not audit["supported_candidates"]:
+        lines += [
+            f"- **Depth {search['horizon']}:** {search_summary(search)}"
+            for search in audit["horizons"]
+        ]
+        lines.append("")
+        rejected = [
+            (search["horizon"], r)
+            for search in audit["horizons"]
+            for r in search["rejected_locations"]
+        ]
+        if rejected:
             lines += [
-                "No supported explanation in the searched family. Amount remains unknown.",
+                "Matching locations rejected by their own patch test:",
                 "",
+                "| Depth | Coordinate | Location | Counterexample |",
+                "| ---: | --- | --- | --- |",
             ]
-        rejections = audit["rejected_candidates"]
-        if rejections:
-            lines += [
-                "| Rejected candidate | Horizon | Counterexample |",
-                "| --- | ---: | --- |",
-            ]
-            for rejection in rejections:
-                counterexample = rejection.get("counterexample", {})
-                detail = rejection["reason"]
-                if counterexample:
-                    detail += (
-                        f": {counterexample['case']}, {counterexample['role']}"
-                        f"[{counterexample['coordinate']}] ← {counterexample['replacement']}; "
-                        f"predicted output {counterexample['predicted_output']}, "
-                        f"observed {counterexample.get('observed_output', 'error')}"
-                    )
-                    if counterexample.get("predicted_output") == counterexample.get(
-                        "observed_output"
-                    ):
-                        detail += " (internal downstream mismatch)"
+            for horizon, r in rejected[:MAX_ROWS]:
                 lines.append(
-                    f"| {rejection['id']} | {rejection['explanation']['horizon']} | {detail} |"
+                    f"| {horizon} | {r['role']}[{r['coordinate']}] | "
+                    f"{selector_text(r['location'], sites)} | {patch_text(r['counterexample'])} |"
+                )
+            if len(rejected) > MAX_ROWS:
+                lines.append(
+                    f"| | | … {len(rejected) - MAX_ROWS} more in `report.json` | |"
                 )
             lines.append("")
-        lines += [
-            "Role-filter rejection counts and sampled counterexamples are in `report.json`.",
-            "",
-        ]
     lines += ["## Frozen explanations and fresh validation", ""]
     frozen = {e["id"]: e for e in report["frozen_explanations"]}
     for result in validation["explanations"]:
@@ -188,6 +254,23 @@ def markdown(report):
             )
             lines.append(f"| {role} | {locations} |")
         lines.append("")
+        swaps = result.get("interchangeable", [])
+        if swaps:
+            mapping = dict(explanation["mapping"])
+            lines += [
+                "Interchangeable locations: copies of the same quantity, each re-tested "
+                "on fresh inputs by swapping it in for that one coordinate.",
+                "",
+                "| Coordinate | Location used above | Interchangeable location | Fresh validation |",
+                "| --- | --- | --- | --- |",
+            ]
+            for swap in swaps:
+                used = mapping[swap["role"]][swap["coordinate"]]
+                lines.append(
+                    f"| {swap['role']}[{swap['coordinate']}] | {selector_text(used, sites)} | "
+                    f"{selector_text(swap['location'], sites)} | {swap['status']} |"
+                )
+            lines.append("")
         # One table per candidate, using its first fresh test context. All records
         # and complete downstream predictions are retained in the JSON report.
         evidence = result["interventions"]
@@ -226,7 +309,7 @@ def save_report(directory, name, program, bank, validation_inputs, validation):
     """Save evidence and ordinary traces, preserving the prevalidation manifest."""
     directory = Path(directory)
     report = {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "program": name,
         "source": program.source,
         "source_digest": program.digest,

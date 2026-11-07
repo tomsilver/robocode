@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .discovery import Limits, discover, validate
 from .fixtures import FIXTURES
-from .instrument import Program
+from .instrument import Program, UnsupportedProgram
 from .report import frozen_payload, save_report, write_json
 from .task import cases
 
@@ -20,6 +20,12 @@ def main():
     selection.add_argument("--fixture", choices=list(FIXTURES))
     selection.add_argument(
         "--source", type=Path, help="One restricted four-argument Python function"
+    )
+    selection.add_argument(
+        "--source-dir",
+        type=Path,
+        help="Analyze every .py file in this folder (one function per file); "
+        "files starting with '_' are skipped",
     )
     parser.add_argument("--discovery-seed", type=int, default=17)
     parser.add_argument("--validation-seed", type=int, default=29)
@@ -39,11 +45,24 @@ def main():
         sources = {args.fixture: FIXTURES[args.fixture]}
     if args.source:
         sources = {args.source.stem: args.source.read_text(encoding="utf-8")}
+    if args.source_dir:
+        files = sorted(
+            p for p in args.source_dir.glob("*.py") if not p.name.startswith("_")
+        )
+        if not files:
+            parser.error(f"No .py programs found in {args.source_dir}")
+        sources = {p.stem: p.read_text(encoding="utf-8") for p in files}
     weights = dict(enumerate(args.state_weights)) if args.state_weights else None
     summary = []
     for name, source in sources.items():
-        program = Program(source)
-        bank = discover(program, cases(args.discovery_seed, "discovery"), limits)
+        try:
+            program = Program(source)
+            bank = discover(program, cases(args.discovery_seed, "discovery"), limits)
+        except UnsupportedProgram as exc:
+            # Outside the supported Python subset: a recorded outcome, not a crash.
+            summary.append({"program": name, "refused": str(exc), "report": None})
+            print(f"{name:20} refused: {exc}")
+            continue
         directory = args.output_dir / name
         # This file is written BEFORE fresh inputs are generated or evaluated.
         write_json(directory / "frozen.json", frozen_payload(bank))
@@ -77,16 +96,19 @@ def main():
         "Unresolved mass has unknown planning amount.",
         "",
         "| Program | Supported explanations | Supported mass | "
-        "Unresolved mass | Truncated |",
-        "| --- | ---: | ---: | ---: | --- |",
+        "Unresolved mass | Truncated | Note |",
+        "| --- | ---: | ---: | ---: | --- | --- |",
     ]
     for row in summary:
         name = row["program"]
+        if "refused" in row:
+            lines.append(f"| {name} | — | — | — | — | Refused: {row['refused']} |")
+            continue
         coverage = row["evidence_coverage"]
         lines.append(
             f"| [{name}]({name}/report.md) | {row['validated_explanations']} | "
             f"{coverage['supported_mass']:.3f} | {coverage['unresolved_mass']:.3f} | "
-            f"{row['search_truncated']} |"
+            f"{row['search_truncated']} | |"
         )
     (args.output_dir / "README.md").write_text(
         "\n".join(lines) + "\n", encoding="utf-8"

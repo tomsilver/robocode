@@ -117,7 +117,8 @@ def draw_tree(
                 fields.append(("State", f"states_{level}", i))
                 if level == depth:
                     fields.append(("U", "evaluations", i))
-                if level == 1:
+                if level == 1 and "scores" in roles:
+                    # Depth-1 models compare their leaf utilities directly.
                     fields.append(("Score", "scores", i))
             lines = []
             for label, role, index in fields:
@@ -250,8 +251,8 @@ def run(args: argparse.Namespace) -> None:
     """Read a fixture report and write separate ordinary and comparison figures."""
     path = args.report / "report.json" if args.report.is_dir() else args.report
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report["schema_version"] != 1:
-        raise ValueError("Unsupported report schema")
+    if report["schema_version"] != 2:
+        raise ValueError("Unsupported report schema; regenerate the report")
     if args.list:
         for r in report["validation"]["ordinary_population"]:
             print(

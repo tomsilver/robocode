@@ -6,10 +6,15 @@ Run with unittest (stdlib only), or collect these tests with the repo's pytest.
 import ast
 import dataclasses
 import json
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
+from robocode.planning_explanations.__main__ import main
 from robocode.planning_explanations.discovery import (
     Explanation,
     Limits,
@@ -31,7 +36,12 @@ from robocode.planning_explanations.report import (
     save_report,
     write_json,
 )
-from robocode.planning_explanations.task import Navigation, cases, make_case
+from robocode.planning_explanations.task import (
+    Navigation,
+    cases,
+    make_case,
+    rollout,
+)
 
 
 class PrototypeTests(unittest.TestCase):
@@ -109,7 +119,10 @@ def p(s, t, u, c):
         ):
             with self.subTest(name=name):
                 result = self.results[name]
-                self.assertGreater(len(self.banks[name].explanations), 1)
+                # One computation; its copies are interchangeable locations rather
+                # than separate explanations.
+                (explanation,) = self.banks[name].explanations
+                self.assertTrue(explanation.interchangeable)
                 for row in result["ordinary_population"]:
                     self.assertEqual(row["status"], "supported_planning")
                     self.assertEqual(row["features"]["supported_horizons"], [horizon])
@@ -182,32 +195,21 @@ def p(s, t, u, c):
 
     def test_internal_effects_are_checked_even_when_outputs_match(self):
         """Equal outputs cannot hide incorrect downstream state predictions."""
-        rejected = next(iter(self.banks["two_step"].audit["routes"].values()))[
-            "rejected_candidates"
-        ]
+        program = self.programs["two_step"]
+        supported = self.banks["two_step"].explanations[0]
         # An early row snapshot contains both states, but changing its second
         # element does not affect the later read used by the second branch.
-        candidate = next(
-            r["explanation"]
-            for r in rejected
-            if r["explanation"]["mapping"][0][1][0]["path"]
+        row = next(
+            s for s, info in program.sites.items() if info["expression"] == "t[s]"
         )
+        mapping = dict(supported.mapping)
+        mapping["states_1"] = (Selector(row, 0, (0,)), Selector(row, 0, (1,)))
         explanation = Explanation(
-            candidate["route"],
-            candidate["horizon"],
-            tuple(
-                (
-                    role,
-                    tuple(
-                        Selector(s["site"], s["occurrence"], tuple(s["path"]))
-                        for s in selectors
-                    ),
-                )
-                for role, selectors in candidate["mapping"]
-            ),
+            supported.route,
+            2,
+            tuple((role, mapping[role]) for role, _ in supported.mapping),
         )
         case = make_case("equal-utilities", 0, [0.25] * 6)
-        program = self.programs["two_step"]
         evidence, failure = paired_test(program, explanation, case, program.run(case))
         self.assertEqual(failure["reason"], "intervention_mismatch")
         self.assertEqual(
@@ -219,6 +221,75 @@ def p(s, t, u, c):
                 for c in evidence[-1]["downstream_checks"]
             )
         )
+
+    def test_unrolled_code_is_supported(self):
+        """Values read by separate expressions can still form one role."""
+        for source, horizon in (
+            ("def p(s, t, u, c):\n    return int(u[t[s][1]] > u[t[s][0]])\n", 1),
+            (
+                "def p(s, t, u, c):\n"
+                "    left = t[s][0]\n"
+                "    right = t[s][1]\n"
+                "    a = max(u[t[left][0]], u[t[left][1]])\n"
+                "    b = max(u[t[right][0]], u[t[right][1]])\n"
+                "    return int(b > a)\n",
+                2,
+            ),
+        ):
+            with self.subTest(horizon=horizon):
+                program = Program(source)
+                bank = discover(program, self.training)
+                result = validate(program, bank, self.fresh)
+                self.assertEqual({e.horizon for e in bank.explanations}, {horizon})
+                self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+
+    def test_unused_copy_is_rejected_by_its_own_patch(self):
+        """A read whose element the decision never uses cannot stand for a score."""
+        program = self.programs["two_step"]
+        # In `return int(scores[1] > scores[0])` the first read of `scores` only
+        # feeds `scores[1]`, so its element 0 is never used by the decision.
+        first_read = min(
+            (
+                site
+                for site, info in program.sites.items()
+                if info["expression"] == "scores" and info["line"] == 11
+            ),
+            key=lambda site: program.sites[site]["column"],
+        )
+        search = next(iter(self.banks["two_step"].audit["routes"].values()))[
+            "horizons"
+        ][1]
+        rejected = [
+            r["location"]
+            for r in search["rejected_locations"]
+            if (r["role"], r["coordinate"]) == ("scores", 0)
+        ]
+        self.assertIn(dataclasses.asdict(Selector(first_read, 0, (0,))), rejected)
+
+    def test_search_cost_follows_locations_not_their_combinations(self):
+        """Per-coordinate screening finds the mapping without enumerating products."""
+        search = next(iter(self.banks["two_step"].audit["routes"].values()))[
+            "horizons"
+        ][1]
+        self.assertEqual(search["result"], "supported")
+        self.assertEqual(search["candidates_tested"], 1)
+        # Matching keeps every copy: about four locations per coordinate, whose
+        # product (millions) is never enumerated.
+        self.assertGreater(sum(c["matched"] for c in search["coordinates"]), 40)
+
+    def test_each_interchangeable_location_passes_the_full_test(self):
+        """Pairwise compatibility must agree with the full paired test it replaces."""
+        program = self.programs["two_step"]
+        explanation = self.banks["two_step"].explanations[0]
+        runs = [(c, program.run(c)) for c in self.training]
+        swaps = list(explanation.swaps())
+        self.assertTrue(swaps)
+        for role, coordinate, location, variant in swaps:
+            with self.subTest(role=role, coordinate=coordinate, location=location):
+                for case, trace in runs:
+                    self.assertIsNone(ordinary(variant, case, trace))
+                for case, trace in runs[:2]:
+                    self.assertIsNone(paired_test(program, variant, case, trace)[1])
 
     def test_conditional_routes_and_unknown_are_execution_specific(self):
         """Do not assign the planning route's features to reactive executions."""
@@ -310,7 +381,7 @@ def p(s, t, u, c):
 
     def test_enumeration_limit_is_reported_as_unresolved_not_absence(self):
         """Budget exhaustion cannot silently become evidence of no planning."""
-        bank = discover(self.programs["two_step"], self.training, Limits(candidates=1))
+        bank = discover(self.programs["two_step"], self.training, Limits(locations=1))
         self.assertTrue(any(a["truncated"] for a in bank.audit["routes"].values()))
         result = validate(self.programs["two_step"], bank, self.fresh)
         self.assertIsNone(result["planningness"])
@@ -366,6 +437,52 @@ def p(s, t, u, c):
         ):
             with self.assertRaises(UnsupportedProgram):
                 Program(source)
+
+    def test_depth_one_needs_no_second_location_for_the_same_number(self):
+        """Depth 1 compares evaluations directly, so code style cannot block support.
+
+        Appending ``u[...]`` directly leaves no later place holding each number on
+        its own; a separate depth-1 score role used to demand one.
+        """
+        case = self.training[0]
+        roles = rollout(case.state, case.transitions, case.utilities, 1)
+        self.assertEqual(set(roles), {"states_1", "evaluations"})
+        program = Program(
+            "def p(s, t, u, c):\n"
+            "    greedy = []\n"
+            "    for a in range(2):\n"
+            "        greedy.append(u[t[s][a]])\n"
+            "    return int(greedy[1] > greedy[0])\n"
+        )
+        bank = discover(program, self.training)
+        result = validate(program, bank, self.fresh)
+        self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+        self.assertEqual({e.horizon for e in bank.explanations}, {1})
+
+    def test_source_dir_analyzes_each_program_and_records_refusals(self):
+        """A folder run reports supported programs and lists refused ones."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            programs = root / "programs"
+            programs.mkdir()
+            (programs / "planner.py").write_text(ONE_STEP)
+            (programs / "loop.py").write_text(
+                "def p(s, t, u, c):\n    while s:\n        s = 0\n    return 0\n"
+            )
+            (programs / "_skipped.py").write_text("not a policy")
+            out = root / "out"
+            argv = ["prog", "--source-dir", str(programs), "--output-dir", str(out)]
+            with mock.patch.object(sys, "argv", argv), redirect_stdout(StringIO()):
+                main()  # type: ignore[no-untyped-call]
+            rows = json.loads((out / "summary.json").read_text())
+            summary = {row["program"]: row for row in rows}
+            self.assertEqual(set(summary), {"loop", "planner"})
+            self.assertIn("While", summary["loop"]["refused"])
+            self.assertFalse((out / "loop").exists())
+            self.assertGreater(summary["planner"]["validated_explanations"], 0)
+            self.assertIn(
+                "Refused: Unsupported syntax: While", (out / "README.md").read_text()
+            )
 
     def test_environment_resets(self):
         """Environment trials start from the same supplied task state."""

@@ -1,7 +1,7 @@
 """The known task boundary and candidate computational models.
 
-Reference rollouts here are analyzer work, never measured program computation.
-Utilities are terminal values at the lookahead cutoff (no intermediate reward).
+Reference rollouts here are analyzer work, never measured program computation. Utilities
+are terminal values at the lookahead cutoff (no intermediate reward).
 """
 
 # Exact builtin types exclude booleans and user-defined numeric subclasses.
@@ -13,15 +13,28 @@ from random import Random
 
 TRANSITIONS = ((1, 2), (3, 4), (4, 5), (0, 5), (1, 3), (2, 0))
 
+# Model roles in canonical order. Depth 1 compares its leaf evaluations directly:
+# a separate "scores" role would only be a copy of the same numbers, and demanding
+# a distinct program location for that copy makes support depend on code style.
+ROLES = {
+    1: ("states_1", "evaluations"),
+    2: ("states_1", "states_2", "evaluations", "scores"),
+}
+
 
 def choose(scores):
     """Two actions, maximizing utility, with ties going to action zero."""
     return int(scores[1] > scores[0])
 
 
+def action_values(roles):
+    """The per-action values a model's decision compares."""
+    return roles["scores"] if "scores" in roles else roles["evaluations"]
+
+
 def rollout(state, transitions, utilities, horizon):
-    """Compute a candidate model's state, evaluation and backup roles."""
-    if horizon not in (1, 2):
+    """Compute a candidate model's states, evaluations and (depth 2) backups."""
+    if horizon not in ROLES:
         raise ValueError("Only horizons 1 and 2 are supported")
     first = list(transitions[state])
     roles = {"states_1": first}
@@ -30,14 +43,13 @@ def rollout(state, transitions, utilities, horizon):
         leaves = [transitions[s][a] for s in first for a in (0, 1)]
         roles["states_2"] = leaves
     roles["evaluations"] = [utilities[s] for s in leaves]
-    roles["scores"] = backup(roles["evaluations"], horizon)
+    if horizon == 2:
+        roles["scores"] = backup(roles["evaluations"])
     return roles
 
 
-def backup(evaluations, horizon):
-    """Maximum backups for a complete binary tree of depth one or two."""
-    if horizon == 1:
-        return list(evaluations)
+def backup(evaluations):
+    """Maximum backup of each first action's two depth-2 leaf evaluations."""
     return [max(evaluations[:2]), max(evaluations[2:])]
 
 
@@ -74,7 +86,7 @@ def make_case(label, state, utilities, transitions=TRANSITIONS):
     transitions = tuple(tuple(row) for row in transitions)
     utilities = tuple(utilities)
     cached = tuple(
-        choose(rollout(s, transitions, utilities, 2)["scores"]) for s in range(6)
+        choose(action_values(rollout(s, transitions, utilities, 2))) for s in range(6)
     )
     return Case(label, state, transitions, utilities, cached)
 

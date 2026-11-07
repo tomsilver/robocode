@@ -63,8 +63,9 @@ alternatives, and ambiguity.
 The prototype uses generic AST expression checkpoints and bounded expression
 occurrence selectors. The task input boundary may specify state, transition table,
 and utility vector; internal identifiers carry no semantic labels. The initial
-hypothesis family is exhaustive deterministic lookahead with a maximum backup and
-first-action tie breaking. Restrictions, enumeration limits, validation splits,
+hypothesis family is exhaustive deterministic lookahead with first-action tie
+breaking: depth 1 compares leaf utilities directly, and depth 2 uses a maximum
+backup. Restrictions, enumeration limits, validation splits,
 and unsupported cases must be explicit in reports. A failed or bounded search
 does not establish absence of planning.
 
@@ -167,9 +168,10 @@ Source is in `src/robocode/planning_explanations/`:
   are deep copies. Interventions substitute a single expression result, or a
   selected element of a copied expression result. They do not globally mutate
   every alias. Execution resets inputs and globals on every run.
-- `discovery.py`: inventories series of existing values, enumerates models and
-  rearrangements, filters ordinary runs, and tests paired interventions. It also
-  validates a frozen bank and describes the ordinary state-weighted population.
+- `discovery.py`: factorized search (per-coordinate matching and patch tests,
+  then assembly from pairwise-compatible survivors), the full ordinary and paired
+  tests, and validation of a frozen bank with its ordinary state-weighted
+  population.
 - `report.py`: JSON serialization, frozen-bank loading, and Markdown reports.
 - `__main__.py`: reproducible demonstration and CLI.
 
@@ -177,8 +179,10 @@ To inspect a single explanation, open the first mapping table in the two-step
 report. It should select two observed first successors, four observed second
 successors, four utility values, and two backed-up action scores. Source names
 appear only to make the result readable; discovery tests values and execution
-order rather than interpreting those names. Alternative mappings through copies
-can also survive; they remain separate explanations.
+order rather than interpreting those names. Copies of the same value (for
+example `u[leaf]`, the variable `value`, and the element of `values`) are listed
+under the explanation as interchangeable locations, each re-tested on fresh
+inputs as a single-coordinate swap, rather than as separate explanations.
 
 For a concrete negative witness, find that explanation's ID in the decoy report.
 The initial outputs match. A changed successor predicts changed evaluations,
@@ -189,22 +193,46 @@ final action agrees but intermediate predictions disagree.
 ## Search space and validation protocol
 
 - Candidate models have horizon 1 or 2, exhaustive two-action expansion, terminal
-  utility evaluation, maximum backup, and action-zero tie breaking.
-- A mapping selects a complete series of 2 or 4 numeric values at one expression
-  site/path across its visits, or the 2 or 4 numeric leaves of one container
-  checkpoint. All permutations are considered within the budget. This does not
-  enumerate arbitrary combinations of independent scalar assignment sites.
-- Mappings must match task-generated future states, terminal evaluations and
-  backups across the route's discovery cases, and respect their temporal order.
-  Model rollouts create expected values only; mappings never call that model.
+  utility evaluation, and action-zero tie breaking. Depth-1 roles are `states_1`
+  and `evaluations`; the decision compares the evaluations directly. Depth-2 roles
+  add `states_2` and `scores`, the maximum backup of each first action's leaves.
+  Depth 1 deliberately has no `scores` role: it would be a copy of the same
+  numbers, and demanding a separate program location for that copy made support
+  depend on code style (`stress/unused_depth.py`).
+- The search is factorized by model coordinate (one state, evaluation or score):
+  1. The program's ordinary outputs must equal the model's decisions on every
+     discovery input of the route. This needs no mapping, so a wrong depth is
+     rejected before matching.
+  2. Each coordinate is matched to every recorded numeric value, at any
+     expression, visit or container element, that equals the model's value in
+     all of the route's discovery runs. Different coordinates of one role may
+     come from different expressions, so unrolled code is covered
+     (`stress/unrolled.py`).
+  3. Each matching location is patched on its own. The action must change
+     exactly as the model predicts, or the location is rejected with that
+     counterexample.
+  4. Survivors are assembled into one complete mapping by backtracking. Every
+     pair must respect the model's temporal order and be compatible: under each
+     patch of one, the other holds the model's predicted value. The full paired
+     test is a conjunction of exactly these single-location and pairwise checks,
+     so cost grows with the number of locations, not their product. For
+     two_step, 49 matching locations would form about 18.4 million complete
+     combinations; the first assembled mapping is supported.
+  5. Other survivors that fit in place of one coordinate are recorded as
+     interchangeable locations.
+  6. The assembled mapping is re-checked with the full ordinary and paired
+     tests, which also produce the reported evidence. A disagreement would be
+     reported as `verification_failed`, never hidden.
+- Mappings select recorded values only; they never call the model or combine
+  values. Model rollouts create expected values only.
 - Paired tests substitute two alternative state IDs at each state coordinate,
   and low/high numbers at each evaluation and action-score coordinate. Predicted
   and observed downstream mapped values and final actions must agree. At least
   one output-changing intervention per tested input is required.
-- Default budgets per route: 256 inventoried series, 4,096 permutations per role
-  and horizon, 128 complete candidates, and two intervention cases. Every tested
-  complete-candidate rejection has a counterexample. Failed role permutations
-  have counts plus a labeled sample of 16 counterexamples. Truncation is explicit.
+- Default budgets per route and depth: 64 matching locations per coordinate,
+  128 complete mappings, 100,000 assembly steps, and two intervention cases.
+  Every rejected location has a counterexample; pairwise conflicts have counts
+  plus a sample of 16. Truncation is explicit.
 - Defaults: discovery seed 17, validation seed 29, two independently sampled
   utility contexts for each initial state in each split. The default initial-state
   distribution is uniform; `--state-weights` overrides it. Contexts within each
@@ -229,20 +257,26 @@ amount of planning; there is deliberately no planningness score.
 
 With default seeds and budgets:
 
-| Fixture | Supported explanations | Supported horizon | Ordinary routes |
-| --- | ---: | --- | --- |
-| One-step planner | 2 | 1 | Supported throughout |
-| Two-step planner | 4 | 2 | Supported throughout |
-| Renamed dictionary planner | 2 | 2 | Supported throughout |
-| Precomputed action lookup | 0 | Unknown | Unresolved |
-| Conditional | 4 on planning route | 2 on odd states | Odd states supported; even states unresolved |
-| Decoy search | 0 | Unknown | Search explanations rejected by interventions |
+| Fixture | Supported explanations | Interchangeable locations | Supported horizon | Ordinary routes |
+| --- | ---: | ---: | --- | --- |
+| One-step planner | 1 | 10 | 1 | Supported throughout |
+| Two-step planner | 1 | 22 | 2 | Supported throughout |
+| Renamed dictionary planner | 1 | 22 | 2 | Supported throughout |
+| Precomputed action lookup | 0 | — | Unknown | Unresolved |
+| Conditional | 1 on planning route | 22 | 2 on odd states | Odd states supported; even states unresolved |
+| Decoy search | 0 | — | Unknown | Every matching location rejected by its own patch test |
 
-All six default searches finish without exhausting their enumeration budgets.
+All six default searches finish without exhausting their budgets. Every frozen
+interchangeable location also passes on fresh validation inputs.
+
 The even-state conditional route is reactive by fixture construction. The
 analyzer conservatively reports that it has no supported lookahead explanation,
 rather than claiming proof of zero planning. Both conditional routes and their
 checkpoints remain inspectable.
+
+Harder test programs live in `src/robocode/planning_explanations/stress/`, with
+predictions and results in that folder's README. Run them all with
+`--source-dir src/robocode/planning_explanations/stress`.
 
 ## Deliberate limits and next steps
 
