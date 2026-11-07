@@ -8,6 +8,10 @@ RoboCode is the experiment code for **AgenticGenPlan**, our study of coding agen
 
 The main setting is **strict black box**: no environment source, injected primitives, or robotics libraries. Programs use Python's standard library, NumPy, and SciPy; the agent interacts through `reset`/`step` and render tools. Source access is an additional condition. This is a study of off-the-shelf coding agents, with no prescribed symbolic representation or planning algorithm.
 
+For the small experimental prototype that discovers and tests planning explanations
+inside program executions, see [Planning explanations](docs/planning-explanations.md).
+It runs independently of the robotics and LLM stack using only Python's standard library.
+
 <table>
   <tr>
     <td align="center"><img src="docs/media/rollouts/tossing3d.gif" alt="A synthesized policy throws a cube across a barrier into a bin" width="300"><br><b>Tossing3D</b> · 2.5× playback</td>

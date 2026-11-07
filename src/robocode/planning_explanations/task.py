@@ -1,0 +1,118 @@
+"""The known task boundary and candidate computational models.
+
+Reference rollouts here are analyzer work, never measured program computation.
+Utilities are terminal values at the lookahead cutoff (no intermediate reward).
+"""
+
+# Exact builtin types exclude booleans and user-defined numeric subclasses.
+# pylint: disable=unidiomatic-typecheck
+
+from dataclasses import dataclass
+from math import isfinite
+from random import Random
+
+TRANSITIONS = ((1, 2), (3, 4), (4, 5), (0, 5), (1, 3), (2, 0))
+
+
+def choose(scores):
+    """Two actions, maximizing utility, with ties going to action zero."""
+    return int(scores[1] > scores[0])
+
+
+def rollout(state, transitions, utilities, horizon):
+    """Compute a candidate model's state, evaluation and backup roles."""
+    if horizon not in (1, 2):
+        raise ValueError("Only horizons 1 and 2 are supported")
+    first = list(transitions[state])
+    roles = {"states_1": first}
+    leaves = first
+    if horizon == 2:
+        leaves = [transitions[s][a] for s in first for a in (0, 1)]
+        roles["states_2"] = leaves
+    roles["evaluations"] = [utilities[s] for s in leaves]
+    roles["scores"] = backup(roles["evaluations"], horizon)
+    return roles
+
+
+def backup(evaluations, horizon):
+    """Maximum backups for a complete binary tree of depth one or two."""
+    if horizon == 1:
+        return list(evaluations)
+    return [max(evaluations[:2]), max(evaluations[2:])]
+
+
+@dataclass(frozen=True)
+class Case:
+    """An immutable input, including an externally cached policy control."""
+
+    label: str
+    state: int
+    transitions: tuple
+    utilities: tuple
+    cached_actions: tuple
+
+    def args(self):
+        """Fresh mutable inputs, so every run starts from the same state."""
+        return (
+            self.state,
+            [list(row) for row in self.transitions],
+            list(self.utilities),
+            list(self.cached_actions),
+        )
+
+
+def make_case(label, state, utilities, transitions=TRANSITIONS):
+    """The cache is prepared outside program execution for negative controls."""
+    if len(transitions) != 6 or any(len(row) != 2 for row in transitions):
+        raise ValueError("Expected six states and two actions")
+    if type(state) is not int or not 0 <= state < 6 or len(utilities) != 6:
+        raise ValueError("Invalid initial state or utility vector")
+    if any(type(v) not in (int, float) or not isfinite(v) for v in utilities):
+        raise ValueError("Utilities must be finite numbers")
+    if any(type(s) is not int or not 0 <= s < 6 for row in transitions for s in row):
+        raise ValueError("Invalid transition")
+    transitions = tuple(tuple(row) for row in transitions)
+    utilities = tuple(utilities)
+    cached = tuple(
+        choose(rollout(s, transitions, utilities, 2)["scores"]) for s in range(6)
+    )
+    return Case(label, state, transitions, utilities, cached)
+
+
+def cases(seed, prefix):
+    """Two fresh utility contexts for every initial state, reproducibly."""
+    rng = Random(seed)
+    result = []
+    for repetition in range(2):
+        for state in range(6):
+            # Distinct nonintegral utilities help separate state IDs from values.
+            utilities = [v + 0.25 for v in rng.sample(range(-30, 31), 6)]
+            result.append(make_case(f"{prefix}-{repetition}-{state}", state, utilities))
+    return result
+
+
+class Navigation:
+    """A resettable deterministic navigation environment for manual inspection."""
+
+    def __init__(self, case):
+        self.case = case
+        self.state = case.state
+
+    def reset(self, state=None):
+        """Reset to the case's start or an explicitly supplied state."""
+        state = self.case.state if state is None else state
+        if type(state) is not int or not 0 <= state < 6:
+            raise ValueError("Unknown state")
+        self.state = state
+        return self.state
+
+    def step(self, action):
+        """Move once; the caller chooses the terminal horizon."""
+        if action not in (0, 1):
+            raise ValueError("Unknown action")
+        self.state = self.case.transitions[self.state][action]
+        return self.state
+
+    def terminal_utility(self):
+        """Utility if the rollout ends at the current state."""
+        return self.case.utilities[self.state]
