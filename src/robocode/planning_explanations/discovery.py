@@ -27,6 +27,10 @@ from .task import ROLES, action_values, backup, choose, rollout
 RUN_ERRORS = (KeyError, IndexError, TypeError, ValueError, RuntimeError)
 _MISSING = object()
 _EXAMPLES = 16
+NUMERIC = ("evaluations", "scores")
+# Distance from the decision's switching point for boundary patches. Generated
+# utilities are a whole number apart, so a smaller step lands strictly between them.
+BOUNDARY_STEP = 0.125
 
 
 @dataclass(frozen=True)
@@ -206,35 +210,80 @@ def predict_patch(case, horizon, role, index, value):
     return predicted
 
 
-def replacements(role, current, case):
-    """Two other states for a state, or values below and above every utility."""
+def switch_point(case, horizon, role, index):
+    """Where the model's decision flips as this one value moves, or None.
+
+    The decision can only flip where the patched value crosses another number the
+    model compares, and those are the model's own evaluations and scores. ``step``
+    is small enough that no other compared number lies between ``point - step``
+    and ``point + step``.
+    """
+    roles = rollout(case.state, case.transitions, case.utilities, horizon)
+    numbers = sorted({v for r in ROLES[horizon] if r in NUMERIC for v in roles[r]})
+    gaps = [b - a for a, b in zip(numbers, numbers[1:])]
+    step = min([BOUNDARY_STEP] + [g / 4 for g in gaps])
+
+    def decision(value):
+        return choose(action_values(predict_patch(case, horizon, role, index, value)))
+
+    for point in numbers:
+        if decision(point - step) != decision(point + step):
+            return point, step
+    return None
+
+
+def replacements(case, horizon, role, index, current):
+    """Labelled substitute values for one model coordinate.
+
+    States: every other state, so a decision-changing state is tried whenever one
+    exists. Values: far below and far above every utility, plus just below, exactly
+    at, and just above the point where the model's decision flips.
+    """
     if role.startswith("states_"):
-        return ((int(current) + 1) % 6, (int(current) + 3) % 6)
-    return (min(case.utilities) - 100, max(case.utilities) + 100)
+        return tuple(("other state", s) for s in range(6) if s != int(current))
+    values = [
+        ("low", min(case.utilities) - 100),
+        ("high", max(case.utilities) + 100),
+    ]
+    found = switch_point(case, horizon, role, index)
+    if found:
+        point, step = found
+        values += [
+            ("below switch", point - step),
+            ("at switch", point),
+            ("above switch", point + step),
+        ]
+    return tuple(values)
 
 
 def interventions(explanation, case, trace):
-    """State substitutions and low/high value substitutions for every role."""
+    """Every labelled single-coordinate substitution for every mapped coordinate."""
     for role, selectors in explanation.mapping:
         for i, selector in enumerate(selectors):
-            for value in replacements(role, selector.read(trace), case):
-                yield role, i, Patch(selector, value)
+            current = selector.read(trace)
+            for kind, value in replacements(
+                case, explanation.horizon, role, i, current
+            ):
+                yield role, i, kind, Patch(selector, value)
 
 
 def paired_test(program, explanation, case, trace):
     """Compare model predictions to actual downstream checkpoints and output."""
     records = []
-    for role, i, patch in interventions(explanation, case, trace):
+    for role, i, kind, patch in interventions(explanation, case, trace):
         predicted = predict_patch(case, explanation.horizon, role, i, patch.value)
         record = {
             "case": case.label,
             "role": role,
             "coordinate": i,
+            "kind": kind,
             "target": asdict(patch.selector),
             "old_value": patch.selector.read(trace),
             "replacement": patch.value,
             "baseline_output": trace.output,
             "predicted_output": choose(action_values(predicted)),
+            # The model expects a different action, so the action alone can fail it.
+            "informative": choose(action_values(predicted)) != trace.output,
             "predicted_roles": predicted,
         }
         try:
@@ -467,12 +516,13 @@ class HorizonSearch:
         effects = []
         for case, trace in self.cases:
             old = selector.read(trace)
-            for value in replacements(role, old, case):
+            for kind, value in replacements(case, self.horizon, role, index, old):
                 predicted = predict_patch(case, self.horizon, role, index, value)
                 record = {
                     "case": case.label,
                     "role": role,
                     "coordinate": index,
+                    "kind": kind,
                     "target": asdict(selector),
                     "old_value": old,
                     "replacement": value,
@@ -741,6 +791,7 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                 "status": status,
                 "ordinary_cases": len(matching),
                 "interventions": records,
+                "informative_interventions": sum(r["informative"] for r in records),
                 "counterexamples": failures,
                 "interchangeable": swaps,
             }

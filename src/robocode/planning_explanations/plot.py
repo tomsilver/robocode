@@ -204,7 +204,8 @@ def comparison_figure(
     for col, (num, record) in enumerate(group):
         role, coord = record["role"], record["coordinate"]
         title = (
-            f"#{num}   {role}[{coord}]: {record['old_value']} → {record['replacement']}"
+            f"#{num}   {role}[{coord}] ({record['kind']}): "
+            f"{record['old_value']} → {record['replacement']}"
         )
         for line, side in enumerate(("predicted", "observed")):
             ax = axes[line, col]
@@ -251,7 +252,7 @@ def run(args: argparse.Namespace) -> None:
     """Read a fixture report and write separate ordinary and comparison figures."""
     path = args.report / "report.json" if args.report.is_dir() else args.report
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report["schema_version"] != 2:
+    if report["schema_version"] != 3:
         raise ValueError("Unsupported report schema; regenerate the report")
     if args.list:
         for r in report["validation"]["ordinary_population"]:
@@ -277,8 +278,8 @@ def run(args: argparse.Namespace) -> None:
     if args.list:
         for i, probe in enumerate(probes, start=1):
             print(
-                f"#{i}: {probe['role']}[{probe['coordinate']}]  {probe['old_value']} → "
-                f"{probe['replacement']}  |  action: "
+                f"#{i}: {probe['role']}[{probe['coordinate']}] ({probe['kind']})  "
+                f"{probe['old_value']} → {probe['replacement']}  |  action: "
                 f"predicted {probe['predicted_output']}, "
                 f"observed {probe.get('observed_output', 'unavailable')}"
             )

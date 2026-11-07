@@ -225,19 +225,31 @@ final action agrees but intermediate predictions disagree.
      reported as `verification_failed`, never hidden.
 - Mappings select recorded values only; they never call the model or combine
   values. Model rollouts create expected values only.
-- Paired tests substitute two alternative state IDs at each state coordinate,
-  and low/high numbers at each evaluation and action-score coordinate. Predicted
-  and observed downstream mapped values and final actions must agree. At least
-  one output-changing intervention per tested input is required.
+- Paired tests substitute every other state ID at each state coordinate, so a
+  decision-changing state is tried whenever one exists. At each evaluation and
+  action-score coordinate they substitute a number far below and one far above
+  every utility, plus values just below, exactly at, and just above the
+  coordinate's switching point: the value at which the model's decision flips
+  (found from the model, 0.125 away). Generated utilities all end in .25, so
+  ordinary runs and the far patches only ever produce whole-number differences;
+  the switching-point patches are the only ones that test where the decision
+  actually flips. Predicted and observed downstream mapped values and final
+  actions must agree. At least one output-changing intervention per tested input
+  is required. Each report counts its *informative* patches, whose predicted
+  action differs from the ordinary run; the others are tested only through
+  internal values.
 - Default budgets per route and depth: 64 matching locations per coordinate,
   128 complete mappings, 100,000 assembly steps, and two intervention cases.
   Every rejected location has a counterexample; pairwise conflicts have counts
   plus a sample of 16. Truncation is explicit.
 - Defaults: discovery seed 17, validation seed 29, two independently sampled
-  utility contexts for each initial state in each split. The default initial-state
-  distribution is uniform; `--state-weights` overrides it. Contexts within each
-  state have equal conditional weight. The transition table stays fixed in the
-  default demo, though `make_case` accepts other valid tables.
+  contexts for each initial state in each split. Each context has its own
+  utilities and its own transition table (two different successors per state).
+  With one fixed table, the states a program visits depend only on the start
+  state, and a program carrying a private copy of the table is indistinguishable
+  from one reading `t`. The default initial-state distribution is uniform;
+  `--state-weights` overrides it. Contexts within each state have equal
+  conditional weight.
 - Branch routes are generic executed `if` decisions. For each frozen mapping,
   validation tests all fresh ordinary executions on its route and paired
   interventions on the first two fresh cases. No mapping repair or discovery
@@ -267,7 +279,12 @@ With default seeds and budgets:
 | Decoy search | 0 | — | Unknown | Every matching location rejected by its own patch test |
 
 All six default searches finish without exhausting their budgets. Every frozen
-interchangeable location also passes on fresh validation inputs.
+interchangeable location also passes on fresh validation inputs. Per-input
+transition tables and switching-point patches left all six verdicts and frozen
+explanations unchanged: they have the same identifiers as under one fixed table
+with low/high patches only. Two-step validation now runs 111 paired
+interventions instead of 48, and 32 of them predict a different action than the
+ordinary run.
 
 The even-state conditional route is reactive by fixture construction. The
 analyzer conservatively reports that it has no supported lookahead explanation,
@@ -288,7 +305,7 @@ budget are not a resource-isolation sandbox. Only ordinary output and input
 mutation are checked for observation preservation, not timing or resource usage.
 
 Future work can expand the mapping grammar and algorithm family, add joint or
-interchange interventions, vary transition graphs, and evaluate independently
-specified task-state distributions. A planningness metric remains a separate
+interchange interventions, and evaluate independently specified task-state
+distributions. A planningness metric remains a separate
 research decision. Preserve unknown outcomes and distinguish amount from evidence
 strength when adding it.

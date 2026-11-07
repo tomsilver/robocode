@@ -33,27 +33,38 @@ rerun the folder command. Write its prediction in the header first.
 
 ## Scoreboard
 
-Default seeds 17/29 and default budgets. "First run" is the original analyzer.
-"Fix A" merges the depth-1 evaluation and score roles. "Fix 2" matches and
-patch-tests each coordinate on its own and assembles compatible survivors (see
-`docs/planning-explanations.md`, "Search space").
+Default seeds 17/29 and default budgets. Each column adds one change to the one
+before it:
 
-| Program | First run | After fix A | After fix 2 |
-| --- | --- | --- | --- |
-| `while_loop`, `helper_function`, `comprehension` | Refused | Refused | Refused |
-| `unrolled` | Unresolved | Unresolved | **Supported (depth 2)** |
-| `memoized` | Supported (depth 2) | Supported (depth 2) | Supported (depth 2) |
-| `pruning` | Unresolved / rejected | Unresolved / rejected | Unresolved: no compatible mapping (all 4 leaves read) or no matching location (3 leaves read) |
-| `depth_three` | Unresolved | Unresolved | Unresolved: output differs from the depth-2 model, so rejected before matching |
-| `sum_rewards` | Unresolved | Unresolved | Unresolved: output differs from the depth-2 model, so rejected before matching |
-| `unused_depth` | **Unresolved** | **Supported (depth 1), second loop only** | Supported (depth 1), second loop only |
-| `unused_depth_with_variable` | Supported (depth 1) | Supported (depth 1) | Supported (depth 1) |
+1. **First run:** the original analyzer.
+2. **Depth-1 roles merged:** the depth-1 model has no separate score role.
+3. **Per-coordinate search:** each coordinate is matched and patch-tested on its
+   own, and compatible survivors are assembled (see `docs/planning-explanations.md`,
+   "Search space").
+4. **Varied tables:** every input has its own transition table instead of one
+   fixed table.
+5. **Boundary patches:** states are replaced by every other state, and values also
+   by numbers just below, at and just above the model's switching point.
 
-The original six examples keep their verdicts after both fixes. After fix 2 each
-supported route has **one** explanation; copies of the same value (for example
-`u[leaf]`, `value`, and the element of `values`) are listed as interchangeable
-locations instead of as separate explanations, and every one of them also passes on
-fresh validation inputs. Also supported now, though not in this folder:
+| Program | First run | Depth-1 roles merged | Per-coordinate search | Varied tables | Boundary patches |
+| --- | --- | --- | --- | --- | --- |
+| `while_loop`, `helper_function`, `comprehension` | Refused | Refused | Refused | Refused | Refused |
+| `unrolled` | Unresolved | Unresolved | **Supported (d2)** | Supported (d2) | Supported (d2) |
+| `memoized` | Supported (d2) | Supported (d2) | Supported (d2) | **Supported (d2) on 0.83 of inputs**: one validation route never seen in discovery | Same |
+| `pruning` | Unresolved | Unresolved | Unresolved: no compatible mapping / no matching location | Same | Same |
+| `depth_three` | Unresolved | Unresolved | Unresolved: rejected before matching | Same | Same |
+| `sum_rewards` | Unresolved | Unresolved | Unresolved: rejected before matching | Same | Same |
+| `unused_depth` | Unresolved | **Supported (d1)**, second loop only | Supported (d1) | Supported (d1) | Supported (d1) |
+| `unused_depth_with_variable` | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) |
+| `own_table` | — | — | Supported (d2) | **Unresolved: rejected before matching** | Same |
+| `margin` | — | — | Supported (d2) | Supported (d2) | **Unresolved: every value location fails a boundary patch** |
+
+"—": the program was added later; its first result is the code as it stood then.
+The original six examples keep their verdicts and their exact frozen explanations
+through all five columns. Each supported route has **one** explanation; copies of
+the same value (for example `u[leaf]`, `value`, and the element of `values`) are
+listed as interchangeable locations, and every one of them also passes on fresh
+validation inputs. Also supported, though not in this folder:
 `int(u[t[s][1]] > u[t[s][0]])` (unrolled depth 1; see the unit tests).
 
 ## Results of the first run, against the predictions
@@ -71,7 +82,14 @@ fresh validation inputs. Also supported now, though not in this folder:
 | `unused_depth` | Computed vs used | Supported at depth 1 only | **Unresolved.** Depth-2 candidates were rejected as intended, but every depth-1 candidate failed too | ❌ |
 | `unused_depth_with_variable` | Style sensitivity (follow-up) | Supported at depth 1 | Supported at depth 1, using the second loop only | ✅ |
 
-## What the run shows
+Added later, each predicted before its first run:
+
+| Program | Tests | Prediction | Result | Match |
+| --- | --- | --- | --- | --- |
+| `own_table` | Environment's table vs a private copy | Supported with one fixed table; unresolved once tables vary | Exactly that | ✅ |
+| `margin` | Patches at the decision boundary | Supported with low/high patches; unresolved with boundary patches | Exactly that | ✅ |
+
+## What the runs show
 
 1. **Syntax (3 programs)** is an engineering limit: `while`, helper functions and
    comprehensions are refused before any analysis.
@@ -81,25 +99,38 @@ fresh validation inputs. Also supported now, though not in this folder:
    "this doesn't fit my one fixed tree."
 3. **Matching** handled a repeated leaf (`memoized`) but not code without loops
    (`unrolled`).
-4. **Style sensitivity (found here, fixed by fix A).** `unused_depth` and
-   `unused_depth_with_variable` behave identically, yet get different verdicts. The
-   depth-1 model has separate *evaluation* and *score* roles, even though at depth 1
-   they are the same number. A program has to read that number in two different
+4. **Style sensitivity (fixed by merging the depth-1 roles).** `unused_depth` and
+   `unused_depth_with_variable` behave identically, yet got different verdicts. The
+   depth-1 model had separate *evaluation* and *score* roles, even though at depth 1
+   they are the same number. A program had to read that number in two different
    places (for example `value = u[...]` and then `append(value)`) for both roles to
    be found. Otherwise the only later reads are at
    `return int(greedy[1] > greedy[0])`, where each read of `greedy` uses only one
    element, the same "unused copy" failure as rejected two_step candidate
-   `6066afab…`.
-
-   **Fix A:** the depth-1 model is now `states_1 → evaluations → decision`, with no
-   separate `scores` role (`ROLES` and `action_values` in `task.py`). Depth 2
-   still has `scores`, because there the max over two leaves is a separate
-   computation.
-
-5. **Unrolled code (fixed by fix 2).** A role used to need all its values from one
-   expression, so code without loops (`unrolled.py`,
+   `6066afab…`. Now the depth-1 model is `states_1 → evaluations → decision`
+   (`ROLES` and `action_values` in `task.py`). Depth 2 still has `scores`, because
+   there the max over two leaves is a separate computation.
+5. **Unrolled code (fixed by the per-coordinate search).** A role used to need all
+   its values from one expression, so code without loops (`unrolled.py`,
    `int(u[t[s][1]] > u[t[s][0]])`) could never be matched. Now each coordinate is
    matched and patch-tested on its own, and survivors are combined only if every
    pair is compatible. In `unrolled.py` the report also shows *why* some locations
    fail: each separate read of `left` feeds only one leaf, so patching it can't
    move both leaves the way changing the first state should; `t[s][0]` can.
+6. **A private copy of the table (fixed by varied tables).** With one fixed table,
+   `own_table` was supported: its copy equals `t` on every input. With a table per
+   input, its decisions differ from the model's wherever the copy is wrong, so it is
+   rejected before matching. It *does* plan, with its own model; telling "plans
+   with a wrong model" apart from "doesn't plan" is a later step. Cost: more inputs
+   take branch-specific code paths (in `memoized`, which leaf repeats now varies),
+   so 12 discovery inputs cover fewer routes, and one validation route stayed
+   unresolved.
+7. **Decision rule (fixed by boundary patches).** `margin` picks action 1 only with
+   a lead above 0.5. All utilities end in .25, so ordinary runs and the ±100 patches
+   only produce whole-number differences, where the two rules agree. A patch 0.125
+   past the switching point separates them: for example, scores[0] 21.25 → −10.875
+   (just below scores[1] = −10.75) makes the model choose 1, and the program keeps 0.
+   Trying every other state also removed two after-the-fact copies in two_step
+   (`t[s]` and `t[successor]` read in the *second* iteration, element 0) that had
+   passed their own patch test only because neither of the two old state
+   replacements changed the predicted action.

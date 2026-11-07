@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import unittest
+from collections import defaultdict
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -37,10 +38,18 @@ from robocode.planning_explanations.report import (
     write_json,
 )
 from robocode.planning_explanations.task import (
+    TRANSITIONS,
     Navigation,
     cases,
     make_case,
     rollout,
+)
+
+# The two-step planner, but successors come from a private copy of the default table.
+OWN_TABLE = (
+    TWO_STEP.replace("    scores = []", f"    table = {TRANSITIONS}\n    scores = []")
+    .replace("t[s][a]", "table[s][a]")
+    .replace("t[successor][b]", "table[successor][b]")
 )
 
 
@@ -77,10 +86,11 @@ def p(s, t, u, c):
     z = False and u[100]
     return x[0] + t[0][0]
 """)
-        trace = program.check_observation(self.training[0])
+        case = make_case("aliases", 0, [0.25] * 6, TRANSITIONS)
+        trace = program.check_observation(case)
         self.assertEqual(trace.output, 10)
         self.assertEqual(trace.args_after[1][0][0], 5)
-        self.assertEqual(self.training[0].transitions[0][0], 1)
+        self.assertEqual(case.transitions[0][0], 1)
 
     def test_nested_expression_checkpoints_are_distinct(self):
         """Nested subscripts sharing a start position need distinct sites."""
@@ -291,6 +301,88 @@ def p(s, t, u, c):
                 for case, trace in runs[:2]:
                     self.assertIsNone(paired_test(program, variant, case, trace)[1])
 
+    def test_every_input_has_its_own_transition_table(self):
+        """Generated inputs vary the table, reproducibly, with two distinct moves."""
+        tables = {c.transitions for c in self.training + self.fresh}
+        self.assertGreater(len(tables), 20)
+        for table in tables:
+            self.assertTrue(all(len(set(row)) == 2 for row in table))
+        self.assertEqual(cases(17, "discovery"), self.training)
+
+    def test_private_copy_of_the_table_is_only_supported_when_tables_are_fixed(self):
+        """With one fixed table, a private copy of it looks like reading ``t``."""
+        program = Program(OWN_TABLE)
+        fixed = [
+            make_case(c.label, c.state, c.utilities, TRANSITIONS) for c in self.training
+        ]
+        self.assertEqual(
+            {e.horizon for e in discover(program, fixed).explanations}, {2}
+        )
+        bank = discover(program, self.training)
+        self.assertFalse(bank.explanations)
+        (audit,) = bank.audit["routes"].values()
+        self.assertEqual(
+            [s["result"] for s in audit["horizons"]],
+            ["ordinary_output", "ordinary_output"],
+        )
+
+    def test_boundary_patches_reject_a_different_decision_rule(self):
+        """Action 1 needing a lead above 0.5 agrees on every whole-number difference.
+
+        Only a patch just past the model's switching point separates the two rules.
+        """
+        source = TWO_STEP.replace(
+            "scores[1] > scores[0]", "scores[1] > scores[0] + 0.5"
+        )
+        program = Program(source)
+        for case in self.training:
+            self.assertEqual(
+                program.run(case).output, self.programs["two_step"].run(case).output
+            )
+        bank = discover(program, self.training)
+        self.assertFalse(bank.explanations)
+        (audit,) = bank.audit["routes"].values()
+        depth_two = audit["horizons"][1]
+        self.assertEqual(depth_two["result"], "no_surviving_location")
+        values = [
+            r["counterexample"]
+            for r in depth_two["rejected_locations"]
+            if r["role"] in ("evaluations", "scores")
+        ]
+        self.assertTrue(
+            any(c["kind"] in ("below switch", "above switch") for c in values)
+        )
+
+    def test_patch_set_covers_states_and_the_switching_point(self):
+        """Every other state, and values around the point where the decision flips."""
+        (validation,) = self.results["two_step"]["explanations"]
+        records = validation["interventions"]
+        self.assertEqual(
+            validation["informative_interventions"],
+            sum(r["predicted_output"] != r["baseline_output"] for r in records),
+        )
+        by_coordinate = defaultdict(list)
+        for record in records:
+            key = (record["case"], record["role"], record["coordinate"])
+            by_coordinate[key].append(record)
+        switches = 0
+        for (_, role, _), group in by_coordinate.items():
+            kinds = {r["kind"]: r for r in group}
+            if role.startswith("states_"):
+                self.assertEqual(set(kinds), {"other state"})
+                self.assertEqual(len({r["replacement"] for r in group}), 5)
+                continue
+            self.assertLessEqual({"low", "high"}, set(kinds))
+            if "at switch" in kinds:
+                switches += 1
+                # Just below and just above the switching point, the model's
+                # decisions differ, so one of these patches must change the action.
+                self.assertNotEqual(
+                    kinds["below switch"]["predicted_output"],
+                    kinds["above switch"]["predicted_output"],
+                )
+        self.assertGreater(switches, 0)
+
     def test_conditional_routes_and_unknown_are_execution_specific(self):
         """Do not assign the planning route's features to reactive executions."""
         result = self.results["conditional"]
@@ -371,7 +463,8 @@ def p(s, t, u, c):
         self.assertTrue(bank.explanations)
         before = bank.digest
         fresh = [
-            make_case(c.label, c.state, (101.25,) + c.utilities[1:]) for c in self.fresh
+            make_case(c.label, c.state, (101.25,) + c.utilities[1:], c.transitions)
+            for c in self.fresh
         ]
         result = validate(program, bank, fresh)
         self.assertEqual(bank.digest, before)

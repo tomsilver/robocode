@@ -17,7 +17,8 @@ LIMITATIONS = [
     "Mappings: each coordinate selects one recorded numeric value (any expression, visit or container element) that equals the model's value in every discovery run of the route. Values are never combined or computed by a mapping.",
     "No helpers, recursion, imports, comprehensions or while loops in analyzed programs.",
     "Routes are executed if-statement decisions; unseen or unvalidated routes stay unresolved.",
-    "Two state replacements and low/high value replacements per mapped coordinate are tested.",
+    "Each mapped state is replaced by every other state. Each mapped value is replaced by numbers far below and far above every utility, and by values just below, exactly at, and just above the point where the model's decision flips (0.125 away). A rule that differs from the model by less than that step is not detected. Joint patches (two coordinates at once) and values taken from other inputs are not tested.",
+    "Every generated input has its own transition table, so a program that carries a private copy of a table is rejected rather than taken as reading the environment's.",
     "Only the configured number of cases per route receives paired interventions.",
     "Interchangeable locations are copies of one quantity; each is validated as a single-coordinate swap, and combinations of swaps are not separately tested.",
     "A selected value is an observed occurrence, not a count of unique arithmetic operations.",
@@ -29,7 +30,9 @@ LIMITATIONS = [
 
 # 2: depth-1 models have no "scores" role, and explanations list interchangeable
 # locations found by per-coordinate search.
-SCHEMA_VERSION = 2
+# 3: patch records carry a "kind" (other state, low, high, below/at/above switch)
+# and validated explanations count their informative interventions.
+SCHEMA_VERSION = 3
 
 
 def write_json(path, value):
@@ -108,8 +111,9 @@ MAX_ROWS = 40
 def patch_text(record):
     """One patch experiment as a short sentence."""
     text = (
-        f"{record['case']}: ← {record['replacement']}; predicted action "
-        f"{record['predicted_output']}, observed {record.get('observed_output', 'error')}"
+        f"{record['case']}: ← {record['replacement']} ({record['kind']}); predicted "
+        f"action {record['predicted_output']}, observed "
+        f"{record.get('observed_output', 'error')}"
     )
     if "error" in record:
         text += f" ({record['error']})"
@@ -243,7 +247,10 @@ def markdown(report):
             f"### `{result['id']}` — {result['status']}",
             "",
             f"Horizon {explanation['horizon']}; {result['ordinary_cases']} ordinary cases; "
-            f"{len(result['interventions'])} paired interventions. Route `{explanation['route']}`.",
+            f"{len(result['interventions'])} paired interventions, of which "
+            f"{result['informative_interventions']} predict a different action than the "
+            f"ordinary run (the rest are tested through internal values). "
+            f"Route `{explanation['route']}`.",
             "",
             "| Role | Existing values in canonical action order |",
             "| --- | --- |",
@@ -279,13 +286,14 @@ def markdown(report):
             lines += [
                 f"Interventions on fresh input `{first}`:",
                 "",
-                "| Role/index | Replacement | Baseline action | Predicted action | Observed action | Downstream matches |",
-                "| --- | ---: | ---: | ---: | ---: | --- |",
+                "| Role/index | Kind | Replacement | Baseline action | Predicted action | Observed action | Downstream matches |",
+                "| --- | --- | ---: | ---: | ---: | ---: | --- |",
             ]
             for record in evidence:
                 if record["case"] == first:
                     lines.append(
-                        f"| {record['role']}[{record['coordinate']}] | {record['replacement']} | "
+                        f"| {record['role']}[{record['coordinate']}] | {record['kind']} | "
+                        f"{record['replacement']} | "
                         f"{record['baseline_output']} | {record['predicted_output']} | "
                         f"{record.get('observed_output', 'error')} | {record['passed']} |"
                     )

@@ -91,15 +91,32 @@ def make_case(label, state, utilities, transitions=TRANSITIONS):
     return Case(label, state, transitions, utilities, cached)
 
 
+def random_transitions(rng):
+    """Two different successors for every state; a state may lead back to itself."""
+    return tuple(tuple(rng.sample(range(6), 2)) for _ in range(6))
+
+
 def cases(seed, prefix):
-    """Two fresh utility contexts for every initial state, reproducibly."""
+    """Two fresh contexts for every initial state, reproducibly.
+
+    Each context draws its own utilities AND its own transition table. With one fixed
+    table, the states a program visits depend only on the start state, and reading the
+    environment's table looks the same as carrying a private copy of it.
+    """
     rng = Random(seed)
     result = []
     for repetition in range(2):
         for state in range(6):
             # Distinct nonintegral utilities help separate state IDs from values.
             utilities = [v + 0.25 for v in rng.sample(range(-30, 31), 6)]
-            result.append(make_case(f"{prefix}-{repetition}-{state}", state, utilities))
+            result.append(
+                make_case(
+                    f"{prefix}-{repetition}-{state}",
+                    state,
+                    utilities,
+                    random_transitions(rng),
+                )
+            )
     return result
 
 
