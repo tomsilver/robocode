@@ -9,6 +9,7 @@ from importlib import import_module, util
 from io import StringIO
 from pathlib import Path
 
+from robocode.planning_explanations import stress
 from robocode.planning_explanations.discovery import discover, validate
 from robocode.planning_explanations.fixtures import CONDITIONAL, ONE_STEP
 from robocode.planning_explanations.instrument import Program
@@ -29,7 +30,11 @@ class PlotTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         cls.addClassCleanup(temporary.cleanup)
         cls.root = Path(temporary.name)
-        for name, source in (("conditional", CONDITIONAL), ("one_step", ONE_STEP)):
+        folder = Path(stress.__file__).parent
+        sources = {"conditional": CONDITIONAL, "one_step": ONE_STEP}
+        for name in ("depth_three", "sum_rewards", "pruning"):
+            sources[name] = (folder / f"{name}.py").read_text(encoding="utf-8")
+        for name, source in sources.items():
             program = Program(source)
             bank = discover(program, cases(17, "discovery"))
             fresh = cases(29, "validation")
@@ -137,3 +142,52 @@ class PlotTests(unittest.TestCase):
         self.assertNotEqual(predicted.texts[0].get_text(), observed.texts[0].get_text())
         self.assertTrue(any("U 99.75" in t.get_text() for t in observed.texts))
         self.assertFalse(any("U 99.75" in t.get_text() for t in predicted.texts))
+
+    def test_deeper_and_summed_trees_show_their_model(self):
+        """Depth 3 draws eight leaves; summed path values are labelled V, not U."""
+        for fixture, leaves, label in (
+            ("depth_three", 8, "U "),
+            ("sum_rewards", 4, "V "),
+        ):
+            with self.subTest(fixture=fixture):
+                report = json.loads(
+                    (self.root / fixture / "report.json").read_text(encoding="utf-8")
+                )
+                row = plot.pick_case(report, None, None)
+                explanation = report["frozen_explanations"][0]
+                traces = json.loads(
+                    (self.root / fixture / "ordinary-traces.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                trace = next(t for t in traces if t["case"] == row["case"])
+                roles = plot.read_roles(explanation, trace)
+                figure = plot.ordinary_figure(report, row, explanation, roles)
+                (axes,) = figure.axes
+                boxes = [t.get_text() for t in axes.texts]
+                self.assertEqual(sum(f"\n{label}" in b for b in boxes), leaves)
+                subtitle = " ".join(t.get_text() for t in figure.texts)
+                self.assertIn(plot.model(explanation).label, subtitle)
+
+    def test_pruned_nodes_are_drawn_as_not_expanded(self):
+        """On a route where the search prunes, the skipped leaf says so."""
+        report = json.loads(
+            (self.root / "pruning" / "report.json").read_text(encoding="utf-8")
+        )
+        rows = report["validation"]["ordinary_population"]
+        row = next(r for r in rows if r["features"]["evaluated_alternatives"] == [3])
+        identifier = row["supported_explanations"][0]
+        explanation = next(
+            e for e in report["frozen_explanations"] if e["id"] == identifier
+        )
+        traces = json.loads(
+            (self.root / "pruning" / "ordinary-traces.json").read_text(encoding="utf-8")
+        )
+        trace = next(t for t in traces if t["case"] == row["case"])
+        roles = plot.read_roles(explanation, trace)
+        figure = plot.ordinary_figure(report, row, explanation, roles)
+        (axes,) = figure.axes
+        boxes = [t.get_text() for t in axes.texts]
+        (skipped,) = [b for b in boxes if "not expanded" in b]
+        self.assertEqual(skipped, "not expanded")
+        self.assertIn("with cutoff", " ".join(t.get_text() for t in figure.texts))

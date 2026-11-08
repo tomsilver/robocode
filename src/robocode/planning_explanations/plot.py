@@ -12,9 +12,23 @@ from typing import Any
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
+from .task import Model
+
 Row = dict[str, Any]
 Roles = dict[str, list]
 DEFAULT = Path("outputs/planning-explanations/two_step")
+
+
+def model(explanation: Row) -> Model:
+    """The model a serialized explanation names."""
+    return Model(
+        explanation["horizon"], explanation["path_value"], explanation["pruning"]
+    )
+
+
+def leaf_label(explanation: Row) -> str:
+    """Leaf utilities are U; path sums are V."""
+    return "U" if explanation["path_value"] == "leaf" else "V"
 
 
 def read_roles(explanation: Row, trace: Row) -> Roles:
@@ -24,6 +38,9 @@ def read_roles(explanation: Row, trace: Row) -> Roles:
     for role, selectors in explanation["mapping"]:
         roles[role] = []
         for selector in selectors:
+            if selector is None:  # A node this route's search does not expand.
+                roles[role].append(None)
+                continue
             value = events[selector["site"], selector["occurrence"]]
             for key in selector["path"]:
                 # JSON object keys are strings, even for Python integer dict keys.
@@ -80,11 +97,13 @@ def draw_tree(
     baseline: Roles,
     original_action: int,
     target: tuple[str, int] | None = None,
+    value_label: str = "U",
+    unobserved: frozenset = frozenset(),
 ) -> None:
     """Draw action paths, keeping distinct paths to the same task state separate."""
     ax.set_axis_off()
     ax.set(xlim=(0, 1), ylim=(0, 1))
-    depth = 2 if "states_2" in roles else 1
+    depth = sum(role.startswith("states_") for role in roles)
 
     def position(level: int, index: int) -> tuple[float, float]:
         return (index + 0.5) / 2**level, 0.86 - 0.72 * level / depth
@@ -92,6 +111,8 @@ def draw_tree(
     for level in range(depth + 1):
         for i in range(2**level):
             x, y = position(level, i)
+            # A node the search did not expand (a cutoff) is drawn faded.
+            skipped = bool(level) and roles[f"states_{level}"][i] is None
             if level:
                 px, py = position(level - 1, i // 2)
                 chosen = level == 1 and i == action
@@ -100,6 +121,7 @@ def draw_tree(
                     [py, y],
                     color="#007668" if chosen else "#a5b2bd",
                     lw=2.5 if chosen else 1,
+                    linestyle="--" if skipped else "-",
                     zorder=1,
                 )
                 ax.text(
@@ -116,7 +138,7 @@ def draw_tree(
             if level:
                 fields.append(("State", f"states_{level}", i))
                 if level == depth:
-                    fields.append(("U", "evaluations", i))
+                    fields.append((value_label, "evaluations", i))
                 if level == 1 and "scores" in roles:
                     # Depth-1 models compare their leaf utilities directly.
                     fields.append(("Score", "scores", i))
@@ -125,6 +147,13 @@ def draw_tree(
                 value = roles[role][index]
                 changed = " Δ" if value != baseline[role][index] else ""
                 lines.append(f"{label} {value}{changed}")
+            if skipped and (f"states_{level}", i) in unobserved:
+                # The route has no location for this node, so the program's value
+                # cannot be read; it is not evidence that the node was skipped.
+                lines = ["not observed"]
+            elif skipped:
+                was_expanded = baseline[f"states_{level}"][i] is not None
+                lines = ["not expanded" + (" Δ" if was_expanded else "")]
             if not level:
                 lines = [
                     f"State {start}",
@@ -138,13 +167,18 @@ def draw_tree(
                 ha="center",
                 va="center",
                 zorder=2,
-                fontsize=10,
-                color="#152f3b",
+                fontsize=10 if depth < 3 else 7,
+                color="#8a99a5" if skipped else "#152f3b",
                 bbox={
                     "boxstyle": "round,pad=0.32",
-                    "facecolor": "#fff4e2" if patched else "#f3f8f8",
-                    "edgecolor": "#b66511" if patched else "#a4b6b8",
+                    "facecolor": (
+                        "white" if skipped else ("#fff4e2" if patched else "#f3f8f8")
+                    ),
+                    "edgecolor": (
+                        "#b66511" if patched else ("#c9d3da" if skipped else "#a4b6b8")
+                    ),
                     "linewidth": 1.8 if patched else 0.8,
+                    "linestyle": "--" if skipped else "-",
                 },
             )
 
@@ -158,19 +192,34 @@ def ordinary_figure(report: Row, row: Row, explanation: Row, roles: Roles) -> Fi
         0.04,
         0.86,
         f"{report['program']}  ·  {row['case']}  ·  "
-        f"horizon {explanation['horizon']}  ·  mapping {explanation['id']}",
+        f"{model(explanation).label}  ·  mapping {explanation['id']}",
         fontsize=10,
     )
-    draw_tree(fig.subplots(), row["state"], roles, row["output"], roles, row["output"])
+    draw_tree(
+        fig.subplots(),
+        row["state"],
+        roles,
+        row["output"],
+        roles,
+        row["output"],
+        value_label=leaf_label(explanation),
+    )
     sites = report["checkpoints"]
     sources = []
     for role, selectors in explanation["mapping"]:
-        exprs = dict.fromkeys(sites[s["site"]]["expression"] for s in selectors)
+        exprs = dict.fromkeys(
+            sites[s["site"]]["expression"] for s in selectors if s is not None
+        )
         sources.append(f"{role}: {', '.join(exprs)}")
     fig.text(
         0.04,
         0.10,
-        "U = terminal utility   ·   Edges = actions   ·   Teal = returned action",
+        (
+            "U = terminal utility"
+            if leaf_label(explanation) == "U"
+            else "V = sum of utilities along the path"
+        )
+        + "   ·   Edges = actions   ·   Teal = returned action",
         fontsize=9,
         color="#334451",
     )
@@ -191,6 +240,12 @@ def comparison_figure(
         left=0.025, right=0.975, top=0.80, bottom=0.07, wspace=0.08, hspace=0.30
     )
     axes = fig.subplots(2, len(group), squeeze=False)
+    unmapped = frozenset(
+        (role, i)
+        for role, selectors in explanation["mapping"]
+        for i, selector in enumerate(selectors)
+        if selector is None
+    )
     fig.text(
         0.025, 0.95, "Interventions on the same execution", fontsize=17, weight="bold"
     )
@@ -237,12 +292,19 @@ def comparison_figure(
                 baseline,
                 row["output"],
                 (role, coord),
+                leaf_label(explanation),
+                unmapped if side == "observed" else frozenset(),
             )
     fig.text(
         0.025,
         0.022,
         "Outlined node = patch target   ·   Δ = changed from ordinary"
-        "   ·   Teal edge = selected action",
+        "   ·   Teal edge = selected action"
+        + (
+            "   ·   not observed = no location for that node on this route"
+            if unmapped
+            else ""
+        ),
         fontsize=9,
     )
     return fig
@@ -252,7 +314,7 @@ def run(args: argparse.Namespace) -> None:
     """Read a fixture report and write separate ordinary and comparison figures."""
     path = args.report / "report.json" if args.report.is_dir() else args.report
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report["schema_version"] != 3:
+    if report["schema_version"] != 5:
         raise ValueError("Unsupported report schema; regenerate the report")
     if args.list:
         for r in report["validation"]["ordinary_population"]:

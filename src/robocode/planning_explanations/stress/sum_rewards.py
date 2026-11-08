@@ -3,6 +3,8 @@
 # u[middle state] + u[leaf] instead of the leaf utility alone.
 # Prediction (before running): UNRESOLVED. States and leaf utilities are all there,
 # but no recorded value equals the model's branch score (max of leaf utilities).
+# Prediction for fix 3 (path value as a parameter, before running): SUPPORTED at
+# depth 2 with sum values, the evaluations found at `u[successor] + u[leaf]`.
 def policy(s, t, u, cache):
     scores = []
     for a in range(2):

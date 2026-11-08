@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .discovery import Limits, discover, validate
 from .fixtures import FIXTURES
-from .instrument import Program, UnsupportedProgram
+from .instrument import Program, ProgramFailure, UnsupportedProgram
 from .report import frozen_payload, save_report, write_json
 from .task import cases
 
@@ -63,6 +63,11 @@ def main():
             summary.append({"program": name, "refused": str(exc), "report": None})
             print(f"{name:20} refused: {exc}")
             continue
+        except ProgramFailure as exc:
+            # The program itself raised or looped too long on an ordinary input.
+            summary.append({"program": name, "failed": str(exc), "report": None})
+            print(f"{name:20} failed: {exc}")
+            continue
         directory = args.output_dir / name
         # This file is written BEFORE fresh inputs are generated or evaluated.
         write_json(directory / "frozen.json", frozen_payload(bank))
@@ -103,6 +108,12 @@ def main():
         name = row["program"]
         if "refused" in row:
             lines.append(f"| {name} | — | — | — | — | Refused: {row['refused']} |")
+            continue
+        if "failed" in row:
+            lines.append(
+                f"| {name} | — | — | — | — | Failed on an ordinary input: "
+                f"{row['failed']} |"
+            )
             continue
         coverage = row["evidence_coverage"]
         lines.append(

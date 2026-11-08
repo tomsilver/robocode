@@ -15,6 +15,7 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
+from robocode.planning_explanations import stress
 from robocode.planning_explanations.__main__ import main
 from robocode.planning_explanations.discovery import (
     Explanation,
@@ -28,6 +29,7 @@ from robocode.planning_explanations.fixtures import FIXTURES, ONE_STEP, TWO_STEP
 from robocode.planning_explanations.instrument import (
     Patch,
     Program,
+    ProgramFailure,
     Selector,
     UnsupportedProgram,
 )
@@ -38,11 +40,14 @@ from robocode.planning_explanations.report import (
     write_json,
 )
 from robocode.planning_explanations.task import (
+    MODELS,
     TRANSITIONS,
+    Model,
     Navigation,
+    action_values,
     cases,
+    choose,
     make_case,
-    rollout,
 )
 
 # The two-step planner, but successors come from a private copy of the default table.
@@ -51,6 +56,19 @@ OWN_TABLE = (
     .replace("t[s][a]", "table[s][a]")
     .replace("t[successor][b]", "table[successor][b]")
 )
+STRESS = Path(stress.__file__).parent
+
+
+def stress_source(name):
+    """A program from the stress folder; its header records the prediction."""
+    return (STRESS / f"{name}.py").read_text(encoding="utf-8")
+
+
+def search_for(bank, depth, path_value="leaf", pruning="none"):
+    """The discovery audit of one model on a single-route bank."""
+    (audit,) = bank.audit["routes"].values()
+    label = Model(depth, path_value, pruning).label
+    return next(s for s in audit["models"] if s["model"] == label)
 
 
 class PrototypeTests(unittest.TestCase):
@@ -266,9 +284,7 @@ def p(s, t, u, c):
             ),
             key=lambda site: program.sites[site]["column"],
         )
-        search = next(iter(self.banks["two_step"].audit["routes"].values()))[
-            "horizons"
-        ][1]
+        search = search_for(self.banks["two_step"], 2)
         rejected = [
             r["location"]
             for r in search["rejected_locations"]
@@ -278,9 +294,7 @@ def p(s, t, u, c):
 
     def test_search_cost_follows_locations_not_their_combinations(self):
         """Per-coordinate screening finds the mapping without enumerating products."""
-        search = next(iter(self.banks["two_step"].audit["routes"].values()))[
-            "horizons"
-        ][1]
+        search = search_for(self.banks["two_step"], 2)
         self.assertEqual(search["result"], "supported")
         self.assertEqual(search["candidates_tested"], 1)
         # Matching keeps every copy: about four locations per coordinate, whose
@@ -321,10 +335,7 @@ def p(s, t, u, c):
         bank = discover(program, self.training)
         self.assertFalse(bank.explanations)
         (audit,) = bank.audit["routes"].values()
-        self.assertEqual(
-            [s["result"] for s in audit["horizons"]],
-            ["ordinary_output", "ordinary_output"],
-        )
+        self.assertEqual({s["result"] for s in audit["models"]}, {"ordinary_output"})
 
     def test_boundary_patches_reject_a_different_decision_rule(self):
         """Action 1 needing a lead above 0.5 agrees on every whole-number difference.
@@ -341,8 +352,7 @@ def p(s, t, u, c):
             )
         bank = discover(program, self.training)
         self.assertFalse(bank.explanations)
-        (audit,) = bank.audit["routes"].values()
-        depth_two = audit["horizons"][1]
+        depth_two = search_for(bank, 2)
         self.assertEqual(depth_two["result"], "no_surviving_location")
         values = [
             r["counterexample"]
@@ -382,6 +392,203 @@ def p(s, t, u, c):
                     kinds["above switch"]["predicted_output"],
                 )
         self.assertGreater(switches, 0)
+
+    def test_model_family_is_depth_by_path_value(self):
+        """Depths 1-3, leaf or summed path values, with or without the cutoff.
+
+        At depth 1 the path values coincide and there is nothing to cut.
+        """
+        self.assertEqual(
+            [(m.depth, m.path_value, m.pruning) for m in MODELS],
+            [(1, "leaf", "none")]
+            + [
+                (depth, value, pruning)
+                for depth in (2, 3)
+                for value in ("leaf", "sum")
+                for pruning in ("none", "cutoff")
+            ],
+        )
+        for invalid in ((1, "sum"), (1, "leaf", "cutoff"), (2, "leaf", "beam")):
+            with self.assertRaises(ValueError):
+                Model(*invalid)
+        case = self.training[0]
+        model = Model(3, "sum")
+        roles = model.rollout(case.state, case.transitions, case.utilities)
+        self.assertEqual(model.roles, tuple(roles))
+        self.assertEqual([len(roles[r]) for r in model.roles], [2, 4, 8, 8, 2])
+        # Path 5 = actions (1, 0, 1): its states are at indices 1, 2 and 5.
+        path = (roles["states_1"][1], roles["states_2"][2], roles["states_3"][5])
+        self.assertEqual(roles["evaluations"][5], sum(case.utilities[s] for s in path))
+        # A patched first state changes everything below it, and nothing else.
+        new = next(s for s in range(6) if s != roles["states_1"][0])
+        patched = model.rollout(
+            case.state, case.transitions, case.utilities, ("states_1", 0, new)
+        )
+        self.assertEqual(patched["states_2"][:2], list(case.transitions[new]))
+        self.assertEqual(patched["states_2"][2:], roles["states_2"][2:])
+        self.assertEqual(patched["evaluations"][4:], roles["evaluations"][4:])
+
+    def test_depth_and_path_value_are_recovered(self):
+        """A depth-3 search and a sum-of-utilities search each get their own model."""
+        for source, depth, path_value in (
+            ("depth_three", 3, "leaf"),
+            ("sum_rewards", 2, "sum"),
+        ):
+            with self.subTest(depth=depth, path_value=path_value):
+                program = Program(stress_source(source))
+                bank = discover(program, self.training)
+                self.assertEqual(
+                    {(e.horizon, e.path_value) for e in bank.explanations},
+                    {(depth, path_value)},
+                )
+                result = validate(program, bank, self.fresh)
+                self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+                for row in result["ordinary_population"]:
+                    self.assertEqual(row["features"]["path_values"], [path_value])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "frozen.json"
+                    write_json(path, frozen_payload(bank))
+                    self.assertEqual(load_frozen(path).explanations, bank.explanations)
+
+    def test_sum_added_after_the_maximum_is_not_covered(self):
+        """Same decisions as the sum model, but no value exists for each path."""
+        program = Program(stress_source("sum_factored"))
+        reference = Program(stress_source("sum_rewards"))
+        for case in self.training:
+            self.assertEqual(program.run(case).output, reference.run(case).output)
+        bank = discover(program, self.training)
+        self.assertFalse(bank.explanations)
+        search = search_for(bank, 2, "sum")
+        self.assertEqual(search["result"], "no_matching_location")
+        self.assertEqual(search["missing"], [f"evaluations[{i}]" for i in range(4)])
+
+    def test_wider_python_is_analyzed(self):
+        """While loops, helpers, recursion, comprehensions and heapq all run.
+
+        The helper's lines run once per call, so visit numbers alone separate the
+        call for action 0 (visit 0) from the call for action 1 (visit 1).
+        """
+        for name in ("while_loop", "helper_function", "recursive", "heap_choice"):
+            with self.subTest(program=name):
+                program = Program(stress_source(name))
+                bank = discover(program, self.training)
+                self.assertEqual(
+                    {(e.horizon, e.path_value) for e in bank.explanations},
+                    {(2, "leaf")},
+                )
+                result = validate(program, bank, self.fresh)
+                self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+        program = Program(stress_source("helper_function"))
+        (explanation,) = discover(program, self.training).explanations
+        states = explanation.selectors()["states_2"]
+        self.assertEqual(len({s.site for s in states}), 2)
+        self.assertEqual([s.occurrence for s in states], [0, 0, 1, 1])
+
+    def test_recomputed_first_state_has_no_single_location(self):
+        """Recomputing ``t[s][a]`` per leaf means no read moves both of its leaves."""
+        program = Program(stress_source("comprehension"))
+        bank = discover(program, self.training)
+        self.assertFalse(bank.explanations)
+        self.assertEqual(search_for(bank, 2)["result"], "no_surviving_location")
+
+    def test_loops_routes_and_failures(self):
+        """Loop tests are route decisions; runaway loops and crashes fail cleanly."""
+        case = self.training[0]
+        trace = Program(stress_source("while_loop")).run(case)
+        self.assertEqual(
+            [taken for _, taken in trace.branches],
+            [True, True, True, False, True, True, True, False, False],
+        )
+        filtered = Program(
+            "def p(s, t, u, c):\n    return len([x for x in u if x > 0])\n"
+        ).run(case)
+        self.assertEqual(len(filtered.branches), 6)
+        for source, message in (
+            ("def p(s, t, u, c):\n    while True:\n        pass\n", "Loop iteration"),
+            ("def p(s, t, u, c):\n    return p(s, t, u, c)\n", "RecursionError"),
+            ("def p(s, t, u, c):\n    return u[10]\n", "IndexError"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ProgramFailure, message):
+                    Program(source).check_observation(case)
+
+    def test_tuples_are_locations_and_infinities_are_written(self):
+        """A tuple element can be patched; -inf is saved as a string, not a crash."""
+        program = Program(
+            "def p(s, t, u, c):\n"
+            "    pair = (u[0], -float('inf'))\n"
+            "    return int(pair[0] > pair[1])\n"
+        )
+        case = self.training[0]
+        trace = program.run(case)
+        event = next(
+            e for e in trace.events if program.sites[e.site]["kind"] == "Tuple"
+        )
+        patched = program.run(case, Patch(Selector(event.site, 0, (1,)), 1e9))
+        self.assertEqual((trace.output, patched.output), (1, 0))
+        self.assertEqual(
+            patched.event(Selector(event.site, 0)).value, (case.utilities[0], 1e9)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.json"
+            write_json(path, [e.value for e in trace.events])
+            self.assertIn('"-inf"', path.read_text())
+
+    def test_cutoff_skips_nodes_without_changing_decisions(self):
+        """The cutoff decides like full search but expands fewer nodes."""
+        full, cutoff = Model(2), Model(2, "leaf", "cutoff")
+        skipped = 0
+        for case in self.training + self.fresh:
+            args = (case.state, case.transitions, case.utilities)
+            whole, pruned = full.rollout(*args), cutoff.rollout(*args)
+            self.assertEqual(
+                choose(action_values(whole)), choose(action_values(pruned))
+            )
+            if pruned["evaluations"][3] is None:
+                skipped += 1
+                # Skipped only because the first leaf already beat action 0.
+                self.assertGreater(pruned["evaluations"][2], pruned["scores"][0])
+                self.assertIsNone(pruned["states_2"][3])
+                self.assertEqual(pruned["scores"][1], pruned["evaluations"][2])
+                # Lower that leaf below action 0's score: the last leaf is expanded.
+                low = pruned["scores"][0] - 1
+                patched = cutoff.rollout(*args, ("evaluations", 2, low))
+                self.assertEqual(patched["evaluations"][3], whole["evaluations"][3])
+            else:
+                self.assertEqual(pruned, whole)
+        self.assertGreater(skipped, 0)
+
+    def test_pruning_is_explained_by_the_cutoff_model(self):
+        """Every route of the pruning program, and the number of paths it evaluates."""
+        program = Program(stress_source("pruning"))
+        bank = discover(program, self.training)
+        self.assertTrue(bank.explanations)
+        self.assertEqual(
+            {(e.horizon, e.path_value, e.pruning) for e in bank.explanations},
+            {(2, "leaf", "cutoff")},
+        )
+        full = Model(2).label
+        for audit in bank.audit["routes"].values():
+            (search,) = [s for s in audit["models"] if s["model"] == full]
+            self.assertNotEqual(search["result"], "supported")
+        result = validate(program, bank, self.fresh)
+        self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+        alternatives = {
+            tuple(row["features"]["evaluated_alternatives"])
+            for row in result["ordinary_population"]
+        }
+        self.assertEqual(alternatives, {(3,), (4,)})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "frozen.json"
+            write_json(path, frozen_payload(bank))
+            self.assertEqual(load_frozen(path).explanations, bank.explanations)
+
+    def test_full_search_and_unsound_pruning_do_not_fit_the_cutoff(self):
+        """A full search never prunes, and an unsound pruning rule is not the cutoff."""
+        search = search_for(self.banks["two_step"], 2, pruning="cutoff")
+        self.assertEqual(search["result"], "shape_varies")
+        unsound = Program(stress_source("unsound_pruning"))
+        self.assertFalse(discover(unsound, self.training).explanations)
 
     def test_conditional_routes_and_unknown_are_execution_specific(self):
         """Do not assign the planning route's features to reactive executions."""
@@ -523,12 +730,19 @@ def p(s, t, u, c):
 
     def test_unsupported_python_fails_explicitly(self):
         """Reject syntax outside the documented trusted subset."""
+        policy = "def p(s, t, u, c):\n    return {}\n"
         for source in (
-            "import os",
-            "def p(s,t,u,c):\n return sum(u)",
-            "def p(s,t,u,c):\n return [x for x in u]",
+            "import os\n" + policy.format(0),
+            "from heapq import _heapify_max\n" + policy.format(0),
+            "x = 1\n" + policy.format(0),
+            "def helper(x):\n    return x\n",  # the last function is the policy
+            policy.format("(lambda x: x)(0)"),
+            policy.format("open('file')"),
+            policy.format("u.__class__"),
+            policy.format("{x for x in u}"),
+            "def p(s, t, u, c):\n    def q(x=1):\n        return x\n    return q()\n",
         ):
-            with self.assertRaises(UnsupportedProgram):
+            with self.subTest(source=source), self.assertRaises(UnsupportedProgram):
                 Program(source)
 
     def test_depth_one_needs_no_second_location_for_the_same_number(self):
@@ -538,7 +752,7 @@ def p(s, t, u, c):
         its own; a separate depth-1 score role used to demand one.
         """
         case = self.training[0]
-        roles = rollout(case.state, case.transitions, case.utilities, 1)
+        roles = Model(1).rollout(case.state, case.transitions, case.utilities)
         self.assertEqual(set(roles), {"states_1", "evaluations"})
         program = Program(
             "def p(s, t, u, c):\n"
@@ -559,9 +773,10 @@ def p(s, t, u, c):
             programs = root / "programs"
             programs.mkdir()
             (programs / "planner.py").write_text(ONE_STEP)
-            (programs / "loop.py").write_text(
-                "def p(s, t, u, c):\n    while s:\n        s = 0\n    return 0\n"
+            (programs / "lambda.py").write_text(
+                "def p(s, t, u, c):\n    return (lambda x: x)(0)\n"
             )
+            (programs / "crash.py").write_text("def p(s, t, u, c):\n    return u[10]\n")
             (programs / "_skipped.py").write_text("not a policy")
             out = root / "out"
             argv = ["prog", "--source-dir", str(programs), "--output-dir", str(out)]
@@ -569,13 +784,14 @@ def p(s, t, u, c):
                 main()  # type: ignore[no-untyped-call]
             rows = json.loads((out / "summary.json").read_text())
             summary = {row["program"]: row for row in rows}
-            self.assertEqual(set(summary), {"loop", "planner"})
-            self.assertIn("While", summary["loop"]["refused"])
-            self.assertFalse((out / "loop").exists())
+            self.assertEqual(set(summary), {"lambda", "crash", "planner"})
+            self.assertIn("Lambda", summary["lambda"]["refused"])
+            self.assertIn("IndexError", summary["crash"]["failed"])
+            self.assertFalse((out / "lambda").exists())
             self.assertGreater(summary["planner"]["validated_explanations"], 0)
-            self.assertIn(
-                "Refused: Unsupported syntax: While", (out / "README.md").read_text()
-            )
+            readme = (out / "README.md").read_text()
+            self.assertIn("Refused: Unsupported syntax: Lambda", readme)
+            self.assertIn("Failed on an ordinary input: IndexError", readme)
 
     def test_environment_resets(self):
         """Environment trials start from the same supplied task state."""

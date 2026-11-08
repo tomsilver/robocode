@@ -64,8 +64,11 @@ The prototype uses generic AST expression checkpoints and bounded expression
 occurrence selectors. The task input boundary may specify state, transition table,
 and utility vector; internal identifiers carry no semantic labels. The initial
 hypothesis family is exhaustive deterministic lookahead with first-action tie
-breaking: depth 1 compares leaf utilities directly, and depth 2 uses a maximum
-backup. Restrictions, enumeration limits, validation splits,
+breaking and a maximum backup, parameterized by depth (1, 2 or 3), by how a
+path is valued (its last state's utility, or the sum of utilities along it), and
+by whether the search uses the sound cutoff (stop expanding the second action
+once one of its paths beats the first action's score).
+Restrictions, enumeration limits, validation splits,
 and unsupported cases must be explicit in reports. A failed or bounded search
 does not establish absence of planning.
 
@@ -107,9 +110,21 @@ PYTHONPATH=src .venv/bin/python -m robocode.planning_explanations \
   --source /absolute/path/to/program.py --output-dir outputs/my-explanation
 ```
 
-Custom source must contain one function with four positional arguments: current
-state, transition table, terminal utility vector, and externally cached action
-table. Parameter and local names are arbitrary. The extra action table is control
+Custom source is a sequence of function definitions, optionally preceded by
+`import heapq` / `import math` (or `from` imports of their public names). The
+**last** top-level function is the policy and takes four positional arguments:
+current state, transition table, terminal utility vector, and externally cached
+action table. Every other function, top-level or nested, is a helper; recursion
+is allowed. Bodies may use `for` and `while` loops, list and dictionary
+comprehensions, generator expressions, slices, a fixed set of builtins (`range`,
+`len`, `min`, `max`, `abs`, `sum`, `sorted`, `reversed`, `enumerate`, `zip`,
+`any`, `all`, `int`, `float`, `list`, `dict`, `tuple`, `set`) and container
+methods (`append`, `extend`, `insert`, `pop`, `get`, `items`, `keys`, `values`,
+`add`). Classes, lambdas, `try`/`with` and `global`/`nonlocal` are refused, as
+are other imports and top-level statements. A program that raises on an
+ordinary input, or loops more than 10,000 times in one run, is reported as
+failed rather than crashing a folder run. Parameter and local names are
+arbitrary. The extra action table is control
 data: it lets the lookup and decoy fixtures have exactly the same ordinary outputs
 as the two-step planner for every generated case. All fixture programs receive
 it; planners ignore it. Its preparation happens **outside measured execution**.
@@ -158,13 +173,17 @@ Unresolved cases (including the lookup and decoy) do not get a fabricated tree.
 
 Source is in `src/robocode/planning_explanations/`:
 
-- `task.py`: resettable six-state, two-action navigation and the candidate model.
-  Every state has a supplied utility at the lookahead cutoff. States are not
-  absorbing; this is a finite-horizon task with no intermediate reward.
+- `task.py`: resettable six-state, two-action navigation and the candidate
+  models (`Model`: depth, path value and pruning, with its roles and its patched
+  depth-first rollout of node events).
+  Every state has a supplied utility. States are not absorbing.
 - `fixtures.py`: six ordinary programs, including one- and two-step planners.
-- `instrument.py`: inserts expression hooks using Python's AST. A checkpoint is
-  identified by source span and expression kind, visit number, and optional literal
-  list/dictionary path. Observing a value returns the original object; snapshots
+- `instrument.py`: validates the Python subset and inserts expression hooks
+  using Python's AST. A checkpoint is identified by source span and expression
+  kind, visit number, and optional literal list/tuple/dictionary path. Inside a
+  helper, the visit number already identifies the caller: within one route,
+  calls happen in the same order on every input. Sets run but are not recorded,
+  and infinities are written to JSON as the strings `"inf"`/`"-inf"`. Observing a value returns the original object; snapshots
   are deep copies. Interventions substitute a single expression result, or a
   selected element of a copied expression result. They do not globally mutate
   every alias. Execution resets inputs and globals on every run.
@@ -192,17 +211,40 @@ final action agrees but intermediate predictions disagree.
 
 ## Search space and validation protocol
 
-- Candidate models have horizon 1 or 2, exhaustive two-action expansion, terminal
-  utility evaluation, and action-zero tie breaking. Depth-1 roles are `states_1`
-  and `evaluations`; the decision compares the evaluations directly. Depth-2 roles
-  add `states_2` and `scores`, the maximum backup of each first action's leaves.
+- Candidate models (`task.MODELS`) are depth-first two-action search to depth
+  1, 2 or 3, with a maximum backup and action-zero tie breaking. A path is valued
+  either by its last state's utility (`leaf`) or by the sum of the utilities of
+  every state on it, the start state excluded (`sum`). Beyond depth 1 a model may
+  use the sound **cutoff**: once a path under the second action is worth strictly
+  more than the first action's score, the rest of the second action is not
+  expanded. The decision cannot change, so the cutoff never changes outputs; it
+  changes which nodes are expanded, depending on the values seen. At depth 1 the
+  path values coincide and there is nothing to cut, so there are nine models.
+- Model values are **node events**. `states_k[i]` is the state reached by the
+  i-th path of k actions, `evaluations[i]` the value of the i-th complete path
+  and, beyond depth 1, `scores[a]` the best evaluated path value under first
+  action `a`. A node the search does not expand is `null`. A route must expand
+  the same nodes on all its discovery inputs (otherwise the search ends as
+  `shape_varies`); only expanded nodes are coordinates, and the mapping holds
+  `null` for the others. Under a patch the model predicts which nodes are
+  expanded, and a mapped location the patched program never reaches reads as
+  `null`, so a cutoff triggered by a patch is a prediction that can pass.
+  "Evaluated alternatives" in the report counts the paths a route's search
+  evaluates: fewer where it prunes.
   Depth 1 deliberately has no `scores` role: it would be a copy of the same
   numbers, and demanding a separate program location for that copy made support
-  depend on code style (`stress/unused_depth.py`).
+  depend on code style (`stress/unused_depth.py`). Intermediate maxima (per
+  depth-2 node at depth 3) are not roles either: a program may compute them or
+  not. Every model does need one value per complete path, so a program that adds
+  a shared term after the maximum is not covered (`stress/sum_factored.py`).
+- Sum-valued models often make the same decisions: depth-2 and depth-3 sums agree
+  on about 90% of generated inputs, and depth-1 with depth-2 sum on about 85%,
+  because the first step's utility is added to every path under an action.
+  Outputs alone then rarely separate them; matching and patches do.
 - The search is factorized by model coordinate (one state, evaluation or score):
   1. The program's ordinary outputs must equal the model's decisions on every
-     discovery input of the route. This needs no mapping, so a wrong depth is
-     rejected before matching.
+     discovery input of the route. This needs no mapping, so a wrong model is
+     usually rejected before matching.
   2. Each coordinate is matched to every recorded numeric value, at any
      expression, visit or container element, that equals the model's value in
      all of the route's discovery runs. Different coordinates of one role may
@@ -238,7 +280,7 @@ final action agrees but intermediate predictions disagree.
   is required. Each report counts its *informative* patches, whose predicted
   action differs from the ordinary run; the others are tested only through
   internal values.
-- Default budgets per route and depth: 64 matching locations per coordinate,
+- Default budgets per route and model: 64 matching locations per coordinate,
   128 complete mappings, 100,000 assembly steps, and two intervention cases.
   Every rejected location has a counterexample; pairwise conflicts have counts
   plus a sample of 16. Truncation is explicit.
@@ -250,7 +292,11 @@ final action agrees but intermediate predictions disagree.
   from one reading `t`. The default initial-state distribution is uniform;
   `--state-weights` overrides it. Contexts within each state have equal
   conditional weight.
-- Branch routes are generic executed `if` decisions. For each frozen mapping,
+- Branch routes are the generic executed `if` and `while` decisions and
+  comprehension filters, so a while loop's iteration count is part of its route.
+  For-loop lengths are not; a data-dependent `for` loop can therefore shift visit
+  numbers between inputs of one route, which shows up as unresolved, not as false
+  support. For each frozen mapping,
   validation tests all fresh ordinary executions on its route and paired
   interventions on the first two fresh cases. No mapping repair or discovery
   occurs on validation data. Reused discovery inputs are rejected even if renamed.
@@ -281,10 +327,17 @@ With default seeds and budgets:
 All six default searches finish without exhausting their budgets. Every frozen
 interchangeable location also passes on fresh validation inputs. Per-input
 transition tables and switching-point patches left all six verdicts and frozen
-explanations unchanged: they have the same identifiers as under one fixed table
-with low/high patches only. Two-step validation now runs 111 paired
-interventions instead of 48, and 32 of them predict a different action than the
-ordinary run.
+mappings unchanged. Two-step validation now runs 111 paired interventions
+instead of 48, and 32 of them predict a different action than the ordinary run.
+The five-model family also leaves every verdict and mapping unchanged; the
+explanation identifiers changed once, because the model's path value is now part
+of each explanation. Of the harder programs, `depth_three` is supported at depth
+3 and `sum_rewards` at depth 2 with summed path values. The wider Python subset
+left every earlier route, mapping and identifier unchanged, and adds supported
+`while`, helper-function, recursive and `heapq` versions of the two-step planner.
+Node events with an optional cutoff also leave all of these unchanged; the
+pruning program is supported by the depth-2 cutoff model on each of its routes,
+evaluating 3 paths where it prunes and 4 where it does not.
 
 The even-state conditional route is reactive by fixture construction. The
 analyzer conservatively reports that it has no supported lookahead explanation,
@@ -299,9 +352,12 @@ predictions and results in that folder's README. Run them all with
 
 This is empirical support for a constrained explanation family, not an algorithmic
 equivalence proof or a general detector of planning. The Python subset excludes
-imports, helpers, recursion, comprehensions, arbitrary methods, and cyclic
-containers. Programs are trusted and tiny; syntax checking and an expression
-budget are not a resource-isolation sandbox. Only ordinary output and input
+classes, lambdas, exceptions, imports beyond `heapq` and `math`, methods beyond
+the listed container methods, and cyclic containers. Best-first search, where
+which node is expanded at step k depends on values without any recorded branch,
+does not fit node events grouped by route; it needs coordinates per step. Programs are trusted and
+tiny; syntax checking and expression and loop budgets are not a
+resource-isolation sandbox. Only ordinary output and input
 mutation are checked for observation preservation, not timing or resource usage.
 
 Future work can expand the mapping grammar and algorithm family, add joint or

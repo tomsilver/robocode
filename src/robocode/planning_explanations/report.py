@@ -5,18 +5,19 @@
 
 import json
 from dataclasses import asdict
+from math import isfinite
 from pathlib import Path
 
 from .discovery import Explanation, FrozenBank
 from .instrument import Selector
-from .task import Case
+from .task import Case, Model
 
 LIMITATIONS = [
     "Empirical support within a restricted hypothesis and mapping family, not a proof.",
-    "Hypotheses: exhaustive depth-1/depth-2 search, first-action ties; depth 1 compares leaf utilities directly, depth 2 uses a maximum backup.",
+    "Hypotheses: exhaustive search to depth 1, 2 or 3 with a maximum backup and first-action ties. A path is valued by its last state's utility or by the sum of utilities along it (start state excluded); at depth 1 these coincide. Depth 1 compares its evaluations directly. Optionally the sound cutoff: stop expanding the second action once one of its paths beats the first action's score (the decision cannot change). Each expanded path needs its own value: a program that adds a shared term after taking the maximum is not covered. A route must expand the same nodes on all its inputs; best-first search, whose expansion order depends on values without any recorded branch, is not covered.",
     "Mappings: each coordinate selects one recorded numeric value (any expression, visit or container element) that equals the model's value in every discovery run of the route. Values are never combined or computed by a mapping.",
-    "No helpers, recursion, imports, comprehensions or while loops in analyzed programs.",
-    "Routes are executed if-statement decisions; unseen or unvalidated routes stay unresolved.",
+    "Python subset: allowlisted imports (heapq, math) and functions; the last top-level function is the policy, all others (top-level or nested, recursion allowed) are helpers. Loops, comprehensions, generator expressions, and allowlisted builtins and container methods are supported. No classes, lambdas, try/with, or global/nonlocal. Sets run but are never recorded. Each run may loop at most 10,000 times and record at most 5,000 expressions.",
+    "Routes are executed if and while decisions and comprehension filters (not for-loop lengths); unseen or unvalidated routes stay unresolved.",
     "Each mapped state is replaced by every other state. Each mapped value is replaced by numbers far below and far above every utility, and by values just below, exactly at, and just above the point where the model's decision flips (0.125 away). A rule that differs from the model by less than that step is not detected. Joint patches (two coordinates at once) and values taken from other inputs are not tested.",
     "Every generated input has its own transition table, so a program that carries a private copy of a table is rejected rather than taken as reading the environment's.",
     "Only the configured number of cases per route receives paired interventions.",
@@ -32,7 +33,25 @@ LIMITATIONS = [
 # locations found by per-coordinate search.
 # 3: patch records carry a "kind" (other state, low, high, below/at/above switch)
 # and validated explanations count their informative interventions.
-SCHEMA_VERSION = 3
+# 4: explanations name a path value as well as a depth; discovery audits are
+# listed per model ("models") instead of per depth ("horizons").
+# 5: models may prune: explanations name a pruning rule, and a mapping holds null
+# for a node the model does not expand on that route.
+SCHEMA_VERSION = 5
+
+
+def finite(value):
+    """Strict JSON has no infinities: write them as the strings "inf" and "-inf".
+
+    Programs may record them, for example a running maximum that starts at -inf.
+    """
+    if isinstance(value, float) and not isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [finite(item) for item in value]
+    return value
 
 
 def write_json(path, value):
@@ -40,7 +59,7 @@ def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        json.dumps(finite(value), indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
 
@@ -63,6 +82,8 @@ def load_frozen(path):
         raise ValueError("Unsupported frozen-bank schema; rerun discovery")
 
     def selector(s):
+        if s is None:
+            return None
         return Selector(s["site"], s["occurrence"], tuple(s["path"]))
 
     explanations = tuple(
@@ -77,6 +98,8 @@ def load_frozen(path):
                 (role, coordinate, tuple(selector(s) for s in locations))
                 for role, coordinate, locations in e["interchangeable"]
             ),
+            e["path_value"],
+            e["pruning"],
         )
         for e in payload["explanations"]
     )
@@ -98,6 +121,8 @@ def load_frozen(path):
 
 def selector_text(selector, sites):
     """Display a checkpoint with source context, visit and container path."""
+    if selector is None:
+        return "not expanded on this route"
     site = sites[selector["site"]]
     return (
         f"`{site['expression']}` (L{site['line']}, C{site['column']}, "
@@ -106,6 +131,13 @@ def selector_text(selector, sites):
 
 
 MAX_ROWS = 40
+
+
+def model_label(explanation):
+    """The readable model name of a serialized explanation."""
+    return Model(
+        explanation["horizon"], explanation["path_value"], explanation["pruning"]
+    ).label
 
 
 def patch_text(record):
@@ -138,7 +170,7 @@ def search_summary(search):
         example = search["counterexample"]
         return (
             f"rejected before matching: on `{example['case']}` the program returns "
-            f"{example['observed']}, the depth-{search['horizon']} model chooses "
+            f"{example['observed']}, the {search['model']} model chooses "
             f"{example['predicted']}."
         )
     if result == "no_matching_location":
@@ -155,6 +187,13 @@ def search_summary(search):
         return (
             "unresolved: every coordinate has surviving locations, but no complete "
             f"combination is consistent (conflicts: {search['conflicts']})."
+        )
+    if result == "shape_varies":
+        example = search["counterexample"]
+        return (
+            "unresolved: the model expands different nodes on inputs of this route "
+            f"(`{example['cases'][0]}` vs `{example['cases'][1]}`), so no fixed "
+            "mapping exists."
         )
     if result == "budget":
         return (
@@ -187,13 +226,14 @@ def markdown(report):
         "Weights apply only to these unpatched runs. Utility contexts are equally weighted "
         "within each initial state. An empty feature set means unresolved, not zero planning.",
         "",
-        "| Input | State | Weight | Route | Output | Status | Horizons | Alternatives | Explanations |",
-        "| --- | ---: | ---: | --- | ---: | --- | --- | --- | ---: |",
+        "| Input | State | Weight | Route | Output | Status | Horizons | Path values | Pruning | Alternatives | Explanations |",
+        "| --- | ---: | ---: | --- | ---: | --- | --- | --- | --- | --- | ---: |",
     ]
     for row in validation["ordinary_population"]:
         lines.append(
             f"| {row['case']} | {row['state']} | {row['weight']:.4f} | {row['route']} | "
             f"{row['output']} | {row['status']} | {row['features']['supported_horizons']} | "
+            f"{row['features']['path_values']} | {row['features']['pruning']} | "
             f"{row['features']['evaluated_alternatives']} | {len(row['supported_explanations'])} |"
         )
     lines += ["", "## Discovery", ""]
@@ -213,25 +253,25 @@ def markdown(report):
             "",
         ]
         lines += [
-            f"- **Depth {search['horizon']}:** {search_summary(search)}"
-            for search in audit["horizons"]
+            f"- **{search['model'].capitalize()}:** {search_summary(search)}"
+            for search in audit["models"]
         ]
         lines.append("")
         rejected = [
-            (search["horizon"], r)
-            for search in audit["horizons"]
+            (search["model"], r)
+            for search in audit["models"]
             for r in search["rejected_locations"]
         ]
         if rejected:
             lines += [
                 "Matching locations rejected by their own patch test:",
                 "",
-                "| Depth | Coordinate | Location | Counterexample |",
-                "| ---: | --- | --- | --- |",
+                "| Model | Coordinate | Location | Counterexample |",
+                "| --- | --- | --- | --- |",
             ]
-            for horizon, r in rejected[:MAX_ROWS]:
+            for model, r in rejected[:MAX_ROWS]:
                 lines.append(
-                    f"| {horizon} | {r['role']}[{r['coordinate']}] | "
+                    f"| {model} | {r['role']}[{r['coordinate']}] | "
                     f"{selector_text(r['location'], sites)} | {patch_text(r['counterexample'])} |"
                 )
             if len(rejected) > MAX_ROWS:
@@ -246,7 +286,7 @@ def markdown(report):
         lines += [
             f"### `{result['id']}` — {result['status']}",
             "",
-            f"Horizon {explanation['horizon']}; {result['ordinary_cases']} ordinary cases; "
+            f"Model: {model_label(explanation)}; {result['ordinary_cases']} ordinary cases; "
             f"{len(result['interventions'])} paired interventions, of which "
             f"{result['informative_interventions']} predict a different action than the "
             f"ordinary run (the rest are tested through internal values). "

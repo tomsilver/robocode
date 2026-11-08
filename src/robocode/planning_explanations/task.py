@@ -1,7 +1,6 @@
 """The known task boundary and candidate computational models.
 
-Reference rollouts here are analyzer work, never measured program computation. Utilities
-are terminal values at the lookahead cutoff (no intermediate reward).
+Reference rollouts here are analyzer work, never measured program computation.
 """
 
 # Exact builtin types exclude booleans and user-defined numeric subclasses.
@@ -12,14 +11,13 @@ from math import isfinite
 from random import Random
 
 TRANSITIONS = ((1, 2), (3, 4), (4, 5), (0, 5), (1, 3), (2, 0))
-
-# Model roles in canonical order. Depth 1 compares its leaf evaluations directly:
-# a separate "scores" role would only be a copy of the same numbers, and demanding
-# a distinct program location for that copy makes support depend on code style.
-ROLES = {
-    1: ("states_1", "evaluations"),
-    2: ("states_1", "states_2", "evaluations", "scores"),
-}
+DEPTHS = (1, 2, 3)
+# How a model values one action path. "leaf": the utility of its last state.
+# "sum": the sum of utilities of every state on it, the start state excluded (it is
+# the same for both actions).
+PATH_VALUES = ("leaf", "sum")
+# Whether a model may stop expanding an action early (see ``Model``).
+PRUNING = ("none", "cutoff")
 
 
 def choose(scores):
@@ -32,25 +30,121 @@ def action_values(roles):
     return roles["scores"] if "scores" in roles else roles["evaluations"]
 
 
-def rollout(state, transitions, utilities, horizon):
-    """Compute a candidate model's states, evaluations and (depth 2) backups."""
-    if horizon not in ROLES:
-        raise ValueError("Only horizons 1 and 2 are supported")
-    first = list(transitions[state])
-    roles = {"states_1": first}
-    leaves = first
-    if horizon == 2:
-        leaves = [transitions[s][a] for s in first for a in (0, 1)]
-        roles["states_2"] = leaves
-    roles["evaluations"] = [utilities[s] for s in leaves]
-    if horizon == 2:
-        roles["scores"] = backup(roles["evaluations"])
-    return roles
+@dataclass(frozen=True)
+class Model:
+    """Depth-first lookahead to a fixed depth, with a maximum backup.
+
+    Values are node events. ``states_k[i]`` is the state reached by the i-th path of
+    k actions (in action order), ``evaluations[i]`` is the value of the i-th
+    complete path and, beyond depth 1, ``scores[a]`` is the best evaluated path
+    value under first action ``a``. A node the search never expands is ``None``.
+    With ``pruning="cutoff"`` the search stops expanding the second action as soon
+    as one of its paths is worth strictly more than the first action's score: the
+    decision is then already known, so the cutoff never changes it, but which
+    nodes are expanded now depends on the values seen.
+
+    Depth 1 compares its evaluations directly: a separate score role would only be
+    a copy of the same numbers, and demanding a distinct program location for that
+    copy makes support depend on code style. Intermediate maxima (for example per
+    depth-2 node at depth 3) are not roles; a program may compute them or not.
+    """
+
+    depth: int
+    path_value: str = "leaf"
+    pruning: str = "none"
+
+    def __post_init__(self):
+        if (
+            self.depth not in DEPTHS
+            or self.path_value not in PATH_VALUES
+            or self.pruning not in PRUNING
+        ):
+            raise ValueError(
+                f"Depth must be in {DEPTHS}, path value in {PATH_VALUES}, "
+                f"pruning in {PRUNING}"
+            )
+        if self.depth == 1 and self.path_value == "sum":
+            raise ValueError("At depth 1 a path's sum is its leaf utility; use 'leaf'")
+        if self.depth == 1 and self.pruning == "cutoff":
+            raise ValueError("At depth 1 each action has one path; nothing to cut")
+
+    @property
+    def label(self):
+        """A short human-readable name."""
+        value = "leaf utility" if self.path_value == "leaf" else "sum of utilities"
+        cutoff = ", with cutoff" if self.pruning == "cutoff" else ""
+        return f"depth {self.depth}, {value}{cutoff}"
+
+    @property
+    def roles(self):
+        """Role names in canonical order."""
+        states = tuple(f"states_{k}" for k in range(1, self.depth + 1))
+        return states + (
+            ("evaluations",) if self.depth == 1 else ("evaluations", "scores")
+        )
+
+    def rollout(self, state, transitions, utilities, patch=None):
+        """Node events of one search; ``patch = (role, index, value)`` intervenes.
+
+        Actions are searched in order and each action's paths left to right; a
+        state is generated when the search first reaches it. A patched value
+        replaces the computed one as soon as it exists, and everything computed
+        afterwards, including whether to cut, uses the replacement. Nodes the
+        search does not expand stay ``None``.
+        """
+        depth = self.depth
+        roles = {f"states_{k}": [None] * 2**k for k in range(1, depth + 1)}
+        roles["evaluations"] = [None] * 2**depth
+        if depth > 1:
+            roles["scores"] = [None, None]
+
+        def record(role, index, value):
+            if patch and tuple(patch[:2]) == (role, index):
+                value = patch[2]
+            roles[role][index] = value
+            return value
+
+        half = 2 ** (depth - 1)
+        for action in (0, 1):
+            evaluated = []
+            for leaf in range(action * half, (action + 1) * half):
+                path = []
+                for level in range(1, depth + 1):
+                    node = leaf >> (depth - level)
+                    states = roles[f"states_{level}"]
+                    if states[node] is None:
+                        parent = (
+                            state
+                            if level == 1
+                            else roles[f"states_{level - 1}"][node >> 1]
+                        )
+                        record(f"states_{level}", node, transitions[parent][node & 1])
+                    path.append(states[node])
+                if self.path_value == "leaf":
+                    value = utilities[path[-1]]
+                else:
+                    value = sum(utilities[s] for s in path)
+                evaluated.append(record("evaluations", leaf, value))
+                if (
+                    self.pruning == "cutoff"
+                    and action == 1
+                    and evaluated[-1] > roles["scores"][0]
+                ):
+                    break
+            if depth > 1:
+                record("scores", action, max(evaluated))
+        return roles
 
 
-def backup(evaluations):
-    """Maximum backup of each first action's two depth-2 leaf evaluations."""
-    return [max(evaluations[:2]), max(evaluations[2:])]
+# Every hypothesis, in the order they are searched and reported.
+MODELS = tuple(
+    Model(depth, value, pruning)
+    for depth in DEPTHS
+    for value in PATH_VALUES
+    for pruning in PRUNING
+    if depth > 1 or (value, pruning) == ("leaf", "none")
+)
+REFERENCE = Model(2)  # The externally cached control policy.
 
 
 @dataclass(frozen=True)
@@ -86,7 +180,8 @@ def make_case(label, state, utilities, transitions=TRANSITIONS):
     transitions = tuple(tuple(row) for row in transitions)
     utilities = tuple(utilities)
     cached = tuple(
-        choose(action_values(rollout(s, transitions, utilities, 2))) for s in range(6)
+        choose(action_values(REFERENCE.rollout(s, transitions, utilities)))
+        for s in range(6)
     )
     return Case(label, state, transitions, utilities, cached)
 

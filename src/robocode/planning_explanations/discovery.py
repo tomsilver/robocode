@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, replace
 from math import isfinite
 
 from .instrument import Patch, Selector
-from .task import ROLES, action_values, backup, choose, rollout
+from .task import MODELS, Model, action_values, choose
 
 RUN_ERRORS = (KeyError, IndexError, TypeError, ValueError, RuntimeError)
 _MISSING = object()
@@ -51,32 +51,63 @@ class Limits:
 class Explanation:
     """A frozen computation and selection-only alignment for one route.
 
-    ``mapping`` names one recorded location per model coordinate. ``interchangeable``
-    lists ``(role, coordinate, locations)``: other locations that passed the same
-    tests when swapped in for that single coordinate. They are copies of the same
-    quantity read at different moments, not different computations.
+    ``horizon``, ``path_value`` and ``pruning`` name the model (see
+    ``task.Model``). ``mapping`` names one recorded location per model coordinate,
+    or ``None`` for a node the model does not expand on this route.
+    ``interchangeable`` lists ``(role, coordinate, locations)``: other locations
+    that passed the same tests when swapped in for that single coordinate. They are
+    copies of the same quantity read at different moments, not different
+    computations.
     """
 
     route: str
     horizon: int
     mapping: tuple
     interchangeable: tuple = ()
+    path_value: str = "leaf"
+    pruning: str = "none"
+
+    @property
+    def model(self):
+        """The computation this explanation claims the program performs."""
+        return Model(self.horizon, self.path_value, self.pruning)
 
     @property
     def identifier(self):
-        """A stable identity for the entire model and mapping."""
-        payload = json.dumps(asdict(self), sort_keys=True)
+        """A stable identity for the entire model and mapping.
+
+        Model parameters added later are left out at their default value, so
+        adding a parameter does not rename existing explanations.
+        """
+        fields = asdict(self)
+        if fields["pruning"] == "none":
+            del fields["pruning"]
+        payload = json.dumps(fields, sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def selectors(self):
         """View the immutable mapping by role."""
         return dict(self.mapping)
 
-    def read(self, trace):
-        """Select and rearrange existing values, with no model computation."""
-        return {
-            role: [s.read(trace) for s in selectors] for role, selectors in self.mapping
-        }
+    def read(self, trace, strict=True):
+        """Select and rearrange existing values, with no model computation.
+
+        Unexpanded nodes read as ``None``. With ``strict=False`` a location the
+        execution never reached (for example after a patch triggered a cutoff)
+        also reads as ``None`` instead of raising.
+        """
+        roles = {}
+        for role, selectors in self.mapping:
+            roles[role] = []
+            for selector in selectors:
+                try:
+                    value = None if selector is None else selector.read(trace)
+                except (KeyError, IndexError, TypeError):
+                    if strict:
+                        raise
+                    value = None
+                roles[role].append(value)
+        return roles
 
     def swaps(self):
         """Yield each single-coordinate substitution of an interchangeable location."""
@@ -120,8 +151,8 @@ def leaves(value, path=()):
     """Inventory numeric scalar locations, without interpreting identifiers."""
     if type(value) in (int, float):
         yield path
-    elif type(value) in (list, dict):
-        keys = range(len(value)) if type(value) is list else value.keys()
+    elif type(value) in (list, tuple, dict):
+        keys = value.keys() if type(value) is dict else range(len(value))
         for key in keys:
             yield from leaves(value[key], path + (key,))
 
@@ -138,22 +169,34 @@ def value_table(trace):
     return table
 
 
-def order_constraints(horizon):
-    """Temporal requirements as ``(reason, earlier, later, strict)`` coordinates."""
+def order_constraints(model):
+    """Temporal requirements as ``(reason, earlier, later, strict)`` coordinates.
+
+    A state precedes the two states it leads to, a path's last state precedes the
+    path's evaluation, and an evaluation is no later than its action's score.
+    """
+    depth = model.depth
     constraints = []
-    for action in (0, 1):
-        for i in [action] if horizon == 1 else [2 * action, 2 * action + 1]:
-            if horizon == 2:
+    for level in range(1, depth):
+        for i in range(2**level):
+            for child in (2 * i, 2 * i + 1):
                 constraints.append(
-                    ("state_order", ("states_1", action), ("states_2", i), True)
+                    (
+                        "state_order",
+                        (f"states_{level}", i),
+                        (f"states_{level + 1}", child),
+                        True,
+                    )
                 )
+    for leaf in range(2**depth):
+        constraints.append(
+            ("evaluation_order", (f"states_{depth}", leaf), ("evaluations", leaf), True)
+        )
+        if depth > 1:
+            action = leaf >> (depth - 1)
             constraints.append(
-                ("evaluation_order", (f"states_{horizon}", i), ("evaluations", i), True)
+                ("backup_order", ("evaluations", leaf), ("scores", action), False)
             )
-            if horizon == 2:
-                constraints.append(
-                    ("backup_order", ("evaluations", i), ("scores", action), False)
-                )
     return constraints
 
 
@@ -165,9 +208,7 @@ def out_of_order(trace, earlier, later, strict):
 
 def ordinary(explanation, case, trace):
     """Check task semantics, temporal order and output on an ordinary execution."""
-    expected = rollout(
-        case.state, case.transitions, case.utilities, explanation.horizon
-    )
+    expected = explanation.model.rollout(case.state, case.transitions, case.utilities)
     try:
         observed = explanation.read(trace)
         if observed != expected:
@@ -178,10 +219,9 @@ def ordinary(explanation, case, trace):
                 "observed": observed,
             }
         mapping = explanation.selectors()
-        for reason, (r1, i1), (r2, i2), strict in order_constraints(
-            explanation.horizon
-        ):
-            if out_of_order(trace, mapping[r1][i1], mapping[r2][i2], strict):
+        for reason, (r1, i1), (r2, i2), strict in order_constraints(explanation.model):
+            first, second = mapping[r1][i1], mapping[r2][i2]
+            if first and second and out_of_order(trace, first, second, strict):
                 return {"reason": reason, "case": case.label}
         if trace.output != choose(action_values(expected)):
             return {
@@ -195,22 +235,22 @@ def ordinary(explanation, case, trace):
     return None
 
 
-def predict_patch(case, horizon, role, index, value):
+def predict_patch(case, model, role, index, value):
     """Intervene in the candidate computation and propagate its effects."""
-    predicted = rollout(case.state, case.transitions, case.utilities, horizon)
-    predicted[role][index] = value
-    if role.startswith("states_"):
-        if horizon == 2 and role == "states_1":
-            predicted["states_2"][2 * index : 2 * index + 2] = case.transitions[value]
-        predicted["evaluations"] = [
-            case.utilities[s] for s in predicted[f"states_{horizon}"]
-        ]
-    if horizon == 2 and role != "scores":
-        predicted["scores"] = backup(predicted["evaluations"])
-    return predicted
+    return model.rollout(
+        case.state, case.transitions, case.utilities, (role, index, value)
+    )
 
 
-def switch_point(case, horizon, role, index):
+def compared_numbers(case, model):
+    """Every number the model's decision is computed from, in increasing order."""
+    roles = model.rollout(case.state, case.transitions, case.utilities)
+    return sorted(
+        {v for role in NUMERIC if role in roles for v in roles[role] if v is not None}
+    )
+
+
+def switch_point(case, model, role, index):
     """Where the model's decision flips as this one value moves, or None.
 
     The decision can only flip where the patched value crosses another number the
@@ -218,13 +258,12 @@ def switch_point(case, horizon, role, index):
     is small enough that no other compared number lies between ``point - step``
     and ``point + step``.
     """
-    roles = rollout(case.state, case.transitions, case.utilities, horizon)
-    numbers = sorted({v for r in ROLES[horizon] if r in NUMERIC for v in roles[r]})
+    numbers = compared_numbers(case, model)
     gaps = [b - a for a, b in zip(numbers, numbers[1:])]
     step = min([BOUNDARY_STEP] + [g / 4 for g in gaps])
 
     def decision(value):
-        return choose(action_values(predict_patch(case, horizon, role, index, value)))
+        return choose(action_values(predict_patch(case, model, role, index, value)))
 
     for point in numbers:
         if decision(point - step) != decision(point + step):
@@ -232,20 +271,19 @@ def switch_point(case, horizon, role, index):
     return None
 
 
-def replacements(case, horizon, role, index, current):
+def replacements(case, model, role, index, current):
     """Labelled substitute values for one model coordinate.
 
     States: every other state, so a decision-changing state is tried whenever one
-    exists. Values: far below and far above every utility, plus just below, exactly
-    at, and just above the point where the model's decision flips.
+    exists. Values: far below and far above every utility and every number the
+    model compares, plus just below, exactly at, and just above the point where the
+    model's decision flips.
     """
     if role.startswith("states_"):
         return tuple(("other state", s) for s in range(6) if s != int(current))
-    values = [
-        ("low", min(case.utilities) - 100),
-        ("high", max(case.utilities) + 100),
-    ]
-    found = switch_point(case, horizon, role, index)
+    numbers = list(case.utilities) + compared_numbers(case, model)
+    values = [("low", min(numbers) - 100), ("high", max(numbers) + 100)]
+    found = switch_point(case, model, role, index)
     if found:
         point, step = found
         values += [
@@ -260,10 +298,10 @@ def interventions(explanation, case, trace):
     """Every labelled single-coordinate substitution for every mapped coordinate."""
     for role, selectors in explanation.mapping:
         for i, selector in enumerate(selectors):
+            if selector is None:
+                continue  # A node this route never expands has nothing to patch.
             current = selector.read(trace)
-            for kind, value in replacements(
-                case, explanation.horizon, role, i, current
-            ):
+            for kind, value in replacements(case, explanation.model, role, i, current):
                 yield role, i, kind, Patch(selector, value)
 
 
@@ -271,7 +309,7 @@ def paired_test(program, explanation, case, trace):
     """Compare model predictions to actual downstream checkpoints and output."""
     records = []
     for role, i, kind, patch in interventions(explanation, case, trace):
-        predicted = predict_patch(case, explanation.horizon, role, i, patch.value)
+        predicted = predict_patch(case, explanation.model, role, i, patch.value)
         record = {
             "case": case.label,
             "role": role,
@@ -288,13 +326,15 @@ def paired_test(program, explanation, case, trace):
         }
         try:
             patched = program.run(case, patch)
-            observed = explanation.read(patched)
+            # A patch may stop the program from reaching a location (a cutoff):
+            # that reads as None, which matches a node the model no longer expands.
+            observed = explanation.read(patched, strict=False)
             # Earlier snapshots are historical facts, not overwritten retroactively.
             target_time = trace.event(patch.selector).index
             checks = []
             for name, selectors in explanation.mapping:
                 for coordinate, selector in enumerate(selectors):
-                    if (
+                    if selector is not None and (
                         trace.event(selector).index > target_time
                         or selector == patch.selector
                     ):
@@ -339,11 +379,25 @@ def _coordinate_name(coordinate):
     return f"{coordinate[0]}[{coordinate[1]}]"
 
 
-class HorizonSearch:
-    """Factorized search for one route and one model depth.
+def _names(coordinates):
+    return [_coordinate_name(c) for c in sorted(coordinates)]
+
+
+def expanded(model, roles):
+    """The model's coordinates that this search actually computed, in role order."""
+    return [
+        (role, i)
+        for role in model.roles
+        for i, value in enumerate(roles[role])
+        if value is not None
+    ]
+
+
+class ModelSearch:
+    """Factorized search for one route and one model.
 
     1. The program's ordinary outputs must equal the model's decisions. This does
-       not depend on any mapping, so a wrong depth is rejected before matching.
+       not depend on any mapping, so a wrong model is rejected before matching.
     2. Each coordinate is matched to every recorded value equal to the model's value
        in all of the route's discovery runs.
     3. Each matching location is patched on its own; the action must change exactly
@@ -356,32 +410,35 @@ class HorizonSearch:
        ``paired_test`` functions, which also produce the reported evidence.
     """
 
-    def __init__(self, program, route, horizon, runs, limits):
+    def __init__(self, program, route, model, runs, limits):
         self.program = program
         self.route = route
-        self.horizon = horizon
+        self.model = model
         self.runs = runs
         self.limits = limits
         self.cases = runs[: limits.intervention_cases]
         self.expected = [
-            rollout(c.state, c.transitions, c.utilities, horizon) for c, _ in runs
+            model.rollout(c.state, c.transitions, c.utilities) for c, _ in runs
         ]
-        self.coordinates = [
-            (role, i)
-            for role in ROLES[horizon]
-            for i in range(len(self.expected[0][role]))
-        ]
+        # Only nodes the model expands are coordinates; the run() checks that the
+        # model expands the same nodes on every input of the route.
+        self.coordinates = expanded(model, self.expected[0])
+        present = set(self.coordinates)
         self.constraints = defaultdict(list)
-        for reason, earlier, later, strict in order_constraints(horizon):
-            self.constraints[frozenset((earlier, later))].append(
-                (reason, earlier, strict)
-            )
+        for reason, earlier, later, strict in order_constraints(model):
+            if earlier in present and later in present:
+                self.constraints[frozenset((earlier, later))].append(
+                    (reason, earlier, strict)
+                )
         self.effects = {}
         self.survivors = {}
         self._pairs = {}
         self._undecided = 0
         self.audit = {
-            "horizon": horizon,
+            "model": model.label,
+            "horizon": model.depth,
+            "path_value": model.path_value,
+            "pruning": model.pruning,
             "result": None,
             "truncated": False,
             "coordinates": [],
@@ -405,6 +462,19 @@ class HorizonSearch:
                         "case": case.label,
                         "predicted": choose(action_values(roles)),
                         "observed": trace.output,
+                    },
+                )
+        for (case, _), roles in zip(self.runs, self.expected):
+            other = expanded(self.model, roles)
+            if other != self.coordinates:
+                # A fixed mapping needs the same events on every input of a route.
+                first = self.runs[0][0].label
+                return self._finish(
+                    "shape_varies",
+                    counterexample={
+                        "cases": [first, case.label],
+                        "only_in_first": _names(set(self.coordinates) - set(other)),
+                        "only_in_second": _names(set(other) - set(self.coordinates)),
                     },
                 )
         candidates = self._match()
@@ -516,8 +586,8 @@ class HorizonSearch:
         effects = []
         for case, trace in self.cases:
             old = selector.read(trace)
-            for kind, value in replacements(case, self.horizon, role, index, old):
-                predicted = predict_patch(case, self.horizon, role, index, value)
+            for kind, value in replacements(case, self.model, role, index, old):
+                predicted = predict_patch(case, self.model, role, index, value)
                 record = {
                     "case": case.label,
                     "role": role,
@@ -566,7 +636,7 @@ class HorizonSearch:
             try:
                 observed = target_location.read(effect["patched"])
             except (KeyError, IndexError, TypeError):
-                observed = "absent"
+                observed = None  # Never reached, like a node the model skips.
             predicted = effect["predicted"][target_coordinate[0]][target_coordinate[1]]
             if observed != predicted:
                 return {
@@ -653,11 +723,11 @@ class HorizonSearch:
             (
                 role,
                 tuple(
-                    representative[(role, i)]
+                    representative.get((role, i))
                     for i in range(len(self.expected[0][role]))
                 ),
             )
-            for role in ROLES[self.horizon]
+            for role in self.model.roles
         )
         interchangeable = []
         for coordinate in self.coordinates:
@@ -673,7 +743,14 @@ class HorizonSearch:
             )
             if locations:
                 interchangeable.append((coordinate[0], coordinate[1], locations))
-        return Explanation(self.route, self.horizon, mapping, tuple(interchangeable))
+        return Explanation(
+            self.route,
+            self.model.depth,
+            mapping,
+            tuple(interchangeable),
+            self.model.path_value,
+            self.model.pruning,
+        )
 
 
 def discover(program, inputs, limits=Limits()):
@@ -688,15 +765,14 @@ def discover(program, inputs, limits=Limits()):
     accepted = []
     for route, route_runs in routes.items():
         searches = [
-            HorizonSearch(program, route, horizon, route_runs, limits)
-            for horizon in ROLES
+            ModelSearch(program, route, model, route_runs, limits) for model in MODELS
         ]
         accepted.extend(e for e in (s.run() for s in searches) if e is not None)
         audit["routes"][route] = {
             "branches": route_runs[0][1].branches,
             "cases": [c.label for c, _ in route_runs],
             "truncated": any(s.audit["truncated"] for s in searches),
-            "horizons": [s.audit for s in searches],
+            "models": [s.audit for s in searches],
         }
     return FrozenBank(program.digest, tuple(inputs), tuple(accepted), audit)
 
@@ -812,8 +888,14 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                 "supported_explanations": [e.identifier for e in explanations],
                 "features": {
                     "supported_horizons": sorted({e.horizon for e in explanations}),
+                    "path_values": sorted({e.path_value for e in explanations}),
+                    "pruning": sorted({e.pruning for e in explanations}),
+                    # Paths this route's search evaluates; fewer when it prunes.
                     "evaluated_alternatives": sorted(
-                        {2**e.horizon for e in explanations}
+                        {
+                            sum(s is not None for s in e.selectors()["evaluations"])
+                            for e in explanations
+                        }
                     ),
                     "root_actions": [2] if explanations else [],
                     "amount_if_unresolved": None,

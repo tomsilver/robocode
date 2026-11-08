@@ -1,9 +1,16 @@
 """Generic expression-value tracing and single-checkpoint substitution.
 
-This is a deliberately restricted Python runner, not a security sandbox. It
-accepts one function using assignments, for loops, if statements and a small
-set of builtins. Observation returns the original object, preserving aliases;
+This is a deliberately restricted Python runner, not a security sandbox. A program is
+a sequence of allowlisted imports (``heapq``, ``math``) and function definitions. The
+LAST top-level function is the policy; every other function, top-level or nested, is
+a helper. Bodies may use assignments, for and while loops, if statements,
+comprehensions, generator expressions, recursion, and allowlisted builtins and
+container methods. Observation returns the original object, preserving aliases;
 only trace snapshots are copied. Patches replace an expression's returned value.
+
+A checkpoint is an expression's source span; its visit number counts executions in
+order. Within one route (the same control-flow decisions) calls happen in the same
+order, so "visit k of this line inside a helper" already identifies its caller.
 """
 
 # The supported runtime data subset deliberately excludes custom subclasses.
@@ -12,21 +19,46 @@ only trace snapshots are copied. Patches replace an expression's returned value.
 import ast
 import copy
 import hashlib
+import heapq
 import json
+import math
 from collections import Counter
 from dataclasses import dataclass, field
+from types import ModuleType
 
 BUILTINS = {
     "range": range,
     "len": len,
     "min": min,
     "max": max,
+    "abs": abs,
+    "sum": sum,
+    "sorted": sorted,
+    "reversed": reversed,
+    "enumerate": enumerate,
+    "zip": zip,
+    "any": any,
+    "all": all,
     "int": int,
+    "float": float,
     "list": list,
     "dict": dict,
+    "tuple": tuple,
+    "set": set,
 }
+MODULES = {"heapq": heapq, "math": math}
+# Container methods a program may call. Sets work but are never recorded.
+METHODS = frozenset(
+    {"append", "extend", "insert", "pop", "get", "items", "keys", "values", "add"}
+)
+# Loop iterations per run, counted in both the plain and the traced program, so a
+# runaway loop fails instead of hanging the analyzer.
+MAX_LOOP_ITERATIONS = 10_000
 ALLOWED = (
     ast.Module,
+    ast.Import,
+    ast.ImportFrom,
+    ast.alias,
     ast.FunctionDef,
     ast.arguments,
     ast.arg,
@@ -34,6 +66,7 @@ ALLOWED = (
     ast.AugAssign,
     ast.Expr,
     ast.For,
+    ast.While,
     ast.If,
     ast.Return,
     ast.Pass,
@@ -43,8 +76,14 @@ ALLOWED = (
     ast.Constant,
     ast.List,
     ast.Dict,
+    ast.Set,
     ast.Tuple,
+    ast.ListComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.comprehension,
     ast.Subscript,
+    ast.Slice,
     ast.Load,
     ast.Store,
     ast.BinOp,
@@ -58,8 +97,10 @@ ALLOWED = (
     ast.Add,
     ast.Sub,
     ast.Mult,
+    ast.Div,
     ast.Mod,
     ast.FloorDiv,
+    ast.Pow,
     ast.USub,
     ast.UAdd,
     ast.Not,
@@ -69,6 +110,10 @@ ALLOWED = (
     ast.LtE,
     ast.Gt,
     ast.GtE,
+    ast.In,
+    ast.NotIn,
+    ast.Is,
+    ast.IsNot,
     ast.And,
     ast.Or,
 )
@@ -78,36 +123,87 @@ class UnsupportedProgram(ValueError):
     """The source is outside the prototype's explicit Python subset."""
 
 
-def validate(tree):
-    """Reject unsupported constructs before compiling either version."""
-    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.FunctionDef):
-        raise UnsupportedProgram("Supply exactly one function")
-    function = tree.body[0]
-    if function.name.startswith("__") or function.name in BUILTINS:
+class ProgramFailure(RuntimeError):
+    """The program itself raised (or looped too long) on an ordinary input."""
+
+
+def reserved(name):
+    """Names the runner uses itself."""
+    return name.startswith("__") or name in BUILTINS
+
+
+def import_bindings(nodes):
+    """Names bound by allowlisted import statements, mapped to their objects."""
+    bindings = {}
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name not in MODULES:
+                    raise UnsupportedProgram(f"Import not allowed: {alias.name}")
+                bindings[alias.asname or alias.name] = MODULES[alias.name]
+            continue
+        if node.level or node.module not in MODULES:
+            raise UnsupportedProgram(f"Import not allowed: {node.module}")
+        for alias in node.names:
+            module = MODULES[node.module]
+            if alias.name.startswith("_") or not hasattr(module, alias.name):
+                raise UnsupportedProgram(
+                    f"Import not allowed: {node.module}.{alias.name}"
+                )
+            bindings[alias.asname or alias.name] = getattr(module, alias.name)
+    if any(reserved(name) for name in bindings):
+        raise UnsupportedProgram("Reserved identifier")
+    return bindings
+
+
+def check_function(function):
+    """Plain positional parameters only, for the policy and helpers alike."""
+    if reserved(function.name):
         raise UnsupportedProgram("Reserved function identifier")
+    arguments = function.args
     if (
         function.decorator_list
         or function.returns
-        or function.args.defaults
-        or function.args.kwonlyargs
-        or function.args.vararg
-        or function.args.kwarg
-        or function.args.posonlyargs
+        or arguments.defaults
+        or arguments.kwonlyargs
+        or arguments.vararg
+        or arguments.kwarg
+        or arguments.posonlyargs
+        or any(arg.annotation for arg in arguments.args)
     ):
         raise UnsupportedProgram(
             "Decorators, annotations and optional arguments unsupported"
         )
-    if len(function.args.args) != 4:
+
+
+def validate(tree):
+    """Reject unsupported constructs; return the policy's name and import bindings."""
+    imports, functions = [], []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append(node)
+        elif isinstance(node, ast.FunctionDef):
+            functions.append(node)
+        else:
+            raise UnsupportedProgram(
+                "Only imports and function definitions are allowed at the top level"
+            )
+    if not functions:
+        raise UnsupportedProgram("Supply a function; the last one is the policy")
+    if len(functions[-1].args.args) != 4:
         raise UnsupportedProgram(
-            "Expected positional state, transitions, utilities, cache"
+            "The last function is the policy and takes positional state, "
+            "transitions, utilities, cache"
         )
-    if any(arg.annotation for arg in function.args.args):
-        raise UnsupportedProgram("Annotations unsupported")
+    bindings = import_bindings(imports)
+    modules = {name for name, value in bindings.items() if type(value) is ModuleType}
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    unsupported = next((n for n in ast.walk(tree) if not isinstance(n, ALLOWED)), None)
+    if unsupported is not None:
+        raise UnsupportedProgram(f"Unsupported syntax: {type(unsupported).__name__}")
     for node in ast.walk(tree):
-        if not isinstance(node, ALLOWED):
-            raise UnsupportedProgram(f"Unsupported syntax: {type(node).__name__}")
-        if isinstance(node, ast.FunctionDef) and node is not function:
-            raise UnsupportedProgram("Nested functions unsupported")
+        if isinstance(node, ast.FunctionDef):
+            check_function(node)
         if isinstance(node, (ast.Name, ast.arg)):
             name = node.id if isinstance(node, ast.Name) else node.arg
             if name.startswith("__") or (
@@ -115,16 +211,25 @@ def validate(tree):
                 and (isinstance(node, ast.arg) or isinstance(node.ctx, ast.Store))
             ):
                 raise UnsupportedProgram("Reserved identifier")
-        if isinstance(node, ast.Attribute) and node.attr != "append":
-            raise UnsupportedProgram("Only the append method is supported")
+        if isinstance(node, ast.Attribute):
+            on_module = isinstance(node.value, ast.Name) and node.value.id in modules
+            if (
+                not isinstance(node.ctx, ast.Load)
+                or node.attr.startswith("_")
+                or not (on_module or node.attr in METHODS)
+            ):
+                raise UnsupportedProgram(f"Unsupported attribute: .{node.attr}")
         if isinstance(node, ast.Call):
-            allowed = (
-                isinstance(node.func, ast.Name) and node.func.id in BUILTINS
-            ) or (isinstance(node.func, ast.Attribute) and node.func.attr == "append")
-            if not allowed:
+            func = node.func
+            if not isinstance(func, ast.Attribute) and not (
+                isinstance(func, ast.Name)
+                and (func.id in BUILTINS or func.id in defined or func.id in bindings)
+            ):
                 raise UnsupportedProgram(
-                    "Only whitelisted builtin calls and append supported"
+                    "Only builtin, helper, imported and container-method calls "
+                    "are supported"
                 )
+    return functions[-1].name, bindings
 
 
 def is_value(value, ancestors=frozenset()):
@@ -141,6 +246,21 @@ def is_value(value, ancestors=frozenset()):
             type(k) in (str, int) and is_value(v, ancestors) for k, v in value.items()
         )
     return False
+
+
+def replaced(value, path, new):
+    """``value`` with the element at ``path`` replaced; tuples are rebuilt.
+
+    Lists and dictionaries along the path are modified in place, so callers pass a
+    copy.
+    """
+    if not path:
+        return copy.deepcopy(new)
+    key, rest = path[0], path[1:]
+    if type(value) is tuple:
+        return value[:key] + (replaced(value[key], rest, new),) + value[key + 1 :]
+    value[key] = replaced(value[key], rest, new)
+    return value
 
 
 @dataclass(frozen=True)
@@ -232,14 +352,9 @@ class Recorder:
             self.patch.selector.occurrence,
         ):
             before = copy.deepcopy(value)
-            if self.patch.selector.path:
-                value = copy.deepcopy(value)
-                parent = value
-                for key in self.patch.selector.path[:-1]:
-                    parent = parent[key]
-                parent[self.patch.selector.path[-1]] = copy.deepcopy(self.patch.value)
-            else:
-                value = copy.deepcopy(self.patch.value)
+            value = replaced(
+                copy.deepcopy(value), self.patch.selector.path, self.patch.value
+            )
             self.patch_count += 1
             patched = True
         self.events.append(
@@ -260,18 +375,44 @@ class Recorder:
         return value
 
 
+def loop_counter(limit=MAX_LOOP_ITERATIONS):
+    """A per-run tick that fails once the program has looped ``limit`` times."""
+    count = 0
+
+    def tick():
+        nonlocal count
+        count += 1
+        if count > limit:
+            raise RuntimeError("Loop iteration budget exceeded")
+
+    return tick
+
+
+def hook(name, *args):
+    """A call to one of the runner's hooks."""
+    return ast.Call(
+        func=ast.Name(id=name, ctx=ast.Load()), args=list(args), keywords=[]
+    )
+
+
 class Instrumenter(ast.NodeTransformer):
-    """Insert a hook around expressions, preserving Python evaluation order."""
+    """Insert a hook around expressions, preserving Python evaluation order.
+
+    ``if`` and ``while`` tests and comprehension filters are also recorded as branch
+    decisions; together they form an execution's route.
+    """
 
     def __init__(self, source):
         self.source = source
         self.sites = {}
 
     def visit(self, node):
-        # A callee/method itself is not a scalar/list/dictionary checkpoint.
+        # Callees, methods and slices are not scalar/list/dictionary checkpoints.
         original = node
         node = super().visit(node)
-        if isinstance(original, ast.expr) and not isinstance(original, ast.Attribute):
+        if isinstance(original, ast.expr) and not isinstance(
+            original, (ast.Attribute, ast.Slice)
+        ):
             if isinstance(getattr(original, "ctx", ast.Load()), ast.Load):
                 site = (
                     f"{original.lineno}:{original.col_offset}:"
@@ -285,24 +426,46 @@ class Instrumenter(ast.NodeTransformer):
                     "expression": ast.get_source_segment(self.source, original),
                 }
                 node = ast.copy_location(
-                    ast.Call(
-                        func=ast.Name(id="__capture", ctx=ast.Load()),
-                        args=[ast.Constant(site), node],
-                        keywords=[],
-                    ),
-                    original,
+                    hook("__capture", ast.Constant(site), node), original
                 )
         return node
 
     def visit_If(self, node):  # pylint: disable=invalid-name
         """Record branch signatures independently of identifier spellings."""
         node = self.generic_visit(node)
-        node.test = ast.Call(
-            func=ast.Name(id="__branch", ctx=ast.Load()),
-            args=[ast.Constant(f"if:{node.lineno}"), node.test],
-            keywords=[],
-        )
+        node.test = hook("__branch", ast.Constant(f"if:{node.lineno}"), node.test)
         return node
+
+    def visit_While(self, node):  # pylint: disable=invalid-name
+        """Each loop test is a branch decision, so iteration counts set the route."""
+        node = self.generic_visit(node)
+        node.test = hook("__branch", ast.Constant(f"while:{node.lineno}"), node.test)
+        return node
+
+    def visit_comprehension(self, node):
+        """A comprehension filter decides like an ``if`` statement."""
+        node = self.generic_visit(node)
+        node.ifs = [
+            hook(
+                "__branch",
+                ast.Constant(f"filter:{test.lineno}:{test.col_offset}"),
+                test,
+            )
+            for test in node.ifs
+        ]
+        return node
+
+
+class LoopGuard(ast.NodeTransformer):
+    """Count every loop iteration, identically in the plain and traced programs."""
+
+    def visit_For(self, node):  # pylint: disable=invalid-name
+        """Tick before each iteration's body."""
+        node = self.generic_visit(node)
+        node.body.insert(0, ast.Expr(hook("__tick")))
+        return node
+
+    visit_While = visit_For
 
 
 class Program:
@@ -312,22 +475,36 @@ class Program:
         self.source = source
         self.digest = hashlib.sha256(source.encode()).hexdigest()
         tree = ast.parse(source)
-        validate(tree)
-        self.name = tree.body[0].name
-        self.plain_code = compile(tree, "<plain-policy>", "exec")
+        self.name, self.bindings = validate(tree)
+        # Imports are bound directly in each run's namespace instead of executed.
+        tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+        plain = LoopGuard().visit(copy.deepcopy(tree))
+        self.plain_code = compile(
+            ast.fix_missing_locations(plain), "<plain-policy>", "exec"
+        )
         instrumenter = Instrumenter(source)
-        transformed = ast.fix_missing_locations(instrumenter.visit(copy.deepcopy(tree)))
-        self.code = compile(transformed, "<traced-policy>", "exec")
+        traced = LoopGuard().visit(instrumenter.visit(copy.deepcopy(tree)))
+        self.code = compile(
+            ast.fix_missing_locations(traced), "<traced-policy>", "exec"
+        )
         self.sites = instrumenter.sites
+
+    def _namespace(self, hooks=None):
+        """Fresh globals: builtins, imported names, a loop counter and any hooks."""
+        return {
+            "__builtins__": BUILTINS,
+            "__tick": loop_counter(),
+            **self.bindings,
+            **(hooks or {}),
+        }
 
     def run(self, case, patch=None):
         """Execute from fresh inputs and globals, returning a complete trace."""
         recorder = Recorder(patch)
-        namespace = {
-            "__builtins__": BUILTINS,
-            "__capture": recorder.capture,
-            "__branch": recorder.branch,
-        }
+        # A dictionary, because "__name" keywords would be mangled inside a class.
+        namespace = self._namespace(
+            {"__capture": recorder.capture, "__branch": recorder.branch}
+        )
         exec(self.code, namespace)  # pylint: disable=exec-used
         args = case.args()
         output = namespace[self.name](*args)
@@ -337,11 +514,19 @@ class Program:
 
     def check_observation(self, case):
         """Check output AND input mutation against an uninstrumented execution."""
-        namespace = {"__builtins__": BUILTINS}
-        exec(self.plain_code, namespace)  # pylint: disable=exec-used
-        args = case.args()
-        output = namespace[self.name](*args)
-        trace = self.run(case)
+        try:
+            namespace = self._namespace()
+            exec(self.plain_code, namespace)  # pylint: disable=exec-used
+            args = case.args()
+            output = namespace[self.name](*args)
+            trace = self.run(case)
+        except UnsupportedProgram:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # Any error raised by the analyzed program itself, reported as such.
+            raise ProgramFailure(
+                f"{type(exc).__name__} on {case.label}: {exc}"
+            ) from exc
         if output != trace.output or args != trace.args_after:
             raise AssertionError(f"Observation changed behavior on {case.label}")
         return trace
