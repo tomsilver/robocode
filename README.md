@@ -11,6 +11,10 @@ The main setting is **strict black box**: no environment source, injected primit
 For the small experimental prototype that discovers and tests planning explanations
 inside program executions, see [Planning explanations](docs/planning-explanations.md).
 It runs independently of the robotics and LLM stack using only Python's standard library.
+The separate [search-explanation prototype](docs/search-explanations.md) implements
+milestones 1–7 of the search/causal-abstraction proposal, with frozen discovery,
+live interventions, nested-value mappings, mixed execution routes, paired diagrams,
+priority search with cost improvement and goal timing, and validation on changing tasks.
 
 <table>
   <tr>
