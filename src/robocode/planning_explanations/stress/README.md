@@ -55,36 +55,90 @@ before it:
    expands (unexpanded nodes are absent), and each model beyond depth 1 also comes
    with the sound cutoff: stop expanding the second action once one of its paths
    beats the first action's score.
+9. **Own model:** every model is also tried with a fixed transition table of the
+   program's own, inferred from the successor states it computes.
 
-| Program | First run | Depth-1 roles merged | Per-coordinate search | Varied tables | Boundary patches | Model family | Wider Python | Node events + cutoff |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `while_loop` | Refused | Refused | Refused | Refused | Refused | Refused | **Supported (d2)** | Same |
-| `helper_function` | Refused | Refused | Refused | Refused | Refused | Refused | **Supported (d2)** | Same |
-| `comprehension` | Refused | Refused | Refused | Refused | Refused | Refused | **Unresolved: no single location holds `states_1[1]`** | Same |
-| `unrolled` | Unresolved | Unresolved | **Supported (d2)** | Supported (d2) | Supported (d2) | Supported (d2) | Same | Same |
-| `memoized` | Supported (d2) | Supported (d2) | Supported (d2) | **Supported (d2) on 0.83 of inputs**: one validation route never seen in discovery | Same | Same | Same | Same |
-| `pruning` | Unresolved | Unresolved | Unresolved: no compatible mapping / no matching location | Same | Same | Same | Same | **Supported (d2, cutoff) on all 3 routes; 3 or 4 paths evaluated** |
-| `depth_three` | Unresolved | Unresolved | Unresolved: rejected before matching | Same | Same | **Supported (d3, leaf)** | Same | Same |
-| `sum_rewards` | Unresolved | Unresolved | Unresolved: rejected before matching | Same | Same | **Supported (d2, sum)** | Same | Same |
-| `unused_depth` | Unresolved | **Supported (d1)**, second loop only | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Same | Same |
-| `unused_depth_with_variable` | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Same | Same |
-| `own_table` | — | — | Supported (d2) | **Unresolved: rejected before matching** | Same | Same | Same | Same |
-| `margin` | — | — | Supported (d2) | Supported (d2) | **Unresolved: every value location fails a boundary patch** | Same | Same | Same |
-| `sum_factored` | — | — | — | — | Unresolved: rejected before matching | Unresolved: the d2-sum model finds no per-path sums | Same | Same |
-| `recursive` | — | — | — | — | — | Refused | **Supported (d2)** | Same |
-| `heap_choice` | — | — | — | — | — | Refused | **Supported (d2)** | Same |
-| `running_max` | — | — | — | — | — | Refused | **Unresolved**: no surviving location / no compatible mapping, depending on route | Same |
-| `pruning_depth_three` | — | — | — | — | — | — | Unresolved | **Supported (d3, cutoff) on 0.83 of inputs**: 7 or 8 paths evaluated; other inputs on routes discovery never saw |
-| `unsound_pruning` | — | — | — | — | — | — | Unresolved | Unresolved: rejected by every model |
+| Program | First run | Depth-1 roles merged | Per-coordinate search | Varied tables | Boundary patches | Model family | Wider Python | Node events + cutoff | Own model |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `while_loop` | Refused | Refused | Refused | Refused | Refused | Refused | **Supported (d2)** | Same | Same |
+| `helper_function` | Refused | Refused | Refused | Refused | Refused | Refused | **Supported (d2)** | Same | Same |
+| `comprehension` | Refused | Refused | Refused | Refused | Refused | Refused | **Unresolved: no single location holds `states_1[1]`** | Same | Same |
+| `unrolled` | Unresolved | Unresolved | **Supported (d2)** | Supported (d2) | Supported (d2) | Supported (d2) | Same | Same | Same |
+| `memoized` | Supported (d2) | Supported (d2) | Supported (d2) | **Supported (d2) on 0.83 of inputs**: one validation route never seen in discovery | Same | Same | Same | Same | Same |
+| `pruning` | Unresolved | Unresolved | Unresolved: no compatible mapping / no matching location | Same | Same | Same | Same | **Supported (d2, cutoff) on all 3 routes; 3 or 4 paths evaluated** | Same |
+| `depth_three` | Unresolved | Unresolved | Unresolved: rejected before matching | Same | Same | **Supported (d3, leaf)** | Same | Same | Same |
+| `sum_rewards` | Unresolved | Unresolved | Unresolved: rejected before matching | Same | Same | **Supported (d2, sum)** | Same | Same | Same |
+| `unused_depth` | Unresolved | **Supported (d1)**, second loop only | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Same | Same | Same |
+| `unused_depth_with_variable` | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Supported (d1) | Same | Same | Same |
+| `own_table` | — | — | Supported (d2) | **Unresolved: rejected before matching** | Same | Same | Same | Same | **Supported (d2, own table = its literal); agrees with the environment on 11 of 72 transitions** |
+| `margin` | — | — | Supported (d2) | Supported (d2) | **Unresolved: every value location fails a boundary patch** | Same | Same | Same | Same |
+| `sum_factored` | — | — | — | — | Unresolved: rejected before matching | Unresolved: the d2-sum model finds no per-path sums | Same | Same | Same |
+| `recursive` | — | — | — | — | — | Refused | **Supported (d2)** | Same | Same |
+| `heap_choice` | — | — | — | — | — | Refused | **Supported (d2)** | Same | Same |
+| `running_max` | — | — | — | — | — | Refused | **Unresolved**: no surviving location / no compatible mapping, depending on route | Same | Same |
+| `pruning_depth_three` | — | — | — | — | — | — | Unresolved | **Supported (d3, cutoff) on 0.83 of inputs**: 7 or 8 paths evaluated; other inputs on routes discovery never saw | Same |
+| `unsound_pruning` | — | — | — | — | — | — | Unresolved | Unresolved: rejected by every model | Same |
+| `own_function` | — | — | — | — | — | — | — | Unresolved | **Supported (d2, own table = its formula)** |
+| `partly_wrong` | — | — | — | — | — | — | — | Unresolved | Unresolved: neither a fixed table nor the environment |
 
 "—": the program was added later; its first result is the code as it stood then.
-The original six examples keep their verdicts and mappings through all eight
+The original six examples keep their verdicts and mappings through all nine
 columns (their identifiers changed once, in the last column, because the path
 value became part of each explanation). Each supported route has **one**
 explanation; copies of the same value (for example `u[leaf]`, `value`, and the
 element of `values`) are listed as interchangeable locations, and every one of
 them also passes on fresh validation inputs. Also supported, though not in this
 folder: `int(u[t[s][1]] > u[t[s][0]])` (unrolled depth 1; see the unit tests).
+
+## Current numbers: lower bound and planningness
+
+Default seeds and budgets. Every fresh input is **supported** (a verified planning
+explanation), **no lookahead** (its action never changed when only its future
+changed: where actions lead and how good the other states are) or **unresolved**
+(its action follows the future, but no model was verified), listed by reason.
+Supported is a lower bound on the share of start states with verified planning.
+**Planningness** is the weighted effective lookahead depth (log2 of complete
+paths evaluated) as an interval: no lookahead counts 0, and unresolved inputs count
+their behavioral lower bound at the lower end and the family **max** (3, the
+deepest model the analyzer can verify, not a true bound) at the upper end.
+
+| Program | Supported | No lookahead | Unresolved | Unresolved, by reason | Planningness (max 3) | True amount (by construction) |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| `one_step` (fixture) | 1.00 | 0.00 | 0.00 | — | [1.00, 1.00] | 1 |
+| `two_step` (fixture) | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `renamed_dictionary` (fixture) | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `lookup` (fixture) | 0.00 | 1.00 | 0.00 | — | [0.00, 0.00] | 0 |
+| `conditional` (fixture) | 0.50 | 0.50 | 0.00 | — | [1.00, 1.00] | 1 |
+| `decoy` (fixture) | 0.00 | 1.00 | 0.00 | — | [0.00, 0.00] | 0 |
+| `comprehension` | 0.00 | 0.00 | 1.00 | no_model_fits 1.00 | [2.00, 3.00] | 2 |
+| `depth_three` | 1.00 | 0.00 | 0.00 | — | [3.00, 3.00] | 3 |
+| `fixed_internal_planner` | 0.00 | 1.00 | 0.00 | — | [0.00, 0.00] | 0 (by behavior) |
+| `heap_choice` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `helper_function` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `margin` | 0.00 | 0.00 | 1.00 | no_model_fits 1.00 | [2.00, 3.00] | 2 |
+| `memoized` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `own_function` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `own_table` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `partly_wrong` | 0.00 | 0.17 | 0.83 | no_model_fits 0.83 | [1.67, 2.50] | about 1.67 |
+| `prefers_higher_state` | 0.00 | 0.00 | 1.00 | no_model_fits 1.00 | [1.00, 3.00] | 1 |
+| `pruning` | 1.00 | 0.00 | 0.00 | — | [1.86, 1.86] | 1.86 |
+| `pruning_depth_three` | 1.00 | 0.00 | 0.00 | — | [2.97, 2.97] | 2.97 |
+| `reads_current_utility` | 0.00 | 1.00 | 0.00 | — | [0.00, 0.00] | 0 |
+| `recursive` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `running_max` | 0.00 | 0.00 | 1.00 | no_model_fits 0.75, unseen_route 0.25 | [1.83, 3.00] | 2 |
+| `sum_factored` | 0.00 | 0.00 | 1.00 | no_model_fits 1.00 | [2.00, 3.00] | 2 |
+| `sum_rewards` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `unrolled` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+| `unsound_pruning` | 0.00 | 0.00 | 1.00 | no_model_fits 1.00 | [1.83, 3.00] | 1.83 (log2 3 or 2 per input) |
+| `unused_depth` | 1.00 | 0.00 | 0.00 | — | [1.00, 1.00] | 1 |
+| `unused_depth_with_variable` | 1.00 | 0.00 | 0.00 | — | [1.00, 1.00] | 1 |
+| `while_loop` | 1.00 | 0.00 | 0.00 | — | [2.00, 2.00] | 2 |
+
+Every interval contains the true amount. Programs still marked unresolved do look
+ahead (the report shows a change to the future that moved the action) but plan in
+a way the family does not cover; their lower end is the behavioral bound on how
+many paths their decision compares, so `comprehension`, `margin` and
+`sum_factored` sit at [2, max 3] and `prefers_higher_state` at [1, max 3].
 
 ## Results of the first run, against the predictions
 
@@ -118,6 +172,12 @@ Added later, each predicted before its first run:
 | `pruning` (node events) | Pruning as a prediction | Supported by d2 cutoff on both routes; 3 paths where it prunes, 4 where not; full model rejected | Supported by d2 cutoff and full model rejected on every route, 3 or 4 paths. It has **three** routes, not two: its `if` can also fire after the last leaf, where breaking skips nothing | ◐ |
 | `pruning_depth_three` | Cutoff at depth 3 | Supported (d3 cutoff) on routes seen in discovery; some validation inputs on unseen routes | Exactly that: 3 routes in discovery, 0.83 of validation inputs supported | ✅ |
 | `unsound_pruning` | An unsound pruning rule | Rejected before matching by every model | Unresolved, but on two small routes some models made the same decisions and were rejected later: by matching, or by a patch that triggers the unsound skip | ◐ |
+| `own_table` (own model) | A private table, inferred | Supported (d2, leaf) with its own table = the literal; every row known; agreement about 1 in 6 | Exactly that: 11 of 72 transitions agree | ✅ |
+| `own_function` | A model written as a formula | Supported (d2, leaf) with the formula's table; agreement about 1 in 6 | Exactly that | ✅ |
+| `partly_wrong` | The limit of a fixed table | Unresolved: environment rejected before matching, no fixed table | Exactly that | ✅ |
+| `reads_current_utility` | What counts as "the future" | No lookahead on every input; [0, 0] | Exactly that | ✅ |
+| `prefers_higher_state` | One-step prediction with an own preference | Looks ahead but unresolved; [0, max 3] | Exactly that: redirecting a transition moves its action | ✅ |
+| `fixed_internal_planner` | The boundary of the behavioral definition | No lookahead | Exactly that | ✅ |
 | `sum_factored` | Order of operations in the sum model | Unresolved: the d2-sum model finds scores but no per-path sums; every other model rejected before matching | Unresolved as predicted, but the d3-sum model got past the output check and failed at matching instead (no depth-3 states) | ◐ |
 
 ## What the runs show
@@ -206,3 +266,51 @@ Added later, each predicted before its first run:
     decisions, and where it happens not to, a patch exposes it. Not covered:
     best-first search, where which node is expanded next depends on values with no
     recorded branch, so one route mixes different expansion patterns.
+11. **Own model (fixed by inferring the program's table).** "Does it plan?" and
+    "is its model right?" are now separate answers. The analyzer never looks for a
+    table in the source; it looks at the successor states a program computes. If
+    they follow one fixed rule on every input while the environment's table
+    changes, that rule is the program's own table, and the usual checks then
+    decide whether the program really searches with it. `own_table` and
+    `own_function` are supported at depth 2 with their exact tables (a literal and
+    a formula), which agree with the random environments on 11 of 72 transitions.
+    Programs that read `t` get no candidate table at all. Limits: a route needs
+    each of its start states twice (on fewer inputs almost anything looks like a
+    fixed function), rows never observed cannot be predicted, and a model that is
+    the environment *with exceptions* (`partly_wrong`) is neither hypothesis.
+12. **A trustworthy lower bound, and planningness (validation step).** Supported
+    mass used to drop whenever validation hit a route discovery never saw, even if
+    the program planned there: `memoized` scored between 0.58 and 1.00 depending
+    on the discovery seed. Validation now also tests frozen explanations from
+    other routes on such inputs (nothing is refitted; the same full test decides).
+    `memoized` reaches 1.00 on 5 of 6 seed pairs (all 6 with
+    `--inputs-per-state 4`), and `pruning_depth_three` gains its "cut after the
+    last leaf" route, which expands the same nodes as a full search. Every
+    unresolved input now says why. Planningness is reported separately, as an
+    interval of effective lookahead depth, so an unknown never counts as zero.
+13. **Verified no lookahead (validation step).** Unresolved used to lump together
+    programs that do not plan and programs that plan outside the family, so both
+    got [0, max 3]. Now each input is also run with only its future changed (86
+    changes: every other state's utility pushed far up and down, every transition
+    redirected, 16 random futures). If its action never moves, the input does not
+    look ahead and counts 0. `lookup`, `decoy` and `reads_current_utility` score
+    [0, 0]; `conditional` tightens from [1, 2.5] to [1, 1]; every one of the 210
+    supported inputs passes as looking ahead. The definition is behavioral:
+    `fixed_internal_planner` searches internally but over a fixed model with fixed
+    values, so it never responds to the world and counts as no lookahead; and
+    `partly_wrong`, believing state 0 is absorbing, cannot tell its actions apart
+    from state 0 and is reactive there (0.17 of inputs) while looking ahead
+    elsewhere.
+14. **A behavioral lower bound for unresolved inputs.** Looking ahead alone did
+    not say how much, so unresolved inputs sat at [0, max 3]. Now tree-shaped
+    futures (the start state has no incoming moves, each first successor is
+    entered only from it) let a redirected move be pinned to the paths starting
+    with it: if the action changes, the decision compares such a path. Only
+    futures where the program takes its original route count. `comprehension`,
+    `margin` and `sum_factored` move to [2, max 3], `prefers_higher_state` to
+    [1, max 3], `running_max` and `unsound_pruning` to about [1.8, max 3], and
+    `partly_wrong` to [1.67, 2.5], whose lower end is its true amount. On all 210
+    supported inputs the bound never exceeds the verified amount, and equals it on
+    150; the others are programs with their own table (they ignore the
+    environment's moves, bound 0), depth-3 searches (only two moves can be told
+    apart, bound at most 2), and routes no tree-shaped future reproduces.

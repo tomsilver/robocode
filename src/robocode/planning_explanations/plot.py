@@ -21,8 +21,12 @@ DEFAULT = Path("outputs/planning-explanations/two_step")
 
 def model(explanation: Row) -> Model:
     """The model a serialized explanation names."""
+    table = explanation["table"]
     return Model(
-        explanation["horizon"], explanation["path_value"], explanation["pruning"]
+        explanation["horizon"],
+        explanation["path_value"],
+        explanation["pruning"],
+        None if table is None else tuple(tuple(row) for row in table),
     )
 
 
@@ -314,7 +318,7 @@ def run(args: argparse.Namespace) -> None:
     """Read a fixture report and write separate ordinary and comparison figures."""
     path = args.report / "report.json" if args.report.is_dir() else args.report
     report = json.loads(path.read_text(encoding="utf-8"))
-    if report["schema_version"] != 5:
+    if report["schema_version"] != 8:
         raise ValueError("Unsupported report schema; regenerate the report")
     if args.list:
         for r in report["validation"]["ordinary_population"]:
@@ -324,7 +328,7 @@ def run(args: argparse.Namespace) -> None:
     row = pick_case(report, args.case, args.explanation)
     ids = row["supported_explanations"]
     if not ids:
-        print(f"{row['case']}: unresolved; no supported tree to plot.")
+        print(f"{row['case']}: {row['status']}; no supported tree to plot.")
         return
     identifier = args.explanation or ids[0]
     if identifier not in ids:

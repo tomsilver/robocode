@@ -12,7 +12,9 @@ import unittest
 from collections import defaultdict
 from contextlib import redirect_stdout
 from io import StringIO
+from math import log2
 from pathlib import Path
+from random import Random
 from unittest import mock
 
 from robocode.planning_explanations import stress
@@ -21,8 +23,11 @@ from robocode.planning_explanations.discovery import (
     Explanation,
     Limits,
     discover,
+    future_probes,
+    infer_tables,
     ordinary,
     paired_test,
+    tree_future,
     validate,
 )
 from robocode.planning_explanations.fixtures import FIXTURES, ONE_STEP, TWO_STEP
@@ -323,19 +328,24 @@ def p(s, t, u, c):
             self.assertTrue(all(len(set(row)) == 2 for row in table))
         self.assertEqual(cases(17, "discovery"), self.training)
 
-    def test_private_copy_of_the_table_is_only_supported_when_tables_are_fixed(self):
-        """With one fixed table, a private copy of it looks like reading ``t``."""
+    def test_private_copy_of_the_table_is_told_apart_only_when_tables_vary(self):
+        """With one fixed table, a private copy of it looks like reading ``t``.
+
+        With a table per input, every environment model is rejected and the copy is
+        recovered as the program's own table.
+        """
         program = Program(OWN_TABLE)
         fixed = [
             make_case(c.label, c.state, c.utilities, TRANSITIONS) for c in self.training
         ]
-        self.assertEqual(
-            {e.horizon for e in discover(program, fixed).explanations}, {2}
-        )
+        (explanation,) = discover(program, fixed).explanations
+        self.assertEqual((explanation.horizon, explanation.table), (2, None))
         bank = discover(program, self.training)
-        self.assertFalse(bank.explanations)
+        (explanation,) = bank.explanations
+        self.assertEqual(explanation.table, TRANSITIONS)
         (audit,) = bank.audit["routes"].values()
-        self.assertEqual({s["result"] for s in audit["models"]}, {"ordinary_output"})
+        environment = [s for s in audit["models"] if s["table"] is None]
+        self.assertEqual({s["result"] for s in environment}, {"ordinary_output"})
 
     def test_boundary_patches_reject_a_different_decision_rule(self):
         """Action 1 needing a lead above 0.5 agrees on every whole-number difference.
@@ -590,6 +600,217 @@ def p(s, t, u, c):
         unsound = Program(stress_source("unsound_pruning"))
         self.assertFalse(discover(unsound, self.training).explanations)
 
+    def test_own_table_is_inferred_and_tested(self):
+        """A program that searches with its own fixed model gets that model back.
+
+        The table is inferred from the successor states it computes, whether they
+        come from a literal or a formula, and then passes the usual checks.
+        """
+        formula = tuple(((2 * x + 1) % 6, (2 * x + 2) % 6) for x in range(6))
+        for name, table in (("own_table", TRANSITIONS), ("own_function", formula)):
+            with self.subTest(program=name):
+                program = Program(stress_source(name))
+                bank = discover(program, self.training)
+                (explanation,) = bank.explanations
+                self.assertEqual(
+                    (explanation.horizon, explanation.path_value), (2, "leaf")
+                )
+                self.assertEqual(explanation.table, table)
+                result = validate(program, bank, self.fresh)
+                self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+                self.assertEqual(len(result["explanations"]), 1)
+                agreement = result["explanations"][0]["environment_agreement"]
+                self.assertLess(agreement["agreeing"], agreement["total"])
+                self.assertIsNotNone(agreement["example"])
+                self.assertEqual(result["explanations"][0]["uncovered_cases"], 0)
+                for row in result["ordinary_population"]:
+                    self.assertEqual(row["features"]["transitions"], ["own"])
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "frozen.json"
+                    write_json(path, frozen_payload(bank))
+                    self.assertEqual(load_frozen(path).explanations, bank.explanations)
+
+    def test_partial_table_predicts_only_what_it_saw(self):
+        """Rows never observed leave inputs uncovered and patches untestable."""
+        program = Program(stress_source("own_table"))
+        # Start states 0 and 1 reach states 0-4 only, so row 5 stays unknown.
+        bank = discover(program, [c for c in self.training if c.state in (0, 1)])
+        (explanation,) = bank.explanations
+        self.assertEqual(explanation.table[5], (None, None))
+        self.assertEqual(explanation.table[:5], TRANSITIONS[:5])
+        result = validate(program, bank, self.fresh)
+        self.assertEqual(len(result["explanations"]), 1)
+        validation = result["explanations"][0]
+        self.assertGreater(validation["uncovered_cases"], 0)
+        self.assertGreater(validation["untestable_patches"], 0)
+        for row in result["ordinary_population"]:
+            # States 2, 3 and 5 need row 5 within two steps.
+            expected = (
+                "unresolved" if row["state"] in (2, 3, 5) else "supported_planning"
+            )
+            self.assertEqual(row["status"], expected)
+            if row["status"] == "unresolved":
+                self.assertEqual(row["unresolved_reason"], "not_covered")
+
+    def test_programs_reading_the_environment_get_no_own_table(self):
+        """No fixed table on programs that read ``t``; tiny routes are not tried."""
+        for name in ("two_step", "conditional"):
+            program = self.programs[name]
+            runs = [(c, program.run(c)) for c in self.training]
+            routes = defaultdict(list)
+            for case, trace in runs:
+                routes[trace.route].append((case, trace))
+            for route_runs in routes.values():
+                self.assertEqual(infer_tables(route_runs, 2, Limits())[0], [])
+        program = self.programs["two_step"]
+        tiny = [(c, program.run(c)) for c in self.training[:3]]
+        self.assertIsNotNone(infer_tables(tiny, 2, Limits())[2])
+        partly = Program(stress_source("partly_wrong"))
+        self.assertFalse(discover(partly, self.training).explanations)
+
+    def test_frozen_explanation_from_another_route_can_explain_an_unseen_route(self):
+        """Inputs on a route discovery never saw are tested against other routes'.
+
+        In ``memoized`` both actions can reach the same two leaves, so two utility
+        lookups are skipped: a route the 12 discovery inputs never took. The frozen
+        explanation that reads the per-path copy (``memo[leaf]``) passes there.
+        """
+        program = Program(stress_source("memoized"))
+        bank = discover(program, self.training)
+        result = validate(program, bank, self.fresh)
+        self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 1)
+        moved = [r for r in result["ordinary_population"] if r["transferred_from"]]
+        self.assertEqual(
+            {r["case"] for r in moved}, {"validation-0-5", "validation-1-3"}
+        )
+        seen = {e.route for e in bank.explanations}
+        for row in moved:
+            self.assertNotIn(row["route"], seen)
+        statuses = {t["status"] for t in result["transfers"]}
+        self.assertEqual(statuses, {"supported", "rejected"})
+
+    def test_planningness_is_effective_depth_with_an_interval(self):
+        """log2 of paths evaluated; unknown inputs span 0 to the family maximum."""
+        for name, interval in (
+            ("one_step", [1.0, 1.0]),
+            ("two_step", [2.0, 2.0]),
+            ("lookup", [0.0, 0.0]),
+        ):
+            with self.subTest(program=name):
+                self.assertEqual(
+                    self.results[name]["planningness"]["interval"], interval
+                )
+        self.assertEqual(self.results["lookup"]["planningness"]["verified"], [0.0, 0.0])
+        program = Program(stress_source("pruning"))
+        result = validate(program, discover(program, self.training), self.fresh)
+        low, high = result["planningness"]["interval"]
+        self.assertEqual(low, high)
+        # Pruned inputs evaluate 3 of 4 paths (log2 3), the others all 4 (2).
+        self.assertTrue(log2(3) < low < 2)
+        depths = {
+            tuple(r["features"]["effective_depth"])
+            for r in result["ordinary_population"]
+        }
+        self.assertEqual(depths, {(round(log2(3), 4),), (2.0,)})
+
+    def test_more_inputs_per_state(self):
+        """Each split can hold more contexts per start state, all distinct."""
+        many = cases(17, "discovery", 4)
+        self.assertEqual(len(many), 24)
+        self.assertEqual(len({c.label for c in many}), 24)
+        self.assertEqual(many[:12], self.training)
+
+    def test_no_lookahead_is_verified_by_changing_only_the_future(self):
+        """Lookups, `return 0`, the current state's utility, a fixed internal search.
+
+        None of them responds to where actions lead or how good other states are.
+        """
+        case = self.training[0]
+        probes = list(future_probes(case))
+        self.assertEqual(len(probes), 10 + 60 + 16)
+        for _, probe in probes:
+            self.assertEqual(probe.state, case.state)
+            self.assertEqual(probe.utilities[case.state], case.utilities[case.state])
+            self.assertEqual(probe.cached_actions, case.cached_actions)
+        programs = {
+            "lookup": self.programs["lookup"],
+            "decoy": self.programs["decoy"],
+        }
+        for name in ("reads_current_utility", "fixed_internal_planner"):
+            programs[name] = Program(stress_source(name))
+        for name, program in programs.items():
+            with self.subTest(program=name):
+                result = validate(program, discover(program, self.training), self.fresh)
+                for row in result["ordinary_population"]:
+                    self.assertEqual(row["status"], "no_lookahead")
+                    self.assertEqual(row["lookahead"]["probes"], len(probes))
+                self.assertEqual(result["planningness"]["interval"], [0.0, 0.0])
+
+    def test_lookahead_without_a_model_stays_unresolved(self):
+        """A program whose action follows the future, but fits no model, is unknown."""
+        for name in ("prefers_higher_state", "running_max"):
+            with self.subTest(program=name):
+                program = Program(stress_source(name))
+                result = validate(program, discover(program, self.training), self.fresh)
+                for row in result["ordinary_population"]:
+                    self.assertEqual(row["status"], "unresolved")
+                    self.assertTrue(row["lookahead"]["depends"])
+                    self.assertIn("change", row["lookahead"]["witness"])
+                low, high = result["planningness"]["interval"]
+                bound = sum(
+                    r["weight"] * r["features"]["effective_depth_lower_bound"]
+                    for r in result["ordinary_population"]
+                )
+                self.assertAlmostEqual(low, bound, places=3)
+                self.assertGreaterEqual(low, 1.0)
+                self.assertEqual(high, 3.0)
+        for row in self.results["two_step"]["ordinary_population"]:
+            self.assertTrue(row["lookahead"]["depends"])
+        # Believing state 0 is absorbing, it cannot tell its actions apart from 0.
+        program = Program(stress_source("partly_wrong"))
+        result = validate(program, discover(program, self.training), self.fresh)
+        for row in result["ordinary_population"]:
+            expected = "no_lookahead" if row["state"] == 0 else "unresolved"
+            self.assertEqual(row["status"], expected)
+
+    def test_behavioral_bound_counts_compared_paths(self):
+        """Redirecting a move in a tree-shaped future shows a path the decision uses.
+
+        The bound never exceeds a verified amount, and it fills in the lower end for
+        planners outside the family.
+        """
+        case = self.training[0]
+        rng = Random("tree")
+        for _ in range(20):
+            future, first, _ = tree_future(case, rng)
+            incoming = defaultdict(list)
+            for state, row in enumerate(future.transitions):
+                for target in row:
+                    incoming[target].append(state)
+            self.assertEqual(incoming[case.state], [])
+            for successor in first:
+                self.assertEqual(incoming[successor], [case.state])
+        expected = {"one_step": 1.0, "two_step": 2.0}
+        for name, depth in expected.items():
+            for row in self.results[name]["ordinary_population"]:
+                self.assertEqual(row["features"]["effective_depth_lower_bound"], depth)
+        for name, result in self.results.items():
+            with self.subTest(program=name):
+                self.assertEqual(result["lower_bound_violations"], [])
+        for name in ("comprehension", "margin"):
+            with self.subTest(program=name):
+                program = Program(stress_source(name))
+                result = validate(program, discover(program, self.training), self.fresh)
+                self.assertEqual(result["planningness"]["interval"], [2.0, 3.0])
+        # It ignores the environment's moves, so moves show nothing: bound 0.
+        program = Program(stress_source("own_table"))
+        result = validate(program, discover(program, self.training), self.fresh)
+        bounds = {
+            r["features"]["effective_depth_lower_bound"]
+            for r in result["ordinary_population"]
+        }
+        self.assertEqual(bounds, {0.0})
+
     def test_conditional_routes_and_unknown_are_execution_specific(self):
         """Do not assign the planning route's features to reactive executions."""
         result = self.results["conditional"]
@@ -600,12 +821,18 @@ def p(s, t, u, c):
                 self.assertEqual(row["status"], "supported_planning")
                 self.assertEqual(row["features"]["supported_horizons"], [2])
             else:
-                self.assertEqual(row["status"], "unresolved")
+                # `return 0`: the action ignores the future, which the test verifies.
+                self.assertEqual(row["status"], "no_lookahead")
                 self.assertEqual(row["features"]["supported_horizons"], [])
-                self.assertIsNone(row["features"]["amount_if_unresolved"])
+                self.assertEqual(row["features"]["effective_depth"], [0.0])
         self.assertEqual(len(routes), 2)
-        self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 0.5)
-        self.assertIsNone(result["planningness"])
+        coverage = result["evidence_coverage"]
+        self.assertAlmostEqual(coverage["supported_mass"], 0.5)
+        self.assertAlmostEqual(coverage["no_lookahead_mass"], 0.5)
+        self.assertEqual(coverage["unresolved_by_reason"], {})
+        # Odd states search to depth 2, even states verifiably not at all.
+        self.assertEqual(result["planningness"]["interval"], [1.0, 1.0])
+        self.assertEqual(result["planningness"]["verified"], [1.0, 1.0])
 
     def test_distribution_applies_only_to_ordinary_runs(self):
         """Changing state weights must not count intervention runs in the population."""
@@ -618,7 +845,7 @@ def p(s, t, u, c):
             sum(r["weight"] for r in result["ordinary_population"]), 1
         )
         self.assertAlmostEqual(result["evidence_coverage"]["supported_mass"], 0.25)
-        self.assertAlmostEqual(result["evidence_coverage"]["unresolved_mass"], 0.75)
+        self.assertAlmostEqual(result["evidence_coverage"]["no_lookahead_mass"], 0.75)
         self.assertGreater(
             sum(len(e["interventions"]) for e in result["explanations"]),
             len(self.fresh),
@@ -632,9 +859,12 @@ def p(s, t, u, c):
         result = validate(program, bank, self.fresh)
         self.assertFalse(bank.explanations)
         self.assertEqual(bank.digest, before)
-        self.assertTrue(
-            all(r["status"] == "unresolved" for r in result["ordinary_population"])
-        )
+        for row in result["ordinary_population"]:
+            if row["state"] % 2:  # It plans there, on a route discovery never saw.
+                self.assertEqual(row["status"], "unresolved")
+                self.assertEqual(row["unresolved_reason"], "unseen_route")
+            else:
+                self.assertEqual(row["status"], "no_lookahead")
 
     def test_freeze_roundtrip_and_no_refit(self):
         """A serialized frozen bank validates unchanged in a separate load."""
@@ -678,13 +908,22 @@ def p(s, t, u, c):
         self.assertTrue(all(e["status"] == "rejected" for e in result["explanations"]))
         self.assertTrue(all(e["counterexamples"] for e in result["explanations"]))
         self.assertAlmostEqual(result["evidence_coverage"]["unresolved_mass"], 1)
+        self.assertEqual(
+            list(result["evidence_coverage"]["unresolved_by_reason"]), ["rejected"]
+        )
 
     def test_enumeration_limit_is_reported_as_unresolved_not_absence(self):
         """Budget exhaustion cannot silently become evidence of no planning."""
-        bank = discover(self.programs["two_step"], self.training, Limits(locations=1))
+        bank = discover(self.programs["two_step"], self.training, Limits(steps=1))
         self.assertTrue(any(a["truncated"] for a in bank.audit["routes"].values()))
+        self.assertFalse(bank.explanations)
         result = validate(self.programs["two_step"], bank, self.fresh)
-        self.assertIsNone(result["planningness"])
+        self.assertEqual(
+            list(result["evidence_coverage"]["unresolved_by_reason"]), ["budget"]
+        )
+        # It still looks ahead at depth 2, which the behavioral bound shows.
+        self.assertEqual(result["planningness"]["interval"], [2.0, 3.0])
+        self.assertIsNone(result["planningness"]["verified"])
         with self.assertRaises(ValueError):
             Limits(intervention_cases=0)
 

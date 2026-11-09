@@ -19,10 +19,19 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, replace
-from math import isfinite
+from math import isfinite, log2
+from random import Random
 
 from .instrument import Patch, Selector
-from .task import MODELS, Model, action_values, choose
+from .task import (
+    DEPTHS,
+    MODELS,
+    Model,
+    UnknownTransition,
+    action_values,
+    choose,
+    random_transitions,
+)
 
 RUN_ERRORS = (KeyError, IndexError, TypeError, ValueError, RuntimeError)
 _MISSING = object()
@@ -41,6 +50,7 @@ class Limits:
     candidates: int = 128  # complete mappings checked for a decision effect
     steps: int = 100_000  # partial assignments explored while assembling
     intervention_cases: int = 2
+    tables: int = 64  # own transition tables inferred per route and depth
 
     def __post_init__(self):
         if any(type(v) is not int or v < 1 for v in asdict(self).values()):
@@ -51,9 +61,10 @@ class Limits:
 class Explanation:
     """A frozen computation and selection-only alignment for one route.
 
-    ``horizon``, ``path_value`` and ``pruning`` name the model (see
-    ``task.Model``). ``mapping`` names one recorded location per model coordinate,
-    or ``None`` for a node the model does not expand on this route.
+    ``horizon``, ``path_value``, ``pruning`` and ``table`` name the model (see
+    ``task.Model``); ``table`` is the program's own inferred transition table, or
+    None for the environment's. ``mapping`` names one recorded location per model
+    coordinate, or ``None`` for a node the model does not expand on this route.
     ``interchangeable`` lists ``(role, coordinate, locations)``: other locations
     that passed the same tests when swapped in for that single coordinate. They are
     copies of the same quantity read at different moments, not different
@@ -66,11 +77,12 @@ class Explanation:
     interchangeable: tuple = ()
     path_value: str = "leaf"
     pruning: str = "none"
+    table: tuple | None = None
 
     @property
     def model(self):
         """The computation this explanation claims the program performs."""
-        return Model(self.horizon, self.path_value, self.pruning)
+        return Model(self.horizon, self.path_value, self.pruning, self.table)
 
     @property
     def identifier(self):
@@ -82,6 +94,8 @@ class Explanation:
         fields = asdict(self)
         if fields["pruning"] == "none":
             del fields["pruning"]
+        if fields["table"] is None:
+            del fields["table"]
         payload = json.dumps(fields, sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
@@ -271,16 +285,333 @@ def switch_point(case, model, role, index):
     return None
 
 
+def predictable(case, model, role, index, value):
+    """Whether the model can predict this patch (its own table may lack a row)."""
+    try:
+        predict_patch(case, model, role, index, value)
+    except UnknownTransition:
+        return False
+    return True
+
+
+def covers(model, case):
+    """Whether the model can predict this input's search at all."""
+    try:
+        model.rollout(case.state, case.transitions, case.utilities)
+    except UnknownTransition:
+        return False
+    return True
+
+
+def infer_tables(runs, depth, limits):
+    """Fixed transition tables that could be the program's own model.
+
+    Candidate states are recorded integers 0-5 present in every run of the route,
+    taken as value series across runs, so copies of one value are one candidate.
+    Constants (literals, loop counters) and re-reads of the parent state are not
+    successors: a candidate must take two values across inputs and differ from its
+    parent on at least one. Most varied candidates are tried first. A
+    first state must be a fixed function of the start state, a deeper state a fixed
+    function of its parent's value, and all of them together one table: the same
+    (state, action) always leads to the same state, whatever the input's
+    environment says. A node with no fitting candidate is left out with its subtree
+    (the program may not expand it). Tables that agree with every run's environment
+    are dropped: they are indistinguishable from reading the environment, which the
+    environment models already test. Every entry must be seen on at least two
+    inputs, so a route needs each of its start states twice; on fewer inputs almost
+    anything looks like a fixed function. Whether the program actually searches
+    with a table is decided afterwards by the usual checks.
+
+    Returns distinct tables (six rows of two successors, None where unobserved),
+    whether a budget stopped the enumeration, and why nothing was tried, if so.
+    """
+    values = [value_table(trace) for _, trace in runs]
+    series = sorted(
+        {
+            tuple(table[selector] for table in values)
+            for selector in values[0]
+            if all(
+                type(table.get(selector)) is int and 0 <= table[selector] < 6
+                for table in values
+            )
+        },
+        key=lambda candidate: (-len(set(candidate)), candidate),
+    )
+    series = [candidate for candidate in series if len(set(candidate)) > 1]
+    starts = tuple(case.state for case, _ in runs)
+    if min(Counter(starts).values()) < 2:
+        return [], False, "a start state of this route has only one input"
+    environments = [case.transitions for case, _ in runs]
+    nodes = [(level, i) for level in range(1, depth + 1) for i in range(2**level)]
+    found = {}
+    steps = 0
+
+    def extend(entries, parent, action, children):
+        """The table plus these observations, or None if they contradict it.
+
+        Entries map (state, action) to (successor, inputs where it was seen).
+        """
+        added = dict(entries)
+        for run, (start, child) in enumerate(zip(parent, children)):
+            seen, inputs = added.get((start, action), (child, frozenset()))
+            if seen != child:
+                return None
+            added[(start, action)] = (child, inputs | {run})
+        return added
+
+    def visit(position, chosen, entries, differs):
+        nonlocal steps
+        if len(found) >= limits.tables or steps >= limits.steps:
+            return
+        if position == len(nodes):
+            if differs and all(len(inputs) > 1 for _, inputs in entries.values()):
+                table = tuple(
+                    tuple(entries.get((s, a), (None,))[0] for a in (0, 1))
+                    for s in range(6)
+                )
+                found.setdefault(table, None)
+            return
+        level, i = nodes[position]
+        parent = starts if level == 1 else chosen.get((level - 1, i >> 1))
+        if parent is None:  # Its parent is not expanded, so neither is this node.
+            visit(position + 1, chosen, entries, differs)
+            return
+        fitting = []
+        for children in series:
+            steps += 1
+            if children == parent:
+                continue  # Re-reading the parent is not a successor.
+            added = extend(entries, parent, i & 1, children)
+            if added is not None:
+                fitting.append((children, added))
+        if not fitting:
+            visit(position + 1, chosen, entries, differs)
+        for children, added in fitting:
+            # Evidence of an own model: a successor the environment does not have.
+            new = differs or any(
+                env[start][i & 1] != child
+                for env, start, child in zip(environments, parent, children)
+            )
+            visit(position + 1, {**chosen, (level, i): children}, added, new)
+
+    visit(0, {}, {}, False)
+    truncated = len(found) >= limits.tables or steps >= limits.steps
+    return list(found), truncated, None
+
+
+# Random environments tried after the targeted changes in the no-lookahead test.
+RANDOM_FUTURES = 16
+
+
+def future_probes(case):
+    """Inputs that differ from ``case`` only in its future.
+
+    The current state, its own utility and the cached actions stay as they are.
+    What changes is where actions lead and how good the other states are: each
+    other state's utility pushed far up and far down, each transition redirected to
+    every other state, then random tables and utilities. Yields (change, input).
+    """
+    state, utilities = case.state, case.utilities
+    for x in range(6):
+        if x == state:
+            continue
+        for value in (max(utilities) + 100, min(utilities) - 100):
+            changed = list(utilities)
+            changed[x] = value
+            yield f"u[{x}] → {value}", replace(case, utilities=tuple(changed))
+    for x in range(6):
+        for a in (0, 1):
+            for y in range(6):
+                if y == case.transitions[x][a]:
+                    continue
+                rows = [list(row) for row in case.transitions]
+                rows[x][a] = y
+                yield (
+                    f"t[{x}][{a}]: {case.transitions[x][a]} → {y}",
+                    replace(case, transitions=tuple(tuple(r) for r in rows)),
+                )
+    rng = Random(case.label)
+    for i in range(RANDOM_FUTURES):
+        values = [v + 0.25 for v in rng.sample(range(-30, 31), 6)]
+        values[state] = utilities[state]
+        yield f"random future {i + 1}", replace(
+            case, transitions=random_transitions(rng), utilities=tuple(values)
+        )
+
+
+def lookahead_test(program, case, output):
+    """Whether changing only the future of ``case`` can change the program's action.
+
+    If no change does, the action depends only on the current state, its utility
+    and stored control data: the input does not look ahead. ``witness`` is the
+    first change that moved the action.
+    """
+    tried = 0
+    for change, probe in future_probes(case):
+        tried += 1
+        try:
+            changed = program.output(probe)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # The program read the changed future, so its behavior depends on it.
+            changed = f"error: {type(exc).__name__}"
+        if changed != output:
+            witness = {"change": change, "action": changed}
+            return {"depends": True, "probes": tried, "witness": witness}
+    return {"depends": False, "probes": tried, "witness": None}
+
+
+# Tree-shaped futures tried for the behavioral lower bound on compared paths.
+TREE_FUTURES = 64
+
+
+def tree_future(case, rng):
+    """A random future in which the first two moves of every path are its own.
+
+    The start state has no incoming transitions, and each first successor is
+    entered only from it; every other transition stays among the remaining three
+    states. So (start, a) is used only by paths starting with action a, and
+    (successor of a, b) only by paths starting with a, b. Returns the input, the
+    two first successors and the remaining states.
+    """
+    others = [x for x in range(6) if x != case.state]
+    rng.shuffle(others)
+    first, rest = others[:2], others[2:]
+    rows = [()] * 6
+    rows[case.state] = tuple(first)
+    for x in first + rest:
+        rows[x] = tuple(rng.sample(rest, 2))
+    values = [v + 0.25 for v in rng.sample(range(-30, 31), 6)]
+    values[case.state] = case.utilities[case.state]
+    future = replace(case, transitions=tuple(rows), utilities=tuple(values))
+    return future, first, rest
+
+
+def redirected(case, state, action, target):
+    """``case`` with one transition sent elsewhere."""
+    rows = [list(row) for row in case.transitions]
+    rows[state][action] = target
+    return replace(case, transitions=tuple(tuple(row) for row in rows))
+
+
+def paths_lower_bound(program, case, route):
+    """The fewest complete paths the program's decision on ``case`` compares.
+
+    Evidence comes only from tree-shaped futures in which the program takes the
+    same route as on ``case``, so it computes with the same structure. If sending
+    (start, a) elsewhere moves the action, the decision depends on a path starting
+    with a; if sending (successor of a, b) elsewhere moves it, on a path starting
+    with a, b. Different starts are different paths, so the bound is at most 4.
+    """
+    rng = Random(f"{case.label}/tree")
+    found = set()
+    matched = 0
+
+    def moves(probe, output):
+        try:
+            return program.output(probe) != output
+        except Exception:  # pylint: disable=broad-exception-caught
+            return True  # It read the changed transition.
+
+    for _ in range(TREE_FUTURES):
+        future, first, rest = tree_future(case, rng)
+        try:
+            trace = program.run(future)
+        except Exception:  # pylint: disable=broad-exception-caught
+            continue
+        if trace.route != route:
+            continue
+        matched += 1
+        for a in (0, 1):
+            for b in (0, 1):
+                current = future.transitions[first[a]][b]
+                if (a, b) not in found and any(
+                    moves(redirected(future, first[a], b, y), trace.output)
+                    for y in rest
+                    if y != current
+                ):
+                    found.add((a, b))
+            if not any(p[0] == a for p in found) and any(
+                moves(redirected(future, case.state, a, y), trace.output) for y in rest
+            ):
+                found.add((a,))
+        if len([p for p in found if len(p) == 2]) == 4:
+            break
+    paths = sum(
+        max(sum((a, b) in found for b in (0, 1)), int((a,) in found)) for a in (0, 1)
+    )
+    return {
+        "paths": paths,
+        "effective_depth": round(log2(paths), 4) if paths else 0.0,
+        "prefixes": [list(p) for p in sorted(found)],
+        "matching_futures": matched,
+        "tried_futures": TREE_FUTURES,
+    }
+
+
+def environment_agreement(model, cases):
+    """How often an own table agrees with each input's environment.
+
+    Counts the transitions each search actually takes, so a pair used twice counts
+    twice. ``example`` is the first disagreement.
+    """
+    agreeing = total = 0
+    example = None
+    for case in cases:
+        roles = model.rollout(case.state, case.transitions, case.utilities)
+        for level in range(1, model.depth + 1):
+            for i, child in enumerate(roles[f"states_{level}"]):
+                if child is None:
+                    continue
+                parent = (
+                    case.state if level == 1 else roles[f"states_{level - 1}"][i >> 1]
+                )
+                actual = case.transitions[parent][i & 1]
+                total += 1
+                if actual == child:
+                    agreeing += 1
+                elif example is None:
+                    example = {
+                        "case": case.label,
+                        "state": parent,
+                        "action": i & 1,
+                        "believed": child,
+                        "environment": actual,
+                    }
+    return {"agreeing": agreeing, "total": total, "example": example}
+
+
+def untestable_patches(explanation, case, trace):
+    """State patches the model cannot predict, because its table lacks a row."""
+    count = 0
+    for role, selectors in explanation.mapping:
+        if not role.startswith("states_"):
+            continue
+        for i, selector in enumerate(selectors):
+            if selector is None:
+                continue
+            current = int(selector.read(trace))
+            count += sum(
+                not predictable(case, explanation.model, role, i, s)
+                for s in range(6)
+                if s != current
+            )
+    return count
+
+
 def replacements(case, model, role, index, current):
     """Labelled substitute values for one model coordinate.
 
-    States: every other state, so a decision-changing state is tried whenever one
-    exists. Values: far below and far above every utility and every number the
-    model compares, plus just below, exactly at, and just above the point where the
-    model's decision flips.
+    States: every other state the model can predict, so a decision-changing state
+    is tried whenever one exists. Values: far below and far above every utility and
+    every number the model compares, plus just below, exactly at, and just above
+    the point where the model's decision flips.
     """
     if role.startswith("states_"):
-        return tuple(("other state", s) for s in range(6) if s != int(current))
+        return tuple(
+            ("other state", s)
+            for s in range(6)
+            if s != int(current) and predictable(case, model, role, index, s)
+        )
     numbers = list(case.utilities) + compared_numbers(case, model)
     values = [("low", min(numbers) - 100), ("high", max(numbers) + 100)]
     found = switch_point(case, model, role, index)
@@ -417,12 +748,15 @@ class ModelSearch:
         self.runs = runs
         self.limits = limits
         self.cases = runs[: limits.intervention_cases]
-        self.expected = [
-            model.rollout(c.state, c.transitions, c.utilities) for c, _ in runs
-        ]
+        try:
+            self.expected = [
+                model.rollout(c.state, c.transitions, c.utilities) for c, _ in runs
+            ]
+        except UnknownTransition:
+            self.expected = None  # An own table that cannot predict every run.
         # Only nodes the model expands are coordinates; the run() checks that the
         # model expands the same nodes on every input of the route.
-        self.coordinates = expanded(model, self.expected[0])
+        self.coordinates = expanded(model, self.expected[0]) if self.expected else []
         present = set(self.coordinates)
         self.constraints = defaultdict(list)
         for reason, earlier, later, strict in order_constraints(model):
@@ -439,6 +773,7 @@ class ModelSearch:
             "horizon": model.depth,
             "path_value": model.path_value,
             "pruning": model.pruning,
+            "table": None if model.table is None else [list(r) for r in model.table],
             "result": None,
             "truncated": False,
             "coordinates": [],
@@ -454,6 +789,8 @@ class ModelSearch:
 
     def run(self):
         """Return a verified explanation, or None; ``audit`` records why."""
+        if self.expected is None:
+            return self._finish("table_incomplete")
         for (case, trace), roles in zip(self.runs, self.expected):
             if trace.output != choose(action_values(roles)):
                 return self._finish(
@@ -750,6 +1087,7 @@ class ModelSearch:
             tuple(interchangeable),
             self.model.path_value,
             self.model.pruning,
+            self.model.table,
         )
 
 
@@ -768,11 +1106,40 @@ def discover(program, inputs, limits=Limits()):
             ModelSearch(program, route, model, route_runs, limits) for model in MODELS
         ]
         accepted.extend(e for e in (s.run() for s in searches) if e is not None)
+        inference = []
+        for depth in DEPTHS:
+            # The same searches with the program's own transitions, one per table.
+            tables, truncated, note = infer_tables(route_runs, depth, limits)
+            own = [
+                ModelSearch(
+                    program, route, replace(model, table=table), route_runs, limits
+                )
+                for table in tables
+                for model in MODELS
+                if model.depth == depth
+            ]
+            accepted.extend(e for e in (s.run() for s in own) if e is not None)
+            early = ("ordinary_output", "table_incomplete")
+            inference.append(
+                {
+                    "horizon": depth,
+                    "tables": len(tables),
+                    "truncated": truncated,
+                    "note": note,
+                    "rejected_before_matching": sum(
+                        s.audit["result"] in early for s in own
+                    ),
+                }
+            )
+            # Keep audits of own-table searches that got past the cheap checks.
+            searches += [s for s in own if s.audit["result"] not in early]
         audit["routes"][route] = {
             "branches": route_runs[0][1].branches,
             "cases": [c.label for c, _ in route_runs],
-            "truncated": any(s.audit["truncated"] for s in searches),
+            "truncated": any(s.audit["truncated"] for s in searches)
+            or any(i["truncated"] for i in inference),
             "models": [s.audit for s in searches],
+            "table_inference": inference,
         }
     return FrozenBank(program.digest, tuple(inputs), tuple(accepted), audit)
 
@@ -838,7 +1205,9 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
     supported = defaultdict(list)
     has_supported_swap = {}
     for explanation in bank.explanations:
-        matching = [(c, t) for c, t in runs if t.route == explanation.route]
+        on_route = [(c, t) for c, t in runs if t.route == explanation.route]
+        # An own table may lack a row an input needs: such inputs are not covered.
+        matching = [(c, t) for c, t in on_route if covers(explanation.model, c)]
         status, records, failures = _full_test(
             program, explanation, matching, intervention_cases
         )
@@ -866,15 +1235,61 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                 "id": explanation.identifier,
                 "status": status,
                 "ordinary_cases": len(matching),
+                "uncovered_cases": len(on_route) - len(matching),
+                "environment_agreement": (
+                    None
+                    if explanation.table is None
+                    else environment_agreement(
+                        explanation.model, [c for c, _ in matching]
+                    )
+                ),
+                "untestable_patches": sum(
+                    untestable_patches(explanation, c, t)
+                    for c, t in matching[:intervention_cases]
+                ),
                 "interventions": records,
                 "informative_interventions": sum(r["informative"] for r in records),
                 "counterexamples": failures,
                 "interchangeable": swaps,
             }
         )
+    # Routes without a supported explanation: test every frozen explanation that
+    # was not falsified on its own route. Nothing is fitted to the fresh inputs;
+    # the same full test decides, so a transfer is held-out evidence.
+    transfers = []
+    usable = [
+        e for e, v in zip(bank.explanations, validations) if v["status"] != "rejected"
+    ]
+    by_route = defaultdict(list)
+    for case, trace in runs:
+        by_route[trace.route].append((case, trace))
+    for route, route_runs in by_route.items():
+        if supported[route]:
+            continue
+        for explanation in usable:
+            if explanation.route == route:
+                continue
+            matching = [(c, t) for c, t in route_runs if covers(explanation.model, c)]
+            status, _, failures = _full_test(
+                program, explanation, matching, intervention_cases
+            )
+            transfers.append(
+                {
+                    "route": route,
+                    "id": explanation.identifier,
+                    "from_route": explanation.route,
+                    "status": status,
+                    "cases": len(matching),
+                    "counterexample": failures[0] if failures else None,
+                }
+            )
+            if status == "supported":
+                supported[route].append(explanation)
+    reasons = UnresolvedReasons(program, bank, validations)
     population = []
     for case, trace in runs:
-        explanations = supported[trace.route]
+        explanations = [e for e in supported[trace.route] if covers(e.model, case)]
+        depths = sorted({effective_depth(e) for e in explanations})
         population.append(
             {
                 "case": case.label,
@@ -885,11 +1300,23 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                 "output": trace.output,
                 "original_checkpoints": len(trace.events),
                 "status": "supported_planning" if explanations else "unresolved",
+                "unresolved_reason": (
+                    None if explanations else reasons.reason(trace.route, case)
+                ),
                 "supported_explanations": [e.identifier for e in explanations],
+                "transferred_from": sorted(
+                    {e.route for e in explanations if e.route != trace.route}
+                ),
                 "features": {
                     "supported_horizons": sorted({e.horizon for e in explanations}),
                     "path_values": sorted({e.path_value for e in explanations}),
                     "pruning": sorted({e.pruning for e in explanations}),
+                    "transitions": sorted(
+                        {
+                            "environment" if e.table is None else "own"
+                            for e in explanations
+                        }
+                    ),
                     # Paths this route's search evaluates; fewer when it prunes.
                     "evaluated_alternatives": sorted(
                         {
@@ -897,6 +1324,7 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                             for e in explanations
                         }
                     ),
+                    "effective_depth": depths,
                     "root_actions": [2] if explanations else [],
                     "amount_if_unresolved": None,
                 },
@@ -904,6 +1332,32 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
                 or any(has_supported_swap[e.identifier] for e in explanations),
             }
         )
+    for row, (case, trace) in zip(population, runs):
+        row["lookahead"] = lookahead_test(program, case, trace.output)
+        if row["status"] == "unresolved" and not row["lookahead"]["depends"]:
+            # Verified not to look ahead: its amount is known, and it is zero.
+            row["status"] = "no_lookahead"
+            row["unresolved_reason"] = None
+            row["features"]["effective_depth"] = [0.0]
+        bound = (
+            paths_lower_bound(program, case, trace.route)
+            if row["lookahead"]["depends"]
+            else {"paths": 0, "effective_depth": 0.0}
+        )
+        row["lookahead"]["lower_bound"] = bound
+        row["features"]["effective_depth_lower_bound"] = bound["effective_depth"]
+    # The bound comes from behavior alone, so it must never exceed a verified amount.
+    bound_violations = [
+        r["case"]
+        for r in population
+        if r["status"] == "supported_planning"
+        and r["features"]["effective_depth_lower_bound"]
+        > r["features"]["effective_depth"][0]
+    ]
+    unresolved = [r for r in population if r["status"] == "unresolved"]
+    by_reason = defaultdict(float)
+    for row in unresolved:
+        by_reason[row["unresolved_reason"]] += row["weight"]
     return {
         "frozen_digest": bank.digest,
         "state_distribution": weights,
@@ -912,15 +1366,106 @@ def validate(program, bank, inputs, state_weights=None, intervention_cases=2):
         ),
         "observation_checks": len(runs),
         "explanations": validations,
+        "transfers": transfers,
         "ordinary_population": population,
         "evidence_coverage": {
             "supported_mass": sum(
                 r["weight"] for r in population if r["status"] == "supported_planning"
             ),
-            "unresolved_mass": sum(
-                r["weight"] for r in population if r["status"] == "unresolved"
+            "no_lookahead_mass": sum(
+                r["weight"] for r in population if r["status"] == "no_lookahead"
             ),
-            "meaning": "Coverage by tested explanations; NOT a planningness score",
+            "unresolved_mass": sum(r["weight"] for r in unresolved),
+            "unresolved_by_reason": dict(sorted(by_reason.items())),
+            "meaning": (
+                "Supported: a lower bound on the share of the state distribution with "
+                "a verified planning explanation. No lookahead: the action never "
+                "changed when only the future changed. Unresolved: the action depends "
+                "on the future, but no model was verified."
+            ),
         },
-        "planningness": None,
+        "planningness": planningness(population),
+        "lower_bound_violations": bound_violations,
     }
+
+
+def effective_depth(explanation):
+    """log2 of the complete paths the explanation's search evaluates on its route.
+
+    A full depth-d search over two actions scores d; pruning lowers it.
+    """
+    paths = sum(s is not None for s in explanation.selectors()["evaluations"])
+    return round(log2(paths), 4)
+
+
+# The largest effective depth any model in the family can have.
+MAX_EFFECTIVE_DEPTH = max(DEPTHS)
+
+
+def planningness(population):
+    """Weighted effective lookahead depth, as an interval over what is unknown.
+
+    Inputs with a verified amount contribute it: explained planning its effective
+    depth (the smallest and largest, if several explanations differ), no lookahead
+    zero. Unresolved inputs look ahead by an unknown amount: they count their
+    behavioral lower bound (log2 of the paths their decision provably compares) at
+    the lower end and the family's maximum at the upper end. ``verified`` is the
+    average over inputs with a verified amount; ``verified_mass`` is their share.
+    """
+    known = [
+        r for r in population if r["status"] in ("supported_planning", "no_lookahead")
+    ]
+    mass = sum(r["weight"] for r in known)
+    low = sum(r["weight"] * r["features"]["effective_depth"][0] for r in known)
+    low += sum(
+        r["weight"] * r["features"]["effective_depth_lower_bound"]
+        for r in population
+        if r["status"] == "unresolved"
+    )
+    high = sum(r["weight"] * r["features"]["effective_depth"][-1] for r in known)
+    unknown = sum(r["weight"] for r in population) - mass
+    return {
+        "unit": "effective lookahead depth: log2 of complete paths evaluated",
+        "interval": [
+            round(float(low), 4),
+            round(float(high + unknown * MAX_EFFECTIVE_DEPTH), 4),
+        ],
+        "verified": (
+            None if not known else [round(low / mass, 4), round(high / mass, 4)]
+        ),
+        "verified_mass": round(mass, 4),
+        "maximum_in_family": MAX_EFFECTIVE_DEPTH,
+    }
+
+
+class UnresolvedReasons:
+    """Why an input has no supported explanation, from the frozen bank alone.
+
+    The discovery inputs are rerun (never refitted) to learn which routes
+    discovery saw; the bank's audit, when present, tells whether a search there
+    was truncated.
+    """
+
+    def __init__(self, program, bank, validations):
+        self.seen = {program.run(c).route for c in bank.discovery_inputs}
+        self.truncated = {
+            route
+            for route, audit in bank.audit.get("routes", {}).items()
+            if audit["truncated"]
+        }
+        self.status = defaultdict(list)
+        for explanation, validation in zip(bank.explanations, validations):
+            self.status[explanation.route].append((explanation, validation["status"]))
+
+    def reason(self, route, case):
+        """One of: unseen_route, not_covered, rejected, budget, no_model_fits."""
+        if route not in self.seen:
+            return "unseen_route"
+        own = self.status[route]
+        if any(s == "supported" and not covers(e.model, case) for e, s in own):
+            return "not_covered"
+        if own and all(s == "rejected" for _, s in own):
+            return "rejected"
+        if not own and route in self.truncated:
+            return "budget"
+        return "no_model_fits"

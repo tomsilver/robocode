@@ -8,6 +8,11 @@
 # - A new table for every input (after fix 1): UNRESOLVED. Wherever the environment's
 #   table differs from the copy, its decisions differ from the model's, so both depths
 #   are rejected before matching. (It still plans, with its own model: fix 7.)
+# Prediction for fix 7 (an inferred fixed table, before running): SUPPORTED (depth 2,
+# leaf) with its OWN transition table, inferred exactly as the literal above. One
+# route covers all six start states, so every row is known and every state patch
+# is testable. Agreement with the environment about 1 in 6 (state, action) pairs,
+# since environment tables are random.
 def policy(s, t, u, cache):
     table = ((1, 2), (3, 4), (4, 5), (0, 5), (1, 3), (2, 0))
     scores = []

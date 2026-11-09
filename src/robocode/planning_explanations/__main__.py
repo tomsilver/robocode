@@ -31,6 +31,13 @@ def main():
     parser.add_argument("--validation-seed", type=int, default=29)
     parser.add_argument("--max-candidates", type=int, default=128)
     parser.add_argument(
+        "--inputs-per-state",
+        type=int,
+        default=2,
+        help="Fresh contexts per start state in each split; more inputs let "
+        "discovery see more routes (default 2)",
+    )
+    parser.add_argument(
         "--state-weights",
         nargs=6,
         type=float,
@@ -57,7 +64,11 @@ def main():
     for name, source in sources.items():
         try:
             program = Program(source)
-            bank = discover(program, cases(args.discovery_seed, "discovery"), limits)
+            bank = discover(
+                program,
+                cases(args.discovery_seed, "discovery", args.inputs_per_state),
+                limits,
+            )
         except UnsupportedProgram as exc:
             # Outside the supported Python subset: a recorded outcome, not a crash.
             summary.append({"program": name, "refused": str(exc), "report": None})
@@ -71,10 +82,12 @@ def main():
         directory = args.output_dir / name
         # This file is written BEFORE fresh inputs are generated or evaluated.
         write_json(directory / "frozen.json", frozen_payload(bank))
-        fresh = cases(args.validation_seed, "validation")
+        fresh = cases(args.validation_seed, "validation", args.inputs_per_state)
         validation = validate(program, bank, fresh, weights)
         save_report(directory, name, program, bank, fresh, validation)
         coverage = validation["evidence_coverage"]
+        low, high = validation["planningness"]["interval"]
+        maximum = validation["planningness"]["maximum_in_family"]
         supported = sum(e["status"] == "supported" for e in validation["explanations"])
         summary.append(
             {
@@ -82,6 +95,8 @@ def main():
                 "frozen_explanations": len(bank.explanations),
                 "validated_explanations": supported,
                 "evidence_coverage": coverage,
+                "planningness": [low, high],
+                "planningness_max": maximum,
                 "search_truncated": any(
                     r["truncated"] for r in bank.audit["routes"].values()
                 ),
@@ -90,35 +105,45 @@ def main():
         )
         print(
             f"{name:20} supported explanations={supported:2}  "
-            f"ordinary supported mass={coverage['supported_mass']:.3f}  "
-            f"unresolved={coverage['unresolved_mass']:.3f}"
+            f"supported mass={coverage['supported_mass']:.3f}  "
+            f"unresolved={coverage['unresolved_mass']:.3f}  "
+            f"no lookahead={coverage['no_lookahead_mass']:.3f}  "
+            f"planningness=[{low:.2f}, {high:.2f}] (max {maximum})"
         )
     write_json(args.output_dir / "summary.json", summary)
     lines = [
         "# Planning explanation prototype",
         "",
-        "Coverage below is evidence coverage, not a planningness score. "
-        "Unresolved mass has unknown planning amount.",
+        "Supported mass is a lower bound on planning coverage; no lookahead means the "
+        "action ignored every change to the future; unresolved inputs look ahead but "
+        "have no verified model. Planningness is an interval of effective lookahead "
+        "depth whose upper end is at most the family max.",
         "",
-        "| Program | Supported explanations | Supported mass | "
-        "Unresolved mass | Truncated | Note |",
-        "| --- | ---: | ---: | ---: | --- | --- |",
+        "| Program | Supported explanations | Supported mass | No lookahead | "
+        "Unresolved mass | Planningness (upper end at most the family max) | "
+        "Truncated | Note |",
+        "| --- | ---: | ---: | ---: | ---: | --- | --- | --- |",
     ]
     for row in summary:
         name = row["program"]
         if "refused" in row:
-            lines.append(f"| {name} | — | — | — | — | Refused: {row['refused']} |")
+            lines.append(
+                f"| {name} | — | — | — | — | — | — | Refused: {row['refused']} |"
+            )
             continue
         if "failed" in row:
             lines.append(
-                f"| {name} | — | — | — | — | Failed on an ordinary input: "
+                f"| {name} | — | — | — | — | — | — | Failed on an ordinary input: "
                 f"{row['failed']} |"
             )
             continue
         coverage = row["evidence_coverage"]
         lines.append(
             f"| [{name}]({name}/report.md) | {row['validated_explanations']} | "
-            f"{coverage['supported_mass']:.3f} | {coverage['unresolved_mass']:.3f} | "
+            f"{coverage['supported_mass']:.3f} | {coverage['no_lookahead_mass']:.3f} | "
+            f"{coverage['unresolved_mass']:.3f} | "
+            f"[{row['planningness'][0]:.2f}, {row['planningness'][1]:.2f}] "
+            f"(max {row['planningness_max']}) | "
             f"{row['search_truncated']} | |"
         )
     (args.output_dir / "README.md").write_text(

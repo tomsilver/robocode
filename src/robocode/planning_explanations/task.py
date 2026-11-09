@@ -20,6 +20,10 @@ PATH_VALUES = ("leaf", "sum")
 PRUNING = ("none", "cutoff")
 
 
+class UnknownTransition(LookupError):
+    """A model's own transition table has no entry for this (state, action)."""
+
+
 def choose(scores):
     """Two actions, maximizing utility, with ties going to action zero."""
     return int(scores[1] > scores[0])
@@ -52,6 +56,10 @@ class Model:
     depth: int
     path_value: str = "leaf"
     pruning: str = "none"
+    # None: successors come from the environment's table given as input. Otherwise
+    # the program's own fixed table, inferred from its traces: six rows of two
+    # successor states, None where a (state, action) pair was never observed.
+    table: tuple | None = None
 
     def __post_init__(self):
         if (
@@ -73,7 +81,12 @@ class Model:
         """A short human-readable name."""
         value = "leaf utility" if self.path_value == "leaf" else "sum of utilities"
         cutoff = ", with cutoff" if self.pruning == "cutoff" else ""
-        return f"depth {self.depth}, {value}{cutoff}"
+        own = ", own transition table" if self.table is not None else ""
+        return f"depth {self.depth}, {value}{cutoff}{own}"
+
+    def structure(self):
+        """The same search, with the environment's transitions."""
+        return Model(self.depth, self.path_value, self.pruning)
 
     @property
     def roles(self):
@@ -90,8 +103,12 @@ class Model:
         state is generated when the search first reaches it. A patched value
         replaces the computed one as soon as it exists, and everything computed
         afterwards, including whether to cut, uses the replacement. Nodes the
-        search does not expand stay ``None``.
+        search does not expand stay ``None``. A model with its own table ignores
+        ``transitions`` and raises ``UnknownTransition`` where its table has no
+        entry: it cannot predict that search.
         """
+        if self.table is not None:
+            transitions = self.table
         depth = self.depth
         roles = {f"states_{k}": [None] * 2**k for k in range(1, depth + 1)}
         roles["evaluations"] = [None] * 2**depth
@@ -118,7 +135,10 @@ class Model:
                             if level == 1
                             else roles[f"states_{level - 1}"][node >> 1]
                         )
-                        record(f"states_{level}", node, transitions[parent][node & 1])
+                        successor = transitions[parent][node & 1]
+                        if successor is None:
+                            raise UnknownTransition((parent, node & 1))
+                        record(f"states_{level}", node, successor)
                     path.append(states[node])
                 if self.path_value == "leaf":
                     value = utilities[path[-1]]
@@ -191,8 +211,8 @@ def random_transitions(rng):
     return tuple(tuple(rng.sample(range(6), 2)) for _ in range(6))
 
 
-def cases(seed, prefix):
-    """Two fresh contexts for every initial state, reproducibly.
+def cases(seed, prefix, per_state=2):
+    """``per_state`` fresh contexts for every initial state, reproducibly.
 
     Each context draws its own utilities AND its own transition table. With one fixed
     table, the states a program visits depend only on the start state, and reading the
@@ -200,7 +220,7 @@ def cases(seed, prefix):
     """
     rng = Random(seed)
     result = []
-    for repetition in range(2):
+    for repetition in range(per_state):
         for state in range(6):
             # Distinct nonintegral utilities help separate state IDs from values.
             utilities = [v + 0.25 for v in rng.sample(range(-30, 31), 6)]

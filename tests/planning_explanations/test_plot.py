@@ -32,7 +32,7 @@ class PlotTests(unittest.TestCase):
         cls.root = Path(temporary.name)
         folder = Path(stress.__file__).parent
         sources = {"conditional": CONDITIONAL, "one_step": ONE_STEP}
-        for name in ("depth_three", "sum_rewards", "pruning"):
+        for name in ("depth_three", "sum_rewards", "pruning", "own_table"):
             sources[name] = (folder / f"{name}.py").read_text(encoding="utf-8")
         for name, source in sources.items():
             program = Program(source)
@@ -104,7 +104,7 @@ class PlotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             message = self.render("conditional", "validation-0-0", output)
-            self.assertIn("unresolved", message)
+            self.assertIn("no supported tree", message)
             self.assertFalse(list(output.iterdir()))
             message = self.render("conditional", "validation-1-1", output)
             self.assertIn("No paired interventions", message)
@@ -191,3 +191,25 @@ class PlotTests(unittest.TestCase):
         (skipped,) = [b for b in boxes if "not expanded" in b]
         self.assertEqual(skipped, "not expanded")
         self.assertIn("with cutoff", " ".join(t.get_text() for t in figure.texts))
+
+    def test_own_table_model_is_named_in_the_tree(self):
+        """The subtitle says the search uses the program's own transition table."""
+        output = self.render("own_table", None, None, list=True)
+        self.assertIn("validation-0-0", output)
+        report = json.loads(
+            (self.root / "own_table" / "report.json").read_text(encoding="utf-8")
+        )
+        row = plot.pick_case(report, None, None)
+        explanation = report["frozen_explanations"][0]
+        traces = json.loads(
+            (self.root / "own_table" / "ordinary-traces.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        trace = next(t for t in traces if t["case"] == row["case"])
+        figure = plot.ordinary_figure(
+            report, row, explanation, plot.read_roles(explanation, trace)
+        )
+        self.assertIn(
+            "own transition table", " ".join(t.get_text() for t in figure.texts)
+        )

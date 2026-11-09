@@ -512,6 +512,12 @@ class Program:
             output, recorder.events, recorder.branches, args, recorder.patch_count
         )
 
+    def output(self, case):
+        """The plain program's action on ``case``, with no recording or patches."""
+        namespace = self._namespace()
+        exec(self.plain_code, namespace)  # pylint: disable=exec-used
+        return namespace[self.name](*case.args())
+
     def check_observation(self, case):
         """Check output AND input mutation against an uninstrumented execution."""
         try:
