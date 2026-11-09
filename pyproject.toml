@@ -112,6 +112,10 @@ disallow_untyped_calls = true
 warn_unreachable = true
 exclude = ["venv/*", ".venv/*", "outputs/*", "third-party/*"]
 
+# egl-probe invokes CMake directly and requires the pre-4.0 policy support.
+[tool.uv.extra-build-dependencies]
+egl-probe = ["cmake>=3.5,<4"]
+
 [tool.uv.sources]
 kindergarden = { path = "third-party/kindergarden", editable = true }
 libero = { path = "third-party/LIBERO-PRO", editable = true }
