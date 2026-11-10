@@ -1,0 +1,570 @@
+"""Verify grid search explanations of loop runs, cached plans and plan use.
+
+Three separate evidence axes, none of which discovers or repairs anything:
+1. computation: every loop iteration of a run against the abstract engine,
+   plus sampled paired edits of the live frontier/costs;
+2. candidate read-out: a cached plan's waypoints follow a parent chain;
+3. local cache use: rotating it about the robot rotates the planar command.
+
+Neither (2) nor (3) attributes search to later actions. `policy_causality`
+checks that entire chain using the same search intervention across calls.
+"""
+
+# Exact built-in types are the representation contract.
+# pylint: disable=unidiomatic-typecheck
+
+import copy
+import hashlib
+import heapq
+import json
+import math
+import random
+from dataclasses import asdict, dataclass
+from typing import Any
+
+import numpy as np
+
+from .grid_engine import GridSearch, GridSpec, grid_features, is_cell
+from .policy_runner import (
+    CallRecord,
+    PolicyProgram,
+    RunRecord,
+    SearchEdit,
+    Session,
+    action_tuple,
+    plan_attributes,
+)
+from .selectors import parse, select
+
+ERRORS = (ValueError, KeyError, TypeError, IndexError, RuntimeError, AttributeError)
+KEEP_RECORDS = 4
+ROTATION_COSINE = 0.9
+WORLD_SHIFT = 0.05
+
+
+@dataclass(frozen=True)
+class GridMapping:
+    """Literal selections at one loop site; the model is a callable local's name."""
+
+    site: str
+    root: str
+    frontier: str
+    parents: str
+    costs: str
+    goal: str = ""
+    model: str = ""
+
+    def __post_init__(self):
+        names = (self.root, self.frontier, self.parents, self.costs)
+        if not all(names) or len(set(names)) != 4:
+            raise ValueError("Grid mappings select four distinct values")
+        for name in (*names, self.goal):
+            if name:
+                parse(name)
+        if self.model and not self.model.isidentifier():
+            raise ValueError("The model is a plain local callable")
+
+
+@dataclass(frozen=True)
+class GridExplanation:
+    """Ingredients plus a selection-only mapping, frozen as one identity."""
+
+    spec: GridSpec
+    mapping: GridMapping
+
+    def __post_init__(self):
+        if self.spec.needs_goal != bool(self.mapping.goal):
+            raise ValueError("A goal is mapped exactly when the ingredients use one")
+        if (self.spec.model == "own") != bool(self.mapping.model):
+            raise ValueError("The own model needs exactly one mapped predicate")
+
+    @property
+    def identifier(self) -> str:
+        """Stable identity of the entire frozen explanation."""
+        return hashlib.sha256(
+            json.dumps(asdict(self), sort_keys=True).encode()
+        ).hexdigest()[:16]
+
+
+def explanation_from_data(data: dict) -> GridExplanation:
+    """Load a declarative explanation, rechecking its restricted ingredients."""
+    return GridExplanation(GridSpec(**data["spec"]), GridMapping(**data["mapping"]))
+
+
+def bind(explanation: GridExplanation, values: dict, callables: dict) -> GridSearch:
+    """A run's inputs are read once, at its first loop checkpoint."""
+    mapping = explanation.mapping
+    goal = select(values, mapping.goal) if mapping.goal else None
+    free = callables[mapping.model] if mapping.model else None
+    return GridSearch(explanation.spec, select(values, mapping.root), goal, free)
+
+
+def decode(explanation: GridExplanation, values: dict) -> tuple:
+    """Current root, canonical frontier, parents and costs; nothing is computed."""
+    mapping, spec = explanation.mapping, explanation.spec
+    raw = select(values, mapping.frontier)
+    parents = select(values, mapping.parents)
+    costs = select(values, mapping.costs)
+    if type(raw) is not list or type(parents) is not dict or type(costs) is not dict:
+        raise ValueError("Expected a list frontier and dictionary parents/costs")
+    for entry in raw:
+        if spec.layout == "states":
+            if not is_cell(entry):
+                raise ValueError("A state frontier holds cells")
+        elif not (
+            type(entry) is tuple
+            and len(entry) == 2
+            and type(entry[0]) in (int, float)
+            and is_cell(entry[1])
+        ):
+            raise ValueError("A pair frontier holds (priority, cell) entries")
+    frontier = tuple(raw) if spec.ordered else tuple(sorted(raw))
+    return select(values, mapping.root), frontier, parents, costs
+
+
+def matches(explanation: GridExplanation, engine: GridSearch, values: dict) -> bool:
+    """Exact correspondence of root, frontier multiset/order, parents and costs."""
+    root, frontier, parents, costs = decode(explanation, values)
+    return (
+        len(parents) == len(engine.parents)
+        and len(frontier) == len(engine.frontier)
+        and root == engine.root
+        and parents == engine.parents
+        and costs == engine.costs
+        and frontier == engine.canonical_frontier()
+    )
+
+
+def difference(explanation: GridExplanation, engine: GridSearch, values) -> dict:
+    """A short, inspectable counterexample instead of two 2,000-entry tables."""
+    root, frontier, parents, costs = decode(explanation, values)
+    predicted = engine.canonical_frontier()
+
+    def few(items) -> list:
+        return [repr(item) for item in list(items)[:5]]
+
+    return {
+        "root": {"predicted": repr(engine.root), "observed": repr(root)},
+        "frontier_only_predicted": few(e for e in predicted if e not in frontier),
+        "frontier_only_observed": few(e for e in frontier if e not in predicted),
+        "parents_differ": few(
+            k
+            for k in set(parents) | set(engine.parents)
+            if parents.get(k, "-") != engine.parents.get(k, "-")
+        ),
+        "costs_differ": few(
+            k
+            for k in set(costs) | set(engine.costs)
+            if costs.get(k, "-") != engine.costs.get(k, "-")
+        ),
+        "sizes": {
+            "predicted_frontier": len(predicted),
+            "observed_frontier": len(frontier),
+            "predicted_parents": len(engine.parents),
+            "observed_parents": len(parents),
+        },
+    }
+
+
+def abstract_edit(engine: GridSearch, edit: SearchEdit) -> None:
+    """The abstract counterpart of a declared live edit."""
+    if engine.phase != "ready":
+        raise ValueError("Interventions require a live search configuration")
+    if edit.operation == "clear":
+        engine.frontier.clear()
+    elif edit.operation == "drop":
+        engine.frontier.remove(edit.entry)
+        if not engine.spec.ordered:
+            heapq.heapify(engine.frontier)
+    elif edit.operation == "raise":
+        if edit.cell not in engine.costs or edit.value is None:
+            raise ValueError("Cost edit names an unrepresented state")
+        engine.costs[edit.cell] = edit.value
+    else:
+        raise ValueError("Unknown abstract intervention")
+
+
+def _summary(transition, step: int, kind: str) -> dict:
+    return {
+        "step": step,
+        "checkpoint": kind,
+        "operation": transition.operation,
+        "selected": repr(transition.selected),
+        "generated": len(transition.generated),
+        "added": [repr(c) for c in transition.added[:4]],
+        "improved": [repr(c) for c in transition.improved[:4]],
+        "frontier_size": transition.frontier_size,
+    }
+
+
+def compare_run(
+    explanation: GridExplanation, run: RunRecord, patch: SearchEdit | None = None
+) -> tuple[dict, GridSearch | None]:
+    """Step the engine beside every frame of a run; stop at the first mismatch."""
+    result: dict = {
+        "site": run.site,
+        "ordinal": run.ordinal,
+        "status": "supported",
+        "records": [],
+    }
+    engine: GridSearch | None = None
+    transitions: list = []
+    step = 0
+    edited = False
+
+    def reject(reason: str, values=None, **extra) -> None:
+        result.update(status="rejected", reason=reason, step=step, **extra)
+        if values is not None and engine is not None:
+            try:
+                result["counterexample"] = difference(explanation, engine, values)
+            except ERRORS as exc:
+                result["counterexample"] = {"error": f"{type(exc).__name__}: {exc}"}
+
+    try:
+        frames = run.capture.frames()
+        _, values = next(frames)
+        engine = bind(explanation, values, run.capture.callables)
+        if not matches(explanation, engine, values):
+            reject("configuration_mismatch", values)
+            return result, None
+        for kind, values in frames:
+            if kind == "edited":
+                if patch is None:
+                    raise ValueError("Unexpected edit frame")
+                abstract_edit(engine, patch)
+                edited = True
+                if not matches(explanation, engine, values):
+                    reject("edit_correspondence", values)
+                    return result, None
+                continue
+            if engine.phase == "done":
+                reject("step_count", extra_frames=True)
+                return result, None
+            transition = engine.step()
+            transitions.append(transition)
+            step += 1
+            if step <= KEEP_RECORDS:
+                result["records"].append(_summary(transition, step, kind))
+            if (kind == "exit") != (engine.phase == "done"):
+                reject("step_count", predicted_phase=engine.phase, checkpoint=kind)
+                return result, None
+            if not matches(explanation, engine, values):
+                reject("configuration_mismatch", values)
+                return result, None
+        if not run.exited:
+            reject("no_termination_checkpoint")
+            return result, None
+        if patch is not None and not edited:
+            reject("edit_not_observed")
+            return result, None
+    except StopIteration:
+        reject("empty_run")
+        return result, None
+    except ERRORS as exc:
+        reject("decode_or_alignment", error=f"{type(exc).__name__}: {exc}")
+        return result, None
+    result.update(
+        steps=step,
+        reached_goal=engine.reached_goal,
+        features=grid_features(transitions),
+    )
+    return result, engine
+
+
+def choose_edits(
+    explanation: GridExplanation, run: RunRecord, seed: str, count: int
+) -> list[SearchEdit]:
+    """Edit points and edits drawn with a fixed seed from the ordinary run."""
+    rng = random.Random(seed)
+    visits = list(range(run.visits))
+    points = sorted(rng.sample(visits, min(count, len(visits))))
+    kinds = ["drop", "raise", "drop", "raise", "clear"][: len(points)]
+    rng.shuffle(kinds)
+    wanted = dict(zip(points, kinds))
+    mapping, spec = explanation.mapping, explanation.spec
+    edits = []
+    index = -1
+    for kind, values in run.capture.frames():
+        if kind != "visit":
+            continue
+        index += 1
+        if index not in wanted:
+            continue
+        root, frontier, parents, costs = decode(explanation, values)
+        if not frontier:
+            continue
+        operation = wanted[index]
+        if operation == "raise":
+            cells = frontier if spec.layout == "states" else [e[1] for e in frontier]
+            internal = set(parents.values())
+            leaves = sorted(
+                {c for c in cells if c != root and c not in internal and c in costs}
+            )
+            if leaves:
+                cell = rng.choice(leaves)
+                edits.append(
+                    SearchEdit(
+                        run.site,
+                        run.ordinal,
+                        index,
+                        "raise",
+                        mapping.costs,
+                        cell=cell,
+                        value=float(costs[cell]) + 2.0,
+                    )
+                )
+                continue
+            operation = "drop"
+        if operation == "drop":
+            entry = rng.choice(list(frontier))
+            edits.append(
+                SearchEdit(
+                    run.site,
+                    run.ordinal,
+                    index,
+                    "drop",
+                    mapping.frontier,
+                    entry=entry,
+                    heap=not spec.ordered,
+                )
+            )
+        else:
+            edits.append(
+                SearchEdit(run.site, run.ordinal, index, "clear", mapping.frontier)
+            )
+    # A predeclared producer probe: force an informative loss of the route when
+    # possible. Random late edits frequently leave every stored waypoint intact.
+    initial = SearchEdit(run.site, run.ordinal, 0, "clear", mapping.frontier)
+    if initial not in edits:
+        edits.append(initial)
+    return edits
+
+
+def same_frames(ordinary: RunRecord, patched: RunRecord, count: int) -> bool:
+    """The first `count` frames of two runs carry identical values."""
+    if ordinary.capture.length < count or patched.capture.length < count:
+        return False
+    for _, (left, right) in zip(
+        range(count), zip(ordinary.capture.frames(), patched.capture.frames())
+    ):
+        if left[0] != right[0] or left[1] != right[1]:
+            return False
+    return True
+
+
+def execute_edit(
+    program: PolicyProgram, call: CallRecord, before: tuple, edit: SearchEdit, domain
+) -> dict:
+    """Re-run only the enclosing call from deep copies with one live edit."""
+    policy, state, extra = before
+    session = Session(capture=True, edit=edit)
+    clone = copy.deepcopy(policy)
+    output, error = None, None
+    try:
+        output = program.call(
+            clone, call.method, (domain.copy_state(state), *extra), session
+        )
+    except ERRORS as exc:
+        # The edited run may still have finished before the policy failed.
+        error = f"{type(exc).__name__}: {exc}"
+    target = None
+    prefix = session.edits == 1
+    for run in session.runs:
+        if (run.site, run.ordinal) == (edit.site, edit.ordinal):
+            target = run
+            break
+    if target is None:
+        return {
+            "session": session,
+            "target": None,
+            "prefix_preserved": False,
+            "error": error,
+        }
+    position = session.runs.index(target)
+    earlier = [(r.site, r.ordinal, r.capture.length) for r in session.runs[:position]]
+    ordinary_earlier = [
+        (r.site, r.ordinal, r.capture.length) for r in call.runs[:position]
+    ]
+    ordinary = next(
+        r for r in call.runs if (r.site, r.ordinal) == (edit.site, edit.ordinal)
+    )
+    # Frames 0..visit (pre-edit, inclusive) must replay unchanged.
+    prefix = (
+        prefix
+        and earlier == ordinary_earlier
+        and same_frames(ordinary, target, _frame_index(ordinary, edit.visit) + 1)
+    )
+    plans = plan_attributes(clone)
+    return {
+        "session": session,
+        "target": target,
+        # Runtime-only counterfactual state, never serialized into evidence.
+        "policy": clone,
+        "plans": plans,
+        "prefix_preserved": prefix,
+        "error": error,
+        "plans_changed": sorted(
+            k
+            for k in set(plans) | set(call.plans_after)
+            if plans.get(k) != call.plans_after.get(k)
+        ),
+        "action_changed": (
+            None
+            if call.action is None or output is None
+            else not _close(action_tuple(output), call.action)
+        ),
+    }
+
+
+def _frame_index(run: RunRecord, visit: int) -> int:
+    """Frame position of the given loop visit in an ordinary (unedited) run."""
+    seen = -1
+    for position, (kind, _) in enumerate(run.capture.frames()):
+        if kind == "visit":
+            seen += 1
+            if seen == visit:
+                return position
+    raise ValueError("Edit visit outside the ordinary run")
+
+
+def _close(a, b, tolerance: float = 1e-9) -> bool:
+    return len(a) == len(b) and all(abs(x - y) <= tolerance for x, y in zip(a, b))
+
+
+def check_edit(
+    explanation: GridExplanation, executed: dict, edit: SearchEdit, baseline
+) -> dict:
+    """Compare a patched continuation with the explanation's patched prediction."""
+    record = {
+        "edit": {
+            "visit": edit.visit,
+            "operation": edit.operation,
+            "selector": edit.selector,
+            "entry": repr(edit.entry) if edit.entry is not None else None,
+            "cell": repr(edit.cell) if edit.cell is not None else None,
+            "value": edit.value,
+        },
+        "prefix_preserved": executed["prefix_preserved"],
+    }
+    if executed["target"] is None:
+        record.update(
+            passed=False, reason="edited_run_missing", error=executed.get("error")
+        )
+        return record
+    comparison, engine = compare_run(explanation, executed["target"], edit)
+    passed = executed["prefix_preserved"] and comparison["status"] == "supported"
+    record.update(
+        passed=passed,
+        comparison={k: v for k, v in comparison.items() if k != "records"},
+        predicted_result_changed=(
+            None if engine is None else engine.result() != baseline
+        ),
+        observed_plans_changed=executed["plans_changed"],
+        observed_action_changed=executed["action_changed"],
+    )
+    return record
+
+
+def readout_shape(function, cell) -> bool:
+    """A read-out maps a cell to a pair of floats."""
+    try:
+        point = function(cell)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+    return (
+        type(point) in (tuple, list)
+        and len(point) == 2
+        and all(type(v) is float for v in point)
+    )
+
+
+def link_plan(points: tuple, parents: dict, readout) -> bool:
+    """Waypoints, except at most one trailing target, read out a parent chain."""
+    if not points:
+        return False
+    inverse = {}
+    for cell in parents:
+        try:
+            x, y = readout(cell)
+        except ERRORS:
+            return False
+        inverse[(float(x), float(y))] = cell
+    cells = [inverse.get(point) for point in points]
+    mapped = 0
+    while mapped < len(cells) and cells[mapped] is not None:
+        mapped += 1
+    if mapped == 0 or len(cells) - mapped > 1:
+        return False
+    return all(parents.get(b) == a for a, b in zip(cells[:mapped], cells[1:mapped]))
+
+
+def _rotated(original, points: list[tuple[float, float]]):
+    """Replace contents keeping the container and element types."""
+
+    def like(item: Any, point: tuple[float, float]) -> Any:
+        if type(item) is list:
+            return [point[0], point[1]]
+        if hasattr(item, "dtype"):
+            return np.array(point, dtype=item.dtype)
+        return (point[0], point[1])
+
+    values = [like(item, point) for item, point in zip(original, points)]
+    if type(original) is list:
+        original[:] = values
+        return original
+    return tuple(values)
+
+
+def follow_probe(
+    program: PolicyProgram,
+    domain,
+    call: CallRecord,
+    before: tuple,
+    attribute: str,
+) -> dict:
+    """Rotate a cached plan by 90 degrees about the robot; the command should too."""
+    policy, state, _ = before
+    points = call.plans_before[attribute]
+    record: dict = {"attribute": attribute, "waypoints": len(points)}
+    baseline = domain.planar(call.action)
+    norm = math.hypot(*baseline)
+    if norm < 1e-9:
+        record.update(passed=False, reason="no_planar_command")
+        return record
+    rx, ry = domain.robot_xy(state)
+    rotated = [(rx - (y - ry), ry + (x - rx)) for x, y in points]
+    clone = copy.deepcopy(policy)
+    value = getattr(clone, attribute)
+    replaced = _rotated(value, rotated)
+    if replaced is not value:
+        setattr(clone, attribute, replaced)
+    try:
+        output = program.call(
+            clone, "get_action", (domain.copy_state(state),), Session(capture=False)
+        )
+    except ERRORS as exc:
+        record.update(passed=False, reason="policy_error", error=str(exc))
+        return record
+    probe = domain.planar(action_tuple(output))
+    expected = (-baseline[1], baseline[0])
+    size = math.hypot(*probe)
+    cosine = (
+        0.0
+        if size < 1e-12
+        else (probe[0] * expected[0] + probe[1] * expected[1]) / (size * norm)
+    )
+    record.update(cosine=round(cosine, 6), passed=cosine >= ROTATION_COSINE)
+    if record["passed"]:
+        shifted = domain.shift_world(domain.copy_state(state), WORLD_SHIFT)
+        try:
+            moved = program.call(
+                copy.deepcopy(policy),
+                "get_action",
+                (shifted,),
+                Session(capture=False),
+            )
+            record["world_insensitive"] = _close(action_tuple(moved), call.action)
+        except ERRORS as exc:
+            record["world_insensitive"] = None
+            record["world_error"] = str(exc)
+    return record

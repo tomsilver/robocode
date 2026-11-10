@@ -1,0 +1,174 @@
+"""Regression tests for the complete search -> cache -> later-action chain."""
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from robocode.planning_explanations.search.policy_discovery import (
+    discover_policy,
+    load_policy_bank,
+    validate_policy,
+)
+from robocode.planning_explanations.search.policy_domains import DiscWorld
+from robocode.planning_explanations.search.policy_fixtures import (
+    DISCARDED_SEARCH,
+    PLAN_ONCE,
+    UNUSED_PLAN,
+)
+from robocode.planning_explanations.search.policy_runner import PolicyProgram
+
+STORE = '        self.path = self._plan(state["robot"], self.goal, state["obstacles"])'
+FOLLOW = "    def get_action(self, state):\n        return self._follow(state)"
+
+
+def analyze(source, development=((0, 0),), validation=((0, 1),)):
+    """Discover once; validate on disjoint episodes with observation parity."""
+    program, domain = PolicyProgram(source), DiscWorld()
+    bank = discover_policy(program, domain, development, validation)
+    result = validate_policy(program, domain, bank)
+    return bank, result["episodes"][0]
+
+
+def probes(episode):
+    """Every stored-plan intervention including rejected predictions."""
+    return [p for v in episode["versions"] for c in v["chains"] for p in c["probes"]]
+
+
+class CrossCallCausalityTest(unittest.TestCase):
+    """Shape, changed cache, and changed actions must not be conflated."""
+
+    def test_discarded_search_no_longer_gets_credit(self):
+        """Independent goal waypoints match a subtree and rotate actions: no credit."""
+        _, episode = analyze(DISCARDED_SEARCH)
+        row = episode["accounting"]["program"]
+        self.assertTrue(row["complete"])
+        self.assertEqual(row["expansion_events"], 459)
+        self.assertEqual(row["attributed_expansion_events"], 0)
+        self.assertEqual(row["followed_plan_share"], 0)
+        self.assertGreater(row["followed_unlinked_plan"], 0)
+        self.assertEqual(row["runs_without_action_witness"], 1)
+
+    def test_genuine_plan_predicts_stored_value_and_mediates_action(self):
+        """The very same search perturbation reaches both cache and later command."""
+        bank, episode = analyze(PLAN_ONCE)
+        witnesses = [p for p in probes(episode) if p["status"] == "supported"]
+        self.assertTrue(witnesses)
+        for probe in witnesses:
+            self.assertEqual(probe["predicted_plan"], probe["observed_plan"])
+            self.assertTrue(probe["changed"])
+            action = probe["future"][-1]
+            self.assertGreater(action["call"], 0)
+            self.assertNotEqual(action["ordinary_action"], action["observed_action"])
+            self.assertEqual(action["predicted_action"], action["observed_action"])
+            self.assertEqual(action["restored_action"], action["ordinary_action"])
+        # Reference/probe executions never add to the ordinary expansion count.
+        row = episode["accounting"]["program"]
+        self.assertEqual(row["planning_events"], 1)
+        self.assertEqual(row["attributed_expansion_events"], row["expansion_events"])
+        self.assertEqual(bank.manifest()["schema"], 2)
+
+    def test_delayed_consumer_is_checked_across_multiple_calls(self):
+        """Identical early actions do not stop the experiment prematurely."""
+        source = PLAN_ONCE.replace(STORE, STORE + "\n        self.wait = 3").replace(
+            FOLLOW,
+            "    def get_action(self, state):\n"
+            "        if self.wait:\n"
+            "            self.wait -= 1\n"
+            "            return (0.0, 0.0)\n"
+            "        return self._follow(state)",
+        )
+        _, episode = analyze(source)
+        witnesses = [p for p in probes(episode) if p["status"] == "supported"]
+        self.assertTrue(witnesses)
+        self.assertTrue(all(p["future"][-1]["call"] >= 4 for p in witnesses))
+        self.assertTrue(all(not p["future"][0]["changed"] for p in witnesses))
+
+    def test_changed_but_unused_plan_is_unresolved_not_attributed(self):
+        """Search really changes the cache, but no later action uses it."""
+        _, episode = analyze(UNUSED_PLAN)
+        changed = [p for p in probes(episode) if p.get("changed")]
+        self.assertTrue(changed)
+        self.assertTrue(all(p["prediction_matches"] for p in changed))
+        self.assertTrue(all(p["status"] == "unresolved" for p in changed))
+        self.assertEqual(
+            episode["accounting"]["program"]["attributed_expansion_events"], 0
+        )
+
+    def test_unrelated_flag_cannot_substitute_for_plan_mediation(self):
+        """Search alters a flag and an unused plan; only the flag changes actions."""
+        source = UNUSED_PLAN.replace(
+            STORE, STORE + "\n        self.flag = len(self.path) == 1"
+        ).replace(
+            "    def get_action(self, state):\n",
+            "    def get_action(self, state):\n"
+            "        if self.flag:\n"
+            "            return (-0.035, -0.035)\n",
+        )
+        _, episode = analyze(source)
+        rejected = [
+            p
+            for p in probes(episode)
+            if p.get("reason") == "plan_does_not_mediate_action"
+        ]
+        self.assertTrue(rejected)
+        self.assertTrue(any(p["future"][-1]["changed"] for p in rejected))
+        self.assertEqual(
+            episode["accounting"]["program"]["attributed_expansion_events"], 0
+        )
+
+    def test_replaced_cache_does_not_inherit_search_credit(self):
+        """An independently replaced cache can drive actions without using search."""
+        source = PLAN_ONCE.replace(
+            FOLLOW,
+            "    def get_action(self, state):\n"
+            "        self.path = [self.goal]\n"
+            "        return self._follow(state)",
+        )
+        _, episode = analyze(source)
+        self.assertFalse(any(p["status"] == "supported" for p in probes(episode)))
+        self.assertEqual(
+            episode["accounting"]["program"]["attributed_expansion_events"], 0
+        )
+
+    def test_wrong_cache_prediction_refutes_readout_even_with_other_witnesses(self):
+        """A changed plan is not enough: its complete value must be predicted."""
+        source = PLAN_ONCE.replace(
+            STORE,
+            STORE + "\n        if len(self.path) == 1:"
+            "\n            self.path = [(-1.0, -1.0)]",
+        )
+        _, episode = analyze(source)
+        self.assertTrue(
+            any(
+                p.get("reason") == "stored_plan_prediction_mismatch"
+                for p in probes(episode)
+            )
+        )
+        self.assertEqual(
+            episode["accounting"]["program"]["attributed_expansion_events"], 0
+        )
+
+    def test_readout_templates_are_frozen_and_legacy_banks_require_rediscovery(self):
+        """Validation cannot invent a readout, or silently upgrade an old bank."""
+        program, domain = PolicyProgram(PLAN_ONCE), DiscWorld()
+        bank = discover_policy(program, domain, ((0, 0),), ((0, 1),))
+        for part in bank.parts.values():
+            part["plan_rules"] = []
+        fingerprint = bank.fingerprint
+        result = validate_policy(program, domain, bank)
+        self.assertEqual(bank.fingerprint, fingerprint)
+        self.assertEqual(result["summary"]["mean"]["attributed_expansion_events"], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bank.json"
+            bank.save(path)
+            self.assertEqual(load_policy_bank(path).fingerprint, fingerprint)
+            data = json.loads(path.read_text())
+            data["schema"] = 1
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "Rediscover"):
+                load_policy_bank(path)
+
+
+if __name__ == "__main__":
+    unittest.main()

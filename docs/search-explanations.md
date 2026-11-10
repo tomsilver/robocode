@@ -1,8 +1,9 @@
 # Search explanations: implementation plan and contract
 
-Recorded 2026-11-08. Implements milestones 1–7 of the agreed design, following
-Sections 2–5 of *Planning Explanations for Python Policies* (the supplied PDF).
-This is a separate model family from the existing lookahead analyzer.
+Recorded 2026-11-08; milestone 8 added 2026-11-09. Implements milestones 1–8
+of the agreed design, following Sections 2–5 of *Planning Explanations for
+Python Policies* (the supplied PDF). This is a separate model family from the
+existing lookahead analyzer.
 
 The original `line` suite covers milestones 1–3. Milestones 4–5 add explicit
 evidence findings and a `tasks` suite with held-out transition tables and goals.
@@ -10,6 +11,125 @@ Milestone 6 adds bounded nested-container mappings and a `routes` suite with
 development-discovered, frozen checkpoint-prefix gates. All three suites use
 the same checkpoint machinery and paired verification. Milestone 7 adds an
 opt-in priority-search engine family while preserving the earlier engine.
+Milestone 8 adds a `policy` suite: whole class-based policies, closed-loop
+episodes, cached plans, and a real agent-written KinDER policy.
+
+Issue 1 corrected 2026-11-10: cross-call attribution now requires a complete
+**search intervention → predicted stored plan → later action** witness.
+See the implementation decisions below. Schema-1 policy banks must be
+rediscovered; schema 2 freezes the new readout templates and probe protocol.
+
+## Run milestone 8: a stateful KinDER policy
+
+```bash
+PYTHONPATH=src .venv/bin/python -m robocode.planning_explanations.search --suite policy
+open outputs/search-policy-benchmark/summary.md
+open outputs/search-policy-benchmark/clutteredretrieval2d/report.html
+```
+
+The whole suite takes about two minutes. `--fixture clutteredretrieval2d` runs
+only the KinDER policy (about 70 seconds); `--fixture plan_once` runs one
+control in a few seconds. Replay a frozen bank without discovering again:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m robocode.planning_explanations.search --suite policy --fixture clutteredretrieval2d --frozen outputs/search-policy-benchmark/clutteredretrieval2d/frozen.json --output-dir outputs/search-policy-replay
+```
+
+Another cached ClutteredRetrieval2D policy runs with `--source path/to/approach.py`
+(and `--env-config` for a different configuration). Other KinDER environments
+need their own domain adapter, which declares the robot's position and which
+objects are obstacles; that is environment meaning, not policy analysis.
+
+The problem addressed here: real policies plan inside helpers, keep the plan
+in an attribute, and spend most calls following it. Milestones 1–7 explain
+one function call at a time, so planning done in `reset` would either vanish
+or, if attributed to every action, be counted hundreds of times.
+
+### The KinDER policy, walked through
+
+The policy (529 lines, `search/policies/PROVENANCE.md`) has six `while` loops.
+Discovery reads only value shapes at each loop's first checkpoint, never names:
+
+| Part | Where | Frozen explanation |
+| --- | --- | --- |
+| `while frontier:` | `reset` | Uniform-cost search with **no goal test**: it explores every cell its own `free()` allows, then picks a stance. Plans read out through `point` |
+| `while q:` | `_make_carry_path` | A* with a Euclidean heuristic, root entry 0, goal tested on selection, improving updates. Plans read out through `to_p` |
+| four others | `reset`, `get_action`, `_make_carry_path` | Path reconstruction and waypoint popping; not search-shaped, listed in coverage |
+
+Each search part keeps two explanations that differ only in how stale heap
+entries are handled; no development run popped a stale entry, so both remain.
+Every iteration of every run is compared (about 2,000 per reachability search).
+Up to five seeded edits plus a predeclared frontier-clear at visit zero per
+sampled run must predict the whole continuation.
+
+The original milestone-8 validation results below predate the Issue-1 fix.
+Their followed-plan shares used structural links and are **not causal-chain
+evidence**. Current results are in `outputs/search-policy-issue1/summary.md`.
+The episodes were not seen during discovery:
+
+| Episode (obstacles, seed) | Solved | Planning events | Expansion events | At initialization | Followed-plan share |
+| --- | --- | --- | --- | --- | --- |
+| (3, 100) | no | 11 | 11,264 | 1,931 | 0.70 |
+| (15, 101) | no | 97 | 17,392 | 1,636 | 0.04 |
+| (20, 102) | no | 127 | 127 | 19 | 0.00 |
+
+Read the last row carefully. The policy "plans" 127 times, but each search
+expands one cell: in its own inflated map the robot's cell has no free
+neighbor, so no plan forms and it resets again. A count of planning events
+alone would call this the most planning-heavy episode; the expansions and the
+followed-plan share show it is not. The carry A* never ran in validation (the
+policy never got that far), so its part is reported as not executed, not zero.
+Every followed call was also world-insensitive: shifting all obstacles left the
+command unchanged, as open-loop plan execution predicts.
+
+### Controls
+
+| Control (disc world) | Planted claim | What the analyzer reports |
+| --- | --- | --- |
+| `plan_once` | A* in `reset`, then follow | 1 planning event, all at initialization; every call follows the plan |
+| `replan_every_call` | A* in every call | One search per call; 0 at initialization; searched share 1.0 |
+| `unused_plan` | A* in `reset`, then steer straight | Search verified and plan linked, yet no call follows it: 0 attributed |
+| `discarded_search` | Compute A*, discard it, build goal waypoints independently | Search verified, cache affects commands, but no search-to-plan chain: 0 supported attribution |
+| `reactive` | No search | No search-shaped loops |
+| `reach_then_pick` | Explore all, then a tree path | Search recovered with no goal test; destination reselection can reject the current conditional plan readout |
+| `nested_renamed` | `plan_once` with renamed nested storage | Identical counts to `plan_once` |
+
+A test-only control rebuilds its heap from a dictionary every iteration. It
+matches uniform-cost search on every ordinary iteration, but a dropped entry
+comes back, so paired edits reject it and its episode totals are withheld.
+
+### What is counted, and how numbers combine
+
+| Number | Rule |
+| --- | --- |
+| Expansion events, N, generated alternatives, re-expansions, cost improvements | Summed over an episode's runs; each run counted once, in its own call |
+| Max expanded and discovery depth | Maximum over runs |
+| Planning events | Runs with at least one expansion |
+| At initialization | The part of those totals from the harness `reset` |
+| Followed-plan share | Rotation-supported cache consumers whose version also has a complete cross-call search witness, divided by all action calls |
+| Searched share | Action calls that contained a search-shaped run |
+| Attributed to actions | Runs with a complete cross-call witness, or whose paired edit changed the same call's command; ≥ marks a lower bound when any run lacks an action witness |
+| Coverage | Search-shaped runs supported, rejected or unresolved; non-search loop runs listed |
+
+Means are uniform over validation episodes and withheld when any episode is.
+Task success is reported separately and never enters these numbers.
+
+Inspect `search/grid_engine.py` for the abstract family, `search/policy_runner.py`
+for instrumentation and replay, `search/policy_verify.py` for search and local
+cache probes, `search/policy_causality.py` for cross-call mediation,
+`search/policy_discovery.py` for banks, freezing and accounting, and
+`search/policy_fixtures.py` for the controls. Tests are in `test_search_policy.py`:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/planning_explanations -p 'test_search_policy.py'
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/planning_explanations -p 'test_policy_causality.py'
+```
+
+Remaining restrictions: one grid family (integer cells, `hypot` step costs);
+the transition model is the policy's own predicate and must be a callable
+local; plans must be attribute lists of points; a part's run is aligned only
+at its loop boundary; plan-following is tested for planar commands only. A
+loop outside the grammar is unresolved, never zero.
 
 ## Run milestone 7: heuristic search and goal timing
 
@@ -147,7 +267,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -
 ```
 
 Remaining restrictions include weighted costs, heaps, helper functions, general
-alignment, symbolic route guards and stateful caching. A* goal-on-generation
+alignment, symbolic route guards and stateful caching (milestone 8 adds heaps,
+helpers and caching for its separate grid family). A* goal-on-generation
 and first-parent variants are described by their ingredients; their names do
 not imply shortest-path guarantees.
 
@@ -604,7 +725,9 @@ The checkpoint runner accepts one function and one integer position argument
 (or a task dictionary for the new `tasks` suite),
 with no helpers, imports, comprehensions, NumPy, external state or loop `else`.
 It operates on trusted source and is not a security sandbox. It is intentionally
-separate from the older analyzer's broader expression instrumentation. One graph
+separate from the older analyzer's broader expression instrumentation. The
+milestone-8 policy runner is a separate, equally trusted runner for whole
+class-based modules. One graph
 mapping must work across its declared input partition. The `routes` suite splits
 that partition using frozen prefix gates; nested dictionary/list selections are
 supported. Adaptive/stuttering alignment and routes that diverge only after a
@@ -629,6 +752,137 @@ result is unresolved, not evidence of zero planning. An LLM proposer can be adde
 later behind the same manifest interface without becoming the verifier.
 
 ## Later extensions
+
+### Milestone 8: implementation decisions (2026-11-09)
+
+Explain one agent-written KinDER policy: the median-length heap-using program
+in the cached runs (ClutteredRetrieval2D, Codex GPT-5.6 Sol, 529 lines). It is a
+class with helpers, closures, NumPy, state across calls, cached plans and
+replanning. Its source is copied byte-identically into the package with its
+provenance. Small class-based control policies in a pure-Python disc world test
+each claim quickly; the KinDER policy runs in the real simulator.
+
+A **part** is one `while` loop in the source. A **run** is one execution of
+that loop. Each part gets its own frozen bank, as each route did in milestone 6.
+A run's inputs (root, goal and the policy's own free-cell predicate) are read
+once at its first loop checkpoint; every later configuration is predicted.
+
+Add a versioned `grid-priority-v1` family; the earlier engines are unchanged.
+States are integer grid cells, costs are floats, and the frontier is a list of
+`(priority, state)` entries decoded as a multiset (a heap's array order is not
+compared). Ingredients: min/FIFO/LIFO selection; priority g, g+h or h; zero,
+Euclidean or Manhattan h to a mapped goal cell; root entry priority; goal on
+selection, on generation, or **none** (explore everything reachable); first-parent
+or improving updates; stale entries re-expanded or skipped; 4- or 8-neighbor
+moves with `hypot` step costs. Ties go to the smaller entry, as Python's heap
+orders tuples. Successor order within one expansion is unobservable at loop
+granularity for heaps and is fixed.
+
+**World.** The transition model is the policy's own predicate, selected by shape
+from current locals and called by the analyzer on single cells. That is the
+policy's map, accepted as given; it is not checked against the simulator. An
+unconstrained grid is the wrong-model alternative. Predicate calls are analyzer
+reference work and never count as policy computation. A second callable maps a
+cell to a point and is used only to link a cached plan to a search tree.
+
+**Counting.** Expansions are counted once, in the run where they happen. Runs
+in the harness `reset` (initialization) are kept and counted once; they are not
+repeated on the calls that later consume their plan. Per-part tables keep the
+earlier features. The program-level row combines them by what they measure:
+effort counts are summed over an episode's runs, depth is the maximum, planning
+events are counted, and the planned share of actions is a fraction. Coverage is
+reported separately. An episode total is withheld when any search-shaped run is
+unresolved. Averages are taken only across validation episodes.
+
+**Plans and actions.** A cached plan is a policy attribute holding a list of
+points. Parent-chain membership is only a structural candidate link. Rotating
+the cache 90 degrees about the robot tests local cache use (planar-command
+cosine at least 0.9); it does not establish that search produced the cache.
+A second probe shifts obstacles and reports whether the command is unchanged.
+Cross-call attribution additionally requires the complete intervention chain
+described below. Structural producers and causal status remain separate in the
+machine-readable report.
+
+**Verification and sampling.** Every expansion of every run is compared.
+Paired search edits (drop a frontier entry, raise an unexpanded leaf's cost,
+clear the frontier) re-execute only the enclosing call from deep copies, check
+the unchanged prefix, and compare the run's whole continuation. Five edit
+points per run are drawn with a fixed seed before any result is seen. In
+schema 2, one additional frontier-clear at visit zero is fixed in advance; at most
+eight runs per part per episode are probed, also drawn with a fixed seed.
+Heap edits restore heap order with `heapq.heapify`, the representation's own
+invariant.
+
+### Issue 1: the complete cross-call causal chain (2026-11-10)
+
+The previous implementation combined a matching parent-chain shape with an
+independent cache-rotation probe. That permitted a false positive: compute A*,
+discard its result, store two goal waypoints derived directly from the input,
+then steer using those waypoints. The waypoint cache affects actions, but search
+does not produce it. On `(0, 1)` the `discarded_search` control still has 459
+verified ordinary expansions; none receives supported action attribution.
+
+`policy_causality.py` now implements a bounded protocol:
+
+1. During development, enumerate readouts of a **complete root-to-endpoint
+   parent chain**, optionally omitting the root and appending one fixed terminal
+   point. Attribute and point-callable candidates come from existing values,
+   without semantic names. Freeze these templates with the bank (schema 2).
+2. On an ordinary execution, bind the endpoint and optional final point from
+   its stored plan. Reconstruct the plan using the independently predicted
+   parent map. This is a conditional readout, not an explanation of destination
+   selection; it adds no analyzer-generated search to program effort.
+3. For each sampled search intervention, predict the entire stored waypoint
+   sequence from the edited abstract search and compare it to the actual
+   post-call attribute. Keep unchanged results, mismatches and errors. Any
+   stored-plan counterexample refutes that readout for this version even if
+   another intervention gave a positive witness.
+4. When the plan changes as predicted, retain four copied policy states:
+   ordinary; search-edited; ordinary with only the predicted plan installed;
+   search-edited with the ordinary plan restored. Carry their state across up
+   to 32 future action calls, supplying the same ordinary observations to each.
+   A witness requires a changed action, equality between the search-edited
+   action and the plan-only prediction, and restoration of the ordinary action
+   when the ordinary plan is restored. Baseline replay must match too.
+5. Stop without credit if a new search or non-suffix cache replacement occurs
+   before the witness. Delayed consumption is allowed. Horizon exhaustion,
+   episode end and replay errors remain unresolved, not proof of non-planning.
+6. Count the producer's ordinary expansions once if the full chain is supported.
+   Rotation still identifies ordinary calls that use that cache version, but
+   cannot by itself establish its search provenance. Same-call search-edit
+   effects remain a separate attribution route. Neither reference computations
+   nor patched runs enter the averaging distribution.
+
+This is experimental support within the declared grammar and interventions,
+not equivalence for every input. The future replays are controlled experiments
+on ordinary observations, **not** counterfactual closed-loop task-success runs.
+The controller's action prediction comes from a plan-only program replay; the
+controller itself has not been synthesized as a separate abstract model.
+Target reselection (e.g. `reach_then_pick`) can fail the current fixed-endpoint
+readout even when search is real. Its search mechanism stays supported while
+cross-call attribution stays unsupported. Issue 2, inventory-budget exhaustion,
+is outside this correction.
+
+Reports separate structural matches, exact plan predictions, action mediation,
+counterexamples and missing witnesses. Inspect
+`validation.episodes[].versions[].chains[]` in `report.json`; Markdown and HTML
+show action comparisons alongside the edit that caused them. The new regression
+suite covers discarded search, a genuine plan, delayed consumption, unused
+changed plans, an unrelated action-changing flag, cache replacement, wrong
+plan predictions, and frozen/legacy banks.
+
+```bash
+PYTHONPATH=src .venv/bin/python -m robocode.planning_explanations.search --suite policy --output-dir outputs/search-policy-issue1
+open outputs/search-policy-issue1/plan_once/report.html
+open outputs/search-policy-issue1/discarded_search/report.html
+```
+
+**Inputs.** Development episodes are (obstacles, seed) = (1, 0), (3, 1), (5, 2).
+Validation episodes are (3, 100), (15, 101) and (20, 102): all new seeds, and
+15 and 20 are counts the policy's author never designed for (they used 1, 3,
+5 and 10). Banks, preselections, readout choices, probe rules
+and validation episodes are frozen before validation. Loops whose values have
+no search shape are listed in coverage, not counted, and not reported as zero.
 
 ### Milestone 7: implementation decisions
 

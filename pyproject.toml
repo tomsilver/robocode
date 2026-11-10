@@ -79,7 +79,11 @@ libero = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-robocode = ["py.typed", "utils/backends/prompt.txt"]
+robocode = [
+    "py.typed",
+    "utils/backends/prompt.txt",
+    "planning_explanations/search/policies/*",
+]
 
 [tool.pytest.ini_options]
 addopts = "-m 'not integration'"

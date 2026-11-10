@@ -1,0 +1,529 @@
+"""Fast reactive manipulation policy for ClutteredRetrieval2DEnv."""
+
+import math
+import heapq
+import numpy as np
+
+
+class GeneratedApproach:
+    def __init__(self, action_space, observation_space, primitives):
+        self.action_space = action_space
+        self.types = {n: observation_space.get_type(n) for n in
+                      ("crv_robot", "target_block", "target_region", "rectangle")}
+        self.phase = "turn"
+        self.timer = 0
+        self.prev_block = None
+        self.approach_point = None
+        self.path = []
+        self.prev_obstacles = {}
+        self.carried_name = None
+        self.initial_target = None
+        self.carry_path = []
+        self.active_name = "target_block"
+        self.clear_timer = 0
+        self.prev_robot = None
+        self.motion_phase = None
+        self.stall_count = 0
+        self.recover_count = 0
+        self.recover_sign = 1.0
+        self.attempts = {}
+        self.mission_steps = 0
+        self.ignored_obstacles = set()
+        self.recover_dir = 0
+        self.recover_progress = 0
+        self.press_step = 0.01
+        self.clear_direction = (1.0, 0.0)
+        self.clear_origin = None
+        self.forced_active = None
+        self.reconsidering = False
+
+    def _make_carry_path(self, state, rx, ry, bx, by, gx, gy):
+        """A* in translation space for the rigid base--payload pair."""
+        obs = []
+        for o in state.get_objects(self.types["rectangle"]):
+            if str(o.name).startswith("obstruction"):
+                obs.append((self._v(state, o, "x"), self._v(state, o, "y"),
+                            0.5 * math.hypot(self._v(state, o, "width"),
+                                             self._v(state, o, "height"))))
+        h = 0.06
+        goal = (rx + gx - bx, ry + gy - by)
+        to_c = lambda p: (int(round((p[0] - .12) / h)), int(round((p[1] - .12) / h)))
+        to_p = lambda c: (.12 + h * c[0], .12 + h * c[1])
+        sc, gc = to_c((rx, ry)), to_c(goal)
+        offx, offy = bx - rx, by - ry
+        def free(c):
+            x, y = to_p(c); px, py = x + offx, y + offy
+            if min(x, y, px, py) < .105 or max(x, y, px, py) > 2.395:
+                return False
+            return all(math.hypot(x-ox, y-oy) > rad+.105 and
+                       math.hypot(px-ox, py-oy) > rad+.16 for ox,oy,rad in obs)
+        q=[(0.,sc)];cost={sc:0.};parent={sc:None};end=None
+        while q:
+            _,cur=heapq.heappop(q)
+            if cur==gc:end=cur;break
+            for di,dj in ((1,0),(-1,0),(0,1),(0,-1)):
+                n=(cur[0]+di,cur[1]+dj)
+                if not free(n):continue
+                nc=cost[cur]+math.hypot(di,dj)
+                if nc<cost.get(n,1e30):
+                    cost[n]=nc;parent[n]=cur
+                    heapq.heappush(q,(nc+math.hypot(n[0]-gc[0],n[1]-gc[1]),n))
+        path=[]
+        if end is not None:
+            while end is not None:path.append(to_p(end));end=parent[end]
+            path.reverse();path=path[1:]
+        path.append(goal)
+        return path
+
+    def _one(self, state, name):
+        return list(state.get_objects(self.types[name]))[0]
+
+    @staticmethod
+    def _v(state, obj, feature):
+        return float(state.get(obj, feature))
+
+    @staticmethod
+    def _angle(x):
+        return (x + math.pi) % (2.0 * math.pi) - math.pi
+
+    def reset(self, state, info):
+        self.phase = "navigate"
+        self.timer = 0
+        self.path = []
+        self.carry_path = []
+        self.prev_obstacles = {}
+        target = self._one(state, "target_block")
+        tx, ty = self._v(state, target, "x"), self._v(state, target, "y")
+        self.prev_block = (tx, ty)
+        r0 = self._one(state, "crv_robot")
+        self.prev_robot = (self._v(state, r0, "x"), self._v(state, r0, "y"))
+        self.motion_phase = None
+        self.stall_count = 0
+        self.mission_steps = 0
+        self.initial_target = (tx, ty)
+        obstacles = []
+        nearby = []
+        for o in state.get_objects(self.types["rectangle"]):
+            if str(o.name).startswith("obstruction"):
+                ox, oy = self._v(state, o, "x"), self._v(state, o, "y")
+                rad = 0.5 * math.hypot(self._v(state, o, "width"),
+                                       self._v(state, o, "height"))
+                obstacles.append((ox, oy, rad))
+                self.prev_obstacles[str(o.name)] = (ox, oy)
+                nearby.append((math.hypot(ox-tx, oy-ty), str(o.name)))
+        close = [item for item in nearby if item[0] < 0.32 and
+                 item[1] not in self.ignored_obstacles]
+        # Peel the outside of the local pile before attempting deeply buried pieces.
+        self.active_name = max(close)[1] if close else "target_block"
+        if self.forced_active is not None:
+            self.active_name = self.forced_active
+            self.forced_active = None
+        active = state.get_object_from_name(self.active_name)
+        bx, by = self._v(state, active, "x"), self._v(state, active, "y")
+        if self.active_name != "target_block":
+            obstacles = [(ox,oy,rad) for ox,oy,rad in obstacles
+                         if math.hypot(ox-bx, oy-by) > 1e-5]
+        best = (-1e9, (bx - 0.4, by))
+        candidates = []
+        for i in range(72):
+            ang = 2.0 * math.pi * i / 72.0
+            sx, sy = bx - 0.4 * math.cos(ang), by - 0.4 * math.sin(ang)
+            score = min(sx - 0.24, 2.26 - sx, sy - 0.24, 2.26 - sy)
+            for ox, oy, radius in obstacles:
+                score = min(score, math.hypot(sx - ox, sy - oy) - radius - 0.24)
+                # Clearance of the final arm ray from this obstruction.
+                vx, vy = bx - sx, by - sy
+                t = max(0.0, min(1.0, ((ox - sx) * vx + (oy - sy) * vy) /
+                                     max(vx * vx + vy * vy, 1e-9)))
+                dseg = math.hypot(ox - (sx + t * vx), oy - (sy + t * vy))
+                score = min(score, dseg - radius - 0.015)
+            if score > best[0]:
+                best = (score, (sx, sy))
+            candidates.append((score, (sx, sy)))
+        self.approach_point = best[1]
+        r = self._one(state, "crv_robot")
+        start = (self._v(state, r, "x"), self._v(state, r, "y"))
+        step = 0.05
+        def cell(p):
+            return (int(round((p[0] - 0.125) / step)),
+                    int(round((p[1] - 0.125) / step)))
+        def point(c):
+            return (0.125 + step * c[0], 0.125 + step * c[1])
+        start_c = cell(start)
+        active_radius = 0.5 * math.hypot(self._v(state, active, "width"),
+                                         self._v(state, active, "height"))
+        nav_obstacles = obstacles + [(bx, by, active_radius)]
+        def free(c):
+            x, y = point(c)
+            if not (0.105 <= x <= 2.395 and 0.105 <= y <= 2.395):
+                return False
+            # Include the retracted arm/gripper envelope, not only base radius.
+            return all(math.hypot(x - ox, y - oy) > rad + 0.24
+                       for ox, oy, rad in nav_obstacles)
+        frontier = [(0.0, start_c)]
+        cost, parent = {start_c: 0.0}, {start_c: None}
+        reached = None
+        while frontier:
+            _, cur = heapq.heappop(frontier)
+            for di, dj in ((1,0),(-1,0),(0,1),(0,-1)):
+                nxt = (cur[0] + di, cur[1] + dj)
+                if not free(nxt):
+                    continue
+                nc = cost[cur] + math.hypot(di, dj)
+                if nc < cost.get(nxt, 1e30):
+                    cost[nxt], parent[nxt] = nc, cur
+                    heapq.heappush(frontier, (nc, nxt))
+        reachable = [(score, point_, cell(point_)) for score, point_ in candidates
+                     if cell(point_) in cost]
+        if reachable:
+            reachable.sort(reverse=True)
+            pick = self.attempts.get(self.active_name, 0) % min(12, len(reachable))
+            _, self.approach_point, reached = reachable[pick]
+        elif self.active_name != "target_block":
+            if not self.reconsidering:
+                self.ignored_obstacles.add(self.active_name)
+                self.reset(state, info)
+                return
+        else:
+            outer = [item for item in nearby if item[0] < 0.50 and
+                     item[1] not in self.ignored_obstacles]
+            if outer:
+                self.forced_active = max(outer)[1]
+                self.reset(state, info)
+                return
+            # A previously moved object may still seal the only approach.  If
+            # no stance exists, reconsider the nearest such blocker instead of
+            # direct-driving forever with an empty path.
+            blocked = [item for item in nearby if item[0] < 0.40]
+            use_nearest_robot = False
+            if not blocked and self.attempts.get("target_block", 0) > 0:
+                blocked = [item for item in nearby if item[0] < 0.60]
+                use_nearest_robot = True
+            if blocked:
+                # Peel the outermost remaining member rather than repeatedly
+                # attacking the deeply buried, least reachable rectangle.
+                if use_nearest_robot:
+                    name = min(blocked, key=lambda item: math.hypot(
+                        self._v(state, state.get_object_from_name(item[1]), "x")-start[0],
+                        self._v(state, state.get_object_from_name(item[1]), "y")-start[1]))[1]
+                else:
+                    name = max(blocked)[1]
+                self.ignored_obstacles.discard(name)
+                self.forced_active = name
+                self.reconsidering = True
+                self.reset(state, info)
+                self.reconsidering = False
+                return
+        if reached is not None:
+            cells = []
+            while reached is not None:
+                cells.append(reached)
+                reached = parent[reached]
+            self.path = [point(c) for c in reversed(cells[1:])]
+            self.path.append(self.approach_point)
+
+    def get_action(self, state):
+        r = self._one(state, "crv_robot")
+        target = self._one(state, "target_block")
+        b = state.get_object_from_name(self.active_name)
+        g = self._one(state, "target_region")
+        rx, ry, th = (self._v(state, r, f) for f in ("x", "y", "theta"))
+        bx, by = (self._v(state, b, f) for f in ("x", "y"))
+        tx, ty = (self._v(state, target, f) for f in ("x", "y"))
+        gx, gy = (self._v(state, g, f) for f in ("x", "y"))
+        arm = self._v(state, r, "arm_joint")
+        a = np.zeros(5, dtype=np.float32)
+        self.mission_steps += 1
+
+        recent_move = 0.0 if self.prev_robot is None else math.hypot(
+            rx-self.prev_robot[0], ry-self.prev_robot[1])
+        if self.motion_phase == self.phase and self.prev_robot is not None:
+            self.stall_count = self.stall_count + 1 if recent_move < 1e-6 else 0
+        else:
+            self.stall_count = 0
+        if self.phase == "escape_carry" and self.stall_count >= 3:
+            # The straight back-out has reached its useful limit; route goalward.
+            self.phase = "pre_align"
+        elif self.phase in ("navigate", "carry") and self.stall_count >= 3:
+            self.phase = self.phase + "_recover"
+            self.recover_count = 0
+            self.recover_dir = 0
+            self.recover_progress = 0
+        elif self.phase == "pre_align" and self.stall_count > 20:
+            self.phase = "center_carry"
+
+        if self.phase in ("navigate", "navigate_recover") and self.mission_steps > 120:
+            self.attempts[self.active_name] = self.attempts.get(self.active_name, 0) + 1
+            self.reset(state, {})
+
+        if (self.phase == "grasp" and self.active_name == "target_block" and
+                self.prev_block is not None and
+                math.hypot(tx - self.prev_block[0], ty - self.prev_block[1]) > 1e-5):
+            self.phase = "escape_carry"
+        if self.phase == "grasp":
+            for name, old in self.prev_obstacles.items():
+                try:
+                    o = state.get_object_from_name(name)
+                    now = (self._v(state, o, "x"), self._v(state, o, "y"))
+                except KeyError:
+                    continue
+                if math.hypot(now[0] - old[0], now[1] - old[1]) > 1e-5:
+                    self.phase = "clear_obstacle"
+                    self.carried_name = name
+                    self.clear_origin = now
+                    self.clear_timer = 0
+                    best = (-1e9, (1.0, 0.0))
+                    for j in range(16):
+                        ang = 2*math.pi*j/16; ux,uy=math.cos(ang),math.sin(ang)
+                        ex,ey=now[0]+.32*ux,now[1]+.32*uy
+                        score=min(ex-.16,2.34-ex,ey-.16,2.34-ey,
+                                  math.hypot(ex-tx,ey-ty)-.28,
+                                  math.hypot(ex-gx,ey-gy)-.28)
+                        for other, pos in self.prev_obstacles.items():
+                            if other != name:
+                                score=min(score,math.hypot(ex-pos[0],ey-pos[1])-.18)
+                        if score>best[0]:best=(score,(ux,uy))
+                    self.clear_direction=best[1]
+                    break
+
+        if self.phase == "navigate_recover":
+            waypoint = self.path[0] if self.path else self.approach_point
+            dx, dy = waypoint[0]-rx, waypoint[1]-ry
+            d = max(math.hypot(dx,dy), 1e-8)
+            a[0] = -self.recover_sign * dy/d * .025
+            a[1] = self.recover_sign * dx/d * .025
+            a[3] = -.1
+            if self.stall_count >= 3:
+                self.recover_sign *= -1.0
+                self.stall_count = 0
+            self.recover_count += 1
+            if self.recover_count >= 10:
+                self.phase = "navigate"
+        elif self.phase == "navigate":
+            while self.path and math.hypot(self.path[0][0] - rx,
+                                           self.path[0][1] - ry) < 0.018:
+                self.path.pop(0)
+            waypoint = self.path[0] if self.path else self.approach_point
+            dx, dy = waypoint[0] - rx, waypoint[1] - ry
+            if math.hypot(dx, dy) > 0.012:
+                a[0] = np.clip(dx, -0.035, 0.035)
+                a[1] = np.clip(dy, -0.035, 0.035)
+                a[3] = -0.1
+            else:
+                self.phase = "turn"
+        if self.phase == "turn":
+            want = math.atan2(by - ry, bx - rx)
+            err = self._angle(want - th)
+            if abs(err) > 0.012:
+                a[2] = np.clip(err, -0.19634954, 0.19634954)
+                a[3] = -0.1
+            else:
+                self.phase = "extend"
+
+        if self.phase == "extend":
+            a[3] = 0.1
+            a[4] = 1.0
+            self.timer += 1
+            if arm >= 0.195:
+                self.phase = "grasp"
+                self.timer = 0
+                self.press_step = 0.01
+            elif self.timer >= 5:
+                self.phase = "grasp"
+                self.timer = 0
+                self.press_step = 0.01
+        elif self.phase == "grasp":
+            a[4] = 1.0
+            dist = math.hypot(bx - rx, by - ry)
+            if dist > 1e-8:
+                if self.motion_phase == "grasp" and recent_move < 1e-7:
+                    self.press_step = max(0.00025, self.press_step * 0.5)
+                step = self.press_step
+                a[0] = (bx - rx) / dist * step
+                a[1] = (by - ry) / dist * step
+            self.timer += 1
+            if self.timer > 90:
+                self.phase = "abort_grasp"
+                self.timer = 0
+        elif self.phase == "escape_carry_recover":
+            a[4] = 1.0
+            dx, dy = rx-bx, ry-by
+            d = max(math.hypot(dx,dy), 1e-8)
+            a[0] = -self.recover_sign*dy/d*.018
+            a[1] = self.recover_sign*dx/d*.018
+            self.recover_count += 1
+            if self.recover_count >= 10:self.phase = "escape_carry"
+        elif self.phase == "escape_carry":
+            a[4] = 1.0
+            escaped = math.hypot(bx - self.initial_target[0],
+                                 by - self.initial_target[1])
+            if escaped > 0.45:
+                self.phase = "pre_align"
+            else:
+                # Back out through the same clear ray used for approach.
+                d = max(math.hypot(bx - rx, by - ry), 1e-8)
+                a[0] = (rx - bx) / d * 0.018
+                a[1] = (ry - by) / d * 0.018
+        elif self.phase == "pre_align":
+            a[4] = 1.0
+            err = self._angle(self._v(state, g, "theta") -
+                              self._v(state, b, "theta"))
+            if abs(err) > 0.0001:
+                a[2] = np.clip(err, -0.19634954, 0.19634954)
+            else:
+                self.phase = "carry"
+                self.carry_path = self._make_carry_path(state, rx, ry, bx, by, gx, gy)
+        elif self.phase == "center_carry":
+            a[4] = 1.0
+            dx, dy = 1.25 - bx, 1.25 - by
+            if math.hypot(dx, dy) < 0.04:
+                self.phase = "orient_carry"
+            else:
+                # Large diagonal moves are rejected in close contact even when
+                # the corresponding small cardinal moves are feasible.
+                self.timer += 1
+                use_x = (self.timer % 2 == 0 and abs(dx) > .012) or abs(dy) <= .012
+                if use_x:
+                    a[0] = np.clip(dx, -0.018, 0.018)
+                else:
+                    a[1] = np.clip(dy, -0.018, 0.018)
+        elif self.phase == "orient_carry":
+            a[4] = 1.0
+            # Match the square's goal orientation (modulo quarter-turns), while
+            # selecting the equivalent arm pose that leaves most wall clearance.
+            block_theta = self._v(state, b, "theta")
+            goal_theta = self._v(state, g, "theta")
+            relative = self._angle(block_theta - th)
+            reach = math.hypot(bx - rx, by - ry)
+            choices = []
+            for k in range(4):
+                cand = goal_theta - relative + k * (math.pi / 2.0)
+                base_x = gx - reach * math.cos(cand)
+                base_y = gy - reach * math.sin(cand)
+                clearance = min(base_x - 0.11, 2.39 - base_x,
+                                base_y - 0.11, 2.39 - base_y)
+                choices.append((clearance, -abs(self._angle(cand - th)), cand))
+            want = max(choices)[2]
+            err = self._angle(want - th)
+            if abs(err) > 0.0001:
+                a[2] = np.clip(err, -0.19634954, 0.19634954)
+            else:
+                self.phase = "carry"
+        elif self.phase == "carry_recover":
+            a[4] = 1.0
+            dx, dy = gx-bx, gy-by
+            d=max(math.hypot(dx,dy),1e-8)
+            base_ang = math.atan2(dy, dx)
+            offsets = (0.0, math.pi/2, -math.pi/2, math.pi,
+                       math.pi/4, -math.pi/4, 3*math.pi/4, -3*math.pi/4)
+            if self.recover_count > 0:
+                if recent_move > 1e-5:
+                    self.recover_progress += 1
+                else:
+                    self.recover_dir = (self.recover_dir + 1) % len(offsets)
+                    self.recover_progress = 0
+            ang = base_ang + offsets[self.recover_dir]
+            a[0]=math.cos(ang)*.018
+            a[1]=math.sin(ang)*.018
+            self.recover_count += 1
+            if self.recover_progress >= 10 or self.recover_count >= 40:
+                self.phase="carry"
+        elif self.phase == "carry":
+            a[4] = 1.0
+            while self.carry_path and math.hypot(self.carry_path[0][0]-rx,
+                                                 self.carry_path[0][1]-ry) < .018:
+                self.carry_path.pop(0)
+            if self.carry_path:
+                dx, dy = self.carry_path[0][0]-rx, self.carry_path[0][1]-ry
+            else:
+                dx, dy = gx - bx, gy - by
+            if math.hypot(dx, dy) < 0.001:
+                self.phase = "final_align"
+            else:
+                a[0] = np.clip(dx, -0.035, 0.035)
+                a[1] = np.clip(dy, -0.035, 0.035)
+        elif self.phase == "final_align_recover":
+            a[4] = 1.0
+            dx,dy=1.25-bx,1.25-by;d=max(math.hypot(dx,dy),1e-8)
+            a[0],a[1]=dx/d*.018,dy/d*.018
+            self.recover_count += 1
+            if self.recover_count >= 12:self.phase="final_align"
+        elif self.phase == "final_align":
+            a[4] = 1.0
+            err = self._angle(self._v(state, g, "theta") -
+                              self._v(state, b, "theta"))
+            if abs(err) > 0.0001:
+                a[2] = np.clip(err, -0.19634954, 0.19634954)
+            else:
+                self.phase = "final_center"
+                self.timer = 0
+        elif self.phase == "final_center":
+            a[4] = 1.0
+            dx, dy = gx - bx, gy - by
+            if math.hypot(dx, dy) < 0.0002:
+                # Try held updates first; if containment is not latched, release
+                # with a tiny persistent base update.
+                self.timer += 1
+                if self.timer <= 8:
+                    probe = math.pi/4 + (self.timer-1)*(math.pi/2)
+                    a[0],a[1]=math.cos(probe)*.006,math.sin(probe)*.006
+                else:
+                    a[0] = .001
+                    a[4] = 0.0
+                    self.phase = "release_trigger"
+            else:
+                a[0] = np.clip(dx, -0.02, 0.02)
+                a[1] = np.clip(dy, -0.02, 0.02)
+        elif self.phase == "release":
+            a[4] = 0.0
+            self.timer += 1
+            if self.timer >= 2:
+                a[3] = -0.1
+                a[0] = -0.02 * math.cos(th)
+                a[1] = -0.02 * math.sin(th)
+        elif self.phase == "release_trigger":
+            a[0] = 0.001
+            a[4] = 0.0
+        elif self.phase == "abort_grasp":
+            a[4] = 0.0
+            a[3] = -0.1
+            self.timer += 1
+            if self.timer >= 3:
+                self.attempts[self.active_name] = self.attempts.get(self.active_name, 0) + 1
+                self.reset(state, {})
+                a[:] = 0.0
+        elif self.phase == "clear_obstacle":
+            a[4] = 1.0
+            self.clear_timer += 1
+            o = state.get_object_from_name(self.carried_name)
+            ox, oy = self._v(state, o, "x"), self._v(state, o, "y")
+            moved = 0.0 if self.clear_origin is None else math.hypot(
+                ox-self.clear_origin[0], oy-self.clear_origin[1])
+            if moved > 0.28 or self.clear_timer > 24:
+                self.phase = "clear_release"
+                self.timer = 0
+            else:
+                a[0] = self.clear_direction[0] * 0.025
+                a[1] = self.clear_direction[1] * 0.025
+        elif self.phase == "clear_release":
+            a[4] = 0.0
+            self.timer += 1
+            if self.timer >= 2:
+                a[3] = -0.1
+                a[0] = -0.02 * math.cos(th)
+                a[1] = -0.02 * math.sin(th)
+            if self.timer >= 4:
+                self.ignored_obstacles.add(self.carried_name)
+                self.reset(state, {})
+                a[:] = 0.0
+        for name in list(self.prev_obstacles):
+            try:
+                o = state.get_object_from_name(name)
+                self.prev_obstacles[name] = (self._v(state, o, "x"),
+                                             self._v(state, o, "y"))
+            except KeyError:
+                pass
+        self.prev_block = (tx, ty)
+        self.prev_robot = (rx, ry)
+        self.motion_phase = self.phase
+        return a

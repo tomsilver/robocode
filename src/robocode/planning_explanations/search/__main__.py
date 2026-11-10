@@ -1,4 +1,4 @@
-"""Run search-explanation milestones 1–7 without robotics or LLMs."""
+"""Run search-explanation milestones 1–8; only milestone 8 uses robotics."""
 
 import argparse
 from pathlib import Path
@@ -11,6 +11,8 @@ from .fixtures import FIXTURES, GROUND_TRUTH
 from .heuristic_discovery import HEURISTIC_LIMITS, discover_heuristics
 from .heuristic_fixtures import GROUND_TRUTH as HEURISTIC_TRUTH
 from .heuristic_fixtures import HEURISTIC_FIXTURES, heuristic_cases
+from .policy_cli import add_policy_arguments, run_policy_suite
+from .policy_fixtures import KINDER_POLICY, POLICY_FIXTURES
 from .report import save_report, save_unresolved, write_json
 from .route_fixtures import GROUND_TRUTH as ROUTE_TRUTH
 from .route_fixtures import ROUTE_FIXTURES, route_cases
@@ -95,7 +97,9 @@ def main(argv=None) -> int:
     """Discover, persist the bank, then validate and export inspectable evidence."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--suite", choices=("line", "tasks", "routes", "heuristics"), default="line"
+        "--suite",
+        choices=("line", "tasks", "routes", "heuristics", "policy"),
+        default="line",
     )
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument(
@@ -107,12 +111,17 @@ def main(argv=None) -> int:
                 | set(TASK_FIXTURES)
                 | set(ROUTE_FIXTURES)
                 | set(HEURISTIC_FIXTURES)
+                | set(POLICY_FIXTURES)
+                | {KINDER_POLICY}
             ),
         ),
         default="all",
     )
     sources.add_argument(
-        "--source", type=Path, help="Trusted one-argument Python policy"
+        "--source",
+        type=Path,
+        help="Trusted one-argument Python policy (a GeneratedApproach class file "
+        "for --suite policy)",
     )
     parser.add_argument(
         "--output-dir",
@@ -122,27 +131,29 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--max-candidates",
         type=int,
-        help="Default: 4000 for heuristics, 2000 otherwise",
+        help="Default: 6000 for policy, 4000 for heuristics, 2000 otherwise",
     )
     parser.add_argument("--max-bindings", type=int, default=64)
     parser.add_argument("--mapping-depth", type=int, default=2)
     parser.add_argument(
         "--max-selectors",
         type=int,
-        help="Value paths inventoried per checkpoint. Default: 128 for heuristics, "
-        "64 otherwise",
+        help="Value paths inventoried per checkpoint. Default: 256 for policy, "
+        "128 for heuristics, 64 otherwise",
     )
     parser.add_argument("--max-routes", type=int, default=8)
     parser.add_argument("--prefix-limit", type=int, default=64)
     parser.add_argument(
         "--frozen", type=Path, help="Validate an existing bank; skip discovery"
     )
+    add_policy_arguments(parser)
     args = parser.parse_args(argv)
     fixtures = {
         "line": FIXTURES,
         "tasks": TASK_FIXTURES,
         "routes": ROUTE_FIXTURES,
         "heuristics": HEURISTIC_FIXTURES,
+        "policy": {**POLICY_FIXTURES, KINDER_POLICY: ""},
     }[args.suite]
     if not args.source and args.fixture != "all" and args.fixture not in fixtures:
         parser.error("Fixture does not belong to the selected suite")
@@ -153,10 +164,14 @@ def main(argv=None) -> int:
                 "tasks": "outputs/search-task-benchmark",
                 "routes": "outputs/search-route-benchmark",
                 "heuristics": "outputs/search-heuristic-benchmark",
+                "policy": "outputs/search-policy-benchmark",
             }[args.suite]
         )
     if args.frozen and not args.source and args.fixture == "all":
         parser.error("--frozen requires --source or a single --fixture")
+    if args.suite == "policy":
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        return run_policy_suite(args)
     defaults = HEURISTIC_LIMITS if args.suite == "heuristics" else Limits()
     try:
         limits = Limits(
