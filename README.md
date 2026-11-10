@@ -2,7 +2,7 @@
 
 ![workflow](https://github.com/tomsilver/robocode/actions/workflows/ci.yml/badge.svg)
 
-[Project website and videos](https://agenticgentamp.github.io/) · [Paper](https://agenticgentamp.github.io/assets/paper.pdf) · [Code](https://github.com/tomsilver/robocode)
+[Project website and videos](https://agenticgentamp.github.io/) · [Paper](https://agenticgentamp.github.io/assets/paper.pdf) · [Code](https://github.com/tomsilver/robocode) · [Dataset](https://huggingface.co/datasets/prpl-group/agentic-gentamp-runs)
 
 RoboCode is the experiment code for **AgenticGenPlan**, our study of coding agents for generalized task and motion planning (TAMP). Given a task description and simulator access, an agent probes the environment, writes and tests Python, and returns one program that solves new instances of the task. We freeze that program and evaluate it without further LLM calls.
 
