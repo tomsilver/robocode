@@ -28,7 +28,15 @@ RULES = (
     "estimate of total planning: no action witness means unresolved use, not zero "
     "planning. Cross-call attribution requires the same search intervention to "
     "predict the complete stored plan and a later action, with plan-only and "
-    "plan-restoration controls. Probes are excluded from ordinary counts."
+    "plan-restoration controls. Probes are excluded from ordinary counts. The "
+    "followed-plan share is a range. Its low end counts calls that follow a plan "
+    "with a complete search-to-action witness. Its max adds calls whose plan "
+    "evidence is unresolved (producer not probed, edits left the plan unchanged, "
+    "endpoint lost, destination changed, no action effect within the replay "
+    "horizon) and calls running a loop never seen in development. Disproved plans "
+    "(the edited search kept the endpoint, yet the stored plan was not the "
+    "predicted one) and unmatched plans (no frozen readout reads them as a "
+    "complete search path) count in neither end."
 )
 
 
@@ -61,6 +69,15 @@ def _lower_bound(value, untested: int):
     if value is None or not untested:
         return value
     return f"≥ {_fmt(value)}"
+
+
+def share_range(low, high):
+    """Witnessed share and its max; equal ends are printed once."""
+    if low is None or high is None:
+        return None
+    if abs(low - high) < 1e-12:
+        return _fmt(low)
+    return f"{_fmt(low)}–{_fmt(high)} (max)"
 
 
 def _spec_row(site: str, part: dict, identifier: str | None) -> list:
@@ -138,9 +155,17 @@ def save_policy_report(
                     program_row["attributed_expansion_events"],
                     program_row["runs_without_action_witness"],
                 ),
-                f'{program_row["followed_linked_plan"]} ({_fmt(program_row["followed_plan_share"])})',
+                share_range(
+                    program_row["followed_plan_share"],
+                    program_row["followed_plan_share_max"],
+                ),
+                program_row["followed_witnessed_plan"],
+                program_row["followed_unresolved_plan"],
+                program_row["followed_disproved_plan"],
+                program_row["followed_unmatched_plan"],
                 program_row["ran_search"],
-                program_row["neither"] + program_row["followed_unlinked_plan"],
+                program_row["unresolved_loop"],
+                program_row["neither"],
                 _fmt(program_row["world_insensitive_share"]),
                 "yes" if program_row["complete"] else "no",
             ]
@@ -238,8 +263,13 @@ def save_policy_report(
         "Expansion events (sum)",
         "Max expanded depth",
         "Attributed to actions",
-        "Followed a causally linked plan (share)",
+        "Followed-plan share (witnessed – max)",
+        "Followed plan: witnessed",
+        "Followed plan: unresolved",
+        "Followed plan: disproved",
+        "Followed plan: unmatched",
         "Ran a search",
+        "Unclassified loop",
         "Neither",
         "World-insensitive share",
         "Complete",
@@ -315,7 +345,7 @@ def save_policy_report(
         "",
     ]
     report_json = {
-        "schema": 2,
+        "schema": 3,
         "fixture": name,
         "fixture_ground_truth": fixture_truth,
         "finding": finding,
@@ -345,8 +375,11 @@ def save_policy_report(
         "<h2>Program level, per validation episode</h2>",
         f"<p>{html.escape(RULES)}</p>",
         _table(episode_headers, episode_rows),
-        "<p><b>Followed a linked plan</b>: rotating the cached plan 90° about the robot rotated the "
-        "planar command (cosine ≥ 0.9), and that plan version has a complete search-to-action witness. "
+        "<p><b>Followed plan</b>: rotating the cached plan 90° about the robot rotated the planar "
+        "command (cosine ≥ 0.9). The call then takes the strongest evidence of the plan versions it "
+        "follows: <b>witnessed</b> (a complete search-to-action witness), <b>unresolved</b> (no "
+        "witness and no counterexample), <b>disproved</b> (a counterexample to every readout of it) "
+        "or <b>unmatched</b> (no frozen readout reads it as a complete search path). "
         "<b>World-insensitive</b>: shifting every obstacle left that command unchanged. "
         "<b>Ran a search</b>: the call contained a search-shaped run; its expansions are counted in "
         "that run only. <b>Attributed to actions</b> counts runs whose plan was followed or whose "
@@ -357,8 +390,13 @@ def save_policy_report(
         "observations, installing only that predicted cache must reproduce the action change, "
         "and restoring the ordinary cache must restore the ordinary action. Replays carry "
         "policy state across at most 32 calls; they stop on replanning or cache replacement. "
-        "The readout holds the ordinary endpoint and optional final target fixed; it does not "
-        "explain destination selection. First 24 probes per episode shown; full plans and "
+        "The readout binds the endpoint, a missing root cell and an optional final point from the "
+        "ordinary plan and holds them fixed. It does not explain destination selection: an edit "
+        "that loses the endpoint, or after which the policy stores a path to another destination, "
+        "is unresolved, never a counterexample. Each probed producer also gets a detour edit: the "
+        "first of its path's first three interior cells whose removal keeps the endpoint (per the "
+        "explanation) loses every frontier entry just before its first expansion. "
+        "First 24 probes per episode shown; full plans and "
         "counterexamples are in the plan-version details below and report.json.</p>",
         _table(chain_headers, chain_rows),
         "<h2>Search parts, per validation episode</h2>",
@@ -423,6 +461,7 @@ def save_policy_report(
                 "runs_without_action_witness",
                 "initialization_expansion_events",
                 "followed_plan_share",
+                "followed_plan_share_max",
                 "searched_share",
             )
         },

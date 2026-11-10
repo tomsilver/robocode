@@ -16,8 +16,10 @@ episodes, cached plans, and a real agent-written KinDER policy.
 
 Issue 1 corrected 2026-11-10: cross-call attribution now requires a complete
 **search intervention → predicted stored plan → later action** witness.
-See the implementation decisions below. Schema-1 policy banks must be
-rediscovered; schema 2 freezes the new readout templates and probe protocol.
+See the implementation decisions below. Older policy banks must be
+rediscovered; schema 3 freezes readout templates that bind the root offset per
+plan, the destination-keeping detour probe, and the four followed-plan
+categories.
 
 ## Run milestone 8: a stateful KinDER policy
 
@@ -59,19 +61,28 @@ Discovery reads only value shapes at each loop's first checkpoint, never names:
 Each search part keeps two explanations that differ only in how stale heap
 entries are handled; no development run popped a stale entry, so both remain.
 Every iteration of every run is compared (about 2,000 per reachability search).
-Up to five seeded edits plus a predeclared frontier-clear at visit zero per
-sampled run must predict the whole continuation.
+Up to five seeded edits per sampled run, plus one destination-keeping detour
+per stored plan it may have produced, must predict the whole continuation.
 
-The original milestone-8 validation results below predate the Issue-1 fix.
-Their followed-plan shares used structural links and are **not causal-chain
-evidence**. Current results are in `outputs/search-policy-issue1/summary.md`.
-The episodes were not seen during discovery:
+Validation results after the Issue-1 follow-up
+(`outputs/search-policy-issue1/summary.md`). The episodes were not seen during
+discovery. The followed-plan share is a range: witnessed calls, up to the max
+that also counts calls whose plan evidence is unresolved.
 
-| Episode (obstacles, seed) | Solved | Planning events | Expansion events | At initialization | Followed-plan share |
-| --- | --- | --- | --- | --- | --- |
-| (3, 100) | no | 11 | 11,264 | 1,931 | 0.70 |
-| (15, 101) | no | 97 | 17,392 | 1,636 | 0.04 |
-| (20, 102) | no | 127 | 127 | 19 | 0.00 |
+| Episode (obstacles, seed) | Solved | Planning events | Expansion events | At initialization | Followed plan: witnessed / unresolved / disproved / unmatched | Followed-plan share (witnessed – max) |
+| --- | --- | --- | --- | --- | --- | --- |
+| (3, 100) | no | 11 | 11,264 | 1,931 | 46 / 480 / 0 / 51 | 0.06–0.70 |
+| (15, 101) | no | 97 | 17,392 | 1,636 | 0 / 97 / 0 / 0 | 0.00–0.04 |
+| (20, 102) | no | 127 | 127 | 19 | 0 / 0 / 0 / 0 | 0.00 |
+
+The original milestone-8 shares (0.70, 0.04, 0.00) used structural links and
+are not causal evidence; they equal the maxima above. Most unresolved calls
+follow plans whose producing run was not among the eight probed runs, or whose
+path has no interior cell to detour around (three waypoints). In (15, 101) one
+reset call runs the reachability search eight times, ignoring one more obstacle
+each time, and stores the last run's path. A detour on an earlier run left that
+plan unchanged, so the readout "this run made the plan" was correctly refuted
+for that run; the remaining runs keep the version unresolved, not disproved.
 
 Read the last row carefully. The policy "plans" 127 times, but each search
 expands one cell: in its own inflated map the robot's cell has no free
@@ -89,9 +100,9 @@ command unchanged, as open-loop plan execution predicts.
 | `plan_once` | A* in `reset`, then follow | 1 planning event, all at initialization; every call follows the plan |
 | `replan_every_call` | A* in every call | One search per call; 0 at initialization; searched share 1.0 |
 | `unused_plan` | A* in `reset`, then steer straight | Search verified and plan linked, yet no call follows it: 0 attributed |
-| `discarded_search` | Compute A*, discard it, build goal waypoints independently | Search verified, cache affects commands, but no search-to-plan chain: 0 supported attribution |
+| `discarded_search` | Compute A*, discard it, build goal waypoints independently | Search verified, cache affects commands, but no readout reads the cache as a search path: plans "unmatched", followed-plan share 0 with max 0, 0 attributed |
 | `reactive` | No search | No search-shaped loops |
-| `reach_then_pick` | Explore all, then a tree path | Search recovered with no goal test; destination reselection can reject the current conditional plan readout |
+| `reach_then_pick` | Explore all, then a tree path | Search recovered with no goal test; a destination-keeping detour witnesses the plan in every validation episode (share 1.0) |
 | `nested_renamed` | `plan_once` with renamed nested storage | Identical counts to `plan_once` |
 
 A test-only control rebuilds its heap from a dictionary every iteration. It
@@ -106,7 +117,7 @@ comes back, so paired edits reject it and its episode totals are withheld.
 | Max expanded and discovery depth | Maximum over runs |
 | Planning events | Runs with at least one expansion |
 | At initialization | The part of those totals from the harness `reset` |
-| Followed-plan share | Rotation-supported cache consumers whose version also has a complete cross-call search witness, divided by all action calls |
+| Followed-plan share | A range over action calls. Low end: rotation-supported cache consumers whose plan version has a complete cross-call search witness. Max: adds consumers of versions with unresolved evidence and calls running a loop never classified in development. Disproved and unmatched versions count in neither end |
 | Searched share | Action calls that contained a search-shaped run |
 | Attributed to actions | Runs with a complete cross-call witness, or whose paired edit changed the same call's command; ≥ marks a lower bound when any run lacks an action witness |
 | Coverage | Search-shaped runs supported, rejected or unresolved; non-search loop runs listed |
@@ -808,8 +819,9 @@ Paired search edits (drop a frontier entry, raise an unexpanded leaf's cost,
 clear the frontier) re-execute only the enclosing call from deep copies, check
 the unchanged prefix, and compare the run's whole continuation. Five edit
 points per run are drawn with a fixed seed before any result is seen. In
-schema 2, one additional frontier-clear at visit zero is fixed in advance; at most
-eight runs per part per episode are probed, also drawn with a fixed seed.
+schema 3, each stored plan a probed run may have produced also gets one detour
+edit (Issue 1 follow-up, below); at most eight runs per part per episode are
+probed, also drawn with a fixed seed.
 Heap edits restore heap order with `heapq.heapify`, the representation's own
 invariant.
 
@@ -825,18 +837,23 @@ verified ordinary expansions; none receives supported action attribution.
 `policy_causality.py` now implements a bounded protocol:
 
 1. During development, enumerate readouts of a **complete root-to-endpoint
-   parent chain**, optionally omitting the root and appending one fixed terminal
-   point. Attribute and point-callable candidates come from existing values,
-   without semantic names. Freeze these templates with the bank (schema 2).
-2. On an ordinary execution, bind the endpoint and optional final point from
-   its stored plan. Reconstruct the plan using the independently predicted
-   parent map. This is a conditional readout, not an explanation of destination
-   selection; it adds no analyzer-generated search to program effort.
+   parent chain**, optionally appending one fixed terminal point. Attribute and
+   point-callable candidates come from existing values, without semantic names.
+   Freeze these templates with the bank (schema 3).
+2. On an ordinary execution, bind the endpoint, whether the root cell is absent
+   (zero or one leading cell) and the optional final point from its stored plan.
+   Reconstruct the plan using the independently predicted parent map. This is a
+   conditional readout, not an explanation of destination selection; it adds no
+   analyzer-generated search to program effort.
 3. For each sampled search intervention, predict the entire stored waypoint
    sequence from the edited abstract search and compare it to the actual
-   post-call attribute. Keep unchanged results, mismatches and errors. Any
-   stored-plan counterexample refutes that readout for this version even if
-   another intervention gave a positive witness.
+   post-call attribute. If the edited search no longer reaches the bound
+   endpoint the same way, the probe is unresolved (`endpoint_lost`): what a
+   policy stores then is fallback code the readout does not model. If the
+   stored plan is a complete chain of the edited tree to another destination,
+   it is unresolved too (`destination_changed`). Otherwise a mismatch is a
+   counterexample, and it refutes that readout for this version even if another
+   intervention gave a positive witness.
 4. When the plan changes as predicted, retain four copied policy states:
    ordinary; search-edited; ordinary with only the predicted plan installed;
    search-edited with the ordinary plan restored. Carry their state across up
@@ -858,18 +875,69 @@ not equivalence for every input. The future replays are controlled experiments
 on ordinary observations, **not** counterfactual closed-loop task-success runs.
 The controller's action prediction comes from a plan-only program replay; the
 controller itself has not been synthesized as a separate abstract model.
-Target reselection (e.g. `reach_then_pick`) can fail the current fixed-endpoint
-readout even when search is real. Its search mechanism stays supported while
-cross-call attribution stays unsupported. Issue 2, inventory-budget exhaustion,
-is outside this correction.
+Issue 2, inventory-budget exhaustion, is outside this correction.
+
+### Issue 1 follow-up: out-of-domain probes, detours, four categories (2026-11-10)
+
+The first correction refuted genuine planners. Every stored-plan mismatch in
+its outputs came from a frontier-clear edit (mostly a predeclared clear at
+visit zero). Clearing removes the bound endpoint from the edited tree, so the
+readout predicted only the final point, while the policy stored whatever its
+failure code produces: nothing (`replan_every_call`), the start plus the target
+(`reach_then_pick`), or a new search toward another target (KinDER). One such
+mismatch refuted the readout. `reach_then_pick` and KinDER fell to share 0 and
+`replan_every_call` gained rejected chains, although all three plan. 120 KinDER
+calls also followed a genuine path whose root waypoint had been consumed in the
+same call, which the frozen "starts at root" template could not read.
+
+Changes:
+
+1. **Out-of-domain probes are unresolved.** `judge_probe` returns
+   `endpoint_lost` when the edited search no longer reaches the bound endpoint
+   the same way (not in the tree, or a different goal outcome), and
+   `destination_changed` when the stored plan is a complete chain of the edited
+   tree to another destination. Only a wrong plan for a kept endpoint is a
+   counterexample. The root offset is bound per plan, like the endpoint.
+2. **A destination-keeping detour replaces the clear at visit zero.** For each
+   stored plan a probed run may have produced, take the first of the path's
+   first three interior cells whose removal keeps the endpoint according to the
+   explanation, and drop every frontier entry of it (`drop_cell`, applied
+   identically to the live list and the abstract engine) just before its first
+   expansion. Starting near the root makes a consumer act on the change within
+   the 32-call replay horizon; a mid-path detour often did not.
+3. **Four followed-plan categories and a share range.** A plan-following call
+   takes the strongest evidence among the versions it follows: witnessed,
+   unresolved, disproved, unmatched (no frozen readout reads the plan as a
+   complete search path). `followed_plan_share` is the witnessed fraction;
+   `followed_plan_share_max` adds unresolved calls and calls running an
+   unclassified loop. Disproved and unmatched calls are in neither end.
+   "Unmatched" is relative to the frozen readout grammar.
+
+| Policy | Ground truth | First correction | Follow-up |
+| --- | --- | --- | --- |
+| `plan_once` | plans | share 1.0 | share 1.0 |
+| `discarded_search` | fake plan | share 0.0 | 0.0, max 0.0 (unmatched) |
+| `reach_then_pick` | plans | 0.0, readout refuted in every episode | 1.0 |
+| `replan_every_call` | plans every call | 3–4 refuted chains per episode | no refuted chains |
+| `unused_plan` | plan unused | 0.0 | 0.0, max 0.0 |
+| KinDER (mean) | unknown | 0.0 | 0.02–0.25 |
+
+The same-call attribution route is unchanged, but it depends on which edits
+run. Without the clear at visit zero, the lower bounds on attributed expansions
+fell for `replan_every_call` (≥ 714 to ≥ 579) and KinDER (≥ 1,244 to ≥ 644).
+Producer runs are still sampled uniformly (eight per part per episode), so on
+KinDER most unresolved calls are unprobed producers; probing plan-producing
+runs first would raise the witnessed share without changing any rule above.
 
 Reports separate structural matches, exact plan predictions, action mediation,
 counterexamples and missing witnesses. Inspect
 `validation.episodes[].versions[].chains[]` in `report.json`; Markdown and HTML
 show action comparisons alongside the edit that caused them. The new regression
 suite covers discarded search, a genuine plan, delayed consumption, unused
-changed plans, an unrelated action-changing flag, cache replacement, wrong
-plan predictions, and frozen/legacy banks.
+changed plans, an unrelated action-changing heading, cache replacement,
+fallback storage after a lost endpoint, a duplicate search that did not
+produce the plan, each probe verdict on a hand-built tree, and frozen/legacy
+banks.
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m robocode.planning_explanations.search --suite policy --output-dir outputs/search-policy-issue1

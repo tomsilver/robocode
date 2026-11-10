@@ -22,7 +22,9 @@ from .discover import digest
 from .grid_engine import GRAMMAR, GridSearch, GridSpec, is_cell
 from .policy_causality import (
     CHAIN_RULES,
+    candidate_templates,
     check_plan_chain,
+    detour_edits,
     finish_chains,
     propose_rules,
 )
@@ -53,6 +55,21 @@ SELECTION_RULE = (
     "Largest development mean M over the part's runs; identifier breaks ties"
 )
 SEARCH_PARTS = ("search", "no_explanation")
+BANK_SCHEMA = 3
+# A call following a cached plan takes the strongest evidence among the plan
+# versions it follows, in this order.
+FOLLOWED = {
+    "supported": "followed_witnessed_plan",
+    "unresolved": "followed_unresolved_plan",
+    "rejected": "followed_disproved_plan",
+    "unmatched": "followed_unmatched_plan",
+}
+CALL_CATEGORIES = (
+    "ran_search",
+    *FOLLOWED.values(),
+    "unresolved_loop",
+    "neither",
+)
 EFFORT = (
     "expansion_events",
     "N",
@@ -255,7 +272,7 @@ class FrozenPolicyBank:
     def manifest(self) -> dict:
         """Only fixed experiment choices, excluding the discovery audit."""
         return {
-            "schema": 2,
+            "schema": BANK_SCHEMA,
             "grammar": GRAMMAR,
             "domain": self.domain,
             "source_digest": self.source_digest,
@@ -300,9 +317,10 @@ class FrozenPolicyBank:
 def load_policy_bank(path: Path) -> FrozenPolicyBank:
     """Reload a bank and verify its integrity hash; nothing is rediscovered."""
     data = json.loads(path.read_text())
-    if data.get("schema") != 2:
+    if data.get("schema") != BANK_SCHEMA:
         raise ValueError(
-            "Rediscover this bank: schema 2 freezes cross-call causal rules"
+            f"Rediscover this bank: schema {BANK_SCHEMA} freezes plan readouts "
+            "that bind the root offset per plan"
         )
     if data.get("grammar") != GRAMMAR:
         raise ValueError("Frozen bank uses a different grammar")
@@ -450,11 +468,28 @@ class EpisodeAnalyzer:
     def _probe(self, call, run, before, entry, engines) -> None:
         seed = f"{self.phase}:{self.case}:{call.index}:{run.site}:{run.ordinal}"
         executed: dict = {}
+        part = self.parts[run.site]
+        plans = {
+            a: v
+            for a, v in call.plans_after.items()
+            if v and v != call.plans_before.get(a)
+        }
+        templates = (
+            part.get("plan_rules", [])
+            if self.phase == "validation"
+            else candidate_templates(plans, part["readouts"])
+        )
         for identifier, (explanation, engine) in engines.items():
             result = entry["explanations"][identifier]
             records = []
             runtime = []
-            for edit in choose_edits(explanation, run, seed, self.limits.edits_per_run):
+            edits = choose_edits(explanation, run, seed, self.limits.edits_per_run)
+            for edit in detour_edits(
+                explanation, run, engine, plans, templates, run.capture.callables
+            ):
+                if edit not in edits:
+                    edits.append(edit)
+            for edit in edits:
                 if edit not in executed:
                     executed[edit] = execute_edit(
                         self.program, call, before, edit, self.domain
@@ -543,6 +578,7 @@ class EpisodeAnalyzer:
                 continue
             probe = follow_probe(self.program, self.domain, call, before, attribute)
             version = self.versions.get(attribute)
+            # Structural tree-shape match only; never causal evidence by itself.
             probe["linked"] = bool(version and version["producer"] is not None)
             probe["version"] = version["index"] if version else None
             record["probes"].append(probe)
@@ -550,11 +586,8 @@ class EpisodeAnalyzer:
                 continue
             version["consumers"] += 1
             version["world_insensitive"] += bool(probe.get("world_insensitive"))
-            if probe["linked"]:
-                category = "followed_linked_plan"
-                record["world_insensitive"] = probe.get("world_insensitive")
-            elif category == "neither":
-                category = "followed_unlinked_plan"
+            # Provisional: the evidence category is known once replays finish.
+            category = "followed_plan"
         record["category"] = category
         return record
 
@@ -572,19 +605,11 @@ def analyze_episode(
     if actions != counted or actions != analyzer.actions:
         raise AssertionError("Observation changed the policy's actions")
     finish_chains(analyzer.history)
-    # Rotation identifies cache consumers; only a completed search intervention
-    # chain promotes their structural link to causal support.
+    # Rotation identifies cache consumers; the followed version's chain evidence
+    # says whether that cache is known to come from search.
     for call in analyzer.calls:
-        if call["category"] != "followed_linked_plan":
-            continue
-        causal = any(
-            p["passed"]
-            and p["version"] is not None
-            and analyzer.history[p["version"]]["causal_status"] == "supported"
-            for p in call["probes"]
-        )
-        if not causal:
-            call["category"] = "followed_unlinked_plan"
+        if call["category"] == "followed_plan":
+            _resolve_followed(call, analyzer.history)
     _attribute_use(analyzer.runs, analyzer.history)
     return {
         "case": list(case),
@@ -595,6 +620,20 @@ def analyze_episode(
         "versions": analyzer.history,
         "run_counts": counts,
     }
+
+
+def _resolve_followed(call: dict, versions: list[dict]) -> None:
+    """A plan-following call takes the strongest evidence among followed versions."""
+    followed = [p for p in call["probes"] if p["passed"] and p["version"] is not None]
+    statuses = {versions[p["version"]]["causal_status"] for p in followed}
+    status = next(s for s in FOLLOWED if s in statuses)
+    call["category"] = FOLLOWED[status]
+    if status == "supported":
+        call["world_insensitive"] = any(
+            p.get("world_insensitive")
+            for p in followed
+            if versions[p["version"]]["causal_status"] == "supported"
+        )
 
 
 def _attribute_use(runs: list[dict], versions: list[dict]) -> None:
@@ -673,16 +712,17 @@ def account(episode: dict) -> dict:
     supported = [r for r in search_runs if r["status"] == "supported"]
     calls = episode["calls"]
     categories = {
-        name: sum(c["category"] == name for c in calls)
-        for name in (
-            "ran_search",
-            "followed_linked_plan",
-            "followed_unlinked_plan",
-            "unresolved_loop",
-            "neither",
-        )
+        name: sum(c["category"] == name for c in calls) for name in CALL_CATEGORIES
     }
-    followed = [c for c in calls if c["category"] == "followed_linked_plan"]
+    followed = [c for c in calls if c["category"] == "followed_witnessed_plan"]
+    # The share's max adds calls whose plan evidence is unresolved and calls that
+    # ran a loop never classified in development. Disproved and unmatched plans
+    # are excluded from both ends.
+    possible = (
+        categories["followed_witnessed_plan"]
+        + categories["followed_unresolved_plan"]
+        + categories["unresolved_loop"]
+    )
     program = {
         "complete": complete,
         "search_runs": len(search_runs),
@@ -708,8 +748,9 @@ def account(episode: dict) -> dict:
         "action_calls": len(calls),
         **categories,
         "followed_plan_share": (
-            categories["followed_linked_plan"] / len(calls) if calls else None
+            categories["followed_witnessed_plan"] / len(calls) if calls else None
         ),
+        "followed_plan_share_max": possible / len(calls) if calls else None,
         "searched_share": categories["ran_search"] / len(calls) if calls else None,
         "world_insensitive_share": (
             sum(bool(c.get("world_insensitive")) for c in followed) / len(followed)
@@ -738,6 +779,7 @@ def summarize(episodes: list[dict]) -> dict:
         "initialization_expansion_events",
         "action_calls",
         "followed_plan_share",
+        "followed_plan_share_max",
         "searched_share",
     )
     return {

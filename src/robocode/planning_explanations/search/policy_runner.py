@@ -297,8 +297,25 @@ def apply_edit(values: dict, edit: SearchEdit) -> None:
         if edit.heap:
             # The heap layout's own invariant, restored after removing an entry.
             heapq.heapify(target)
+    elif edit.operation == "drop_cell":
+        target[:] = drop_cell_entries(target, edit.cell)
+        if edit.heap:
+            heapq.heapify(target)
     else:
         raise ValueError("Unknown search edit")
+
+
+def drop_cell_entries(frontier: list, cell) -> list:
+    """Every entry except those of one cell, for cell or (priority, cell) layouts."""
+
+    def held(entry):
+        pair = type(entry) is tuple and len(entry) == 2 and type(entry[1]) is tuple
+        return entry[1] if pair else entry
+
+    kept = [entry for entry in frontier if held(entry) != cell]
+    if len(kept) == len(frontier):
+        raise ValueError("The frontier holds no entry for this cell")
+    return kept
 
 
 class _Transformer(ast.NodeTransformer):

@@ -279,19 +279,20 @@ class ControlPolicyTest(unittest.TestCase):
         self.assertEqual(validation["episodes"][0]["runs"], [])
 
     def test_exhaustive_reachability_has_no_goal_test(self):
-        """Search is recovered; endpoint reselection exceeds the frozen readout."""
+        """Search is recovered; a destination-keeping detour witnesses its plan."""
         spec = self.selected("reach_then_pick").spec
         self.assertEqual((spec.priority, spec.goal_timing), ("g", "none"))
-        self.assertEqual(
-            self.program_row("reach_then_pick")["followed_plan_share"], 0.0
-        )
+        row = self.program_row("reach_then_pick")
+        self.assertEqual(row["followed_plan_share"], 1.0)
+        self.assertEqual(row["attributed_expansion_events"], row["expansion_events"])
         versions = self.results["reach_then_pick"][2]["episodes"][0]["versions"]
+        probes = [p for v in versions for c in v["chains"] for p in c["probes"]]
+        # Edits that lose or move the destination are out of the readout's domain.
+        self.assertFalse([p for p in probes if p["status"] == "rejected"])
         self.assertTrue(
             any(
-                p.get("reason") == "stored_plan_prediction_mismatch"
-                for v in versions
-                for c in v["chains"]
-                for p in c["probes"]
+                p["edit"]["operation"] == "drop_cell" and p["status"] == "supported"
+                for p in probes
             )
         )
 
@@ -453,7 +454,12 @@ class KinderPolicyTest(unittest.TestCase):
         development = bank.audit["development"][0]["accounting"]["program"]
         self.assertTrue(development["complete"])
         self.assertEqual(development["initialization_runs"], 1)
-        self.assertGreater(development["followed_linked_plan"], 0)
+        self.assertGreater(
+            development["followed_witnessed_plan"]
+            + development["followed_unresolved_plan"],
+            0,
+        )
+        self.assertEqual(development["followed_disproved_plan"], 0)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,19 @@
 """Regression tests for the complete search -> cache -> later-action chain."""
 
+import copy
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
+from robocode.planning_explanations.search.grid_engine import GridSearch, GridSpec
+from robocode.planning_explanations.search.policy_causality import (
+    Binding,
+    PlanRule,
+    bind_plan,
+    judge_probe,
+    read_plan,
+)
 from robocode.planning_explanations.search.policy_discovery import (
     discover_policy,
     load_policy_bank,
@@ -46,7 +55,9 @@ class CrossCallCausalityTest(unittest.TestCase):
         self.assertEqual(row["expansion_events"], 459)
         self.assertEqual(row["attributed_expansion_events"], 0)
         self.assertEqual(row["followed_plan_share"], 0)
-        self.assertGreater(row["followed_unlinked_plan"], 0)
+        # No frozen readout reads its cache as a search path: not even the max.
+        self.assertEqual(row["followed_plan_share_max"], 0)
+        self.assertGreater(row["followed_unmatched_plan"], 0)
         self.assertEqual(row["runs_without_action_witness"], 1)
 
     def test_genuine_plan_predicts_stored_value_and_mediates_action(self):
@@ -63,10 +74,13 @@ class CrossCallCausalityTest(unittest.TestCase):
             self.assertEqual(action["predicted_action"], action["observed_action"])
             self.assertEqual(action["restored_action"], action["ordinary_action"])
         # Reference/probe executions never add to the ordinary expansion count.
+        self.assertTrue(any(p["edit"]["operation"] == "drop_cell" for p in witnesses))
         row = episode["accounting"]["program"]
         self.assertEqual(row["planning_events"], 1)
         self.assertEqual(row["attributed_expansion_events"], row["expansion_events"])
-        self.assertEqual(bank.manifest()["schema"], 2)
+        self.assertEqual(row["followed_plan_share"], 1.0)
+        self.assertEqual(row["followed_plan_share_max"], 1.0)
+        self.assertEqual(bank.manifest()["schema"], 3)
 
     def test_delayed_consumer_is_checked_across_multiple_calls(self):
         """Identical early actions do not stop the experiment prematurely."""
@@ -96,14 +110,13 @@ class CrossCallCausalityTest(unittest.TestCase):
         )
 
     def test_unrelated_flag_cannot_substitute_for_plan_mediation(self):
-        """Search alters a flag and an unused plan; only the flag changes actions."""
+        """Search alters a heading and an unused plan; only the heading acts."""
         source = UNUSED_PLAN.replace(
-            STORE, STORE + "\n        self.flag = len(self.path) == 1"
+            STORE, STORE + "\n        self.angle = sum(x + 2 * y for x, y in self.path)"
         ).replace(
             "    def get_action(self, state):\n",
             "    def get_action(self, state):\n"
-            "        if self.flag:\n"
-            "            return (-0.035, -0.035)\n",
+            "        return (0.035 * math.cos(self.angle), 0.035 * math.sin(self.angle))\n",
         )
         _, episode = analyze(source)
         rejected = [
@@ -131,22 +144,44 @@ class CrossCallCausalityTest(unittest.TestCase):
             episode["accounting"]["program"]["attributed_expansion_events"], 0
         )
 
-    def test_wrong_cache_prediction_refutes_readout_even_with_other_witnesses(self):
-        """A changed plan is not enough: its complete value must be predicted."""
+    def test_fallback_after_a_lost_endpoint_is_not_a_counterexample(self):
+        """What a policy stores once its search fails is outside the readout."""
         source = PLAN_ONCE.replace(
             STORE,
             STORE + "\n        if len(self.path) == 1:"
             "\n            self.path = [(-1.0, -1.0)]",
         )
         _, episode = analyze(source)
+        found = probes(episode)
+        self.assertTrue(any(p.get("reason") == "endpoint_lost" for p in found))
+        self.assertFalse([p for p in found if p["status"] == "rejected"])
+        row = episode["accounting"]["program"]
+        self.assertEqual(row["attributed_expansion_events"], row["expansion_events"])
+
+    def test_only_the_search_that_produced_the_plan_gets_credit(self):
+        """Two identical searches; the stored plan comes from the second only."""
+        source = PLAN_ONCE.replace(
+            STORE,
+            '        self._plan(state["robot"], self.goal, state["obstacles"])\n'
+            + STORE,
+        )
+        _, episode = analyze(source)
+        (version,) = episode["versions"]
+        first, second = version["chains"]
+        # Editing the first search leaves the plan as the second one made it.
+        self.assertEqual(first["status"], "rejected")
         self.assertTrue(
             any(
                 p.get("reason") == "stored_plan_prediction_mismatch"
-                for p in probes(episode)
+                for p in first["probes"]
             )
         )
+        self.assertEqual(second["status"], "supported")
+        self.assertEqual(version["causal_status"], "supported")
+        row = episode["accounting"]["program"]
+        self.assertEqual(row["followed_plan_share"], 1.0)
         self.assertEqual(
-            episode["accounting"]["program"]["attributed_expansion_events"], 0
+            2 * row["attributed_expansion_events"], row["expansion_events"]
         )
 
     def test_readout_templates_are_frozen_and_legacy_banks_require_rediscovery(self):
@@ -168,6 +203,80 @@ class CrossCallCausalityTest(unittest.TestCase):
             path.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "Rediscover"):
                 load_policy_bank(path)
+
+
+def _box(cell) -> bool:
+    return 0 <= cell[0] < 5 and 0 <= cell[1] < 5
+
+
+def _point(cell) -> tuple:
+    return (float(cell[0]), float(cell[1]))
+
+
+class JudgeProbeTest(unittest.TestCase):
+    """Only a wrong plan for an endpoint the edited search keeps is a refutation."""
+
+    def setUp(self):
+        spec = GridSpec(priority="g", goal_timing="none")
+        self.engine = GridSearch(spec, (0, 0), None, _box)
+        while self.engine.phase == "ready":
+            self.engine.step()
+        self.rule = PlanRule("path", "point", 0)
+        self.points = read_plan(self.engine, _point, Binding(0, (2, 2), ()))
+        self.binding = bind_plan(self.rule, self.points, self.engine, _point)
+        # The same tree, except (2, 2) now hangs off its other neighbour.
+        self.rerouted = copy.deepcopy(self.engine)
+        old = self.engine.parents[(2, 2)]
+        self.rerouted.parents[(2, 2)] = (2, 1) if old == (1, 2) else (1, 2)
+
+    def judge(self, patched, observed) -> dict:
+        return judge_probe(
+            self.rule,
+            self.binding,
+            self.points,
+            self.engine,
+            patched,
+            _point,
+            observed,
+        )
+
+    def test_binding_reads_a_plan_missing_its_root(self):
+        """A root waypoint consumed in the same call is a bound value, not a rule."""
+        binding = bind_plan(self.rule, self.points[1:], self.engine, _point)
+        self.assertEqual((binding.skip, binding.endpoint), (1, (2, 2)))
+
+    def test_predicted_change_is_replayed(self):
+        predicted = read_plan(self.rerouted, _point, self.binding)
+        outcome = self.judge(self.rerouted, predicted)
+        self.assertEqual(outcome["status"], "replay")
+        self.assertTrue(outcome["changed"])
+
+    def test_unchanged_plan_is_unresolved(self):
+        outcome = self.judge(self.engine, self.points)
+        self.assertEqual(outcome["reason"], "plan_unchanged")
+
+    def test_lost_endpoint_is_unresolved_whatever_is_stored(self):
+        patched = copy.deepcopy(self.engine)
+        del patched.parents[(2, 2)]
+        for observed in ((), ((-1.0, -1.0),), self.points):
+            outcome = self.judge(patched, observed)
+            self.assertEqual(
+                (outcome["status"], outcome["reason"]),
+                ("unresolved", "endpoint_lost"),
+            )
+
+    def test_path_to_another_destination_is_unresolved(self):
+        other = read_plan(self.engine, _point, Binding(0, (3, 2), ()))
+        outcome = self.judge(self.engine, other)
+        self.assertEqual(outcome["reason"], "destination_changed")
+        self.assertEqual(outcome["rebound"]["endpoint"], (3, 2))
+
+    def test_stale_plan_for_a_kept_endpoint_is_a_counterexample(self):
+        outcome = self.judge(self.rerouted, self.points)
+        self.assertEqual(
+            (outcome["status"], outcome["reason"]),
+            ("rejected", "stored_plan_prediction_mismatch"),
+        )
 
 
 if __name__ == "__main__":

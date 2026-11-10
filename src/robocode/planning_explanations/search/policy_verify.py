@@ -2,7 +2,8 @@
 
 Three separate evidence axes, none of which discovers or repairs anything:
 1. computation: every loop iteration of a run against the abstract engine,
-   plus sampled paired edits of the live frontier/costs;
+   plus sampled paired edits of the live frontier/costs (and the detour probes
+   `policy_causality` derives from the stored plan);
 2. candidate read-out: a cached plan's waypoints follow a parent chain;
 3. local cache use: rotating it about the robot rotates the planar command.
 
@@ -32,6 +33,7 @@ from .policy_runner import (
     SearchEdit,
     Session,
     action_tuple,
+    drop_cell_entries,
     plan_attributes,
 )
 from .selectors import parse, select
@@ -174,6 +176,10 @@ def abstract_edit(engine: GridSearch, edit: SearchEdit) -> None:
         engine.frontier.clear()
     elif edit.operation == "drop":
         engine.frontier.remove(edit.entry)
+        if not engine.spec.ordered:
+            heapq.heapify(engine.frontier)
+    elif edit.operation == "drop_cell":
+        engine.frontier[:] = drop_cell_entries(engine.frontier, edit.cell)
         if not engine.spec.ordered:
             heapq.heapify(engine.frontier)
     elif edit.operation == "raise":
@@ -332,11 +338,8 @@ def choose_edits(
             edits.append(
                 SearchEdit(run.site, run.ordinal, index, "clear", mapping.frontier)
             )
-    # A predeclared producer probe: force an informative loss of the route when
-    # possible. Random late edits frequently leave every stored waypoint intact.
-    initial = SearchEdit(run.site, run.ordinal, 0, "clear", mapping.frontier)
-    if initial not in edits:
-        edits.append(initial)
+    # Route-changing producer probes need the stored plan; see
+    # `policy_causality.detour_edits`.
     return edits
 
 

@@ -1,10 +1,18 @@
 """Bounded search -> stored plan -> later action experiments.
 
-The readout is conditional on the ordinary endpoint and optional final target.
-It reconstructs an existing parent chain; it does not discover a new route or
-explain target selection. Templates are proposed on development runs only.
-Counterfactual policies receive the ordinary episode's observations, so these
-are controlled causal probes, not alternative closed-loop task-success trials.
+A readout template (cache attribute, point callable, optional fixed final point)
+is proposed on development runs only and frozen with the bank. On each plan
+version it binds three values from the ordinary stored plan: the endpoint cell,
+whether the root cell is absent (zero or one leading cell, e.g. consumed in the
+same call), and the final point. Those stay fixed when predicting the stored plan
+of an edited search.
+
+The readout says nothing about what a policy stores once an edit loses that
+endpoint, or once the policy picks another destination; such probes are
+unresolved, never counterexamples. Only a wrong prediction for an endpoint the
+edited search still reaches refutes the readout. Counterfactual policies receive
+the ordinary episode's observations, so these are controlled causal probes, not
+alternative closed-loop task-success trials.
 """
 
 import copy
@@ -12,15 +20,21 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from .policy_runner import Session, action_tuple, plan_attributes
-from .policy_verify import ERRORS, compare_run
+from .policy_runner import SearchEdit, Session, action_tuple, plan_attributes
+from .policy_verify import ERRORS, abstract_edit, bind, compare_run
 
 CHAIN_HORIZON = 32
+DETOUR_CANDIDATES = 3
 CHAIN_RULES = {
-    "readout": "fixed-terminal-parent-chain-v1",
-    "skip_root": [0, 1],
+    "readout": "complete-parent-chain-v2",
+    "bound_per_plan": ["endpoint", "absent leading root cell (0 or 1)", "final point"],
     "fixed_tail_points": [0, 1],
-    "extra_search_probe": "clear frontier at visit zero",
+    "producer_probe": (
+        "per stored chain, the first of its first three interior cells whose "
+        "removal keeps the endpoint per the explanation: drop every frontier "
+        "entry of it at the visit just before its first ordinary expansion"
+    ),
+    "out_of_domain": "endpoint lost or plan rebound under an edit: unresolved",
     "future_calls": CHAIN_HORIZON,
     "observations": "ordinary episode observations held fixed",
     "mediation": (
@@ -35,8 +49,16 @@ class PlanRule:
 
     attribute: str
     function: str
-    skip_root: int
     tail: int
+
+
+@dataclass(frozen=True)
+class Binding:
+    """What a readout binds from one ordinary stored plan, held fixed under edits."""
+
+    skip: int
+    endpoint: tuple
+    tail: tuple
 
 
 def _path(parents, root, endpoint) -> list:
@@ -56,14 +78,15 @@ def _path(parents, root, endpoint) -> list:
     return path
 
 
-def read_plan(rule, engine, point, endpoint, tail) -> tuple:
-    """Predict actual stored waypoints from the abstract final parent map."""
-    cells = _path(engine.parents, engine.root, endpoint)[rule.skip_root :]
-    return tuple(tuple(float(v) for v in point(c)) for c in cells) + tail
+def read_plan(engine, point, binding: Binding) -> tuple:
+    """The stored waypoints a bound readout predicts from a final parent map."""
+    cells = _path(engine.parents, engine.root, binding.endpoint)[binding.skip :]
+    return tuple(tuple(float(v) for v in point(c)) for c in cells) + binding.tail
 
 
-def context(rule, points, engine, point) -> tuple:
-    """Bind the ordinary endpoint, requiring a *whole* root-to-endpoint path."""
+def bind_plan(rule: PlanRule, points, engine, point) -> Binding:
+    """Read a stored plan as a *whole* parent chain, optionally without the root."""
+    points = tuple(points or ())
     mapped = points[:-1] if rule.tail else points
     if not mapped:
         raise ValueError("No represented path")
@@ -73,28 +96,149 @@ def context(rule, points, engine, point) -> tuple:
         if value in inverse:
             raise ValueError("Non-injective point readout")
         inverse[value] = cell
-    endpoint = inverse[mapped[-1]]
+    endpoint = inverse[tuple(mapped[-1])]
     tail = points[-1:] if rule.tail else ()
-    if read_plan(rule, engine, point, endpoint, tail) != points:
-        raise ValueError("Stored plan is not the declared complete parent chain")
-    return endpoint, tail
+    for skip in (0, 1):
+        binding = Binding(skip, endpoint, tail)
+        if read_plan(engine, point, binding) == points:
+            return binding
+    raise ValueError("Stored plan is not a complete parent chain")
 
 
 def propose_rules(attribute, points, engine, functions, names) -> list[dict]:
-    """At most four templates per point callable; DEVELOPMENT ONLY."""
+    """At most two templates per point callable; DEVELOPMENT ONLY."""
     rules = []
     for name in names:
         if name not in functions:
             continue
-        for skip in (0, 1):
-            for tail in (0, 1):
-                rule = PlanRule(attribute, name, skip, tail)
-                try:
-                    context(rule, points, engine, functions[name])
-                except ERRORS:
-                    continue
-                rules.append(asdict(rule))
+        for tail in (0, 1):
+            rule = PlanRule(attribute, name, tail)
+            try:
+                bind_plan(rule, points, engine, functions[name])
+            except ERRORS:
+                continue
+            rules.append(asdict(rule))
     return rules
+
+
+def candidate_templates(plans: dict, names) -> list[dict]:
+    """Every template the development grammar could propose for these plans."""
+    return [
+        asdict(PlanRule(attribute, name, tail))
+        for attribute in sorted(plans)
+        for name in names
+        for tail in (0, 1)
+    ]
+
+
+def _detour(explanation, run, engine, cell, endpoint) -> SearchEdit | None:
+    """Drop `cell` before its first expansion if, per the model, the endpoint stays.
+
+    The choice uses the ordinary run and the explanation alone; the live policy's
+    response to the edit is unknown when it is made.
+    """
+    _, values = next(run.capture.frames())
+    model = bind(explanation, values, run.capture.callables)
+    visit, found = 0, False
+    while model.phase == "ready" and not found:
+        found = model.step().expanded == cell
+        visit += not found
+    if not found:
+        return None
+    edit = SearchEdit(
+        run.site,
+        run.ordinal,
+        visit,
+        "drop_cell",
+        explanation.mapping.frontier,
+        cell=cell,
+        heap=not explanation.spec.ordered,
+    )
+    model = bind(explanation, values, run.capture.callables)
+    for _ in range(visit):
+        model.step()
+    abstract_edit(model, edit)
+    while model.phase == "ready":
+        model.step()
+    kept = endpoint in model.parents and model.reached_goal == engine.reached_goal
+    return edit if kept else None
+
+
+def detour_edits(explanation, run, engine, plans, templates, functions) -> list:
+    """Predeclared producer probes, chosen from the ordinary run alone.
+
+    For every stored plan a template reads as a complete chain of this run's tree,
+    take the first of its first DETOUR_CANDIDATES interior cells (starting at the
+    root's child) whose removal keeps the endpoint according to the explanation,
+    and drop all of its frontier entries just before its first expansion. The
+    route changes near its start, so a consumer acts on the change within the
+    replay horizon.
+    """
+    chains: list = []
+    for template in templates:
+        rule = PlanRule(**template)
+        points = plans.get(rule.attribute)
+        if not points or rule.function not in functions:
+            continue
+        try:
+            binding = bind_plan(rule, points, engine, functions[rule.function])
+            path = _path(engine.parents, engine.root, binding.endpoint)
+        except ERRORS:
+            continue
+        if path not in chains:
+            chains.append(path)
+    edits: list = []
+    for path in chains:
+        for cell in path[1:-1][:DETOUR_CANDIDATES]:
+            try:
+                edit = _detour(explanation, run, engine, cell, path[-1])
+            except (*ERRORS, StopIteration):
+                continue
+            if edit is not None:
+                if edit not in edits:
+                    edits.append(edit)
+                break
+    return edits
+
+
+def judge_probe(rule, binding, points, engine, patched, point, observed) -> dict:
+    """One edited stored plan against the bound readout's prediction.
+
+    `status` is "replay" (changed exactly as predicted: test later actions),
+    "unresolved" or "rejected". Only a kept endpoint can yield a counterexample.
+    """
+    if (
+        binding.endpoint not in patched.parents
+        or patched.reached_goal != engine.reached_goal
+    ):
+        return {"status": "unresolved", "reason": "endpoint_lost"}
+    predicted = read_plan(patched, point, binding)
+    fields = {
+        "predicted_plan": predicted,
+        "prediction_matches": predicted == observed,
+        "changed": predicted != points,
+    }
+    if predicted == observed:
+        if predicted == points:
+            return {**fields, "status": "unresolved", "reason": "plan_unchanged"}
+        return {**fields, "status": "replay"}
+    try:
+        other = bind_plan(rule, observed, patched, point)
+    except ERRORS:
+        return {
+            **fields,
+            "status": "rejected",
+            "reason": "stored_plan_prediction_mismatch",
+        }
+    # Still a complete chain of the edited tree, read with other bound values:
+    # the policy chose another destination, which this readout does not model.
+    moved = (other.endpoint, other.tail) != (binding.endpoint, binding.tail)
+    return {
+        **fields,
+        "status": "unresolved",
+        "reason": "destination_changed" if moved else "root_offset_changed",
+        "rebound": {"endpoint": other.endpoint, "root_absent": other.skip},
+    }
 
 
 def _install(policy, attribute, points) -> None:
@@ -201,13 +345,21 @@ def check_plan_chain(
     replays: list[ChainReplay] = []
     try:
         point = functions[rule.function]
-        endpoint, tail = context(rule, points, engine, point)
+        binding = bind_plan(rule, points, engine, point)
     except ERRORS as exc:
-        evidence.update(status="rejected", reason="ordinary_readout", error=str(exc))
+        # This template does not read the ordinary plan: no claim, no evidence.
+        evidence.update(
+            status="not_applicable", reason="ordinary_readout", error=str(exc)
+        )
         return evidence, replays
-    evidence.update(endpoint=endpoint, fixed_tail=tail, ordinary_plan=points)
+    evidence.update(
+        endpoint=binding.endpoint,
+        root_absent=binding.skip,
+        fixed_tail=binding.tail,
+        ordinary_plan=points,
+    )
     for edit, executed, search_check in executions:
-        probe = {"edit": search_check["edit"], "status": "unresolved"}
+        probe: dict = {"edit": search_check["edit"], "status": "unresolved"}
         evidence["probes"].append(probe)
         if not search_check["passed"] or executed.get("error"):
             probe.update(reason="search_edit_failed", error=executed.get("error"))
@@ -216,38 +368,46 @@ def check_plan_chain(
         if patched is None:
             probe.update(reason="search_prediction_missing")
             continue
-        predicted = read_plan(rule, patched, point, endpoint, tail)
         observed = executed["plans"].get(rule.attribute)
-        probe.update(
-            predicted_plan=predicted,
-            observed_plan=observed,
-            prediction_matches=predicted == observed,
-            changed=predicted != points,
-        )
-        if predicted != observed:
-            probe.update(status="rejected", reason="stored_plan_prediction_mismatch")
-        elif predicted == points:
-            probe.update(reason="plan_unchanged")
-        else:
+        probe["observed_plan"] = observed
+        try:
+            outcome = judge_probe(
+                rule, binding, points, engine, patched, point, observed
+            )
+        except ERRORS as exc:
+            probe.update(reason="readout_error", error=str(exc))
+            continue
+        if outcome.pop("status") == "replay":
+            probe.update(outcome)
             replays.append(
                 ChainReplay(
                     probe,
                     rule.attribute,
                     ordinary,
                     executed["policy"],
-                    predicted,
+                    outcome["predicted_plan"],
                     points,
                 )
             )
+            continue
+        probe.update(outcome)
+        if outcome["reason"] == "stored_plan_prediction_mismatch":
+            probe["status"] = "rejected"
     return evidence, replays
 
 
 def finish_chains(versions) -> None:
-    """A failed prediction refutes a readout even if another probe had a witness."""
+    """Chain and plan-version verdicts once every replay has ended.
+
+    A failed prediction refutes a readout even if another probe had a witness.
+    A version is "unmatched" when no frozen readout reads it at all.
+    """
     for version in versions:
+        applicable = []
         for chain in version["chains"]:
-            if chain["status"] == "rejected":
+            if chain["status"] == "not_applicable":
                 continue
+            applicable.append(chain)
             for probe in chain["probes"]:
                 if probe["status"] == "pending":
                     probe.update(
@@ -258,9 +418,11 @@ def finish_chains(versions) -> None:
                 chain.update(status="rejected", reason="counterexample")
             elif "supported" in statuses:
                 chain.update(status="supported", reason="search_plan_action_witness")
+            elif not chain["probes"]:
+                chain.update(status="unresolved", reason="producer_not_probed")
             else:
                 chain.update(status="unresolved", reason="no_complete_chain_witness")
-        statuses = {c["status"] for c in version["chains"]}
+        statuses = {c["status"] for c in applicable}
         if "supported" in statuses:
             version.update(
                 causal_status="supported", causal_reason="complete_chain_witness"
@@ -269,10 +431,16 @@ def finish_chains(versions) -> None:
             version.update(
                 causal_status="rejected", causal_reason="readout_counterexample"
             )
+        elif applicable:
+            version.update(
+                causal_status="unresolved", causal_reason="no_complete_chain_witness"
+            )
         else:
             version.update(
-                causal_status="unresolved",
+                causal_status="unmatched",
                 causal_reason=(
-                    "no_complete_chain_witness" if statuses else "no_frozen_readout"
+                    "no_complete_chain_readout"
+                    if version["chains"]
+                    else "no_frozen_readout"
                 ),
             )

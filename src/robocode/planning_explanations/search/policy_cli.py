@@ -13,7 +13,7 @@ from .policy_discovery import (
 )
 from .policy_domains import DEVELOPMENT, VALIDATION, DiscWorld, KinderDomain
 from .policy_fixtures import GROUND_TRUTH, KINDER_POLICY, POLICY_FIXTURES, kinder_source
-from .policy_report import save_policy_report
+from .policy_report import save_policy_report, share_range
 from .policy_runner import PolicyProgram
 from .report import save_unresolved, write_json
 
@@ -94,7 +94,9 @@ def run_policy_suite(args: argparse.Namespace) -> int:
             f'{name}: {summary["finding"]["label"]}; '
             f'planning events={summary.get("mean_planning_events")}, '
             f'expansion events={summary.get("mean_expansion_events")}, '
-            f'followed-plan share={summary.get("mean_followed_plan_share")}'
+            "followed-plan share="
+            f'{summary.get("mean_followed_plan_share")}'
+            f' (max {summary.get("mean_followed_plan_share_max")})'
         )
     write_json(args.output_dir / "summary.json", summaries)
     rows = [
@@ -102,13 +104,15 @@ def run_policy_suite(args: argparse.Namespace) -> int:
         "",
         "Means are uniform over each policy's frozen validation episodes. Effort is "
         "summed within an episode, depth is a maximum, and the followed-plan share is "
-        "the fraction of action calls whose command followed a linked cached "
-        "plan. "
+        "the fraction of action calls whose command followed a cached plan with a "
+        "complete search-to-action witness; its max adds calls whose plan evidence is "
+        "unresolved. "
         "These are features of the frozen explanations, not a planningness score.",
         "",
         "| Policy | Known fixture label | Finding | Planning events | "
         "Expansion events | Attributed to actions | At initialization | "
-        "Followed-plan share | Searched share | Max expanded depth | Solved |",
+        "Followed-plan share (witnessed – max) | Searched share | "
+        "Max expanded depth | Solved |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in summaries:
@@ -124,7 +128,10 @@ def run_policy_suite(args: argparse.Namespace) -> int:
                 else row.get("mean_attributed_expansion_events")
             ),
             row.get("mean_initialization_expansion_events"),
-            row.get("mean_followed_plan_share"),
+            share_range(
+                row.get("mean_followed_plan_share"),
+                row.get("mean_followed_plan_share_max"),
+            ),
             row.get("mean_searched_share"),
             row.get("max_expanded_depth"),
             row.get("solved"),
@@ -136,7 +143,9 @@ def run_policy_suite(args: argparse.Namespace) -> int:
         "",
         "— marks a withheld value: an unresolved search-shaped run is not zero. "
         "≥ marks supported effort with unresolved use in other runs: no complete "
-        "action witness is not zero planning. Cross-call credit requires a search "
+        "action witness is not zero planning. A share range's max counts plans "
+        "whose search provenance is unresolved; it is the most the evidence allows, "
+        "not an estimate. Cross-call credit requires a search "
         "edit to predict the stored plan and later action, with mediation controls.",
     ]
     (args.output_dir / "summary.md").write_text(
