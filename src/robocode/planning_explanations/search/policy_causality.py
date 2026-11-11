@@ -1,11 +1,13 @@
 """Bounded search -> stored plan -> later action experiments.
 
-A readout template (cache attribute, point callable, optional fixed final point)
-is proposed on development runs only and frozen with the bank. On each plan
-version it binds three values from the ordinary stored plan: the endpoint cell,
-whether the root cell is absent (zero or one leading cell, e.g. consumed in the
-same call), and the final point. Those stay fixed when predicting the stored plan
-of an edited search.
+A readout template (cache attribute, point callable, final-point kind) is
+proposed on development runs only and frozen with the bank. The final point is
+absent, follows the chain's last cell, or stands in for it: some policies drop
+the endpoint cell and append an exact target inside it instead. On each plan
+version a template binds three values from the ordinary stored plan: the
+endpoint cell, whether the root cell is absent (zero or one leading cell, e.g.
+consumed in the same call), and the final point. Those stay fixed when
+predicting the stored plan of an edited search.
 
 The readout says nothing about what a policy stores once an edit loses that
 endpoint, or once the policy picks another destination; such probes are
@@ -25,10 +27,21 @@ from .policy_verify import ERRORS, abstract_edit, bind, compare_run
 
 CHAIN_HORIZON = 32
 DETOUR_CANDIDATES = 3
+# Final point: none, after the chain's last cell, or in place of it.
+NO_TAIL, TAIL_AFTER, TAIL_REPLACES = 0, 1, 2
+TAILS = (NO_TAIL, TAIL_AFTER, TAIL_REPLACES)
 CHAIN_RULES = {
-    "readout": "complete-parent-chain-v2",
+    "readout": "complete-parent-chain-v3",
     "bound_per_plan": ["endpoint", "absent leading root cell (0 or 1)", "final point"],
-    "fixed_tail_points": [0, 1],
+    "final_point": {
+        "0": "none",
+        "1": "after the chain's last cell",
+        "2": (
+            "in place of the chain's last cell: the tree cell whose point is "
+            "uniquely nearest the final point, and whose parent is the last "
+            "stored cell"
+        ),
+    },
     "producer_probe": (
         "per stored chain, the first of its first three interior cells whose "
         "removal keeps the endpoint per the explanation: drop every frontier "
@@ -51,6 +64,10 @@ class PlanRule:
     function: str
     tail: int
 
+    def __post_init__(self):
+        if self.tail not in TAILS:
+            raise ValueError("Unknown final-point kind")
+
 
 @dataclass(frozen=True)
 class Binding:
@@ -59,6 +76,7 @@ class Binding:
     skip: int
     endpoint: tuple
     tail: tuple
+    replaced: bool = False
 
 
 def _path(parents, root, endpoint) -> list:
@@ -80,8 +98,22 @@ def _path(parents, root, endpoint) -> list:
 
 def read_plan(engine, point, binding: Binding) -> tuple:
     """The stored waypoints a bound readout predicts from a final parent map."""
-    cells = _path(engine.parents, engine.root, binding.endpoint)[binding.skip :]
+    cells = _path(engine.parents, engine.root, binding.endpoint)
+    if binding.replaced:
+        cells = cells[:-1]
+    cells = cells[binding.skip :]
     return tuple(tuple(float(v) for v in point(c)) for c in cells) + binding.tail
+
+
+def _cell_holding(inverse: dict, target) -> tuple:
+    """The tree cell whose point is uniquely nearest `target`."""
+    ranked = sorted(
+        (sum((a - b) ** 2 for a, b in zip(value, target)), cell)
+        for value, cell in inverse.items()
+    )
+    if not ranked or (len(ranked) > 1 and ranked[0][0] == ranked[1][0]):
+        raise ValueError("No unique cell holds the final point")
+    return ranked[0][1]
 
 
 def bind_plan(rule: PlanRule, points, engine, point) -> Binding:
@@ -98,20 +130,26 @@ def bind_plan(rule: PlanRule, points, engine, point) -> Binding:
         inverse[value] = cell
     endpoint = inverse[tuple(mapped[-1])]
     tail = points[-1:] if rule.tail else ()
+    replaced = rule.tail == TAIL_REPLACES
+    if replaced:
+        # The final point stands in for one more cell, which the policy dropped.
+        last, endpoint = endpoint, _cell_holding(inverse, tail[0])
+        if engine.parents.get(endpoint) != last:
+            raise ValueError("The final point's cell does not extend the chain")
     for skip in (0, 1):
-        binding = Binding(skip, endpoint, tail)
+        binding = Binding(skip, endpoint, tail, replaced)
         if read_plan(engine, point, binding) == points:
             return binding
     raise ValueError("Stored plan is not a complete parent chain")
 
 
 def propose_rules(attribute, points, engine, functions, names) -> list[dict]:
-    """At most two templates per point callable; DEVELOPMENT ONLY."""
+    """At most three templates per point callable; DEVELOPMENT ONLY."""
     rules = []
     for name in names:
         if name not in functions:
             continue
-        for tail in (0, 1):
+        for tail in TAILS:
             rule = PlanRule(attribute, name, tail)
             try:
                 bind_plan(rule, points, engine, functions[name])
@@ -127,7 +165,7 @@ def candidate_templates(plans: dict, names) -> list[dict]:
         asdict(PlanRule(attribute, name, tail))
         for attribute in sorted(plans)
         for name in names
-        for tail in (0, 1)
+        for tail in TAILS
     ]
 
 
@@ -356,6 +394,7 @@ def check_plan_chain(
         endpoint=binding.endpoint,
         root_absent=binding.skip,
         fixed_tail=binding.tail,
+        endpoint_replaced_by_final_point=binding.replaced,
         ordinary_plan=points,
     )
     for edit, executed, search_check in executions:

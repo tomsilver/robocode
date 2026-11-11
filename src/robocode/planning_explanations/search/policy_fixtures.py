@@ -93,6 +93,13 @@ DISCARDED_SEARCH = PLAN_ONCE.replace(
     "0.1 * round(self.goal[1] / 0.1)), self.goal]",
 )
 
+# Stores the path like the KinDER policy: the endpoint cell is dropped and the
+# exact goal (which lies inside that cell) is appended instead.
+ENDPOINT_REPLACED = PLAN_ONCE.replace(
+    "        return path + [(goal[0], goal[1])]",
+    "        return path[:-1] + [(goal[0], goal[1])]",
+)
+
 REPLAN_EVERY_CALL = _HEADER + _PLANNER + _FOLLOW + """
     def reset(self, state, info):
         self.goal = tuple(state["goal"])
@@ -237,6 +244,7 @@ POLICY_FIXTURES = {
     "reactive": REACTIVE,
     "reach_then_pick": REACH_THEN_PICK,
     "nested_renamed": NESTED_RENAMED,
+    "endpoint_replaced": ENDPOINT_REPLACED,
 }
 
 GROUND_TRUTH = {
@@ -249,6 +257,9 @@ GROUND_TRUTH = {
     "reactive": "Steers toward the goal; no search",
     "reach_then_pick": "Explores every reachable cell, then follows a tree path",
     "nested_renamed": "plan_once with renamed, nested search storage",
+    "endpoint_replaced": (
+        "plan_once storing its path without the goal cell, then the exact goal"
+    ),
     "clutteredretrieval2d": "Agent-written KinDER policy; no construction label",
 }
 

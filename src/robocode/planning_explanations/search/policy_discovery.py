@@ -51,11 +51,16 @@ from .policy_verify import (
 )
 from .selectors import inventory
 
+RUN_SELECTION = (
+    "per part and episode, at most `probed_runs` runs: first the last run of each "
+    "call that stored a new non-empty plan (from an uninstrumented pass), then "
+    "seeded draws among the rest"
+)
 SELECTION_RULE = (
     "Largest development mean M over the part's runs; identifier breaks ties"
 )
 SEARCH_PARTS = ("search", "no_explanation")
-BANK_SCHEMA = 3
+BANK_SCHEMA = 4
 # A call following a cached plan takes the strongest evidence among the plan
 # versions it follows, in this order.
 FOLLOWED = {
@@ -297,6 +302,7 @@ class FrozenPolicyBank:
                 "rotation_cosine": ROTATION_COSINE,
                 "world_shift": WORLD_SHIFT,
                 "seeds": "phase:case:call:site:ordinal strings; runs by phase:case:site",
+                "run_selection": RUN_SELECTION,
                 "cross_call": CHAIN_RULES,
             },
             "selection_rule": SELECTION_RULE,
@@ -319,8 +325,8 @@ def load_policy_bank(path: Path) -> FrozenPolicyBank:
     data = json.loads(path.read_text())
     if data.get("schema") != BANK_SCHEMA:
         raise ValueError(
-            f"Rediscover this bank: schema {BANK_SCHEMA} freezes plan readouts "
-            "that bind the root offset per plan"
+            f"Rediscover this bank: schema {BANK_SCHEMA} freezes final-point "
+            "readouts and plan-producer-first probe selection"
         )
     if data.get("grammar") != GRAMMAR:
         raise ValueError("Frozen bank uses a different grammar")
@@ -347,26 +353,56 @@ def load_policy_bank(path: Path) -> FrozenPolicyBank:
     return bank
 
 
-def _sample_runs(counts: dict, phase: str, case, limit: int) -> dict:
-    """Which runs of each part get paired edits; fixed before any result."""
+def _sample_runs(counts: dict, producers: dict, phase: str, case, limit: int) -> dict:
+    """Which runs of each part get paired edits; fixed before any result.
+
+    Runs that may have produced a new stored plan come first; seeded draws fill
+    the remaining places (or choose among producers when they exceed the limit).
+    """
     chosen = {}
     for site, count in counts.items():
-        indices = list(range(count))
-        if count > limit:
-            indices = sorted(
-                random.Random(f"{phase}:{case}:{site}:runs").sample(indices, limit)
-            )
-        chosen[site] = set(indices)
+        rng = random.Random(f"{phase}:{case}:{site}:runs")
+        first = sorted(producers.get(site, ()))
+        if len(first) >= limit:
+            chosen[site] = set(rng.sample(first, limit))
+            continue
+        taken = set(first)
+        rest = [i for i in range(count) if i not in taken]
+        fill = rng.sample(rest, min(limit - len(first), len(rest)))
+        chosen[site] = taken | set(fill)
     return chosen
 
 
-def _count_runs(program: PolicyProgram, domain, case) -> tuple[dict, list]:
+def _new_plan(old: tuple, new: tuple) -> bool:
+    """A call stored a new, non-empty plan rather than consuming the old one."""
+    if not new or new == old:
+        return False
+    consumed = len(new) < len(old) and old[-len(new) :] == new
+    return not consumed
+
+
+def _count_runs(program: PolicyProgram, domain, case) -> tuple[dict, dict, list]:
+    """Runs per part, and the runs that may have produced a new stored plan.
+
+    In a call that stores a new non-empty plan, the last run of each part is a
+    candidate producer: a later run of the same loop would overwrite the plan.
+    Only the policy's ordinary behavior is used, never a probe's result.
+    """
     trace = run_episode(program, domain, case, capture=False)
     counts: dict[str, int] = {}
+    producers: dict[str, set] = {}
     for call in trace.calls:
+        last: dict[str, int] = {}
         for run in call.runs:
-            counts[run.site] = counts.get(run.site, 0) + 1
-    return counts, [c.action for c in trace.calls]
+            last[run.site] = counts.get(run.site, 0)
+            counts[run.site] = last[run.site] + 1
+        if any(
+            _new_plan(call.plans_before.get(a, ()), call.plans_after.get(a, ()))
+            for a in set(call.plans_before) | set(call.plans_after)
+        ):
+            for site, index in last.items():
+                producers.setdefault(site, set()).add(index)
+    return counts, producers, [c.action for c in trace.calls]
 
 
 class EpisodeAnalyzer:
@@ -597,9 +633,9 @@ def analyze_episode(
 ) -> dict:
     """Plain run, a counting run, then one replay with every check and probe."""
     plain = run_episode(program, domain, case, instrumented=False)
-    counts, counted = _count_runs(program, domain, case)
+    counts, producers, counted = _count_runs(program, domain, case)
     analyzer = EpisodeAnalyzer(program, domain, parts, case, phase, limits)
-    analyzer.sampled = _sample_runs(counts, phase, case, limits.probed_runs)
+    analyzer.sampled = _sample_runs(counts, producers, phase, case, limits.probed_runs)
     full = run_episode(program, domain, case, after_call=analyzer)
     actions = [c.action for c in plain.calls]
     if actions != counted or actions != analyzer.actions:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from robocode.planning_explanations.search.grid_engine import GridSearch, GridSpec
 from robocode.planning_explanations.search.policy_causality import (
+    TAIL_REPLACES,
     Binding,
     PlanRule,
     bind_plan,
@@ -15,6 +16,8 @@ from robocode.planning_explanations.search.policy_causality import (
     read_plan,
 )
 from robocode.planning_explanations.search.policy_discovery import (
+    _count_runs,
+    _sample_runs,
     discover_policy,
     load_policy_bank,
     validate_policy,
@@ -22,6 +25,7 @@ from robocode.planning_explanations.search.policy_discovery import (
 from robocode.planning_explanations.search.policy_domains import DiscWorld
 from robocode.planning_explanations.search.policy_fixtures import (
     DISCARDED_SEARCH,
+    ENDPOINT_REPLACED,
     PLAN_ONCE,
     UNUSED_PLAN,
 )
@@ -80,7 +84,7 @@ class CrossCallCausalityTest(unittest.TestCase):
         self.assertEqual(row["attributed_expansion_events"], row["expansion_events"])
         self.assertEqual(row["followed_plan_share"], 1.0)
         self.assertEqual(row["followed_plan_share_max"], 1.0)
-        self.assertEqual(bank.manifest()["schema"], 3)
+        self.assertEqual(bank.manifest()["schema"], 4)
 
     def test_delayed_consumer_is_checked_across_multiple_calls(self):
         """Identical early actions do not stop the experiment prematurely."""
@@ -184,6 +188,54 @@ class CrossCallCausalityTest(unittest.TestCase):
             2 * row["attributed_expansion_events"], row["expansion_events"]
         )
 
+    def test_final_point_replacing_the_endpoint_cell_is_read(self):
+        """A stored path missing its endpoint cell, then an exact point inside it."""
+        _, episode = analyze(ENDPOINT_REPLACED)
+        replaced = [
+            c
+            for v in episode["versions"]
+            for c in v["chains"]
+            if c["rule"]["tail"] == TAIL_REPLACES
+        ]
+        self.assertTrue(replaced)
+        self.assertTrue(all(c["endpoint_replaced_by_final_point"] for c in replaced))
+        self.assertTrue(any(c["status"] == "supported" for c in replaced))
+        row = episode["accounting"]["program"]
+        self.assertEqual(row["followed_plan_share"], 1.0)
+
+    def test_the_plan_producing_search_is_always_probed(self):
+        """A search that stores the plan is probed, however many others run."""
+        source = PLAN_ONCE.replace(
+            FOLLOW,
+            "    def get_action(self, state):\n"
+            '        self._plan(state["robot"], self.goal, state["obstacles"])\n'
+            "        return self._follow(state)",
+        )
+        program = PolicyProgram(source)
+        counts, producers, _ = _count_runs(program, DiscWorld(), (0, 1))
+        (site,) = [
+            s
+            for s, info in program.sites.items()
+            if info["source"] == "while frontier:"
+        ]
+        self.assertGreater(counts[site], 8)
+        # Only `reset` stores a plan; the searches in later calls are discarded.
+        self.assertEqual(producers[site], {0})
+        for seed in range(5):
+            chosen = _sample_runs(counts, producers, "validation", seed, 8)
+            self.assertIn(0, chosen[site])
+            self.assertEqual(len(chosen[site]), 8)
+
+    def test_producer_first_selection_fills_and_caps_with_seeded_draws(self):
+        counts = {"a": 20, "b": 5}
+        many = {"a": set(range(12))}
+        chosen = _sample_runs(counts, many, "validation", (0, 1), 8)
+        self.assertTrue(chosen["a"] <= set(range(12)))
+        self.assertEqual(len(chosen["a"]), 8)
+        self.assertEqual(chosen["b"], set(range(5)))
+        none = _sample_runs(counts, {}, "validation", (0, 1), 8)
+        self.assertEqual(len(none["a"]), 8)
+
     def test_readout_templates_are_frozen_and_legacy_banks_require_rediscovery(self):
         """Validation cannot invent a readout, or silently upgrade an old bank."""
         program, domain = PolicyProgram(PLAN_ONCE), DiscWorld()
@@ -239,6 +291,17 @@ class JudgeProbeTest(unittest.TestCase):
             _point,
             observed,
         )
+
+    def test_binding_reads_a_final_point_in_place_of_the_endpoint(self):
+        """The final point's own cell extends the stored chain by one cell."""
+        rule = PlanRule("path", "point", TAIL_REPLACES)
+        stored = self.points[:-1] + ((2.1, 1.9),)
+        binding = bind_plan(rule, stored, self.engine, _point)
+        self.assertEqual((binding.endpoint, binding.replaced), ((2, 2), True))
+        self.assertEqual(read_plan(self.engine, _point, binding), stored)
+        with self.assertRaises(ValueError):
+            # (0, 0) holds this point, but it does not extend the chain.
+            bind_plan(rule, self.points[:-1] + ((0.1, 0.1),), self.engine, _point)
 
     def test_binding_reads_a_plan_missing_its_root(self):
         """A root waypoint consumed in the same call is a bound value, not a rule."""

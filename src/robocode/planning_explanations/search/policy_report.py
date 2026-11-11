@@ -391,11 +391,14 @@ def save_policy_report(
         "and restoring the ordinary cache must restore the ordinary action. Replays carry "
         "policy state across at most 32 calls; they stop on replanning or cache replacement. "
         "The readout binds the endpoint, a missing root cell and an optional final point from the "
-        "ordinary plan and holds them fixed. It does not explain destination selection: an edit "
+        "ordinary plan and holds them fixed. The final point either follows the path's last cell or "
+        "stands in for it (the path then stops one cell short and ends with an exact point inside "
+        "that cell). It does not explain destination selection: an edit "
         "that loses the endpoint, or after which the policy stores a path to another destination, "
         "is unresolved, never a counterexample. Each probed producer also gets a detour edit: the "
         "first of its path's first three interior cells whose removal keeps the endpoint (per the "
-        "explanation) loses every frontier entry just before its first expansion. "
+        "explanation) loses every frontier entry just before its first expansion. Runs that stored "
+        "a new plan are probed first; seeded draws fill the remaining places. "
         "First 24 probes per episode shown; full plans and "
         "counterexamples are in the plan-version details below and report.json.</p>",
         _table(chain_headers, chain_rows),

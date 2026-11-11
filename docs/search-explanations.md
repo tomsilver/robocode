@@ -17,9 +17,10 @@ episodes, cached plans, and a real agent-written KinDER policy.
 Issue 1 corrected 2026-11-10: cross-call attribution now requires a complete
 **search intervention → predicted stored plan → later action** witness.
 See the implementation decisions below. Older policy banks must be
-rediscovered; schema 3 freezes readout templates that bind the root offset per
-plan, the destination-keeping detour probe, and the four followed-plan
-categories.
+rediscovered; schema 4 freezes readout templates (the root offset is bound per
+plan; a final point may follow or replace the endpoint cell), the
+destination-keeping detour probe, plan-producer-first probe selection, and the
+four followed-plan categories.
 
 ## Run milestone 8: a stateful KinDER policy
 
@@ -64,25 +65,29 @@ Every iteration of every run is compared (about 2,000 per reachability search).
 Up to five seeded edits per sampled run, plus one destination-keeping detour
 per stored plan it may have produced, must predict the whole continuation.
 
-Validation results after the Issue-1 follow-up
+Validation results after the Issue-1 follow-ups
 (`outputs/search-policy-issue1/summary.md`). The episodes were not seen during
 discovery. The followed-plan share is a range: witnessed calls, up to the max
 that also counts calls whose plan evidence is unresolved.
 
 | Episode (obstacles, seed) | Solved | Planning events | Expansion events | At initialization | Followed plan: witnessed / unresolved / disproved / unmatched | Followed-plan share (witnessed – max) |
 | --- | --- | --- | --- | --- | --- | --- |
-| (3, 100) | no | 11 | 11,264 | 1,931 | 46 / 480 / 0 / 51 | 0.06–0.70 |
-| (15, 101) | no | 97 | 17,392 | 1,636 | 0 / 97 / 0 / 0 | 0.00–0.04 |
+| (3, 100) | no | 11 | 11,264 | 1,931 | 286 / 240 / 0 / 51 | 0.38–0.70 |
+| (15, 101) | no | 97 | 17,392 | 1,636 | 97 / 0 / 0 / 0 | 0.04 |
 | (20, 102) | no | 127 | 127 | 19 | 0 / 0 / 0 / 0 | 0.00 |
 
 The original milestone-8 shares (0.70, 0.04, 0.00) used structural links and
-are not causal evidence; they equal the maxima above. Most unresolved calls
-follow plans whose producing run was not among the eight probed runs, or whose
-path has no interior cell to detour around (three waypoints). In (15, 101) one
-reset call runs the reachability search eight times, ignoring one more obstacle
-each time, and stores the last run's path. A detour on an earlier run left that
-plan unchanged, so the readout "this run made the plan" was correctly refuted
-for that run; the remaining runs keep the version unresolved, not disproved.
+are not causal evidence; they equal the maxima above. In (3, 100) the robot
+gets stuck and replans every 121 steps (`mission_steps > 120`). The 240
+unresolved calls follow two of those plans: their changed stored paths were
+predicted exactly, but the earliest cell a detour could remove without cutting
+off the destination is the third waypoint, and the robot did not get past the
+second within the 32 replayed calls. The 51 unmatched calls follow a "path"
+that is only the standing point (the stance cell was the robot's own cell). In
+(15, 101) one reset call runs the reachability search eight times, ignoring one
+more obstacle each time, and stores the last run's path. Detours on earlier
+runs leave that plan unchanged, so the readout "this run made the plan" is
+correctly refuted for them, while the last run's chain witnesses the version.
 
 Read the last row carefully. The policy "plans" 127 times, but each search
 expands one cell: in its own inflated map the robot's cell has no free
@@ -104,6 +109,7 @@ command unchanged, as open-loop plan execution predicts.
 | `reactive` | No search | No search-shaped loops |
 | `reach_then_pick` | Explore all, then a tree path | Search recovered with no goal test; a destination-keeping detour witnesses the plan in every validation episode (share 1.0) |
 | `nested_renamed` | `plan_once` with renamed nested storage | Identical counts to `plan_once` |
+| `endpoint_replaced` | `plan_once` storing its path without the goal cell, then the exact goal (as the KinDER policy does) | Read with the final point in place of the endpoint cell; share 1.0 |
 
 A test-only control rebuilds its heap from a dictionary every iteration. It
 matches uniform-cost search on every ordinary iteration, but a dropped entry
@@ -819,9 +825,10 @@ Paired search edits (drop a frontier entry, raise an unexpanded leaf's cost,
 clear the frontier) re-execute only the enclosing call from deep copies, check
 the unchanged prefix, and compare the run's whole continuation. Five edit
 points per run are drawn with a fixed seed before any result is seen. In
-schema 3, each stored plan a probed run may have produced also gets one detour
-edit (Issue 1 follow-up, below); at most eight runs per part per episode are
-probed, also drawn with a fixed seed.
+schema 4, each stored plan a probed run may have produced also gets one detour
+edit (Issue 1 follow-up, below). At most eight runs per part per episode are
+probed: first the runs that stored a new plan (known from an uninstrumented
+pass), then seeded draws.
 Heap edits restore heap order with `heapq.heapify`, the representation's own
 invariant.
 
@@ -837,9 +844,10 @@ verified ordinary expansions; none receives supported action attribution.
 `policy_causality.py` now implements a bounded protocol:
 
 1. During development, enumerate readouts of a **complete root-to-endpoint
-   parent chain**, optionally appending one fixed terminal point. Attribute and
-   point-callable candidates come from existing values, without semantic names.
-   Freeze these templates with the bank (schema 3).
+   parent chain**, with no final point, a final point after the endpoint cell,
+   or a final point in place of it. Attribute and point-callable candidates
+   come from existing values, without semantic names. Freeze these templates
+   with the bank (schema 4).
 2. On an ordinary execution, bind the endpoint, whether the root cell is absent
    (zero or one leading cell) and the optional final point from its stored plan.
    Reconstruct the plan using the independently predicted parent map. This is a
@@ -920,14 +928,38 @@ Changes:
 | `reach_then_pick` | plans | 0.0, readout refuted in every episode | 1.0 |
 | `replan_every_call` | plans every call | 3–4 refuted chains per episode | no refuted chains |
 | `unused_plan` | plan unused | 0.0 | 0.0, max 0.0 |
-| KinDER (mean) | unknown | 0.0 | 0.02–0.25 |
+| KinDER (mean) | unknown | 0.0 | 0.02–0.25 (0.14–0.25 after the second follow-up) |
 
 The same-call attribution route is unchanged, but it depends on which edits
 run. Without the clear at visit zero, the lower bounds on attributed expansions
 fell for `replan_every_call` (≥ 714 to ≥ 579) and KinDER (≥ 1,244 to ≥ 644).
-Producer runs are still sampled uniformly (eight per part per episode), so on
-KinDER most unresolved calls are unprobed producers; probing plan-producing
-runs first would raise the witnessed share without changing any rule above.
+### Issue 1, second follow-up: final point in place of the endpoint; producers first
+
+Two further gaps left KinDER plans unresolved. First, the policy stores
+`cells[1:]` of the walk back from its stance cell (line 222): the stance cell is
+dropped and its exact standing point appended instead. The readout took the
+last stored cell as the endpoint, so after a detour that changed only the
+stance cell's parent it reported `destination_changed`, and a two-cell stored
+path had no interior cell to detour around. Second, probed runs were drawn
+uniformly, which in (3, 100) skipped the search whose plan 120 calls followed,
+and in (15, 101) skipped every plan-producing search.
+
+1. **Final point in place of the endpoint.** A third template kind binds the
+   endpoint as the tree cell whose point is uniquely nearest the final point,
+   and requires its parent to be the last stored cell. The prediction is the
+   edited chain to that cell, minus the cell, plus the same final point. The
+   `endpoint_replaced` control stores its path this way and is witnessed in
+   every validation episode.
+2. **Plan-producing runs first.** An uninstrumented pass already counts runs;
+   it now also marks, in each call that stored a new non-empty plan (not a
+   consumed suffix), the last run of each part. Those runs are probed first and
+   seeded draws fill the remaining places (at most eight per part per episode).
+   The rule reads only the policy's ordinary behavior, never a probe result.
+
+KinDER, before and after: (3, 100) from 0.06–0.70 to 0.38–0.70; (15, 101) from
+0.00–0.04 to 0.04 (every followed plan witnessed); mean from 0.02–0.25 to
+0.14–0.25. Attributed expansions rose to ≥ 5,662 and ≥ 4,734 in the first two
+episodes. All controls are unchanged. Bank schema 4.
 
 Reports separate structural matches, exact plan predictions, action mediation,
 counterexamples and missing witnesses. Inspect
