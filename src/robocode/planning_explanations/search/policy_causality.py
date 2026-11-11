@@ -474,6 +474,12 @@ def finish_chains(versions) -> None:
             version.update(
                 causal_status="unresolved", causal_reason="no_complete_chain_witness"
             )
+        elif version.get("unexplained_loop_in_call"):
+            # No readout applies, but an unexplained possible search ran when
+            # the plan was stored: its provenance is unknown, not unmatched.
+            version.update(
+                causal_status="unresolved", causal_reason="unexplained_loop_in_call"
+            )
         else:
             version.update(
                 causal_status="unmatched",

@@ -14,6 +14,7 @@ counted, the planned share of actions is a fraction, and coverage is kept separa
 import itertools
 import json
 import random
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -49,6 +50,13 @@ from .policy_verify import (
     link_plan,
     readout_shape,
 )
+from .policy_worklist import (
+    SCAN_DEPTH,
+    SCAN_LIMIT,
+    scan_runs,
+    unreadable_reason,
+    worklist_signature,
+)
 from .selectors import inventory
 
 RUN_SELECTION = (
@@ -60,7 +68,17 @@ SELECTION_RULE = (
     "Largest development mean M over the part's runs; identifier breaks ties"
 )
 SEARCH_PARTS = ("search", "no_explanation")
-BANK_SCHEMA = 4
+# A loop the grammar cannot bind that still shows a worklist, or that could not
+# be fully inspected: unknown, never zero.
+UNREADABLE = "unreadable_loop"
+LOOP_RULES = (
+    "a loop with no grammar binding is not search-shaped (zero) only if no list, "
+    "dict, deque or set in it both gains and loses items during any run, and every "
+    f"container was inspected (depth {SCAN_DEPTH}, {SCAN_LIMIT} containers per "
+    "snapshot); otherwise it is unreadable. Validation runs of not-search-shaped "
+    "parts are re-checked the same way"
+)
+BANK_SCHEMA = 5
 # A call following a cached plan takes the strongest evidence among the plan
 # versions it follows, in this order.
 FOLLOWED = {
@@ -91,8 +109,8 @@ class PolicyLimits:
 
     candidates: int = 6000
     bindings: int = 64
-    mapping_depth: int = 2
-    selectors: int = 256
+    mapping_depth: int = 3
+    selectors: int = 1024
     edits_per_run: int = 5
     probed_runs: int = 8
 
@@ -109,6 +127,18 @@ def _returns_bool(function, cell) -> bool:
         return type(function(cell)) is bool
     except Exception:  # pylint: disable=broad-exception-caught
         return False
+
+
+def _one_entry(value, root, sizes) -> bool:
+    """A frontier holding one (priority, ..., root) entry; extra numbers break ties."""
+    return (
+        type(value) in (list, deque)
+        and len(value) == 1
+        and type(value[0]) is tuple
+        and len(value[0]) in sizes
+        and all(type(x) in (int, float) for x in value[0][:-1])
+        and value[0][-1] == root
+    )
 
 
 def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, dict]:
@@ -137,15 +167,9 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
                 and all(test(found[p], r) for (found, _), r in zip(firsts, roots))
             ]
 
-        pairs = paths(
-            lambda v, r: type(v) is list
-            and len(v) == 1
-            and type(v[0]) is tuple
-            and len(v[0]) == 2
-            and type(v[0][0]) in (int, float)
-            and v[0][1] == r
-        )
-        states = paths(lambda v, r: type(v) is list and v == [r])
+        pairs = paths(lambda v, r: _one_entry(v, r, (2,)))
+        tagged = paths(lambda v, r: _one_entry(v, r, range(3, 8)))
+        states = paths(lambda v, r: type(v) in (list, deque) and list(v) == [r])
         parents = paths(lambda v, r: type(v) is dict and v == {r: None})
         costs = paths(
             lambda v, r: type(v) is dict
@@ -165,7 +189,11 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
             for n in named
             if all(readout_shape(c[n], r) for (_, c), r in zip(firsts, roots))
         ]
-        for layout, frontiers in (("pairs", pairs), ("states", states)):
+        for layout, frontiers in (
+            ("pairs", pairs),
+            ("tagged", tagged),
+            ("states", states),
+        ):
             for frontier, parent, cost in itertools.product(frontiers, parents, costs):
                 if len(roles) == limits.bindings:
                     limited = True
@@ -188,7 +216,11 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
 
 def grid_specifications(layout: str) -> Iterator[GridSpec]:
     """The finite grid-priority-v1 ingredient grammar for one frontier layout."""
-    selections = ("min", "fifo", "lifo") if layout == "pairs" else ("fifo", "lifo")
+    selections = {
+        "pairs": ("min", "fifo", "lifo"),
+        "tagged": ("min",),
+        "states": ("fifo", "lifo"),
+    }[layout]
     priorities = (
         (
             ("g", "none"),
@@ -197,7 +229,7 @@ def grid_specifications(layout: str) -> Iterator[GridSpec]:
             ("h", "euclidean"),
             ("h", "manhattan"),
         )
-        if layout == "pairs"
+        if layout in ("pairs", "tagged")
         else (("g", "none"),)
     )
     for selection, (priority, heuristic) in itertools.product(selections, priorities):
@@ -303,6 +335,7 @@ class FrozenPolicyBank:
                 "world_shift": WORLD_SHIFT,
                 "seeds": "phase:case:call:site:ordinal strings; runs by phase:case:site",
                 "run_selection": RUN_SELECTION,
+                "loops_without_binding": LOOP_RULES,
                 "cross_call": CHAIN_RULES,
             },
             "selection_rule": SELECTION_RULE,
@@ -325,8 +358,8 @@ def load_policy_bank(path: Path) -> FrozenPolicyBank:
     data = json.loads(path.read_text())
     if data.get("schema") != BANK_SCHEMA:
         raise ValueError(
-            f"Rediscover this bank: schema {BANK_SCHEMA} freezes final-point "
-            "readouts and plan-producer-first probe selection"
+            f"Rediscover this bank: schema {BANK_SCHEMA} adds tagged and deque "
+            "frontiers and the worklist check for loops without a binding"
         )
     if data.get("grammar") != GRAMMAR:
         raise ValueError("Frozen bank uses a different grammar")
@@ -435,14 +468,21 @@ class EpisodeAnalyzer:
         self.replays = [r for r in self.replays if r.evidence["status"] == "pending"]
         trees = []
         statuses = set()
+        unexplained = False
         for run in call.runs:
             entry, tree = self._run(call, run, (policy, state, extra))
             entry["index"] = len(self.runs)
             self.runs.append(entry)
             statuses.add(entry["part_status"])
+            # A loop that may be a search but is not explained could have made
+            # any plan this call stores.
+            unexplained |= (
+                entry["status"] != "supported"
+                and entry["part_status"] != "not_search_shaped"
+            )
             if tree is not None:
                 trees.append((entry, tree, run.capture.callables))
-        self._versions(call, trees, after)
+        self._versions(call, trees, after, unexplained)
         if call.method == "get_action":
             self.calls.append(self._classify(call, (policy, state, extra), statuses))
         # Release frames only now: probes of a later run replay the earlier ones.
@@ -467,6 +507,12 @@ class EpisodeAnalyzer:
         }
         if not part or part["status"] != "search":
             shaped = part is not None and part["status"] == "not_search_shaped"
+            if shaped:
+                # The frozen "not a search" verdict is re-checked on this run.
+                reason = unreadable_reason(worklist_signature(run))
+                if reason:
+                    entry.update(part_status=UNREADABLE, unreadable=reason)
+                    shaped = False
             entry["status"] = "not_search_shaped" if shaped else "unresolved"
             return entry, None
         engines = {}
@@ -541,7 +587,7 @@ class EpisodeAnalyzer:
                     status="rejected", reason="intervention", counterexample=failed[0]
                 )
 
-    def _versions(self, call: CallRecord, trees: list, after) -> None:
+    def _versions(self, call: CallRecord, trees: list, after, unexplained) -> None:
         """A plan version starts when a call replaces (not merely consumes) a plan."""
         for attribute in sorted(set(call.plans_before) | set(call.plans_after)):
             old = call.plans_before.get(attribute, ())
@@ -570,6 +616,7 @@ class EpisodeAnalyzer:
                 "world_insensitive": 0,
                 "chains": [],
                 "causal_status": "unresolved",
+                "unexplained_loop_in_call": unexplained,
             }
             for entry, engine, functions in trees:
                 part = self.parts[entry["site"]]
@@ -879,7 +926,12 @@ def discover_policy(
         record = {"runs": len(runs[site]), "bindings": len(roles), **bound, "tested": 0}
         audit["parts"][site] = record
         if not roles:
-            parts[site] = {"status": "not_search_shaped", "explanations": []}
+            signature = scan_runs(runs[site])
+            record["worklist"] = signature
+            reason = unreadable_reason(signature)
+            record["unreadable"] = reason
+            status = UNREADABLE if reason else "not_search_shaped"
+            parts[site] = {"status": status, "explanations": []}
             continue
         survivors = []
         for explanation in proposals(site, roles):

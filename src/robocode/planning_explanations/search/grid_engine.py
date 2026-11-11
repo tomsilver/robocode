@@ -71,8 +71,11 @@ class GridSpec:
             raise ValueError("Neighborhood must be 4 or 8")
         if self.model not in ("own", "open"):
             raise ValueError("Model is the policy's own predicate or an open grid")
-        if self.layout not in ("pairs", "states"):
-            raise ValueError("Frontier layout must be pairs or states")
+        if self.layout not in ("pairs", "states", "tagged"):
+            raise ValueError("Frontier layout must be pairs, states or tagged")
+        if self.layout == "tagged" and self.selection != "min":
+            # Extra tie-break numbers only matter to a priority heap.
+            raise ValueError("A tagged frontier is a priority heap")
         if self.layout == "states" and (
             self.selection == "min"
             or self.priority != "g"
@@ -119,6 +122,7 @@ class GridSearch:
     frontier: list = field(default_factory=list)
     phase: str = "ready"
     reached_goal: bool = False
+    pushes: int = 0
 
     def __post_init__(self):
         if not is_cell(self.root):
@@ -133,7 +137,12 @@ class GridSearch:
             self.frontier = [self.root]
         else:
             first = 0.0 if self.spec.root_priority == "zero" else self.rank(self.root)
-            self.frontier = [(first, self.root)]
+            self.frontier = (
+                [(first, 0, self.root)]
+                if self.spec.layout == "tagged"
+                else [(first, self.root)]
+            )
+            self.pushes = 1
 
     def h(self, cell: Cell) -> float:
         """Declared heuristic formulas, measured in cells to the goal."""
@@ -154,16 +163,23 @@ class GridSearch:
         return self.costs[cell] + self.h(cell)
 
     def canonical_frontier(self) -> tuple:
-        """Ordered lists compare in order; a heap compares as a sorted multiset."""
-        return (
-            tuple(self.frontier) if self.spec.ordered else tuple(sorted(self.frontier))
+        """Ordered lists compare in order; a heap compares as a sorted multiset.
+
+        A tagged heap is compared as (priority, cell) entries: its tie-break
+        numbers are the policy's own bookkeeping, not part of the search.
+        """
+        entries = (
+            [(e[0], e[-1]) for e in self.frontier]
+            if self.spec.layout == "tagged"
+            else self.frontier
         )
+        return tuple(entries) if self.spec.ordered else tuple(sorted(entries))
 
     def frontier_cells(self) -> list[Cell]:
         """States currently queued, including duplicates of stale entries."""
         if self.spec.layout == "states":
             return list(self.frontier)
-        return [entry[1] for entry in self.frontier]
+        return [entry[-1] for entry in self.frontier]
 
     def depth(self, cell: Cell) -> int:
         """Retained parent-chain length; parent cycles are invalid."""
@@ -176,29 +192,55 @@ class GridSearch:
             depth += 1
         return depth
 
-    def _pop(self) -> Any:
-        if self.spec.selection == "min":
-            return heapq.heappop(self.frontier)
-        return self.frontier.pop(0 if self.spec.selection == "fifo" else -1)
+    def _pop(self, prefer: Cell | None = None) -> Any:
+        if self.spec.selection != "min":
+            return self.frontier.pop(0 if self.spec.selection == "fifo" else -1)
+        if prefer is not None and self.spec.layout == "tagged":
+            # Ties in priority go to the cell the run itself selected.
+            low = self.frontier[0][0]
+            tied = [
+                i
+                for i, e in enumerate(self.frontier)
+                if e[0] == low and e[-1] == prefer
+            ]
+            if tied:
+                entry = self.frontier.pop(min(tied, key=lambda i: self.frontier[i][1]))
+                heapq.heapify(self.frontier)
+                return entry
+        return heapq.heappop(self.frontier)
 
     def _push(self, cell: Cell) -> None:
         if self.spec.layout == "states":
             if cell not in self.frontier:
                 self.frontier.append(cell)
+        elif self.spec.layout == "tagged":
+            heapq.heappush(self.frontier, (self.rank(cell), self.pushes, cell))
+            self.pushes += 1
         elif self.spec.selection == "min":
             heapq.heappush(self.frontier, (self.rank(cell), cell))
         else:
             self.frontier.append((self.rank(cell), cell))
 
-    def step(self) -> GridTransition:
-        """Advance one loop iteration without reading any concrete snapshot."""
+    def tied_cells(self) -> set:
+        """Distinct cells sharing the lowest priority of a tagged heap."""
+        if self.spec.layout != "tagged" or not self.frontier:
+            return set()
+        low = self.frontier[0][0]
+        return {e[-1] for e in self.frontier if e[0] == low}
+
+    def step(self, prefer: Cell | None = None) -> GridTransition:
+        """Advance one loop iteration without reading any concrete snapshot.
+
+        `prefer` resolves a priority tie of a tagged heap (read from the run);
+        without it, ties go to the earliest push.
+        """
         if self.phase != "ready":
             raise ValueError("Cannot step a terminated search")
         if not self.frontier:
             self.phase = "done"
             return GridTransition("exhausted")
-        entry = self._pop()
-        node = entry if self.spec.layout == "states" else entry[1]
+        entry = self._pop(prefer)
+        node = entry if self.spec.layout == "states" else entry[-1]
         if self.spec.goal_timing == "selection" and node == self.goal:
             self.phase, self.reached_goal = "done", True
             return GridTransition("goal", node, frontier_size=len(self.frontier))

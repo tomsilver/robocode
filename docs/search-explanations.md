@@ -20,7 +20,8 @@ See the implementation decisions below. Older policy banks must be
 rediscovered; schema 4 freezes readout templates (the root offset is bound per
 plan; a final point may follow or replace the endpoint cell), the
 destination-keeping detour probe, plan-producer-first probe selection, and the
-four followed-plan categories.
+four followed-plan categories. Issue 2 (also 2026-11-10, schema 5): a loop the
+analyzer cannot read is reported unknown, never zero planning.
 
 ## Run milestone 8: a stateful KinDER policy
 
@@ -110,6 +111,9 @@ command unchanged, as open-loop plan execution predicts.
 | `reach_then_pick` | Explore all, then a tree path | Search recovered with no goal test; a destination-keeping detour witnesses the plan in every validation episode (share 1.0) |
 | `nested_renamed` | `plan_once` with renamed nested storage | Identical counts to `plan_once` |
 | `endpoint_replaced` | `plan_once` storing its path without the goal cell, then the exact goal (as the KinDER policy does) | Read with the final point in place of the endpoint cell; share 1.0 |
+| `tiebreak_astar` | `plan_once` with `(f, tie-break counter, cell)` heap entries | Read as a tagged heap, ties taken from the run; share 1.0. Mean expansions 298.3 vs 297.7 for `plan_once`: its counter breaks ties differently, so it really explores slightly differently |
+| `deque_bfs` | Breadth-first search with a `deque` frontier; plan once and follow | Read as first-in-first-out search; share 1.0 |
+| `bfs_without_costs` | Breadth-first search with no cost map (outside the grammar) | Unreadable: its frontier gains and loses items, so totals are withheld (—), not zero |
 
 A test-only control rebuilds its heap from a dictionary every iteration. It
 matches uniform-cost search on every ordinary iteration, but a dropped entry
@@ -146,7 +150,11 @@ Remaining restrictions: one grid family (integer cells, `hypot` step costs);
 the transition model is the policy's own predicate and must be a callable
 local; plans must be attribute lists of points; a part's run is aligned only
 at its loop boundary; plan-following is tested for planar commands only. A
-loop outside the grammar is unresolved, never zero.
+loop without a grammar binding counts as no search only when none of its
+containers both gains and loses items and every container was inspected;
+otherwise it is unreadable and totals are withheld (Issue 2, below). Loop
+snapshots record numbers, strings, tuples, lists, dicts, deques and sets of
+those; a worklist kept on `self` or inside another object is invisible.
 
 ## Run milestone 7: heuristic search and goal timing
 
@@ -961,6 +969,56 @@ KinDER, before and after: (3, 100) from 0.06–0.70 to 0.38–0.70; (15, 101) fr
 0.14–0.25. Attributed expansions rose to ≥ 5,662 and ≥ 4,734 in the first two
 episodes. All controls are unchanged. Bank schema 4.
 
+### Issue 2: loops the analyzer cannot read (2026-11-10)
+
+A loop with no grammar binding was marked "not search-shaped", and accounting
+left its runs out, so the report read "complete, zero planning". Three routes
+led there, each reproduced on `plan_once` (a real A* reported as complete with
+0 planning events):
+
+1. The variable inventory hit its count limit. The cut was recorded in the
+   audit but never consulted.
+2. The to-do list sat deeper than the mapping depth (`box["q"]` at depth 0).
+   Depth cuts were not even recorded.
+3. The to-do list had a shape the grammar did not know, with normal limits:
+   `(f, tie-break, cell)` heap entries, a `deque`, or breadth-first search
+   without a cost map. Loop snapshots did not record deques or sets at all.
+
+Changes:
+
+1. **Worklist test for loops without a binding** (`policy_worklist.py`). A
+   search keeps a worklist: some list, dict, deque or set gains items and loses
+   items while the loop runs. A loop without a binding is "not search-shaped"
+   (zero) only if no container does both in any development run and every
+   container was inspected (depth 4, 4,096 containers per snapshot). Otherwise
+   it is `unreadable_loop`: unknown, totals withheld. Validation runs of
+   not-search-shaped parts are re-checked the same way, so the development
+   verdict is never assumed. A plan stored in a call that ran an unexplained
+   loop is unresolved, not unmatched: the followed-plan share's max includes it.
+2. **Wider readable forms.** A `tagged` heap layout reads entries
+   `(priority, numbers…, cell)`. The extra numbers are the policy's own
+   bookkeeping: the explanation is the search up to tie order, and when equal
+   priorities tie, the cell the run took out is read from the next snapshot;
+   everything else is still predicted and compared. Deque frontiers are read
+   wherever list frontiers are, and loop snapshots now record deques and sets.
+   Live edits address heap entries by (priority, cell).
+3. **Larger default inventory:** 1,024 selectors (was 256) and mapping depth 3
+   (was 2).
+
+Results: the three reproductions are now unreadable, with totals withheld and
+a followed-plan share of 0–1.0 (max). `tiebreak_astar` is explained (459
+expansions on (0, 1), as `plan_once`; 298.3 vs 297.7 on average over validation,
+because its counter orders ties differently); `deque_bfs` is explained as
+first-in-first-out search; `bfs_without_costs` is unreadable. Ordinary loops (path reconstruction
+only appends; waypoint popping only pops) and the reactive control still count
+as zero. KinDER is unchanged: its four ordinary loops stay not search-shaped in
+development and in every validation run, and its numbers are identical. The
+KinDER analysis takes about 115 s instead of 75 s. Bank schema 5.
+
+Remaining gaps: worklists kept on `self` or in non-plain objects are invisible
+to the snapshot; a loop with a temporary list rebuilt every iteration can be
+reported unreadable (unknown) although it is not a search.
+
 Reports separate structural matches, exact plan predictions, action mediation,
 counterexamples and missing witnesses. Inspect
 `validation.episodes[].versions[].chains[]` in `report.json`; Markdown and HTML
@@ -981,8 +1039,10 @@ open outputs/search-policy-issue1/discarded_search/report.html
 Validation episodes are (3, 100), (15, 101) and (20, 102): all new seeds, and
 15 and 20 are counts the policy's author never designed for (they used 1, 3,
 5 and 10). Banks, preselections, readout choices, probe rules
-and validation episodes are frozen before validation. Loops whose values have
-no search shape are listed in coverage, not counted, and not reported as zero.
+and validation episodes are frozen before validation. Loops with no grammar
+binding and no worklist are listed in coverage and not counted; loops with no
+binding but a worklist (or not fully inspected) are unreadable, so totals are
+withheld rather than reported as zero.
 
 ### Milestone 7: implementation decisions
 

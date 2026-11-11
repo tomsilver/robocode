@@ -84,7 +84,7 @@ class CrossCallCausalityTest(unittest.TestCase):
         self.assertEqual(row["attributed_expansion_events"], row["expansion_events"])
         self.assertEqual(row["followed_plan_share"], 1.0)
         self.assertEqual(row["followed_plan_share_max"], 1.0)
-        self.assertEqual(bank.manifest()["schema"], 4)
+        self.assertEqual(bank.manifest()["schema"], 5)
 
     def test_delayed_consumer_is_checked_across_multiple_calls(self):
         """Identical early actions do not stop the experiment prematurely."""

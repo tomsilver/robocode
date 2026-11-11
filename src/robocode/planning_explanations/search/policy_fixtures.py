@@ -100,6 +100,54 @@ ENDPOINT_REPLACED = PLAN_ONCE.replace(
     "        return path[:-1] + [(goal[0], goal[1])]",
 )
 
+# A* whose heap entries carry a tie-break counter: (f, push number, cell).
+TIEBREAK_ASTAR = (
+    PLAN_ONCE.replace("frontier = [(0.0, root)]", "frontier = [(0.0, 0, root)]")
+    .replace("_, cur = heapq.heappop(frontier)", "_, _, cur = heapq.heappop(frontier)")
+    .replace(
+        "heapq.heappush(frontier, (nc + h, nxt))",
+        "heapq.heappush(frontier, (nc + h, len(cost), nxt))",
+    )
+)
+
+_BFS = """
+        root, target = cell(start), cell(goal)
+        frontier = deque([root])
+        cost, parent = {root: 0.0}, {root: None}
+        while frontier:
+            cur = frontier.popleft()
+            if cur == target:
+                break
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt = (cur[0] + di, cur[1] + dj)
+                if not free(nxt) or nxt in parent:
+                    continue
+                cost[nxt], parent[nxt] = cost[cur] + 1.0, cur
+                frontier.append(nxt)
+"""
+
+_ASTAR = PLAN_ONCE[
+    PLAN_ONCE.index("        root, target = cell(start), cell(goal)") : PLAN_ONCE.index(
+        "        path = []"
+    )
+]
+
+# Breadth-first search with a deque frontier (and a cost map).
+DEQUE_BFS = (
+    PLAN_ONCE.replace(_ASTAR, _BFS)
+    .replace("import heapq\n", "import heapq\nfrom collections import deque\n")
+    .replace("A* on a 0.1 grid;", "Breadth-first search on a 0.1 grid;")
+)
+
+# Breadth-first search that keeps no cost map: outside the grammar. Its worklist
+# must make it unreadable (unknown), never zero planning.
+BFS_WITHOUT_COSTS = DEQUE_BFS.replace(
+    "        cost, parent = {root: 0.0}, {root: None}", "        parent = {root: None}"
+).replace(
+    "                cost[nxt], parent[nxt] = cost[cur] + 1.0, cur",
+    "                parent[nxt] = cur",
+)
+
 REPLAN_EVERY_CALL = _HEADER + _PLANNER + _FOLLOW + """
     def reset(self, state, info):
         self.goal = tuple(state["goal"])
@@ -245,6 +293,9 @@ POLICY_FIXTURES = {
     "reach_then_pick": REACH_THEN_PICK,
     "nested_renamed": NESTED_RENAMED,
     "endpoint_replaced": ENDPOINT_REPLACED,
+    "tiebreak_astar": TIEBREAK_ASTAR,
+    "deque_bfs": DEQUE_BFS,
+    "bfs_without_costs": BFS_WITHOUT_COSTS,
 }
 
 GROUND_TRUTH = {
@@ -259,6 +310,11 @@ GROUND_TRUTH = {
     "nested_renamed": "plan_once with renamed, nested search storage",
     "endpoint_replaced": (
         "plan_once storing its path without the goal cell, then the exact goal"
+    ),
+    "tiebreak_astar": "plan_once with (f, tie-break counter, cell) heap entries",
+    "deque_bfs": "Breadth-first search with a deque frontier; plan once and follow",
+    "bfs_without_costs": (
+        "Breadth-first search without a cost map: outside the grammar, so unknown"
     ),
     "clutteredretrieval2d": "Agent-written KinDER policy; no construction label",
 }

@@ -14,6 +14,7 @@ import ast
 import copy
 import hashlib
 import heapq
+from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,8 +49,10 @@ def value_like(value, depth: int = 0) -> bool:
         return True
     if depth >= 4:
         return False
-    if type(value) is list:
+    if type(value) in (list, deque):
         return all(value_like(v, depth + 1) for v in value)
+    if type(value) is set:
+        return all(immutable(v, depth + 1) for v in value)
     if type(value) is dict:
         return all(
             immutable(k, depth + 1) and value_like(v, depth + 1)
@@ -97,7 +100,8 @@ class RunCapture:
             }
         encoded: dict[str, tuple] = {}
         # Each remembered value is tagged with its kind: V scalar/tuple, L flat
-        # list, C nested list, D dictionary (kept as a private copy).
+        # list, C nested list, D dictionary (kept as a private copy), Q deque of
+        # immutable items, S set of immutable items.
         previous = self._previous
         seen = set()
         for name, value in values.items():
@@ -129,6 +133,16 @@ class RunCapture:
                         encoded[name] = ("C", copy.deepcopy(value))
                         previous[name] = ("C", copy.deepcopy(value))
                     seen.add(name)
+            elif type(value) in (deque, set) and all(immutable(v) for v in value):
+                snapshot = (
+                    ("Q", tuple(value), value.maxlen)
+                    if type(value) is deque
+                    else ("S", frozenset(value))
+                )
+                if old != snapshot:
+                    encoded[name] = snapshot
+                    previous[name] = snapshot
+                seen.add(name)
             elif immutable(value):
                 if (
                     old is None
@@ -182,6 +196,10 @@ class RunCapture:
                     working[name] = list(item[1])
                 elif tag in ("D", "C"):
                     working[name] = copy.deepcopy(item[1])
+                elif tag == "Q":
+                    working[name] = deque(item[1], item[2])
+                elif tag == "S":
+                    working[name] = set(item[1])
                 elif tag == "U":
                     current = working.setdefault(name, {})
                     current.update(item[1])
@@ -288,31 +306,52 @@ def apply_edit(values: dict, edit: SearchEdit) -> None:
             raise ValueError("Cost edits need a live dictionary entry")
         target[edit.cell] = edit.value
         return
-    if type(target) is not list:
-        raise ValueError("Frontier edits require a live list")
+    if type(target) not in (list, deque):
+        raise ValueError("Frontier edits require a live list or deque")
     if edit.operation == "clear":
         target.clear()
     elif edit.operation == "drop":
-        target.remove(edit.entry)
+        del target[drop_index(target, edit.entry)]
         if edit.heap:
             # The heap layout's own invariant, restored after removing an entry.
             heapq.heapify(target)
     elif edit.operation == "drop_cell":
-        target[:] = drop_cell_entries(target, edit.cell)
+        kept = drop_cell_entries(target, edit.cell)
+        target.clear()
+        target.extend(kept)
         if edit.heap:
             heapq.heapify(target)
     else:
         raise ValueError("Unknown search edit")
 
 
-def drop_cell_entries(frontier: list, cell) -> list:
-    """Every entry except those of one cell, for cell or (priority, cell) layouts."""
+def entry_view(entry):
+    """A frontier entry as (priority, cell), or the cell itself.
 
-    def held(entry):
-        pair = type(entry) is tuple and len(entry) == 2 and type(entry[1]) is tuple
-        return entry[1] if pair else entry
+    Extra numbers between the priority and the cell (tie-breakers) are dropped.
+    """
+    if type(entry) is tuple and len(entry) >= 2 and type(entry[-1]) is tuple:
+        return (entry[0], entry[-1])
+    return entry
 
-    kept = [entry for entry in frontier if held(entry) != cell]
+
+def drop_index(frontier, view) -> int:
+    """Position of the first entry whose view equals `view`."""
+    for index, entry in enumerate(frontier):
+        if entry_view(entry) == view:
+            return index
+    raise ValueError("The frontier holds no such entry")
+
+
+def entry_cell(entry):
+    """The cell a frontier entry holds."""
+    view = entry_view(entry)
+    return view if view is entry else view[1]
+
+
+def drop_cell_entries(frontier, cell) -> list:
+    """Every entry except those of one cell, for any entry layout."""
+    kept = [entry for entry in frontier if entry_cell(entry) != cell]
     if len(kept) == len(frontier):
         raise ValueError("The frontier holds no entry for this cell")
     return kept

@@ -20,6 +20,7 @@ import heapq
 import json
 import math
 import random
+from collections import Counter, deque
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -34,6 +35,8 @@ from .policy_runner import (
     Session,
     action_tuple,
     drop_cell_entries,
+    drop_index,
+    entry_view,
     plan_attributes,
 )
 from .selectors import parse, select
@@ -107,20 +110,26 @@ def decode(explanation: GridExplanation, values: dict) -> tuple:
     raw = select(values, mapping.frontier)
     parents = select(values, mapping.parents)
     costs = select(values, mapping.costs)
-    if type(raw) is not list or type(parents) is not dict or type(costs) is not dict:
-        raise ValueError("Expected a list frontier and dictionary parents/costs")
+    if (
+        type(raw) not in (list, deque)
+        or type(parents) is not dict
+        or type(costs) is not dict
+    ):
+        raise ValueError("Expected a list/deque frontier and dictionary parents/costs")
     for entry in raw:
         if spec.layout == "states":
             if not is_cell(entry):
                 raise ValueError("A state frontier holds cells")
         elif not (
             type(entry) is tuple
-            and len(entry) == 2
-            and type(entry[0]) in (int, float)
-            and is_cell(entry[1])
+            and (len(entry) == 2 if spec.layout == "pairs" else len(entry) >= 3)
+            and all(type(v) in (int, float) for v in entry[:-1])
+            and is_cell(entry[-1])
         ):
-            raise ValueError("A pair frontier holds (priority, cell) entries")
-    frontier = tuple(raw) if spec.ordered else tuple(sorted(raw))
+            raise ValueError("A heap frontier holds (priority, ..., cell) entries")
+    # Tie-break numbers of tagged entries are not part of the search state.
+    views = [entry_view(e) for e in raw] if spec.layout == "tagged" else list(raw)
+    frontier = tuple(views) if spec.ordered else tuple(sorted(views))
     return select(values, mapping.root), frontier, parents, costs
 
 
@@ -175,7 +184,7 @@ def abstract_edit(engine: GridSearch, edit: SearchEdit) -> None:
     if edit.operation == "clear":
         engine.frontier.clear()
     elif edit.operation == "drop":
-        engine.frontier.remove(edit.entry)
+        del engine.frontier[drop_index(engine.frontier, edit.entry)]
         if not engine.spec.ordered:
             heapq.heapify(engine.frontier)
     elif edit.operation == "drop_cell":
@@ -201,6 +210,26 @@ def _summary(transition, step: int, kind: str) -> dict:
         "improved": [repr(c) for c in transition.improved[:4]],
         "frontier_size": transition.frontier_size,
     }
+
+
+def _selected(explanation: GridExplanation, engine: GridSearch, values) -> Any:
+    """For a tied tagged heap, the tied cell the run took out (read from `values`).
+
+    The run's own tie-break numbers decide ties; which tied cell went is the one
+    whose (priority, cell) count dropped in the next snapshot. Anything else is
+    still predicted and compared.
+    """
+    tied = engine.tied_cells()
+    if len(tied) < 2:
+        return None
+    try:
+        after = Counter(decode(explanation, values)[1])
+    except ERRORS:
+        return None
+    low = engine.frontier[0][0]
+    before = Counter(entry_view(e) for e in engine.frontier)
+    gone = [c for c in tied if after[(low, c)] < before[(low, c)]]
+    return gone[0] if len(gone) == 1 else None
 
 
 def compare_run(
@@ -246,7 +275,7 @@ def compare_run(
             if engine.phase == "done":
                 reject("step_count", extra_frames=True)
                 return result, None
-            transition = engine.step()
+            transition = engine.step(_selected(explanation, engine, values))
             transitions.append(transition)
             step += 1
             if step <= KEEP_RECORDS:

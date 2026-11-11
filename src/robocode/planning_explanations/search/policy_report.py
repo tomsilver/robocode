@@ -7,7 +7,7 @@ import html
 from dataclasses import asdict
 from pathlib import Path
 
-from .policy_discovery import DEPTH, EFFORT, FrozenPolicyBank
+from .policy_discovery import DEPTH, EFFORT, UNREADABLE, FrozenPolicyBank
 from .policy_runner import PolicyProgram
 from .report import _details, _table, write_json
 
@@ -15,6 +15,10 @@ FINDINGS = {
     "search_supported": "Search explanations supported for every search-shaped run",
     "partially_explained": "Some search-shaped runs are unresolved; totals withheld",
     "no_search_parts": "No search-shaped loops within the grammar",
+    "unreadable_loops": (
+        "Some loops keep a worklist the grammar cannot read (or could not be fully "
+        "inspected); totals withheld"
+    ),
 }
 
 RULES = (
@@ -28,7 +32,10 @@ RULES = (
     "estimate of total planning: no action witness means unresolved use, not zero "
     "planning. Cross-call attribution requires the same search intervention to "
     "predict the complete stored plan and a later action, with plan-only and "
-    "plan-restoration controls. Probes are excluded from ordinary counts. The "
+    "plan-restoration controls. Probes are excluded from ordinary counts. A loop "
+    "the grammar cannot bind counts as no search only if no container in it both "
+    "gains and loses items and every container was inspected; otherwise it is "
+    "unreadable and totals are withheld. The "
     "followed-plan share is a range. Its low end counts calls that follow a plan "
     "with a complete search-to-action witness. Its max adds calls whose plan "
     "evidence is unresolved (producer not probed, edits left the plan unchanged, "
@@ -47,7 +54,14 @@ def _finding(bank: FrozenPolicyBank, validation: dict) -> dict:
         for e in validation["episodes"]
         for r in e["runs"]
     )
-    if "search" not in statuses and "no_explanation" not in statuses and not unseen:
+    unreadable = UNREADABLE in statuses or any(
+        r["part_status"] == UNREADABLE
+        for e in validation["episodes"]
+        for r in e["runs"]
+    )
+    if unreadable:
+        code = "unreadable_loops"
+    elif "search" not in statuses and "no_explanation" not in statuses and not unseen:
         code = "no_search_parts"
     elif validation["summary"]["complete"]:
         code = "search_supported"
