@@ -72,13 +72,16 @@ SEARCH_PARTS = ("search", "no_explanation")
 # be fully inspected: unknown, never zero.
 UNREADABLE = "unreadable_loop"
 LOOP_RULES = (
-    "a loop with no grammar binding is not search-shaped (zero) only if no list, "
-    "dict, deque or set in it both gains and loses items during any run, and every "
-    f"container was inspected (depth {SCAN_DEPTH}, {SCAN_LIMIT} containers per "
-    "snapshot); otherwise it is unreadable. Validation runs of not-search-shaped "
-    "parts are re-checked the same way"
+    "numpy numbers are recorded as plain numbers, and only a list, dict, deque, "
+    "set or a tuple holding one counts as omitted container data; "
+    "a loop with no grammar binding is unreadable if container data was omitted, "
+    "a container gains and loses items, or a growing sequence has a possible "
+    "advancing integer read cursor; inspection limits also make it unreadable "
+    f"(depth {SCAN_DEPTH}, {SCAN_LIMIT} containers and integer candidates per "
+    "snapshot). These are bounded representation checks. Validation runs of "
+    "not-search-shaped parts are re-checked the same way"
 )
-BANK_SCHEMA = 5
+BANK_SCHEMA = 7
 # A call following a cached plan takes the strongest evidence among the plan
 # versions it follows, in this order.
 FOLLOWED = {
@@ -358,8 +361,8 @@ def load_policy_bank(path: Path) -> FrozenPolicyBank:
     data = json.loads(path.read_text())
     if data.get("schema") != BANK_SCHEMA:
         raise ValueError(
-            f"Rediscover this bank: schema {BANK_SCHEMA} adds tagged and deque "
-            "frontiers and the worklist check for loops without a binding"
+            f"Rediscover this bank: schema {BANK_SCHEMA} records numpy numbers "
+            "and counts only mutable containers as snapshot omissions"
         )
     if data.get("grammar") != GRAMMAR:
         raise ValueError("Frozen bank uses a different grammar")
@@ -460,9 +463,10 @@ class EpisodeAnalyzer:
 
     def __call__(self, call: CallRecord, policy, state, extra, after) -> None:
         self.actions.append(call.action)
-        search_sites = set(self.program.sites) - {
-            s for s, p in self.parts.items() if p["status"] == "not_search_shaped"
-        }
+        # Replays stop when a recognised search runs again. An unknown loop does
+        # not stop them: if it replaces the cache, the replay's cache check stops
+        # it, and the plan-only and restoration controls test mediation anyway.
+        search_sites = {s for s, p in self.parts.items() if p["status"] in SEARCH_PARTS}
         for replay in self.replays:
             replay.step(self.program, self.domain, call, state, extra, search_sites)
         self.replays = [r for r in self.replays if r.evidence["status"] == "pending"]
@@ -509,9 +513,12 @@ class EpisodeAnalyzer:
             shaped = part is not None and part["status"] == "not_search_shaped"
             if shaped:
                 # The frozen "not a search" verdict is re-checked on this run.
-                reason = unreadable_reason(worklist_signature(run))
+                signature = worklist_signature(run)
+                reason = unreadable_reason(signature)
                 if reason:
-                    entry.update(part_status=UNREADABLE, unreadable=reason)
+                    entry.update(
+                        part_status=UNREADABLE, unreadable=reason, worklist=signature
+                    )
                     shaped = False
             entry["status"] = "not_search_shaped" if shaped else "unresolved"
             return entry, None
@@ -651,10 +658,10 @@ class EpisodeAnalyzer:
         if statuses & set(SEARCH_PARTS):
             record["category"] = "ran_search"
             return record
-        if statuses - {"not_search_shaped"}:
-            # A loop never seen in development: not known to be search, not zero.
-            record["category"] = "unresolved_loop"
-            return record
+        # A loop not known to be a search (or not): it may drive this action, so
+        # the call is not "neither". It does not hide plan evidence, though.
+        unknown = bool(statuses - {"not_search_shaped"})
+        record["unknown_loop"] = unknown
         category = "neither"
         for attribute, points in sorted(call.plans_before.items()):
             if not points:
@@ -667,10 +674,16 @@ class EpisodeAnalyzer:
             record["probes"].append(probe)
             if not probe["passed"] or version is None:
                 continue
+            if unknown and version["call"] >= call.index:
+                # The unknown loop may have replaced this plan during the call.
+                probe["stored_this_call"] = True
+                continue
             version["consumers"] += 1
             version["world_insensitive"] += bool(probe.get("world_insensitive"))
             # Provisional: the evidence category is known once replays finish.
             category = "followed_plan"
+        if category == "neither" and unknown:
+            category = "unresolved_loop"
         record["category"] = category
         return record
 

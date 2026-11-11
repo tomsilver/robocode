@@ -376,7 +376,11 @@ class VerificationTest(unittest.TestCase):
         self.assertFalse(row["complete"])
         self.assertIsNone(row["expansion_events"])
         self.assertEqual(row["explained_only_expansion_events"], 232)
-        self.assertEqual(row["unresolved_loop"], row["action_calls"])
+        # The unseen loop runs in every call but does not erase plan evidence:
+        # the plan stored at reset is witnessed, so every call stays credited.
+        self.assertTrue(all(c["unknown_loop"] for c in episode["calls"]))
+        self.assertEqual(row["followed_witnessed_plan"], row["action_calls"])
+        self.assertEqual(row["unresolved_loop"], 0)
 
     def test_episodes_must_be_disjoint(self):
         """Validation episodes cannot reuse a development episode."""

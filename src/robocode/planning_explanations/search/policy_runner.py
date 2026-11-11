@@ -61,6 +61,62 @@ def value_like(value, depth: int = 0) -> bool:
     return False
 
 
+OPAQUE = object()
+
+
+def _numpy_number(value) -> bool:
+    """A numpy boolean, integer or float scalar (recognised without importing numpy)."""
+    dtype = getattr(value, "dtype", None)
+    return (
+        type(value).__module__ == "numpy"
+        and getattr(value, "ndim", None) == 0
+        and getattr(dtype, "kind", "?") in ("b", "i", "u", "f")
+    )
+
+
+def plain(value, depth: int = 0):
+    """A copy with numpy numbers as Python numbers, or OPAQUE if anything is opaque."""
+    kind = type(value)
+    if kind in _SCALARS:
+        return value
+    if _numpy_number(value):
+        return value.item()
+    if depth >= 4:
+        return OPAQUE
+    if kind is dict:
+        pairs = []
+        for key, item in value.items():
+            key, item = plain(key, depth + 1), plain(item, depth + 1)
+            if key is OPAQUE or item is OPAQUE:
+                return OPAQUE
+            pairs.append((key, item))
+        return dict(pairs)
+    if kind in (tuple, list, deque, set):
+        items = []
+        for item in value:
+            item = plain(item, depth + 1)
+            if item is OPAQUE:
+                return OPAQUE
+            items.append(item)
+        if kind is deque:
+            return deque(items, value.maxlen)
+        return kind(items)
+    return OPAQUE
+
+
+def holds_mutable(value, depth: int = 0) -> bool:
+    """A list, dict, deque or set, or a tuple holding one: state that can change.
+
+    A tuple of numbers or objects cannot itself gain or lose items, so it can
+    never be a hidden worklist.
+    """
+    if type(value) in (list, dict, deque, set):
+        return True
+    if type(value) is tuple:
+        return depth >= 4 or any(holds_mutable(v, depth + 1) for v in value)
+    return False
+
+
 def policy_callable(value) -> bool:
     """A function or lambda written in the analyzed source, never a library call."""
     code = getattr(value, "__code__", None)
@@ -89,6 +145,9 @@ class RunCapture:
         self.records: list[tuple[str, dict]] = []
         self.callables: dict[str, Callable] = {}
         self._previous: dict[str, Any] = {}
+        # Values outside the snapshot language must not look like absent state.
+        # Accumulate names over the run, including containers lost in later frames.
+        self.omitted_containers: set[str] = set()
 
     def record(self, kind: str, values: dict) -> None:
         """Encode current values against the previous frame of this run."""
@@ -107,57 +166,75 @@ class RunCapture:
         for name, value in values.items():
             if name.startswith("__"):
                 continue
-            old = previous.get(name)
-            if type(value) is dict:
-                if (
-                    old is not None
-                    and old[0] == "D"
-                    and self._delta(name, value, old[1], encoded)
-                ):
-                    seen.add(name)
-                elif value_like(value):
-                    encoded[name] = ("D", copy.deepcopy(value))
-                    previous[name] = ("D", copy.deepcopy(value))
-                    seen.add(name)
-            elif type(value) is list:
-                snapshot = tuple(value)
-                if old is not None and old[0] == "L" and old[1] == snapshot:
-                    # Equal to an already-checked immutable snapshot.
-                    seen.add(name)
-                elif immutable(snapshot):
-                    encoded[name] = ("L", snapshot)
-                    previous[name] = ("L", snapshot)
-                    seen.add(name)
-                elif value_like(value):
-                    if old is None or old[0] != "C" or old[1] != value:
-                        encoded[name] = ("C", copy.deepcopy(value))
-                        previous[name] = ("C", copy.deepcopy(value))
-                    seen.add(name)
-            elif type(value) in (deque, set) and all(immutable(v) for v in value):
-                snapshot = (
-                    ("Q", tuple(value), value.maxlen)
-                    if type(value) is deque
-                    else ("S", frozenset(value))
-                )
-                if old != snapshot:
-                    encoded[name] = snapshot
-                    previous[name] = snapshot
+            recorded = self._encode(name, value, encoded)
+            if not recorded:
+                # numpy numbers are recorded as the plain numbers they hold.
+                converted = plain(value)
+                if converted is not OPAQUE:
+                    recorded = self._encode(name, converted, encoded)
+            if recorded:
                 seen.add(name)
-            elif immutable(value):
-                if (
-                    old is None
-                    or old[0] != "V"
-                    or type(old[1]) is not type(value)
-                    or old[1] != value
-                ):
-                    encoded[name] = ("V", value)
-                    previous[name] = ("V", value)
-                seen.add(name)
+            elif holds_mutable(value):
+                # Unrecorded state that could change is not evidence of absence.
+                self.omitted_containers.add(name)
         for name in list(previous):
             if name not in seen:
                 encoded[name] = ("X",)
                 del previous[name]
         self.records.append((kind, encoded))
+
+    def _encode(self, name: str, value, encoded: dict) -> bool:
+        """Record one value if it is in the snapshot language; True if recorded."""
+        previous = self._previous
+        old = previous.get(name)
+        if type(value) is dict:
+            if (
+                old is not None
+                and old[0] == "D"
+                and self._delta(name, value, old[1], encoded)
+            ):
+                return True
+            if value_like(value):
+                encoded[name] = ("D", copy.deepcopy(value))
+                previous[name] = ("D", copy.deepcopy(value))
+                return True
+            return False
+        if type(value) is list:
+            snapshot = tuple(value)
+            if old is not None and old[0] == "L" and old[1] == snapshot:
+                # Equal to an already-checked immutable snapshot.
+                return True
+            if immutable(snapshot):
+                encoded[name] = ("L", snapshot)
+                previous[name] = ("L", snapshot)
+                return True
+            if value_like(value):
+                if old is None or old[0] != "C" or old[1] != value:
+                    encoded[name] = ("C", copy.deepcopy(value))
+                    previous[name] = ("C", copy.deepcopy(value))
+                return True
+            return False
+        if type(value) in (deque, set) and all(immutable(v) for v in value):
+            snapshot = (
+                ("Q", tuple(value), value.maxlen)
+                if type(value) is deque
+                else ("S", frozenset(value))
+            )
+            if old != snapshot:
+                encoded[name] = snapshot
+                previous[name] = snapshot
+            return True
+        if immutable(value):
+            if (
+                old is None
+                or old[0] != "V"
+                or type(old[1]) is not type(value)
+                or old[1] != value
+            ):
+                encoded[name] = ("V", value)
+                previous[name] = ("V", value)
+            return True
+        return False
 
     @staticmethod
     def _delta(name: str, value: dict, old: dict, encoded: dict) -> bool:
@@ -325,7 +402,7 @@ def apply_edit(values: dict, edit: SearchEdit) -> None:
         raise ValueError("Unknown search edit")
 
 
-def entry_view(entry):
+def entry_view(entry) -> Any:
     """A frontier entry as (priority, cell), or the cell itself.
 
     Extra numbers between the priority and the cell (tie-breakers) are dropped.
@@ -343,7 +420,7 @@ def drop_index(frontier, view) -> int:
     raise ValueError("The frontier holds no such entry")
 
 
-def entry_cell(entry):
+def entry_cell(entry) -> Any:
     """The cell a frontier entry holds."""
     view = entry_view(entry)
     return view if view is entry else view[1]

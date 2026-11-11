@@ -20,8 +20,11 @@ See the implementation decisions below. Older policy banks must be
 rediscovered; schema 4 freezes readout templates (the root offset is bound per
 plan; a final point may follow or replace the endpoint cell), the
 destination-keeping detour probe, plan-producer-first probe selection, and the
-four followed-plan categories. Issue 2 (also 2026-11-10, schema 5): a loop the
-analyzer cannot read is reported unknown, never zero planning.
+four followed-plan categories. Issue 2 introduced unreadable-loop checks in
+schema 5. Schema 6 additionally preserves snapshot omissions, flags growing
+queues with advancing cursors, and fixes validation-only search headlines.
+Schema 7 records numpy numbers as plain numbers, counts only changeable
+containers as omissions, and keeps plan evidence when an unknown loop runs.
 
 ## Run milestone 8: a stateful KinDER policy
 
@@ -1018,6 +1021,100 @@ KinDER analysis takes about 115 s instead of 75 s. Bank schema 5.
 Remaining gaps: worklists kept on `self` or in non-plain objects are invisible
 to the snapshot; a loop with a temporary list rebuilt every iteration can be
 reported unreadable (unknown) although it is not a search.
+
+### Issue 2 follow-up: missing snapshots, append-only queues, validation headlines
+
+The schema-5 checks still returned **complete, zero planning** for two
+equivalent representations of the controls:
+
+- Move the renamed A* working dictionary five nesting levels deeper. The
+  recorder dropped it before the worklist inspector ran, without recording
+  that observation was incomplete.
+- Implement BFS with a growing list and a moving integer cursor, retaining
+  processed entries. No container loses entries, so the worklist test missed
+  the queue even though the program produces the same actions as deque BFS.
+
+Schema 6 fixes these failures conservatively:
+
+1. `RunCapture.omitted_containers` retains the names of builtin containers
+   excluded by the snapshot language at **any** checkpoint. The worklist audit
+   carries these omissions forward as incomplete inspection; a loop without a
+   search binding is `unreadable_loop`, with reason `snapshot_omission`.
+2. The bounded inspector also records sequence lengths and integer values at
+   existing paths. A growing sequence plus an increasing integer within its
+   length is a possible read cursor (`growing_sequence_with_cursor`). This is
+   enough to withhold a zero classification, not enough to certify BFS or
+   attribute its effort. Names have no semantic role; nested cursors work too.
+   Static, decreasing and out-of-range integers do not trigger this warning.
+3. Both checks run again on validation executions of parts previously labeled
+   not-search-shaped. Validation omissions are included in the run's audit.
+4. Report findings check validation completeness before issuing a no-search
+   headline. A loop already present in the source but first executed during
+   validation is unresolved, even though it is not an `unseen_part`.
+
+The two representation controls now have unknown expansion/planning-event
+totals and a followed-plan range of 0–1, rather than a false zero. A
+validation-only search has the headline "Some executed loops are unresolved;
+totals withheld" consistently in JSON, Markdown and HTML. Existing path
+reconstruction, waypoint consumption and reactive controls remain covered by
+regression tests. Observation parity and equivalence to the original controls
+are checked as well.
+
+These remain bounded representation checks, not a proof of non-planning for
+arbitrary programs. A growing output list with an unrelated advancing counter
+may conservatively become unknown. State in `self` or unsupported object
+types, and other queue encodings, still require broader instrumentation or
+additional explanation families. The search-to-plan-to-action protocol and
+ordinary-execution accounting are unchanged.
+
+Older frozen banks require rediscovery because the negative-classification
+rules are part of the experiment. Regression commands:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/planning_explanations -p 'test_policy*.py'
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests/planning_explanations -p 'test_search_policy.py'
+```
+
+### Issue 2, second follow-up: numpy values; unknown loops and plan evidence (2026-11-11)
+
+Two problems remained after schema 6, both shown on `plan_once` (113 action
+calls in episode (0, 1)):
+
+1. **numpy numbers became omissions.** The snapshot accepts exact Python
+   scalars only, so `here = (np.float64(x), np.float64(y))` in the
+   waypoint-following helper was omitted. Schema 6 then made that ordinary
+   loop unreadable, and the program went from complete with share 1.0 to
+   withheld totals with share 0–1.0. A tuple cannot gain or lose items, so it
+   can never be the hidden worklist that rule exists for.
+2. **An unknown loop erased plan evidence.** A call that ran an unknown loop
+   was labelled "unclassified loop" before plan-following was checked, so 113
+   steps proven to follow the search's path were not counted as proven. The
+   same loop also stopped every cross-call replay, as if it were a replan, so
+   the proof itself was never obtained.
+
+Changes (schema 7):
+
+1. Values outside the snapshot language are converted when they hold only
+   numpy booleans, integers and floats; they are recorded as the Python
+   numbers they hold. Only a list, dict, deque or set, or a tuple holding one,
+   counts as an omitted container. A heap of `(f, node_object)` entries is
+   still omitted, so such a search stays unknown rather than zero.
+2. Plan-following is checked whenever no recognised search ran in the call. If
+   an unknown loop ran, a step is credited to a plan only if that plan version
+   was stored in an earlier call; otherwise the step stays "unclassified
+   loop", inside the share's max. Cross-call replays stop only when a
+   recognised search part runs; an unknown loop that replaces the cache is
+   still stopped by the cache-replacement check, and the plan-only and
+   restoration controls test mediation regardless.
+
+| `plan_once` variant | Schema 6 | Schema 7 |
+| --- | --- | --- |
+| + harmless numpy tuple in a helper | totals withheld, share 0–1.0 | complete, 459 expansions, share 1.0 |
+| A* keeping its costs as numpy numbers | unreadable | explained; same expansions as `plan_once` |
+| + an unknown countdown helper loop | share 0–1.0 | totals withheld (the helper may hide effort), share 1.0 |
+| unknown loop replacing the plan every call | share 0–1.0 | share 0–1.0 (plan stored beside it: not credited) |
+
+KinDER and the existing controls are unchanged.
 
 Reports separate structural matches, exact plan predictions, action mediation,
 counterexamples and missing witnesses. Inspect

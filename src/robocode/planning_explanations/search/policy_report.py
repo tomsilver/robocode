@@ -13,7 +13,7 @@ from .report import _details, _table, write_json
 
 FINDINGS = {
     "search_supported": "Search explanations supported for every search-shaped run",
-    "partially_explained": "Some search-shaped runs are unresolved; totals withheld",
+    "partially_explained": "Some executed loops are unresolved; totals withheld",
     "no_search_parts": "No search-shaped loops within the grammar",
     "unreadable_loops": (
         "Some loops keep a worklist the grammar cannot read (or could not be fully "
@@ -33,9 +33,10 @@ RULES = (
     "planning. Cross-call attribution requires the same search intervention to "
     "predict the complete stored plan and a later action, with plan-only and "
     "plan-restoration controls. Probes are excluded from ordinary counts. A loop "
-    "the grammar cannot bind counts as no search only if no container in it both "
-    "gains and loses items and every container was inspected; otherwise it is "
-    "unreadable and totals are withheld. The "
+    "the grammar cannot bind is unreadable if containers gain and lose items, "
+    "a growing sequence has a possible advancing read cursor, or container data "
+    "was omitted or incompletely inspected. Totals are then withheld. These "
+    "bounded checks do not rule out every other search representation. The "
     "followed-plan share is a range. Its low end counts calls that follow a plan "
     "with a complete search-to-action witness. Its max adds calls whose plan "
     "evidence is unresolved (producer not probed, edits left the plan unchanged, "
@@ -49,11 +50,6 @@ RULES = (
 
 def _finding(bank: FrozenPolicyBank, validation: dict) -> dict:
     statuses = [p["status"] for p in bank.parts.values()]
-    unseen = any(
-        r["part_status"] == "unseen_part"
-        for e in validation["episodes"]
-        for r in e["runs"]
-    )
     unreadable = UNREADABLE in statuses or any(
         r["part_status"] == UNREADABLE
         for e in validation["episodes"]
@@ -61,12 +57,12 @@ def _finding(bank: FrozenPolicyBank, validation: dict) -> dict:
     )
     if unreadable:
         code = "unreadable_loops"
-    elif "search" not in statuses and "no_explanation" not in statuses and not unseen:
-        code = "no_search_parts"
-    elif validation["summary"]["complete"]:
-        code = "search_supported"
-    else:
+    elif not validation["summary"]["complete"]:
         code = "partially_explained"
+    elif "search" not in statuses and "no_explanation" not in statuses:
+        code = "no_search_parts"
+    else:
+        code = "search_supported"
     return {"code": code, "label": FINDINGS[code], "planningness": None}
 
 
@@ -85,7 +81,7 @@ def _lower_bound(value, untested: int):
     return f"≥ {_fmt(value)}"
 
 
-def share_range(low, high):
+def share_range(low, high) -> float | str | None:
     """Witnessed share and its max; equal ends are printed once."""
     if low is None or high is None:
         return None
