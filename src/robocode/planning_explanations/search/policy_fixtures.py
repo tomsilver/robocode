@@ -284,6 +284,69 @@ NESTED_RENAMED = _HEADER.replace("self.path = []", "self.route = []") + """
         return (max(-0.035, min(0.035, t[0] - x)), max(-0.035, min(0.035, t[1] - y)))
 """
 
+# A* written the way GPT-6 Astra's KinDER policy writes it: a numpy obstacle grid
+# (`bad`), a parent table without a root entry, (f, g, cell) heap entries, a weighted
+# octile heuristic with 1.414 diagonals, no corner cutting, a return inside the loop.
+_GRID_OCTILE = """
+    def _plan(self, start, goal, obstacles):
+        \"\"\"Weighted-octile A* over a numpy occupancy grid.\"\"\"
+        step, n = 0.1, 26
+        axis = np.arange(n) * step
+        cx, cy = np.meshgrid(axis, axis, indexing="ij")
+        bad = (cx < 0.05) | (cx > 2.45) | (cy < 0.05) | (cy > 2.45)
+        for ox, oy, r in obstacles:
+            bad |= np.hypot(cx - ox, cy - oy) <= r + 0.1
+        src = tuple(np.clip(np.round(np.asarray(start) / step).astype(int), 0, n - 1))
+        dst = tuple(np.clip(np.round(np.asarray(goal) / step).astype(int), 0, n - 1))
+        if bad[dst]:
+            return [(goal[0], goal[1])]
+        front = [(0.0, 0.0, src)]
+        cost = {src: 0.0}
+        parent = {}
+        moves = [(1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
+                 (1, 1, 1.414), (1, -1, 1.414), (-1, 1, 1.414), (-1, -1, 1.414)]
+        while front:
+            _, g, k = heapq.heappop(front)
+            if g > cost[k] + 1e-6:
+                continue
+            if k == dst:
+                out = [(goal[0], goal[1])]
+                while k != src:
+                    out.append((step * k[0], step * k[1]))
+                    k = parent[k]
+                out.reverse()
+                return out
+            for dx, dy, d in moves:
+                nxt = (k[0] + dx, k[1] + dy)
+                if not (0 <= nxt[0] < n and 0 <= nxt[1] < n) or bad[nxt]:
+                    continue
+                if dx and dy and (bad[k[0] + dx, k[1]] or bad[k[0], k[1] + dy]):
+                    continue
+                ng = g + d
+                if ng >= cost.get(nxt, 1e20):
+                    continue
+                cost[nxt] = ng
+                parent[nxt] = k
+                ax, ay = abs(dst[0] - nxt[0]), abs(dst[1] - nxt[1])
+                h = max(ax, ay) + .414 * min(ax, ay)
+                heapq.heappush(front, (ng + h * 1.02, ng, nxt))
+        return [(goal[0], goal[1])]
+"""
+
+GRID_OCTILE = (
+    _HEADER.replace("import math\n", "import math\n\nimport numpy as np\n")
+    + _GRID_OCTILE
+    + _FOLLOW
+    + """
+    def reset(self, state, info):
+        self.goal = tuple(state["goal"])
+        self.path = self._plan(state["robot"], self.goal, state["obstacles"])
+
+    def get_action(self, state):
+        return self._follow(state)
+"""
+)
+
 POLICY_FIXTURES = {
     "plan_once": PLAN_ONCE,
     "discarded_search": DISCARDED_SEARCH,
@@ -296,6 +359,7 @@ POLICY_FIXTURES = {
     "tiebreak_astar": TIEBREAK_ASTAR,
     "deque_bfs": DEQUE_BFS,
     "bfs_without_costs": BFS_WITHOUT_COSTS,
+    "grid_octile": GRID_OCTILE,
 }
 
 GROUND_TRUTH = {
@@ -315,6 +379,10 @@ GROUND_TRUTH = {
     "deque_bfs": "Breadth-first search with a deque frontier; plan once and follow",
     "bfs_without_costs": (
         "Breadth-first search without a cost map: outside the grammar, so unknown"
+    ),
+    "grid_octile": (
+        "A* in Astra's style: numpy obstacle grid, empty parent table, weighted "
+        "octile heuristic, 1.414 diagonals, no corner cutting; plan once and follow"
     ),
     "clutteredretrieval2d": "Agent-written KinDER policy; no construction label",
 }

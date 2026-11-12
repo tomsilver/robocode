@@ -12,6 +12,7 @@ counted, the planned share of actions is a fraction, and coverage is kept separa
 # pylint: disable=unidiomatic-typecheck
 
 import itertools
+import math
 import json
 import random
 from collections import deque
@@ -20,7 +21,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .discover import digest
-from .grid_engine import GRAMMAR, GridSearch, GridSpec, is_cell
+from .grid_engine import (
+    EIGHT,
+    FOUR,
+    GRAMMAR,
+    MODELS,
+    GridSearch,
+    GridSpec,
+    is_cell,
+)
 from .policy_causality import (
     CHAIN_RULES,
     candidate_templates,
@@ -30,6 +39,7 @@ from .policy_causality import (
     propose_rules,
 )
 from .policy_runner import (
+    boolean_grid,
     CallRecord,
     PolicyProgram,
     RunRecord,
@@ -50,6 +60,7 @@ from .policy_verify import (
     link_plan,
     readout_shape,
 )
+from .policy_fit import fit_role
 from .policy_worklist import (
     SCAN_DEPTH,
     SCAN_LIMIT,
@@ -81,7 +92,7 @@ LOOP_RULES = (
     "snapshot). These are bounded representation checks. Validation runs of "
     "not-search-shaped parts are re-checked the same way"
 )
-BANK_SCHEMA = 7
+BANK_SCHEMA = 10
 # A call following a cached plan takes the strongest evidence among the plan
 # versions it follows, in this order.
 FOLLOWED = {
@@ -104,6 +115,15 @@ EFFORT = (
     "cost_improvements",
 )
 DEPTH = ("max_expanded_depth", "max_discovery_depth")
+# Totals withheld when a search-shaped run is unresolved. Each keeps its explained
+# part (`explained_only_*`), a lower bound: an unknown run can only add to it.
+WITHHELD = (
+    "planning_events",
+    *EFFORT,
+    *DEPTH,
+    "attributed_expansion_events",
+    "initialization_expansion_events",
+)
 
 
 @dataclass(frozen=True)
@@ -173,7 +193,11 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
         pairs = paths(lambda v, r: _one_entry(v, r, (2,)))
         tagged = paths(lambda v, r: _one_entry(v, r, range(3, 8)))
         states = paths(lambda v, r: type(v) in (list, deque) and list(v) == [r])
-        parents = paths(lambda v, r: type(v) is dict and v == {r: None})
+        # The root's parent entry is None, or absent as in the PDF's algorithm
+        # ("store no parent for it").
+        parents = [
+            (p, "none") for p in paths(lambda v, r: type(v) is dict and v == {r: None})
+        ] + [(p, "absent") for p in paths(lambda v, r: type(v) is dict and not v)]
         costs = paths(
             lambda v, r: type(v) is dict
             and len(v) == 1
@@ -192,12 +216,21 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
             for n in named
             if all(readout_shape(c[n], r) for (_, c), r in zip(firsts, roots))
         ]
+        # A boolean array the run already holds, indexed by the root cell.
+        grids = paths(
+            lambda v, r: boolean_grid(v)
+            and v.ndim == 2
+            and 0 <= r[0] < v.shape[0]
+            and 0 <= r[1] < v.shape[1]
+        )
         for layout, frontiers in (
             ("pairs", pairs),
             ("tagged", tagged),
             ("states", states),
         ):
-            for frontier, parent, cost in itertools.product(frontiers, parents, costs):
+            for frontier, (parent, root_parent), cost in itertools.product(
+                frontiers, parents, costs
+            ):
                 if len(roles) == limits.bindings:
                     limited = True
                     break
@@ -206,10 +239,12 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
                         "root": root,
                         "frontier": frontier,
                         "parents": parent,
+                        "root_parent": root_parent,
                         "costs": cost,
                         "layout": layout,
                         "goals": goals,
                         "models": models,
+                        "grids": grids,
                         "readouts": readouts,
                     }
                 )
@@ -217,25 +252,68 @@ def grid_bindings(runs: list[RunRecord], limits: PolicyLimits) -> tuple[list, di
     return roles, audit
 
 
-def grid_specifications(layout: str) -> Iterator[GridSpec]:
-    """The finite grid-priority-v1 ingredient grammar for one frontier layout."""
+# Fitted ingredients that equal a v1 menu item are written as that item, so the
+# same explanation never appears under two identities.
+_MENU_MOVES = {
+    tuple((di, dj, math.hypot(di, dj)) for di, dj in offsets): size
+    for offsets, size in ((FOUR, 4), (EIGHT, 8))
+}
+_MENU_HEURISTICS = {
+    ("euclidean", (1.0,)): "euclidean",
+    ("octile", (1.0, 1.0)): "manhattan",
+}
+
+
+def grid_specifications(
+    layout: str, root_parent: str = "none", fit: dict | None = None, goal: str = ""
+) -> Iterator[GridSpec]:
+    """The finite ingredient grammar for one frontier layout.
+
+    Without `fit`, these are the grid-priority-v1 menu items (4/8 neighbors with
+    straight-line step costs; straight-line or city-block heuristics). With `fit`,
+    the move table, heuristic and entry fields proposed from development runs
+    replace those menu items; every other choice is enumerated the same way.
+    """
     selections = {
         "pairs": ("min", "fifo", "lifo"),
         "tagged": ("min",),
         "states": ("fifo", "lifo"),
     }[layout]
-    priorities = (
-        (
-            ("g", "none"),
-            ("g+h", "euclidean"),
-            ("g+h", "manhattan"),
-            ("h", "euclidean"),
-            ("h", "manhattan"),
+    if fit is None:
+        priorities: tuple = (
+            (
+                ("g", "none", "", ()),
+                ("g+h", "euclidean", "", ()),
+                ("g+h", "manhattan", "", ()),
+                ("h", "euclidean", "", ()),
+                ("h", "manhattan", "", ()),
+            )
+            if layout in ("pairs", "tagged")
+            else (("g", "none", "", ()),)
         )
-        if layout in ("pairs", "tagged")
-        else (("g", "none"),)
-    )
-    for selection, (priority, heuristic) in itertools.product(selections, priorities):
+        neighborhoods: tuple = (4, 8)
+        extra: dict = {}
+    else:
+        fitted = []
+        for p, form, coef in fit["heuristics"].get(goal, []):
+            menu = _MENU_HEURISTICS.get((form, coef))
+            if p == "g":
+                fitted.append((p, "none", "", ()))
+            elif menu:
+                fitted.append((p, menu, "", ()))
+            else:
+                fitted.append((p, "fitted", form, coef))
+        priorities = tuple(
+            dict.fromkeys([("g", "none", "", ()), *fitted])
+            if layout in ("pairs", "tagged")
+            else [("g", "none", "", ())]
+        )
+        size = _MENU_MOVES.get(fit["moves"])
+        neighborhoods = (size,) if size else (0,)
+        extra = {"moves": () if size else fit["moves"], "fields": fit["fields"]}
+    for selection, (priority, heuristic, h_form, h_coef) in itertools.product(
+        selections, priorities
+    ):
         for (
             root_priority,
             timing,
@@ -248,32 +326,88 @@ def grid_specifications(layout: str) -> Iterator[GridSpec]:
             ("selection", "generation", "none"),
             ("first", "improve"),
             ("reexpand", "skip") if selection == "min" else ("reexpand",),
-            (4, 8),
-            ("own", "open"),
+            neighborhoods,
+            MODELS,
         ):
-            try:
-                yield GridSpec(
-                    selection,
-                    priority,
-                    heuristic,
-                    root_priority,
-                    timing,
-                    relaxation,
-                    stale,
-                    neighborhood,
-                    model,
-                    layout,
-                )
-            except ValueError:
-                continue
+            sources = ("costs", "entry") if extra.get("fields") else ("costs",)
+            for corners, g_source in itertools.product(("cut", "no_cut"), sources):
+                try:
+                    yield GridSpec(
+                        selection,
+                        priority,
+                        heuristic,
+                        root_priority,
+                        timing,
+                        relaxation,
+                        stale,
+                        neighborhood,
+                        model,
+                        layout,
+                        h_form=h_form,
+                        h_coef=h_coef,
+                        corners=corners,
+                        root_parent=root_parent,
+                        g_source=g_source,
+                        **extra,
+                    )
+                except ValueError:
+                    continue
 
 
-def proposals(site: str, roles: list[dict]) -> Iterator[GridExplanation]:
-    """Every bounded ingredient/binding combination; no names are consulted."""
+def _model_paths(role: dict, model: str) -> list[str]:
+    if model == "own":
+        return role["models"]
+    if model in ("grid_free", "grid_blocked"):
+        return role["grids"]
+    return [""]
+
+
+def proposals(
+    site: str, roles: list[dict], fits: list[dict] | None = None
+) -> Iterator[GridExplanation]:
+    """Every bounded ingredient/binding combination; no names are consulted.
+
+    Ingredients fitted on development runs come first (one set per binding and
+    goal), then the fixed menu. Both are verified the same way.
+    """
+    fits = fits or [None] * len(roles)
+    seen: set = set()
+    for explanation in _proposals(site, roles, fits):
+        if explanation.identifier not in seen:
+            seen.add(explanation.identifier)
+            yield explanation
+
+
+def _proposals(site: str, roles: list[dict], fits: list) -> Iterator[GridExplanation]:
+    for role, fit in zip(roles, fits):
+        if fit is None or fit["moves"] is None:
+            continue
+        for goal in role["goals"] or [""]:
+            for spec in grid_specifications(
+                role["layout"], role["root_parent"], fit, goal
+            ):
+                if spec.needs_goal and not goal:
+                    continue
+                uses_goal = spec.needs_goal or spec.heuristic == "fitted"
+                for model in _model_paths(role, spec.model):
+                    if not uses_goal and goal != (role["goals"] or [""])[0]:
+                        continue
+                    yield GridExplanation(
+                        spec,
+                        GridMapping(
+                            site,
+                            role["root"],
+                            role["frontier"],
+                            role["parents"],
+                            role["costs"],
+                            goal if spec.needs_goal else "",
+                            model,
+                        ),
+                    )
     for role in roles:
-        for spec in grid_specifications(role["layout"]):
+        for spec in grid_specifications(role["layout"], role["root_parent"]):
             goals = role["goals"] if spec.needs_goal else [""]
-            models = role["models"] if spec.model == "own" else [""]
+            models = _model_paths(role, spec.model)
             for goal, model in itertools.product(goals, models):
                 yield GridExplanation(
                     spec,
@@ -361,8 +495,9 @@ def load_policy_bank(path: Path) -> FrozenPolicyBank:
     data = json.loads(path.read_text())
     if data.get("schema") != BANK_SCHEMA:
         raise ValueError(
-            f"Rediscover this bank: schema {BANK_SCHEMA} records numpy numbers "
-            "and counts only mutable containers as snapshot omissions"
+            f"Rediscover this bank: schema {BANK_SCHEMA} proposes move tables, "
+            "heuristic weights and heap-entry numbers from development runs, reads "
+            "boolean-grid models, and records small numpy arrays and tuples of lists"
         )
     if data.get("grammar") != GRAMMAR:
         raise ValueError("Frozen bank uses a different grammar")
@@ -766,16 +901,18 @@ def account(episode: dict) -> dict:
     """Per-part tables plus the program row, combined by what each number means."""
     parts: dict[str, dict] = {}
     for run in episode["runs"]:
+        row = parts.get(run["site"])
         if run["part_status"] == "not_search_shaped":
-            row = parts.setdefault(
-                run["site"], {"runs": 0, "status": "not_search_shaped"}
-            )
+            if row is None:
+                row = parts[run["site"]] = {"runs": 0, "status": "not_search_shaped"}
             row["runs"] += 1
             continue
-        row = parts.setdefault(
-            run["site"],
-            {
-                "runs": 0,
+        if row is None or "supported" not in row:
+            # A "not a search" part can have runs re-checked as unreadable in
+            # validation; its row then counts every run, with the unknown ones
+            # under unresolved_or_rejected.
+            row = parts[run["site"]] = {
+                "runs": row["runs"] if row else 0,
                 "status": run["part_status"],
                 "supported": 0,
                 "unresolved_or_rejected": 0,
@@ -784,8 +921,7 @@ def account(episode: dict) -> dict:
                 **{k: 0 for k in DEPTH},
                 "attributed_expansion_events": 0,
                 "plan_versions_linked": 0,
-            },
-        )
+            }
         row["runs"] += 1
         row["initialization_runs"] += run["call"] == 0
         if run["status"] != "supported":
@@ -857,15 +993,22 @@ def account(episode: dict) -> dict:
     }
     if not complete:
         # An unresolved run is not zero; withhold totals rather than undercount.
-        for key in (*EFFORT, *DEPTH, "planning_events", "attributed_expansion_events"):
+        for key in WITHHELD:
             program[f"explained_only_{key}"] = program[key]
             program[key] = None
     return {"parts": parts, "program": program}
 
 
+def known_part(row: dict, key: str):
+    """A total, or if it is withheld, its explained part (a lower bound)."""
+    value = row.get(key)
+    return row.get(f"explained_only_{key}") if value is None else value
+
+
 def summarize(episodes: list[dict]) -> dict:
     """Uniform means over validation episodes; withheld if any episode is."""
     rows = [e["accounting"]["program"] for e in episodes]
+    bounds = [{k: known_part(r, k) for k in WITHHELD} for r in rows]
     keys = (
         "planning_events",
         *EFFORT,
@@ -889,6 +1032,19 @@ def summarize(episodes: list[dict]) -> dict:
                 else max((r[k] for r in rows), default=0)
             )
             for k in DEPTH
+        },
+        # Means and maxima of known parts: lower bounds where totals are withheld.
+        "lower_bound": {
+            k: (
+                _mean(bounds, k)
+                if k not in DEPTH
+                else (
+                    None
+                    if any(b[k] is None for b in bounds)
+                    else max((b[k] for b in bounds), default=0)
+                )
+            )
+            for k in WITHHELD
         },
         "solved": sum(e["solved"] for e in episodes),
     }
@@ -947,7 +1103,19 @@ def discover_policy(
             parts[site] = {"status": status, "explanations": []}
             continue
         survivors = []
-        for explanation in proposals(site, roles):
+        # Numbers for the fixed algorithm, proposed from development runs only.
+        fits = [fit_role(role, runs[site]) for role in roles]
+        record["fitted"] = [
+            {
+                "moves": fit["moves"],
+                "heuristics": fit["heuristics"],
+                "fields": fit["fields"],
+                "observed_edges": fit["observed_edges"],
+                "observed_entries": fit["observed_entries"],
+            }
+            for fit in fits
+        ]
+        for explanation in proposals(site, roles, fits):
             if audit["tested"] >= limits.candidates:
                 audit["candidate_budget"] = True
                 break

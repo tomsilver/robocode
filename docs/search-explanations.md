@@ -25,6 +25,11 @@ schema 5. Schema 6 additionally preserves snapshot omissions, flags growing
 queues with advancing cursors, and fixes validation-only search headlines.
 Schema 7 records numpy numbers as plain numbers, counts only changeable
 containers as omissions, and keeps plan evidence when an unknown loop runs.
+Schema 8 stops counting a variable that is replaced by a same-size list each
+iteration (a point or pose) as a worklist, and integers no longer cut
+inspection. Schema 9 (grammar grid-priority-v2) proposes move tables,
+heuristic weights and heap-entry numbers from development runs and reads
+boolean-grid models. Schema 10 records small numpy arrays and tuples of lists.
 
 ## Run milestone 8: a stateful KinDER policy
 
@@ -1115,6 +1120,145 @@ Changes (schema 7):
 | unknown loop replacing the plan every call | share 0–1.0 | share 0–1.0 (plan stored beside it: not credited) |
 
 KinDER and the existing controls are unchanged.
+
+### False worklists, integer grids, headlines, lower bounds (2026-11-12)
+
+Four problems found while reviewing schema 7:
+
+1. **A value rebuilt each iteration looked like a worklist.** Writing
+   `pt = list(point(node)); path.append(pt)` in `plan_once`'s path rebuilding
+   made that loop unreadable: `pt` holds a different two-number list every
+   round, so it "gains and loses items". Totals went from 459 to withheld.
+2. **Integers counted toward the inspection limits.** A 100 × 100 grid of
+   integers exceeded the 4,096 limit, and a list of integers at the depth
+   limit counted as a cut. Either made every loop seeing it "inspection cut".
+3. **Wrong headline.** A loop unreadable in development but never run in
+   validation gave the headline "totals withheld" while the totals were
+   complete.
+4. **"—" hid what was known.** A withheld total printed as "—", although the
+   explained runs' total is a true lower bound. The initialization total was
+   not withheld at all, so it could silently undercount.
+
+Changes (schema 8, report schema 4):
+
+1. Snapshots note which variables hold a different container object than in
+   the previous snapshot. Churn makes a container a possible worklist only if
+   it was edited in place or replaced by one of another size at some point.
+   A variable only ever replaced by a same-size container is a value. Ids are
+   compared only between consecutive snapshots; a reused address can only make
+   a replacement look like an in-place edit (toward "unknown"), never the
+   reverse. Replacement is observed for variables only, so nested containers
+   always count. Same-object identity alone would miss a level-by-level BFS
+   (`frontier = layer` every round), which this rule keeps unknown.
+2. Integers are leaves: every integer is kept as a possible read cursor, and
+   only nested containers can cut inspection.
+3. The headline reports unreadable loops only if one ran in validation. An
+   unreadable loop that did not run is named in a note on the headline.
+4. Withheld totals (now including initialization effort) keep their explained
+   part, shown as "≥ value" in every table and summarized as
+   `summary.lower_bound`. The JSON totals stay `null`.
+
+| Variant | Schema 7 | Schema 8 |
+| --- | --- | --- |
+| `plan_once`, `pt = list(point(node))` | reconstruction unreadable (`pt`), totals withheld | not a search; complete, 459 expansions |
+| `plan_once` + 100 × 100 integer grid | reconstruction unreadable (inspection cut) | not a search; complete, 459 expansions |
+| level-by-level BFS without costs | unreadable (`frontier`) | unreadable (`frontier`) |
+| countdown helper loop (in place) | unreadable | unreadable |
+
+Remaining false-alarm source: a list rebuilt each round with a varying size
+(for example a neighbor list in a greedy walk) still counts as a possible
+worklist, because by its snapshots it looks the same as a level-by-level
+frontier.
+
+### Ingredients proposed from development runs (grid-priority-v2, 2026-11-12)
+
+The second agent-written KinDER policy (GPT-6 Astra, Blackbox, seed 444) has a
+textbook A* that grid-priority-v1 could not read:
+
+- its parent table starts empty, and
+- it checks obstacles in a numpy grid (`bad[nxt]`) rather than through a function.
+
+Even with those two fixed, three ingredients are missing from the v1 menu:
+
+- a weighted octile heuristic, `(max + 0.414 * min) * 1.02`, which matched 399 of 399 sampled entries;
+- 1.414 diagonal costs;
+- a no-corner-cutting rule.
+
+A rough keyword scan of the 16 heap-based ClutteredRetrieval2D policies found
+numpy-grid checks in about 10 and octile-style heuristics in about 11. Adding
+each variant to the menu would grow it with every policy, so v2 follows the
+PDF's split instead: proposal search may use development cases, and the
+frozen explanation is verified on held-out ones.
+
+- **Proposed from development snapshots (`policy_fit.py`):**
+  - a move table, i.e. per offset the cost difference observed on new parent edges;
+  - heuristic coefficients, either `(high + c * low) * w` (which covers octile, city-block and chessboard distances) or `w * straight-line`;
+  - the numbers a heap entry stores between its priority and its cell (`g` or `-g`).
+
+  Each constant snaps to the shortest decimal that reproduces every observed number exactly (1.414, not 1.4139999999999997), so the engine repeats the program's own arithmetic.
+- **Enumerated and decided by verification:** everything else, including two new choices. The corner rule is `cut` or `no_cut`. The cost an expansion reads is `costs` (the cost table) or `entry` (the `g` stored in the popped entry). These two sources agree on every ordinary run, so only an intervention can separate them. Each probed run therefore gets one targeted edit: raise the cost of the cell selected next. In the Astra-style fixture, this edit rejects the `costs` version.
+- **New mappings:**
+  - a parent table with no root entry (the PDF's own algorithm "stores no parent" for the root);
+  - a boolean numpy grid as the obstacle model, with True meaning free or blocked, and cells outside the grid blocked. The recorder now keeps read-only copies of such grids.
+- **New checkpoint:** a `return` inside a loop body ends that loop's run, just as the PDF's algorithm returns from inside its loop. Before this, such runs had no termination checkpoint and could never be supported.
+- **Comparison:** costs and priorities are compared up to floating-point rounding (relative and absolute tolerance 1e-9). Parents and frontier cells are still compared exactly.
+
+The engine still predicts every step on its own. The only exception is the old
+tie peeking (`_selected`), which now applies only to tagged heaps whose entry
+numbers could not be fitted. Removing it entirely is the next step.
+
+The Astra-style disc-world control is `grid_octile`. Its search is now
+explained and validated. Its followed-plan share is still 0: the policy turns
+cells into waypoints inline (`step * k[0]`), and readouts are only looked up as
+callables.
+
+### Recorder and checker speed (2026-11-12)
+
+On Astra 444, recording one development episode took about 14 s, against
+0.9 s for the same episode unrecorded. Two causes:
+
+- Every loop checkpoint copied the whole heap and both tables.
+- Every numpy number in them was converted again, 45 million conversions in that episode.
+
+Comparing one explanation with the episode's 38 A* runs took 7.5 s, most of it
+spent re-validating the shape of every frontier entry at every checkpoint.
+
+- **Incremental recording.** A flat list or dictionary of immutable items keeps its previous frame's raw container. Changed positions or keys are found with C-level identity comparisons, and only those items are converted and stored: tag `P` for list positions, `U` for dictionary entries. A tuple of numpy numbers is converted once per run. An immutable item with the same identity has the same value, so no change is missed. A mutable or opaque item, or a removed or reordered key, falls back to a full snapshot. `RunCapture.incremental = False` keeps the old encoder as a reference. On 10 policies and about 36,000 checkpoints, including Astra's real episode, the two encoders decode identically, value types included.
+- **Compare first.** The observed frontier is compared with the engine's prediction, which is well formed by construction. Entry-by-entry validation (`decode`) runs only when they differ, so malformed state is still reported as such. A parent table without a root entry is compared as a subset view, not rebuilt.
+
+Results on Astra's development episode (1, 0), measured under a profiler:
+
+| | Before | After |
+| --- | --- | --- |
+| Record the episode | 37.6 s | 2.1 s |
+| Compare one explanation with its 38 runs | 7.5 s | 1.4 s |
+
+Without the profiler, recording the episode took 1.1 s, against 11.3 s with
+the old encoder (which by then already used the faster numpy type check).
+
+### Numpy vectors and tuples of lists (schema 10, 2026-11-12)
+
+With its A* explained, Astra's totals were still withheld. Two of its ordinary
+loops were `snapshot_omission`:
+
+- the path rebuilding: `out.append(self.points[k])` builds a list of numpy 2-vectors;
+- the smoothing in `smooth`: `path` and `result` are lists of numpy 2-vectors, and `check = (allrect, theta, ...)` is a tuple holding a list of rectangles.
+
+The recorder could keep neither, so "might hide a worklist" withheld the
+totals. This is the same problem numpy numbers had before schema 7.
+
+- A numeric numpy array of at most 64 numbers (a point, a pose, a rectangle's corners) is recorded as the nested tuple of the numbers it holds. Larger arrays stay unrecorded, as before, and boolean grids keep their own read-only tag. Arrays are mutable, so they never take the incremental identity shortcut; a list holding them is copied whole at each checkpoint.
+- A tuple holding lists is recorded as a full copy, like a nested list.
+- The worklist scan now looks inside tuples that hold containers, so a queue carried in a tuple record (`state = (queue, seen)`) is still seen. Tuples of plain values, such as cells, points and heap entries, remain leaves.
+
+On Astra's development episodes all three ordinary loops now read as "not a
+search", with nothing omitted or cut. The encoders still decode identically on
+the 10-policy check.
+
+Two follow-ups surfaced once the smoothing loop became readable:
+
+- **Cursor rule.** In 22 of the 249 smoothing runs of the 20-obstacle validation episode, `result` grows by one item per step while `i` advances with `i == len(result)`, whenever smoothing can skip no point. The growing-sequence rule fired on this. A read cursor points at the next unread item, so while items wait to be read it is strictly behind the end. The rule now requires `cursor < length` after the step (it used to accept `<=`). Append-only BFS with a head index is still caught, and so is the nested cursor test. A counter equal to the length, as in smoothing or a rollout step counter, is no longer flagged.
+- **Accounting.** A part that reads as "not a search" in the bank can have individual validation runs re-checked as unreadable. `account` assumed one status per part per episode and raised `KeyError: 'initialization_runs'`. The row now counts every run, with the unreadable ones under `unresolved_or_rejected`.
 
 Reports separate structural matches, exact plan predictions, action mediation,
 counterexamples and missing witnesses. Inspect

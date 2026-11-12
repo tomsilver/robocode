@@ -22,6 +22,8 @@ import math
 import random
 from collections import Counter, deque
 from dataclasses import asdict, dataclass
+from itertools import chain
+from operator import itemgetter
 from typing import Any
 
 import numpy as np
@@ -38,10 +40,18 @@ from .policy_runner import (
     drop_index,
     entry_view,
     plan_attributes,
+    same_snapshot,
 )
 from .selectors import parse, select
 
 ERRORS = (ValueError, KeyError, TypeError, IndexError, RuntimeError, AttributeError)
+# Checkpoint kinds that end a run: a false loop test or break, or a return inside it.
+ENDINGS = ("exit", "return")
+# Costs and priorities agree up to floating-point rounding of the same arithmetic.
+REL_TOL = ABS_TOL = 1e-9
+_VIEW = itemgetter(0, -1)
+_MIDDLE = itemgetter(slice(1, -1))
+_NUMBERS = frozenset({int, float})
 KEEP_RECORDS = 4
 ROTATION_COSINE = 0.9
 WORLD_SHIFT = 0.05
@@ -49,7 +59,11 @@ WORLD_SHIFT = 0.05
 
 @dataclass(frozen=True)
 class GridMapping:
-    """Literal selections at one loop site; the model is a callable local's name."""
+    """Literal selections at one loop site.
+
+    The model is a callable local's name, or the path of a boolean grid the run
+    already holds (a mapping decodes an existing representation).
+    """
 
     site: str
     root: str
@@ -66,8 +80,8 @@ class GridMapping:
         for name in (*names, self.goal):
             if name:
                 parse(name)
-        if self.model and not self.model.isidentifier():
-            raise ValueError("The model is a plain local callable")
+        if self.model:
+            parse(self.model)
 
 
 @dataclass(frozen=True)
@@ -80,8 +94,10 @@ class GridExplanation:
     def __post_init__(self):
         if self.spec.needs_goal != bool(self.mapping.goal):
             raise ValueError("A goal is mapped exactly when the ingredients use one")
-        if (self.spec.model == "own") != bool(self.mapping.model):
-            raise ValueError("The own model needs exactly one mapped predicate")
+        if (self.spec.model != "open") != bool(self.mapping.model):
+            raise ValueError("A predicate or grid model needs exactly one mapping")
+        if self.spec.model == "own" and not self.mapping.model.isidentifier():
+            raise ValueError("The own model is a plain local callable")
 
     @property
     def identifier(self) -> str:
@@ -96,12 +112,33 @@ def explanation_from_data(data: dict) -> GridExplanation:
     return GridExplanation(GridSpec(**data["spec"]), GridMapping(**data["mapping"]))
 
 
+def grid_predicate(grid, true_means_free: bool):
+    """Free-cell test read off a 2-D boolean grid; outside the grid is blocked."""
+    shape = getattr(grid, "shape", None)
+    if shape is None or len(shape) != 2:
+        raise ValueError("A grid model is a two-dimensional boolean array")
+    rows, columns = shape
+
+    def free(cell) -> bool:
+        i, j = cell
+        if not (0 <= i < rows and 0 <= j < columns):
+            return False
+        return bool(grid[i, j]) == true_means_free
+
+    return free
+
+
 def bind(explanation: GridExplanation, values: dict, callables: dict) -> GridSearch:
     """A run's inputs are read once, at its first loop checkpoint."""
-    mapping = explanation.mapping
+    mapping, spec = explanation.mapping, explanation.spec
     goal = select(values, mapping.goal) if mapping.goal else None
-    free = callables[mapping.model] if mapping.model else None
-    return GridSearch(explanation.spec, select(values, mapping.root), goal, free)
+    if spec.model == "own":
+        free = callables[mapping.model]
+    elif spec.model in ("grid_free", "grid_blocked"):
+        free = grid_predicate(select(values, mapping.model), spec.model == "grid_free")
+    else:
+        free = None
+    return GridSearch(spec, select(values, mapping.root), goal, free)
 
 
 def decode(explanation: GridExplanation, values: dict) -> tuple:
@@ -133,23 +170,110 @@ def decode(explanation: GridExplanation, values: dict) -> tuple:
     return select(values, mapping.root), frontier, parents, costs
 
 
-def matches(explanation: GridExplanation, engine: GridSearch, values: dict) -> bool:
-    """Exact correspondence of root, frontier multiset/order, parents and costs."""
-    root, frontier, parents, costs = decode(explanation, values)
-    return (
-        len(parents) == len(engine.parents)
-        and len(frontier) == len(engine.frontier)
-        and root == engine.root
-        and parents == engine.parents
-        and costs == engine.costs
-        and frontier == engine.canonical_frontier()
+def _near(a, b) -> bool:
+    return a == b or math.isclose(a, b, rel_tol=REL_TOL, abs_tol=ABS_TOL)
+
+
+def _same_costs(observed: dict, predicted: dict) -> bool:
+    if observed == predicted:
+        return True
+    return observed.keys() == predicted.keys() and all(
+        _near(v, predicted[k]) for k, v in observed.items()
     )
+
+
+def _same_frontier(observed: tuple, predicted: tuple, spec: GridSpec) -> bool:
+    """Same entries; priorities may differ by float rounding only."""
+    if observed == predicted:
+        return True
+    if len(observed) != len(predicted) or spec.layout == "states":
+        return False
+    if spec.ordered:
+        return all(
+            a[-1] == b[-1] and _near(a[0], b[0]) for a, b in zip(observed, predicted)
+        )
+
+    def by_cell(entries) -> dict:
+        grouped: dict = {}
+        for priority, cell in entries:
+            grouped.setdefault(cell, []).append(priority)
+        return {cell: sorted(ps) for cell, ps in grouped.items()}
+
+    left, right = by_cell(observed), by_cell(predicted)
+    return left.keys() == right.keys() and all(
+        len(ps) == len(right[c]) and all(map(_close, ps, right[c]))
+        for c, ps in left.items()
+    )
+
+
+def _quick_frontier(spec: GridSpec, raw) -> tuple | None:
+    """The observed canonical frontier without per-entry validation, if it reads."""
+    try:
+        views = list(map(_VIEW, raw)) if spec.layout == "tagged" else list(raw)
+        return tuple(views) if spec.ordered else tuple(sorted(views))
+    except (TypeError, IndexError):
+        return None
+
+
+def _well_formed_tags(raw) -> bool:
+    """Tagged entries hold at least one number between priority and cell."""
+    return not raw or (
+        min(map(len, raw)) >= 3
+        and all(
+            map(
+                _NUMBERS.__contains__, map(type, chain.from_iterable(map(_MIDDLE, raw)))
+            )
+        )
+    )
+
+
+def _same_parents(parents: dict, engine: GridSearch) -> bool:
+    if engine.spec.root_parent == "none":
+        return parents == engine.parents
+    return (
+        len(parents) == len(engine.parents) - 1
+        and engine.root not in parents
+        and parents.items() <= engine.parents.items()
+    )
+
+
+def matches(explanation: GridExplanation, engine: GridSearch, values: dict) -> bool:
+    """Root, parents and frontier cells exactly; costs and priorities up to rounding.
+
+    The observed frontier is first compared with the prediction, which is well
+    formed by construction; only a frontier that differs is validated entry by
+    entry (`decode`), so malformed state is still reported as such.
+    """
+    spec, mapping = explanation.spec, explanation.mapping
+    raw = select(values, mapping.frontier)
+    parents = select(values, mapping.parents)
+    costs = select(values, mapping.costs)
+    predicted = engine.canonical_frontier()
+    observed = (
+        _quick_frontier(spec, raw)
+        if type(raw) in (list, deque) and type(parents) is dict and type(costs) is dict
+        else None
+    )
+    if (
+        observed is not None
+        and len(observed) == len(predicted)
+        and (spec.layout != "tagged" or _well_formed_tags(raw))
+        and _same_frontier(observed, predicted, spec)
+    ):
+        return (
+            select(values, mapping.root) == engine.root
+            and _same_parents(parents, engine)
+            and _same_costs(costs, engine.costs)
+        )
+    decode(explanation, values)  # raises for malformed state
+    return False
 
 
 def difference(explanation: GridExplanation, engine: GridSearch, values) -> dict:
     """A short, inspectable counterexample instead of two 2,000-entry tables."""
     root, frontier, parents, costs = decode(explanation, values)
     predicted = engine.canonical_frontier()
+    expected = engine.observed_parents()
 
     def few(items) -> list:
         return [repr(item) for item in list(items)[:5]]
@@ -160,18 +284,20 @@ def difference(explanation: GridExplanation, engine: GridSearch, values) -> dict
         "frontier_only_observed": few(e for e in frontier if e not in predicted),
         "parents_differ": few(
             k
-            for k in set(parents) | set(engine.parents)
-            if parents.get(k, "-") != engine.parents.get(k, "-")
+            for k in set(parents) | set(expected)
+            if parents.get(k, "-") != expected.get(k, "-")
         ),
         "costs_differ": few(
             k
             for k in set(costs) | set(engine.costs)
-            if costs.get(k, "-") != engine.costs.get(k, "-")
+            if k not in costs
+            or k not in engine.costs
+            or not _near(costs[k], engine.costs[k])
         ),
         "sizes": {
             "predicted_frontier": len(predicted),
             "observed_frontier": len(frontier),
-            "predicted_parents": len(engine.parents),
+            "predicted_parents": len(expected),
             "observed_parents": len(parents),
         },
     }
@@ -280,7 +406,7 @@ def compare_run(
             step += 1
             if step <= KEEP_RECORDS:
                 result["records"].append(_summary(transition, step, kind))
-            if (kind == "exit") != (engine.phase == "done"):
+            if (kind in ENDINGS) != (engine.phase == "done"):
                 reject("step_count", predicted_phase=engine.phase, checkpoint=kind)
                 return result, None
             if not matches(explanation, engine, values):
@@ -367,9 +493,49 @@ def choose_edits(
             edits.append(
                 SearchEdit(run.site, run.ordinal, index, "clear", mapping.frontier)
             )
+    targeted = _raise_next(explanation, run)
+    if targeted is not None and targeted not in edits:
+        edits.append(targeted)
     # Route-changing producer probes need the stored plan; see
     # `policy_causality.detour_edits`.
     return edits
+
+
+def _raise_next(explanation: GridExplanation, run: RunRecord) -> SearchEdit | None:
+    """Raise the cost of the cell selected next, at the first later checkpoint.
+
+    Reading the selected cell's cost from the table or from its heap entry gives
+    the same ordinary run; this edit separates the two.
+    """
+    spec, mapping = explanation.spec, explanation.mapping
+    index = -1
+    for kind, values in run.capture.frames():
+        if kind != "visit":
+            continue
+        index += 1
+        if index == 0:
+            continue
+        root, frontier, _, costs = decode(explanation, values)
+        if not frontier:
+            return None
+        if spec.layout == "states":
+            cell = frontier[0] if spec.selection == "fifo" else frontier[-1]
+        elif spec.selection == "min":
+            cell = frontier[0][1]
+        else:
+            cell = (frontier[0] if spec.selection == "fifo" else frontier[-1])[1]
+        if cell == root or cell not in costs:
+            return None
+        return SearchEdit(
+            run.site,
+            run.ordinal,
+            index,
+            "raise",
+            mapping.costs,
+            cell=cell,
+            value=float(costs[cell]) + 2.0,
+        )
+    return None
 
 
 def same_frames(ordinary: RunRecord, patched: RunRecord, count: int) -> bool:
@@ -379,7 +545,7 @@ def same_frames(ordinary: RunRecord, patched: RunRecord, count: int) -> bool:
     for _, (left, right) in zip(
         range(count), zip(ordinary.capture.frames(), patched.capture.frames())
     ):
-        if left[0] != right[0] or left[1] != right[1]:
+        if left[0] != right[0] or not same_snapshot(left[1], right[1]):
             return False
     return True
 

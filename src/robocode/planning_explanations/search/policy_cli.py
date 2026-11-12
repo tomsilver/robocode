@@ -13,7 +13,7 @@ from .policy_discovery import (
 )
 from .policy_domains import DEVELOPMENT, VALIDATION, DiscWorld, KinderDomain
 from .policy_fixtures import GROUND_TRUTH, KINDER_POLICY, POLICY_FIXTURES, kinder_source
-from .policy_report import save_policy_report, share_range
+from .policy_report import at_least, finding_text, save_policy_report, share_range
 from .policy_runner import PolicyProgram
 from .report import save_unresolved, write_json
 
@@ -53,6 +53,12 @@ def policy_limits(args: argparse.Namespace) -> PolicyLimits:
     )
 
 
+def _bounded(row: dict, key: str, mean: bool = True, partial: bool = False):
+    """A summary value, or "≥" its lower bound when the value is withheld."""
+    value = row.get(f"mean_{key}" if mean else key)
+    return at_least(value, row.get(f"lower_bound_{key}"), partial)
+
+
 def run_policy_suite(args: argparse.Namespace) -> int:
     """Discover, persist each bank, validate, and write one report per policy."""
     limits = policy_limits(args)
@@ -90,10 +96,18 @@ def run_policy_suite(args: argparse.Namespace) -> int:
             summary = save_unresolved(directory, name, source, exc)
             failed = True
         summaries.append(summary)
+        planning = at_least(
+            summary.get("mean_planning_events"),
+            summary.get("lower_bound_planning_events"),
+        )
+        expansions = at_least(
+            summary.get("mean_expansion_events"),
+            summary.get("lower_bound_expansion_events"),
+        )
         print(
-            f'{name}: {summary["finding"]["label"]}; '
-            f'planning events={summary.get("mean_planning_events")}, '
-            f'expansion events={summary.get("mean_expansion_events")}, '
+            f'{name}: {finding_text(summary["finding"])}; '
+            f"planning events={planning}, "
+            f"expansion events={expansions}, "
             "followed-plan share="
             f'{summary.get("mean_followed_plan_share")}'
             f' (max {summary.get("mean_followed_plan_share_max")})'
@@ -119,21 +133,21 @@ def run_policy_suite(args: argparse.Namespace) -> int:
         cells = [
             f'[{row["fixture"]}]({row["fixture"]}/report.html)',
             row.get("fixture_ground_truth"),
-            row["finding"]["label"],
-            row.get("mean_planning_events"),
-            row.get("mean_expansion_events"),
-            (
-                f'≥ {row.get("mean_attributed_expansion_events")}'
-                if row.get("mean_runs_without_action_witness")
-                else row.get("mean_attributed_expansion_events")
+            finding_text(row["finding"]),
+            _bounded(row, "planning_events"),
+            _bounded(row, "expansion_events"),
+            _bounded(
+                row,
+                "attributed_expansion_events",
+                partial=bool(row.get("mean_runs_without_action_witness")),
             ),
-            row.get("mean_initialization_expansion_events"),
+            _bounded(row, "initialization_expansion_events"),
             share_range(
                 row.get("mean_followed_plan_share"),
                 row.get("mean_followed_plan_share_max"),
             ),
             row.get("mean_searched_share"),
-            row.get("max_expanded_depth"),
+            _bounded(row, "max_expanded_depth", mean=False),
             row.get("solved"),
         ]
         rows.append(
@@ -141,9 +155,11 @@ def run_policy_suite(args: argparse.Namespace) -> int:
         )
     rows += [
         "",
-        "— marks a withheld value: an unresolved search-shaped run is not zero. "
-        "≥ marks supported effort with unresolved use in other runs: no complete "
-        "action witness is not zero planning. A share range's max counts plans "
+        "≥ marks a lower bound. For effort, the total counts only runs the analyzer "
+        "could read; the other runs are unknown (never zero) and can only add to it. "
+        "For attributed effort, it also marks runs with no complete action witness, "
+        "which is not zero planning. — marks a value with no bound. "
+        "A share range's max counts plans "
         "whose search provenance is unresolved; it is the most the evidence allows, "
         "not an estimate. Cross-call credit requires a search "
         "edit to predict the stored plan and later action, with mediation controls.",

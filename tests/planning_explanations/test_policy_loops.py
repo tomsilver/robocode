@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -23,7 +24,10 @@ from robocode.planning_explanations.search.policy_fixtures import (
     REACTIVE,
     TIEBREAK_ASTAR,
 )
-from robocode.planning_explanations.search.policy_report import save_policy_report
+from robocode.planning_explanations.search.policy_report import (
+    _finding,
+    save_policy_report,
+)
 from robocode.planning_explanations.search.policy_runner import (
     PolicyProgram,
     RunCapture,
@@ -115,6 +119,36 @@ APPEND_ONLY_BFS = (
 )
 
 
+# plan_once whose path rebuilding puts each point in a fresh list first.
+POINT_LIST = PLAN_ONCE.replace(
+    "            path.append(point(node))",
+    "            pt = list(point(node))\n            path.append(pt)",
+)
+
+# plan_once with a 100 x 100 grid of integers next to its path rebuilding.
+INTEGER_GRID = PLAN_ONCE.replace(
+    "        path = []\n",
+    "        grid = [[0] * 100 for _ in range(100)]\n        path = []\n",
+)
+
+# Breadth-first search one layer at a time: every round builds a new frontier.
+_START = BFS_WITHOUT_COSTS.index("        frontier = deque([root])")
+_END = BFS_WITHOUT_COSTS.index("        path = []")
+LEVEL_BFS = BFS_WITHOUT_COSTS[:_START] + """        frontier = [root]
+        parent = {root: None}
+        while frontier and target not in parent:
+            layer = []
+            for cur in frontier:
+                for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nxt = (cur[0] + di, cur[1] + dj)
+                    if not free(nxt) or nxt in parent:
+                        continue
+                    parent[nxt] = cur
+                    layer.append(nxt)
+            frontier = layer
+""" + BFS_WITHOUT_COSTS[_END:]
+
+
 class UnreadableLoopTest(unittest.TestCase):
     """A loop counts as zero only with evidence that it is not a search."""
 
@@ -184,6 +218,16 @@ class UnreadableLoopTest(unittest.TestCase):
         self.assertIn("worklist_without_binding", reasons)
         self.assert_withheld(episode)
 
+    def test_a_level_by_level_search_stays_unknown(self):
+        """A frontier replaced by a new list each round is still a worklist."""
+        bank, episode, statuses = analyze(LEVEL_BFS)
+        self.assertEqual(statuses[0], UNREADABLE)
+        search = min(bank.parts, key=lambda site: int(site.split(":")[0]))
+        self.assertEqual(
+            bank.audit["parts"][search]["worklist"]["worklist"], "frontier"
+        )
+        self.assert_withheld(episode)
+
     def test_ordinary_loops_and_reactive_policies_still_count_as_zero(self):
         """The existing non-search controls keep their classifications."""
         _, episode, statuses = analyze(PLAN_ONCE)
@@ -206,13 +250,15 @@ class UnreadableLoopTest(unittest.TestCase):
             "            item = work.pop()\n"
             "            rounds += 1\n"
             "            if rounds == 1 and work:\n"
-            "                work.append(item)",
+            # A new entry: re-adding the popped one would leave no visible change.
+            "                work.append(item[:2])",
         )
         _, episode, statuses = analyze(
             source, development=((1, 0),), validation=((3, 1),)
         )
         self.assertEqual(statuses, ["not_search_shaped"])
-        self.assertTrue(any(r["part_status"] == UNREADABLE for r in episode["runs"]))
+        (run,) = [r for r in episode["runs"] if r["part_status"] == UNREADABLE]
+        self.assertEqual(run["worklist"]["worklist"], "work")
         self.assertFalse(episode["accounting"]["program"]["complete"])
 
     def test_validation_rechecks_new_snapshot_omissions(self):
@@ -324,6 +370,15 @@ class WorklistSignatureTest(unittest.TestCase):
         self.assertEqual(signature["worklist"], 'x["q"]')
         self.assertEqual(signature["cursor"], 'x["i"]')
 
+    def test_a_counter_equal_to_the_length_is_not_a_cursor(self):
+        """Smoothing appends one point per step; its index never trails the end."""
+        run = run_of(
+            {"result": [], "i": 0},
+            {"result": [(0.1, 0.2)], "i": 1},
+            {"result": [(0.1, 0.2), (0.3, 0.2)], "i": 2},
+        )
+        self.assertIsNone(worklist_signature(run)["worklist"])
+
     def test_a_frozen_or_out_of_range_integer_is_not_a_cursor(self):
         """Only an advancing integer inside the sequence can be a cursor."""
         for before, after in ((1, 1), (10, 11), (2, 1)):
@@ -336,6 +391,58 @@ class WorklistSignatureTest(unittest.TestCase):
         signature = worklist_signature(run)
         self.assertTrue(signature["cut"])
         self.assertEqual(signature["omitted"], ["q"])
+
+    def test_a_value_rebuilt_each_iteration_is_not_a_worklist(self):
+        """A point replaced by a new list of the same size is a value."""
+        run = run_of({"pt": [2, 3]}, {"pt": [2, 2]}, {"pt": [1, 2]})
+        self.assertEqual(run.capture.replaced[1:], [{"pt"}, {"pt"}])
+        self.assertIsNone(worklist_signature(run)["worklist"])
+
+    def test_a_fixed_size_list_edited_in_place_can_be_a_worklist(self):
+        """A preallocated queue keeps its size but is the same, edited list."""
+        queue = [None, None]
+        run = RunRecord("site", 0, ("reset",), RunCapture())
+        run.capture.record("visit", {"q": queue})
+        queue[0] = (1, 1)
+        run.capture.record("visit", {"q": queue})
+        queue[1] = (2, 2)
+        queue[0] = None
+        run.capture.record("visit", {"q": queue})
+        self.assertEqual(run.capture.replaced[1:], [frozenset(), frozenset()])
+        self.assertEqual(worklist_signature(run)["worklist"], "q")
+
+    def test_a_replaced_list_that_changes_size_can_be_a_worklist(self):
+        """A level-by-level frontier is replaced each round, with a new size."""
+        run = run_of(
+            {"frontier": [(0, 0)]},
+            {"frontier": [(0, 1), (1, 0)]},
+            {"frontier": [(0, 2), (1, 1), (2, 0)]},
+        )
+        self.assertEqual(worklist_signature(run)["worklist"], "frontier")
+
+    def test_nested_containers_are_never_treated_as_values(self):
+        """Replacement is only observed for variables; nested lists still count."""
+        run = run_of({"box": {"pt": [2, 3]}}, {"box": {"pt": [2, 2]}})
+        self.assertEqual(worklist_signature(run)["worklist"], 'box["pt"]')
+
+    def test_integers_never_cut_inspection(self):
+        """A grid of numbers is inspected fully, at any size or depth."""
+        _, cut = containers({"grid": [[0] * 100 for _ in range(100)]})
+        self.assertFalse(cut)
+        _, cut = containers({"rows": [[1, 2]]}, depth=1)
+        self.assertFalse(cut)
+        _, cut = containers({"rows": [[[1, 2]]]}, depth=1)
+        self.assertTrue(cut)
+
+    def test_integers_inside_large_containers_are_still_cursors(self):
+        """Lifting the integer limit keeps every integer a possible cursor."""
+        run = run_of(
+            {"q": [10], "marks": [0] * 5000},
+            {"q": [10, 20], "marks": [1] + [0] * 4999},
+        )
+        signature = worklist_signature(run)
+        self.assertEqual(signature["cursor"], "marks[0]")
+        self.assertFalse(signature["cut"])
 
     def test_partly_opaque_containers_are_not_silently_absent(self):
         """Unsupported elements also leave omission evidence."""
@@ -416,6 +523,26 @@ class NumpyAndUnknownLoopTest(unittest.TestCase):
         self.assertEqual(row["followed_plan_share_max"], 1.0)
         self.assertGreater(row["unresolved_loop"], 0)
 
+    def test_small_numpy_arrays_and_tuples_of_lists_are_recorded(self):
+        """Waypoint vectors and records of lists are values, not snapshot gaps."""
+        capture = RunCapture()
+        out = [np.array([0.5, 1.0]), np.array([0.6, 1.0])]
+        check = ([(np.array([1.0, 2.0]), 0.5)], None, 0.1)
+        capture.record(
+            "visit", {"out": out, "check": check, "big": np.zeros(500), "p": out[0]}
+        )
+        _, values = next(capture.frames())
+        self.assertEqual(values["out"], [(0.5, 1.0), (0.6, 1.0)])
+        self.assertEqual(values["check"], ([((1.0, 2.0), 0.5)], None, 0.1))
+        self.assertEqual(values["p"], (0.5, 1.0))
+        self.assertNotIn("big", values)
+        self.assertEqual(capture.omitted_containers, set())
+
+    def test_a_worklist_inside_a_tuple_is_still_seen(self):
+        """Recording a tuple of lists must not hide the queue it carries."""
+        run = run_of({"state": ([1, 2], "x")}, {"state": ([2, 3, 4], "x")})
+        self.assertEqual(worklist_signature(run)["worklist"], "state[0]")
+
     def test_only_mutable_unrecorded_state_counts_as_omitted(self):
         """Tuples of numbers or objects cannot hide a worklist; lists can."""
         capture = RunCapture()
@@ -432,6 +559,65 @@ class NumpyAndUnknownLoopTest(unittest.TestCase):
         self.assertEqual(values["here"], (1.5, 2))
         self.assertIs(type(values["here"][0]), float)
         self.assertEqual(capture.omitted_containers, {"heap", "box"})
+
+
+class OrdinaryCodeKeepsTotalsTest(unittest.TestCase):
+    """Common non-search code next to a search does not hide its totals."""
+
+    def test_a_point_rebuilt_as_a_list_keeps_totals(self):
+        """A fresh [x, y] list per path point is not a to-do list."""
+        plain = analyze(PLAN_ONCE)[1]["accounting"]["program"]
+        _, episode, statuses = analyze(POINT_LIST)
+        self.assertEqual(statuses, ["search", "not_search_shaped", "not_search_shaped"])
+        row = episode["accounting"]["program"]
+        self.assertTrue(row["complete"])
+        self.assertEqual(row["expansion_events"], plain["expansion_events"])
+
+    def test_a_large_integer_grid_keeps_totals(self):
+        """Ten thousand integers are not a reason for "could not inspect"."""
+        plain = analyze(PLAN_ONCE)[1]["accounting"]["program"]
+        _, episode, statuses = analyze(INTEGER_GRID)
+        self.assertEqual(statuses, ["search", "not_search_shaped", "not_search_shaped"])
+        row = episode["accounting"]["program"]
+        self.assertTrue(row["complete"])
+        self.assertEqual(row["expansion_events"], plain["expansion_events"])
+
+
+class ReportBoundsTest(unittest.TestCase):
+    """Headlines name only what ran; withheld totals show their known part."""
+
+    def test_an_unreadable_loop_that_never_ran_does_not_withhold(self):
+        """The headline follows validation, with a note about the idle loop."""
+        bank = SimpleNamespace(
+            parts={"3:4": {"status": UNREADABLE}, "9:8": {"status": "search"}}
+        )
+        runs = [{"site": "9:8", "part_status": "search"}]
+        validation = {"episodes": [{"runs": runs}], "summary": {"complete": True}}
+        finding = _finding(bank, validation)
+        self.assertEqual(finding["code"], "search_supported")
+        self.assertIn("did not run in validation", finding["note"])
+        runs.append({"site": "3:4", "part_status": UNREADABLE})
+        finding = _finding(bank, {**validation, "summary": {"complete": False}})
+        self.assertEqual(finding["code"], "unreadable_loops")
+        self.assertNotIn("note", finding)
+
+    def test_withheld_totals_are_shown_as_lower_bounds(self):
+        """An unknown loop can only add effort, so the known part is "≥"."""
+        program, domain = PolicyProgram(UNKNOWN_HELPER), DiscWorld()
+        bank = discover_policy(program, domain, ((0, 0),), ((0, 1),))
+        result = validate_policy(program, domain, bank)
+        row = result["episodes"][0]["accounting"]["program"]
+        known = row["explained_only_expansion_events"]
+        self.assertGreater(known, 0)
+        self.assertIsNone(row["initialization_expansion_events"])
+        self.assertEqual(row["explained_only_initialization_expansion_events"], known)
+        self.assertEqual(result["summary"]["lower_bound"]["expansion_events"], known)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            summary = save_policy_report(root, "helper", program, bank, result, None)
+            self.assertIsNone(summary["mean_expansion_events"])
+            self.assertEqual(summary["lower_bound_expansion_events"], known)
+            self.assertIn(f"| ≥ {known} |", (root / "report.md").read_text())
 
 
 if __name__ == "__main__":

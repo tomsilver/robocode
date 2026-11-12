@@ -27,8 +27,9 @@ RULES = (
     "are counted once, in the call where they happen. Depths are maxima. Planning "
     "events count runs with at least one expansion. Shares are fractions of the "
     "episode's action calls. Means are taken only across validation episodes. A "
-    "total is withheld (shown as —) when any search-shaped run is unresolved: an "
-    "unresolved run is not zero. Attributed effort is supported effort, not an "
+    "total is withheld when any search-shaped run is unresolved: an unresolved run "
+    "is not zero. Tables then show the total over explained runs as a lower bound "
+    "(≥). Attributed effort is supported effort, not an "
     "estimate of total planning: no action witness means unresolved use, not zero "
     "planning. Cross-call attribution requires the same search intervention to "
     "predict the complete stored plan and a later action, with plan-only and "
@@ -50,11 +51,15 @@ RULES = (
 
 def _finding(bank: FrozenPolicyBank, validation: dict) -> dict:
     statuses = [p["status"] for p in bank.parts.values()]
-    unreadable = UNREADABLE in statuses or any(
-        r["part_status"] == UNREADABLE
-        for e in validation["episodes"]
-        for r in e["runs"]
-    )
+    runs = [r for e in validation["episodes"] for r in e["runs"]]
+    # Only an unreadable loop that ran in validation withholds its totals.
+    unreadable = any(r["part_status"] == UNREADABLE for r in runs)
+    ran = {r["site"] for r in runs}
+    idle = [
+        site
+        for site, part in bank.parts.items()
+        if part["status"] == UNREADABLE and site not in ran
+    ]
     if unreadable:
         code = "unreadable_loops"
     elif not validation["summary"]["complete"]:
@@ -63,7 +68,18 @@ def _finding(bank: FrozenPolicyBank, validation: dict) -> dict:
         code = "no_search_parts"
     else:
         code = "search_supported"
-    return {"code": code, "label": FINDINGS[code], "planningness": None}
+    finding = {"code": code, "label": FINDINGS[code], "planningness": None}
+    if idle:
+        finding["note"] = (
+            f"{len(idle)} loop(s) unreadable in development did not run in validation"
+        )
+    return finding
+
+
+def finding_text(finding: dict) -> str:
+    """The headline, with its note if it has one."""
+    note = finding.get("note")
+    return f"{finding['label']} ({note})" if note else finding["label"]
 
 
 def _fmt(value, digits: int = 2):
@@ -74,11 +90,20 @@ def _fmt(value, digits: int = 2):
     return value
 
 
-def _lower_bound(value, untested: int):
-    """Runs without an action witness can only add supported attributed effort."""
-    if value is None or not untested:
-        return value
-    return f"≥ {_fmt(value)}"
+def at_least(value, bound, partial: bool = False):
+    """A value, or "≥ bound" where unknown runs can only add to it.
+
+    A withheld total (None) shows its explained part. `partial` marks a value that
+    is itself a lower bound (attributed effort with runs lacking an action witness).
+    """
+    if value is None:
+        return None if bound is None else f"≥ {_fmt(bound)}"
+    return f"≥ {_fmt(value)}" if partial else _fmt(value)
+
+
+def _total(row: dict, key: str, partial: bool = False):
+    """An episode total, or its explained part as "≥" when the total is withheld."""
+    return at_least(row[key], row.get(f"explained_only_{key}"), partial)
 
 
 def share_range(low, high) -> float | str | None:
@@ -157,13 +182,14 @@ def save_policy_report(
                 label,
                 "yes" if episode["solved"] else "no",
                 episode["steps"],
-                program_row["planning_events"],
-                program_row["initialization_expansion_events"],
-                program_row["expansion_events"],
-                program_row["max_expanded_depth"],
-                _lower_bound(
-                    program_row["attributed_expansion_events"],
-                    program_row["runs_without_action_witness"],
+                _total(program_row, "planning_events"),
+                _total(program_row, "initialization_expansion_events"),
+                _total(program_row, "expansion_events"),
+                _total(program_row, "max_expanded_depth"),
+                _total(
+                    program_row,
+                    "attributed_expansion_events",
+                    bool(program_row["runs_without_action_witness"]),
                 ),
                 share_range(
                     program_row["followed_plan_share"],
@@ -239,8 +265,9 @@ def save_policy_report(
                         ]
                     )
         chain_rows.extend(rows[:24])
-    mean_rows = [[k, _fmt(v)] for k, v in mean.items()] + [
-        [k, v] for k, v in summary["max"].items()
+    bounds = summary["lower_bound"]
+    mean_rows = [[k, at_least(v, bounds.get(k))] for k, v in mean.items()] + [
+        [k, at_least(v, bounds.get(k))] for k, v in summary["max"].items()
     ]
     part_headers = [
         "Part",
@@ -313,7 +340,7 @@ def save_policy_report(
         "",
         f"Known fixture label: {fixture_truth or 'not supplied'} (never given to the analyzer).",
         "",
-        f"**Finding: {finding['label']}.**",
+        f"**Finding: {finding_text(finding)}.**",
         "",
         f"Validation episodes (obstacles, seed): {episodes}, uniform weights. "
         f"Frozen bank `{bank.fingerprint[:16]}` was written before any of them ran.",
@@ -355,7 +382,7 @@ def save_policy_report(
         "",
     ]
     report_json = {
-        "schema": 3,
+        "schema": 4,
         "fixture": name,
         "fixture_ground_truth": fixture_truth,
         "finding": finding,
@@ -369,7 +396,7 @@ def save_policy_report(
     (directory / "report.md").write_text("\n".join(lines), encoding="utf-8")
     body = [
         f"<h1>Search explanations of a stateful policy: {html.escape(name)}</h1>",
-        f"<p><b>Finding: {html.escape(finding['label'])}.</b></p>",
+        f"<p><b>Finding: {html.escape(finding_text(finding))}.</b></p>",
         f"<p>Known fixture label: {html.escape(fixture_truth or 'not supplied')}. "
         "It comes from construction and is never given to the analyzer.</p>",
         f"<p>Validation episodes (obstacles, seed): {html.escape(episodes)}. The frozen bank "
@@ -394,7 +421,9 @@ def save_policy_report(
         "<b>Ran a search</b>: the call contained a search-shaped run; its expansions are counted in "
         "that run only. <b>Attributed to actions</b> counts runs whose plan was followed or whose "
         "paired edit changed the same call's command; ≥ marks a lower bound when some runs have "
-        "no action witness. Missing causal support is unresolved use, not zero planning.</p>",
+        "no action witness. Missing causal support is unresolved use, not zero planning. "
+        "In the effort columns, ≥ marks a total over the runs the analyzer could read: "
+        "the other runs are unknown and can only add to it.</p>",
         "<h2>Search → stored plan → later action</h2>",
         "<p>The same search edit must predict the entire changed cache. On later ordinary "
         "observations, installing only that predicted cache must reproduce the action change, "
@@ -479,6 +508,16 @@ def save_policy_report(
             )
         },
         "max_expanded_depth": summary["max"]["max_expanded_depth"],
+        **{
+            f"lower_bound_{k}": _fmt(bounds.get(k))
+            for k in (
+                "planning_events",
+                "expansion_events",
+                "attributed_expansion_events",
+                "initialization_expansion_events",
+                "max_expanded_depth",
+            )
+        },
         "parts": {s: p["status"] for s, p in bank.parts.items()},
         "effort_features": list(EFFORT),
         "depth_features": list(DEPTH),
