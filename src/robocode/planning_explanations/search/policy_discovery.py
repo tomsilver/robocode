@@ -58,6 +58,7 @@ from .policy_verify import (
     explanation_from_data,
     follow_probe,
     link_plan,
+    point_functions,
     readout_shape,
 )
 from .policy_fit import fit_role
@@ -92,7 +93,7 @@ LOOP_RULES = (
     "snapshot). These are bounded representation checks. Validation runs of "
     "not-search-shaped parts are re-checked the same way"
 )
-BANK_SCHEMA = 10
+BANK_SCHEMA = 11
 # A call following a cached plan takes the strongest evidence among the plan
 # versions it follows, in this order.
 FOLLOWED = {
@@ -123,7 +124,23 @@ WITHHELD = (
     *DEPTH,
     "attributed_expansion_events",
     "initialization_expansion_events",
+    "search_score",
 )
+
+
+def search_score(runs: list[dict], calls: int) -> float:
+    """Mean states expanded beyond the start, per policy call.
+
+    Per call, N sums the distinct states expanded by its supported search runs,
+    and the call scores max(N - 1, 0); a call without a search scores 0 (a
+    reactive decision). The mean is over every call of the episode: the reset
+    call and each action call.
+    """
+    expanded: dict[int, int] = {}
+    for run in runs:
+        if run["status"] == "supported":
+            expanded[run["call"]] = expanded.get(run["call"], 0) + run["features"]["N"]
+    return sum(max(n - 1, 0) for n in expanded.values()) / calls if calls else 0.0
 
 
 @dataclass(frozen=True)
@@ -497,7 +514,8 @@ def load_policy_bank(path: Path) -> FrozenPolicyBank:
         raise ValueError(
             f"Rediscover this bank: schema {BANK_SCHEMA} proposes move tables, "
             "heuristic weights and heap-entry numbers from development runs, reads "
-            "boolean-grid models, and records small numpy arrays and tuples of lists"
+            "boolean-grid models, records small numpy arrays and tuples of lists, "
+            "and reads partial (smoothed) plans and point arrays"
         )
     if data.get("grammar") != GRAMMAR:
         raise ValueError("Frozen bank uses a different grammar")
@@ -598,6 +616,19 @@ class EpisodeAnalyzer:
 
     def __call__(self, call: CallRecord, policy, state, extra, after) -> None:
         self.actions.append(call.action)
+        if self.phase == "development":
+            # Point arrays the policy holds are read-out candidates, like callables.
+            arrays = sorted(point_functions({}, after))
+            for part in self.parts.values():
+                if part["status"] not in SEARCH_PARTS:
+                    continue
+                # The two lists may be one object; extend each list only once.
+                lists = [part["readouts"]]
+                candidates = part.get("readout_candidates")
+                if candidates is not None and candidates is not part["readouts"]:
+                    lists.append(candidates)
+                for names in lists:
+                    names.extend(n for n in arrays if n not in names)
         # Replays stop when a recognised search runs again. An unknown loop does
         # not stop them: if it replaces the cache, the replay's cache check stops
         # it, and the plan-only and restoration controls test mediation anyway.
@@ -609,7 +640,7 @@ class EpisodeAnalyzer:
         statuses = set()
         unexplained = False
         for run in call.runs:
-            entry, tree = self._run(call, run, (policy, state, extra))
+            entry, tree = self._run(call, run, (policy, state, extra), after)
             entry["index"] = len(self.runs)
             self.runs.append(entry)
             statuses.add(entry["part_status"])
@@ -620,16 +651,18 @@ class EpisodeAnalyzer:
                 and entry["part_status"] != "not_search_shaped"
             )
             if tree is not None:
-                trees.append((entry, tree, run.capture.callables))
+                trees.append(
+                    (entry, tree, point_functions(run.capture.callables, after))
+                )
         self._versions(call, trees, after, unexplained)
         if call.method == "get_action":
             self.calls.append(self._classify(call, (policy, state, extra), statuses))
         # Release frames only now: probes of a later run replay the earlier ones.
         for run in call.runs:
-            run.capture.records.clear()
+            run.capture.release()
         self.executions.clear()
 
-    def _run(self, call, run, before) -> tuple[dict, GridSearch | None]:
+    def _run(self, call, run, before, after) -> tuple[dict, GridSearch | None]:
         index = self.part_index.get(run.site, 0)
         self.part_index[run.site] = index + 1
         part = self.parts.get(run.site)
@@ -665,7 +698,7 @@ class EpisodeAnalyzer:
                 engines[explanation.identifier] = (explanation, engine)
         if index in self.sampled.get(run.site, ()):
             entry["probed"] = True
-            self._probe(call, run, before, entry, engines)
+            self._probe(call, run, before, after, entry, engines)
         selected = part["selected"]
         if selected is None:
             supported = [
@@ -689,7 +722,7 @@ class EpisodeAnalyzer:
             return entry, engines[selected][1]
         return entry, None
 
-    def _probe(self, call, run, before, entry, engines) -> None:
+    def _probe(self, call, run, before, after, entry, engines) -> None:
         seed = f"{self.phase}:{self.case}:{call.index}:{run.site}:{run.ordinal}"
         executed: dict = {}
         part = self.parts[run.site]
@@ -708,8 +741,10 @@ class EpisodeAnalyzer:
             records = []
             runtime = []
             edits = choose_edits(explanation, run, seed, self.limits.edits_per_run)
+            # The stored plan is read with the policy as the call left it.
+            functions = point_functions(run.capture.callables, after)
             for edit in detour_edits(
-                explanation, run, engine, plans, templates, run.capture.callables
+                explanation, run, engine, plans, templates, functions
             ):
                 if edit not in edits:
                     edits.append(edit)
@@ -748,6 +783,15 @@ class EpisodeAnalyzer:
             consumed = bool(new) and len(new) < len(old) and old[-len(new) :] == new
             if producer is None and consumed:
                 continue
+            # A plan no search in this call produced that is identical to another
+            # plan the policy already holds (`self.path = self.delivery`) is a
+            # copy: it carries that plan's provenance, not "no source".
+            copied_from = None
+            if producer is None and new:
+                for other, points in sorted(call.plans_after.items()):
+                    if other != attribute and points == new and other in self.versions:
+                        copied_from = self.versions[other]["index"]
+                        break
             version: dict = {
                 "attribute": attribute,
                 "call": call.index,
@@ -759,6 +803,7 @@ class EpisodeAnalyzer:
                 "chains": [],
                 "causal_status": "unresolved",
                 "unexplained_loop_in_call": unexplained,
+                "copied_from": copied_from,
             }
             for entry, engine, functions in trees:
                 part = self.parts[entry["site"]]
@@ -990,6 +1035,8 @@ def account(episode: dict) -> dict:
             else None
         ),
         "non_search_loop_runs": len(episode["runs"]) - len(search_runs),
+        # Every call counts: the reset call plus each action call.
+        "search_score": search_score(search_runs, len(calls) + 1),
     }
     if not complete:
         # An unresolved run is not zero; withhold totals rather than undercount.
@@ -1010,6 +1057,7 @@ def summarize(episodes: list[dict]) -> dict:
     rows = [e["accounting"]["program"] for e in episodes]
     bounds = [{k: known_part(r, k) for k in WITHHELD} for r in rows]
     keys = (
+        "search_score",
         "planning_events",
         *EFFORT,
         "attributed_expansion_events",

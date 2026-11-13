@@ -22,6 +22,11 @@ FINDINGS = {
 }
 
 RULES = (
+    "The search score is the mean, over every policy call of an episode (reset and "
+    "each action), of the distinct states its search runs expanded beyond the "
+    "start: max(N - 1, 0) per call, with N summed over the call's runs; a call "
+    "without a search scores 0. It counts search amount, not quality, in the "
+    "policy's own states (grid cells), so it depends on the policy's grid. "
     "Effort counts (expansion events, N, generated alternatives, re-expansions, "
     "cost improvements) are summed over an episode's runs; each run's expansions "
     "are counted once, in the call where they happen. Depths are maxima. Planning "
@@ -182,6 +187,7 @@ def save_policy_report(
                 label,
                 "yes" if episode["solved"] else "no",
                 episode["steps"],
+                _total(program_row, "search_score"),
                 _total(program_row, "planning_events"),
                 _total(program_row, "initialization_expansion_events"),
                 _total(program_row, "expansion_events"),
@@ -252,7 +258,11 @@ def save_policy_report(
                         [
                             str(episode["case"]),
                             version["call"],
-                            version["attribute"],
+                            (
+                                f'{version["attribute"]} (partial plan)'
+                                if chain.get("kept") == "some"
+                                else version["attribute"]
+                            ),
                             chain["status"],
                             f'{probe["edit"]["visit"]} / {probe["edit"]["operation"]}',
                             f'{probe.get("prediction_matches")} / {probe.get("changed")}',
@@ -295,6 +305,7 @@ def save_policy_report(
         "Episode",
         "Solved",
         "Steps",
+        "Search score (per call)",
         "Planning events",
         "At initialization",
         "Expansion events (sum)",
@@ -434,7 +445,12 @@ def save_policy_report(
         "stands in for it (the path then stops one cell short and ends with an exact point inside "
         "that cell). It does not explain destination selection: an edit "
         "that loses the endpoint, or after which the policy stores a path to another destination, "
-        "is unresolved, never a counterexample. Each probed producer also gets a detour edit: the "
+        "is unresolved, never a counterexample. When no complete-chain readout reads a "
+        "development plan, a partial one may: the plan keeps some of the chain's cells in "
+        "order (at least one before the goal), as path smoothing does. Smoothing is not "
+        "modelled, so an edit predicts only that the new plan lies on the edited path; its "
+        "detour drops a cell the plan kept, and the mediation controls are the same "
+        '(marked "partial plan" below). Each probed producer also gets a detour edit: the '
         "first of its path's first three interior cells whose removal keeps the endpoint (per the "
         "explanation) loses every frontier entry just before its first expansion. Runs that stored "
         "a new plan are probed first; seeded draws fill the remaining places. "
@@ -496,6 +512,7 @@ def save_policy_report(
         **{
             f"mean_{k}": _fmt(mean.get(k))
             for k in (
+                "search_score",
                 "planning_events",
                 "expansion_events",
                 "attributed_expansion_events",
@@ -511,6 +528,7 @@ def save_policy_report(
         **{
             f"lower_bound_{k}": _fmt(bounds.get(k))
             for k in (
+                "search_score",
                 "planning_events",
                 "expansion_events",
                 "attributed_expansion_events",

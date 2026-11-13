@@ -10,6 +10,7 @@ import numpy as np
 from robocode.planning_explanations.search.grid_engine import GridSearch, GridSpec
 from robocode.planning_explanations.search.policy_discovery import (
     discover_policy,
+    search_score,
     validate_policy,
 )
 from robocode.planning_explanations.search.policy_domains import DiscWorld
@@ -18,7 +19,17 @@ from robocode.planning_explanations.search.policy_fit import (
     fit_heuristics,
     fit_moves,
 )
-from robocode.planning_explanations.search.policy_fixtures import GRID_OCTILE
+from robocode.planning_explanations.search.policy_causality import (
+    TAIL_AFTER,
+    PlanRule,
+    _path,
+    bind_plan,
+)
+from robocode.planning_explanations.search.policy_fixtures import (
+    GRID_OCTILE,
+    GRID_SMOOTHED,
+    PLAN_ONCE,
+)
 from robocode.planning_explanations.search.policy_runner import (
     PolicyProgram,
     Recorder,
@@ -276,3 +287,119 @@ class AstraStyleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PartialPlanTest(unittest.TestCase):
+    """A smoothed plan keeps some of the search path's cells, in order."""
+
+    def engine(self) -> GridSearch:
+        spec = GridSpec("min", "g", "none", model="open", neighborhood=4)
+        engine = GridSearch(spec, (0, 0), (3, 0))
+        while engine.phase == "ready":
+            engine.step()
+        return engine
+
+    def test_partial_plan_rules(self):
+        """Order, a cell before the goal, and a final point inside the goal."""
+        engine = self.engine()
+        point = lambda c: (float(c[0]), float(c[1]))  # noqa: E731
+        rule = PlanRule("path", "point", TAIL_AFTER, "some")
+        path = _path(engine.parents, engine.root, (3, 0))
+        corner = path[1]
+        binding = bind_plan(rule, [point(corner), (3.2, 0.1)], engine, point)
+        self.assertEqual((binding.endpoint, binding.cells), ((3, 0), (corner,)))
+        for bad in (
+            [(3.0, 0.0), (3.2, 0.1)],  # only the destination
+            [point(path[2]), point(path[1]), (3.2, 0.1)],  # out of order
+            [point(corner), (1.0, 0.1)],  # final point outside the goal cell
+            [(9.0, 9.0), (3.2, 0.1)],  # not a tree cell
+        ):
+            with self.assertRaises(ValueError):
+                bind_plan(rule, bad, engine, point)
+
+    def test_smoothed_and_full_plans_are_witnessed(self):
+        """Point arrays are readouts; smoothed plans get a corner-detour witness."""
+        development = ((1, 0), (3, 1), (5, 2))
+        for source, kept in ((GRID_OCTILE, "all"), (GRID_SMOOTHED, "some")):
+            program = PolicyProgram(source)
+            bank = discover_policy(program, DiscWorld(), development, ((15, 101),))
+            (part,) = [p for p in bank.parts.values() if p["status"] == "search"]
+            self.assertEqual(
+                {(r["function"], r["kept"]) for r in part["plan_rules"]},
+                {("self.points", kept)},
+            )
+            row = validate_policy(program, DiscWorld(), bank)["episodes"][0][
+                "accounting"
+            ]["program"]
+            self.assertGreater(row["followed_witnessed_plan"], 0)
+            self.assertEqual(row["followed_plan_share"], 1.0)
+
+
+# plan_once, but the searched plan is stored in `later` and copied into a new list
+# in `path` by the first action call, where no search runs. (Astra's
+# `self.path = self.delivery` shares one list, so its original is followed too.)
+COPIED_PLAN = PLAN_ONCE.replace(
+    """    def reset(self, state, info):
+        self.goal = tuple(state["goal"])
+        self.path = self._plan(state["robot"], self.goal, state["obstacles"])
+
+    def get_action(self, state):
+        return self._follow(state)""",
+    """    def reset(self, state, info):
+        self.goal = tuple(state["goal"])
+        self.later = self._plan(state["robot"], self.goal, state["obstacles"])
+        self.path, self.copied = [], False
+
+    def get_action(self, state):
+        if not self.copied:
+            # A new list: `later` stays as stored, only `path` is followed.
+            self.path, self.copied = list(self.later), True
+        return self._follow(state)""",
+)
+
+
+class CopiedPlanTest(unittest.TestCase):
+    """A plan copied from another stored plan keeps that plan's provenance."""
+
+    def test_a_copied_plan_shares_the_original_verdict(self):
+        """Following `path` (a copy of `later`) is credited like following `later`."""
+        self.assertNotEqual(COPIED_PLAN, PLAN_ONCE)
+        program = PolicyProgram(COPIED_PLAN)
+        bank = discover_policy(program, DiscWorld(), ((1, 0), (3, 1)), ((3, 100),))
+        episode = validate_policy(program, DiscWorld(), bank)["episodes"][0]
+        copies = [v for v in episode["versions"] if v["copied_from"] is not None]
+        self.assertTrue(copies)
+        for copy in copies:
+            source = episode["versions"][copy["copied_from"]]
+            self.assertEqual(source["attribute"], "later")
+            self.assertEqual(copy["causal_status"], source["causal_status"])
+        row = episode["accounting"]["program"]
+        self.assertEqual(row["followed_unmatched_plan"], 0)
+        self.assertEqual(row["followed_plan_share"], 1.0)
+
+
+class SearchScoreTest(unittest.TestCase):
+    """Mean states expanded beyond the start, per policy call."""
+
+    def test_the_score_sums_searches_within_a_call(self):
+        """Two searches in one call add up; calls without search score 0."""
+        runs = [
+            {"call": 0, "status": "supported", "features": {"N": 10}},
+            {"call": 2, "status": "supported", "features": {"N": 4}},
+            {"call": 2, "status": "supported", "features": {"N": 3}},
+            {"call": 3, "status": "unresolved"},
+        ]
+        # Calls 0..4: (10 - 1) + (4 + 3 - 1) = 15 over 5 calls.
+        self.assertEqual(search_score(runs, 5), 3.0)
+
+    def test_plan_once_scores_its_single_search(self):
+        """One search at reset, then only plan following."""
+        program = PolicyProgram(PLAN_ONCE)
+        bank = discover_policy(program, DiscWorld(), ((1, 0),), ((3, 100),))
+        result = validate_policy(program, DiscWorld(), bank)
+        episode = result["episodes"][0]
+        row = episode["accounting"]["program"]
+        (search,) = [r for r in episode["runs"] if r["status"] == "supported"]
+        expected = (search["features"]["N"] - 1) / (len(episode["calls"]) + 1)
+        self.assertAlmostEqual(row["search_score"], expected)
+        self.assertAlmostEqual(result["summary"]["mean"]["search_score"], expected)

@@ -293,6 +293,7 @@ _GRID_OCTILE = """
         step, n = 0.1, 26
         axis = np.arange(n) * step
         cx, cy = np.meshgrid(axis, axis, indexing="ij")
+        self.points = np.stack([cx, cy], axis=-1)
         bad = (cx < 0.05) | (cx > 2.45) | (cy < 0.05) | (cy > 2.45)
         for ox, oy, r in obstacles:
             bad |= np.hypot(cx - ox, cy - oy) <= r + 0.1
@@ -312,7 +313,7 @@ _GRID_OCTILE = """
             if k == dst:
                 out = [(goal[0], goal[1])]
                 while k != src:
-                    out.append((step * k[0], step * k[1]))
+                    out.append(self.points[k])
                     k = parent[k]
                 out.reverse()
                 return out
@@ -333,6 +334,27 @@ _GRID_OCTILE = """
         return [(goal[0], goal[1])]
 """
 
+# grid_octile, then Astra's smoothing: keep the farthest waypoint a straight line
+# reaches without crossing a blocked cell, so the stored plan keeps only corners.
+_SMOOTH = """
+    def _smooth(self, bad, start, path):
+        result, prev, i = [], np.asarray(start, dtype=float), 0
+        while i < len(path):
+            far = i
+            for j in range(len(path) - 1, i, -1):
+                d = np.asarray(path[j], dtype=float) - prev
+                steps = max(2, int(np.linalg.norm(d) / 0.02) + 1)
+                samples = prev + np.linspace(0, 1, steps)[:, None] * d
+                ids = np.clip(np.round(samples / 0.1).astype(int), 0, len(bad) - 1)
+                if not bad[ids[1:, 0], ids[1:, 1]].any():
+                    far = j
+                    break
+            result.append(path[far])
+            prev = np.asarray(path[far], dtype=float)
+            i = far + 1
+        return result
+"""
+
 GRID_OCTILE = (
     _HEADER.replace("import math\n", "import math\n\nimport numpy as np\n")
     + _GRID_OCTILE
@@ -347,6 +369,13 @@ GRID_OCTILE = (
 """
 )
 
+GRID_SMOOTHED = GRID_OCTILE.replace(
+    """                out.reverse()
+                return out""",
+    """                out.reverse()
+                return self._smooth(bad, start, out)""",
+).replace(_FOLLOW, _FOLLOW + _SMOOTH)
+
 POLICY_FIXTURES = {
     "plan_once": PLAN_ONCE,
     "discarded_search": DISCARDED_SEARCH,
@@ -360,6 +389,7 @@ POLICY_FIXTURES = {
     "deque_bfs": DEQUE_BFS,
     "bfs_without_costs": BFS_WITHOUT_COSTS,
     "grid_octile": GRID_OCTILE,
+    "grid_smoothed": GRID_SMOOTHED,
 }
 
 GROUND_TRUTH = {
@@ -383,6 +413,10 @@ GROUND_TRUTH = {
     "grid_octile": (
         "A* in Astra's style: numpy obstacle grid, empty parent table, weighted "
         "octile heuristic, 1.414 diagonals, no corner cutting; plan once and follow"
+    ),
+    "grid_smoothed": (
+        "grid_octile, then Astra's smoothing: the stored plan keeps only the "
+        "corners a straight line cannot skip; plan once and follow"
     ),
     "clutteredretrieval2d": "Agent-written KinDER policy; no construction label",
 }

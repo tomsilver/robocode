@@ -617,6 +617,10 @@ class ReportBoundsTest(unittest.TestCase):
             summary = save_policy_report(root, "helper", program, bank, result, None)
             self.assertIsNone(summary["mean_expansion_events"])
             self.assertEqual(summary["lower_bound_expansion_events"], known)
+            # The search score is withheld too, with its known part as a bound.
+            self.assertIsNone(summary["mean_search_score"])
+            self.assertGreater(summary["lower_bound_search_score"], 0)
+            self.assertIn("Search score (per call)", (root / "report.md").read_text())
             self.assertIn(f"| ≥ {known} |", (root / "report.md").read_text())
 
 

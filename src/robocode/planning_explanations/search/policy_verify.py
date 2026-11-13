@@ -572,12 +572,9 @@ def execute_edit(
             target = run
             break
     if target is None:
-        return {
-            "session": session,
-            "target": None,
-            "prefix_preserved": False,
-            "error": error,
-        }
+        for run in session.runs:
+            run.capture.release()
+        return {"target": None, "prefix_preserved": False, "error": error}
     position = session.runs.index(target)
     earlier = [(r.site, r.ordinal, r.capture.length) for r in session.runs[:position]]
     ordinary_earlier = [
@@ -592,9 +589,13 @@ def execute_edit(
         and earlier == ordinary_earlier
         and same_frames(ordinary, target, _frame_index(ordinary, edit.visit) + 1)
     )
+    # Only the edited run is compared later; a planning call can hold dozens of
+    # other recorded searches, kept until the call's analysis ends otherwise.
+    for run in session.runs:
+        if run is not target:
+            run.capture.release()
     plans = plan_attributes(clone)
     return {
-        "session": session,
         "target": target,
         # Runtime-only counterfactual state, never serialized into evidence.
         "policy": clone,
@@ -661,6 +662,39 @@ def check_edit(
         observed_action_changed=executed["action_changed"],
     )
     return record
+
+
+def _array_point(array):
+    rows, columns = array.shape[:2]
+
+    def point(cell) -> tuple[float, float]:
+        i, j = cell
+        if not (0 <= i < rows and 0 <= j < columns):
+            raise IndexError("Cell outside the point array")
+        return (float(array[i, j, 0]), float(array[i, j, 1]))
+
+    return point
+
+
+def point_functions(callables: dict, policy) -> dict:
+    """Cell-to-point readouts: policy callables, and arrays the policy holds.
+
+    An array attribute of shape (rows, columns, 2) is read as `point[i, j]`
+    (for example a grid of waypoint coordinates); the mapping decodes an existing
+    representation and computes nothing itself.
+    """
+    found = dict(callables)
+    for name, value in vars(policy).items() if hasattr(policy, "__dict__") else ():
+        dtype = getattr(value, "dtype", None)
+        if (
+            type(value).__module__ == "numpy"
+            and type(value).__name__ == "ndarray"
+            and getattr(value, "ndim", 0) == 3
+            and value.shape[2] == 2
+            and getattr(dtype, "kind", "?") == "f"
+        ):
+            found[f"self.{name}"] = _array_point(value)
+    return found
 
 
 def readout_shape(function, cell) -> bool:

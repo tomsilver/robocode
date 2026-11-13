@@ -525,6 +525,20 @@ class RunCapture:
         """Number of recorded frames, including any edit frame."""
         return len(self.records)
 
+    def finish(self) -> None:
+        """Drop what only encoding needs (previous values, raw copies, the
+        conversion memo); recorded frames stay readable."""
+        self._previous = {}
+        self._raw = {}
+        self._memo = {}
+        self._ids = {}
+
+    def release(self) -> None:
+        """Drop everything, frames included, once a call's analysis is done."""
+        self.finish()
+        self.records.clear()
+        self.replaced.clear()
+
 
 @dataclass
 class RunRecord:
@@ -606,6 +620,8 @@ class Recorder:
         run.exited = True
         if self.sessions[-1].capture:
             run.capture.record(kind, values)
+            # A run is never recorded again after it ends.
+            run.capture.finish()
 
 
 def apply_edit(values: dict, edit: SearchEdit) -> None:

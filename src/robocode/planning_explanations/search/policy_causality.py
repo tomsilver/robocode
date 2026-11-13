@@ -9,6 +9,14 @@ endpoint cell, whether the root cell is absent (zero or one leading cell, e.g.
 consumed in the same call), and the final point. Those stay fixed when
 predicting the stored plan of an edited search.
 
+A second, weaker readout is used only when no complete-chain readout reads a
+development plan: the stored waypoints are *some* of the chain's cells, in order,
+including at least one cell before the endpoint, then an optional final point
+inside the endpoint (the search goal). This is how a policy that smooths its
+path stores it. Smoothing is not modelled, so an edit predicts only that the
+new stored plan lies, in order, on the edited search's path to the same goal;
+the mediation controls are unchanged.
+
 The readout says nothing about what a policy stores once an edit loses that
 endpoint, or once the policy picks another destination; such probes are
 unresolved, never counterexamples. Only a wrong prediction for an endpoint the
@@ -30,8 +38,18 @@ DETOUR_CANDIDATES = 3
 # Final point: none, after the chain's last cell, or in place of it.
 NO_TAIL, TAIL_AFTER, TAIL_REPLACES = 0, 1, 2
 TAILS = (NO_TAIL, TAIL_AFTER, TAIL_REPLACES)
+KEPT = ("all", "some")
 CHAIN_RULES = {
-    "readout": "complete-parent-chain-v3",
+    "readout": "parent-chain-v4",
+    "kept": {
+        "all": "every chain cell (optionally without the root), then the final point",
+        "some": (
+            "an ordered subset of the chain's cells with at least one cell before "
+            "the endpoint, then a final point inside the endpoint (the search "
+            "goal); used only when no complete-chain readout applies"
+        ),
+    },
+    "point_readouts": "a policy callable, or a policy array indexed by cell",
     "bound_per_plan": ["endpoint", "absent leading root cell (0 or 1)", "final point"],
     "final_point": {
         "0": "none",
@@ -63,10 +81,15 @@ class PlanRule:
     attribute: str
     function: str
     tail: int
+    kept: str = "all"
 
     def __post_init__(self):
         if self.tail not in TAILS:
             raise ValueError("Unknown final-point kind")
+        if self.kept not in KEPT:
+            raise ValueError("A plan keeps all or some of the chain's cells")
+        if self.kept == "some" and self.tail == TAIL_REPLACES:
+            raise ValueError("A partial plan's final point lies inside the endpoint")
 
 
 @dataclass(frozen=True)
@@ -77,6 +100,8 @@ class Binding:
     endpoint: tuple
     tail: tuple
     replaced: bool = False
+    # Cells a partial ("some") plan keeps, in order; empty for complete chains.
+    cells: tuple = ()
 
 
 def _path(parents, root, endpoint) -> list:
@@ -116,18 +141,55 @@ def _cell_holding(inverse: dict, target) -> tuple:
     return ranked[0][1]
 
 
-def bind_plan(rule: PlanRule, points, engine, point) -> Binding:
-    """Read a stored plan as a *whole* parent chain, optionally without the root."""
-    points = tuple(points or ())
-    mapped = points[:-1] if rule.tail else points
-    if not mapped:
-        raise ValueError("No represented path")
+def _inverse(engine, point) -> dict:
     inverse = {}
     for cell in engine.parents:
         value = tuple(float(v) for v in point(cell))
         if value in inverse:
             raise ValueError("Non-injective point readout")
         inverse[value] = cell
+    return inverse
+
+
+def _bind_some(rule: PlanRule, points: tuple, engine, point) -> Binding:
+    """Read a stored plan as an ordered subset of the chain to the search goal."""
+    if not engine.reached_goal:
+        raise ValueError("A partial plan is read against a reached search goal")
+    mapped = points[:-1] if rule.tail else points
+    inverse = _inverse(engine, point)
+    try:
+        cells = tuple(inverse[tuple(p)] for p in mapped)
+    except KeyError as exc:
+        raise ValueError("A waypoint is not the point of a tree cell") from exc
+    endpoint = engine.goal
+    path = _path(engine.parents, engine.root, endpoint)
+    position = {cell: i for i, cell in enumerate(path)}
+    places = [position.get(c) for c in cells]
+    if None in places or places != sorted(set(places)):
+        raise ValueError("Waypoints are not in order on the chain to the goal")
+    if not any(c != endpoint for c in cells):
+        # Only the destination: nothing of the search's route is stored.
+        raise ValueError("A partial plan keeps no cell before the endpoint")
+    tail = points[-1:] if rule.tail else ()
+    if tail:
+        if _cell_holding(inverse, tail[0]) != endpoint:
+            raise ValueError("The final point is not inside the search goal")
+    elif cells[-1] != endpoint:
+        raise ValueError("Without a final point the plan ends at the endpoint")
+    return Binding(0, endpoint, tail, False, cells)
+
+
+def bind_plan(rule: PlanRule, points, engine, point) -> Binding:
+    """Read a stored plan as a whole parent chain (or an ordered subset of one)."""
+    points = tuple(points or ())
+    if rule.kept == "some":
+        return _bind_some(
+            rule, tuple(tuple(map(float, p)) for p in points), engine, point
+        )
+    mapped = points[:-1] if rule.tail else points
+    if not mapped:
+        raise ValueError("No represented path")
+    inverse = _inverse(engine, point)
     endpoint = inverse[tuple(mapped[-1])]
     tail = points[-1:] if rule.tail else ()
     replaced = rule.tail == TAIL_REPLACES
@@ -143,29 +205,41 @@ def bind_plan(rule: PlanRule, points, engine, point) -> Binding:
     raise ValueError("Stored plan is not a complete parent chain")
 
 
+def _templates(attribute, names, kept) -> list[PlanRule]:
+    return [
+        PlanRule(attribute, name, tail, kept)
+        for name in names
+        for tail in TAILS
+        if not (kept == "some" and tail == TAIL_REPLACES)
+    ]
+
+
 def propose_rules(attribute, points, engine, functions, names) -> list[dict]:
-    """At most three templates per point callable; DEVELOPMENT ONLY."""
-    rules = []
-    for name in names:
-        if name not in functions:
-            continue
-        for tail in TAILS:
-            rule = PlanRule(attribute, name, tail)
+    """Templates that read this plan; DEVELOPMENT ONLY.
+
+    Complete-chain templates come first; partial ones are proposed only when no
+    complete-chain template reads the plan.
+    """
+    for kept in KEPT:
+        rules = []
+        for rule in _templates(attribute, [n for n in names if n in functions], kept):
             try:
-                bind_plan(rule, points, engine, functions[name])
+                bind_plan(rule, points, engine, functions[rule.function])
             except ERRORS:
                 continue
             rules.append(asdict(rule))
-    return rules
+        if rules:
+            return rules
+    return []
 
 
 def candidate_templates(plans: dict, names) -> list[dict]:
     """Every template the development grammar could propose for these plans."""
     return [
-        asdict(PlanRule(attribute, name, tail))
+        asdict(rule)
         for attribute in sorted(plans)
-        for name in names
-        for tail in TAILS
+        for kept in KEPT
+        for rule in _templates(attribute, names, kept)
     ]
 
 
@@ -223,13 +297,19 @@ def detour_edits(explanation, run, engine, plans, templates, functions) -> list:
             path = _path(engine.parents, engine.root, binding.endpoint)
         except ERRORS:
             continue
-        if path not in chains:
-            chains.append(path)
+        # A partial plan's kept cells are where a detour must show up in it.
+        candidates = (
+            [c for c in binding.cells if c not in (engine.root, binding.endpoint)]
+            if binding.cells
+            else path[1:-1]
+        )
+        if (path[-1], candidates) not in chains:
+            chains.append((path[-1], candidates))
     edits: list = []
-    for path in chains:
-        for cell in path[1:-1][:DETOUR_CANDIDATES]:
+    for endpoint, candidates in chains:
+        for cell in candidates[:DETOUR_CANDIDATES]:
             try:
-                edit = _detour(explanation, run, engine, cell, path[-1])
+                edit = _detour(explanation, run, engine, cell, endpoint)
             except (*ERRORS, StopIteration):
                 continue
             if edit is not None:
@@ -237,6 +317,33 @@ def detour_edits(explanation, run, engine, plans, templates, functions) -> list:
                     edits.append(edit)
                 break
     return edits
+
+
+def _judge_some(rule, binding, points, patched, point, observed) -> dict:
+    """A partial plan: the edited plan must lie, in order, on the edited path.
+
+    Smoothing is not modelled, so the exact plan is not predicted; the observed
+    edited plan, if it lies on the edited search's path to the same goal, goes
+    on to the mediation replay. A plan that is not on that path may come from
+    another search the policy ran instead: unresolved, never a counterexample.
+    """
+    observed = tuple(tuple(map(float, p)) for p in (observed or ()))
+    fields = {"changed": observed != tuple(points), "readout": "some"}
+    if not fields["changed"]:
+        return {**fields, "status": "unresolved", "reason": "plan_unchanged"}
+    try:
+        other = bind_plan(rule, observed, patched, point)
+    except ERRORS:
+        return {**fields, "status": "unresolved", "reason": "plan_not_on_edited_path"}
+    if (other.endpoint, other.tail) != (binding.endpoint, binding.tail):
+        return {**fields, "status": "unresolved", "reason": "destination_changed"}
+    return {
+        **fields,
+        "status": "replay",
+        "predicted_plan": observed,
+        "prediction_matches": True,
+        "on_edited_path": True,
+    }
 
 
 def judge_probe(rule, binding, points, engine, patched, point, observed) -> dict:
@@ -250,6 +357,8 @@ def judge_probe(rule, binding, points, engine, patched, point, observed) -> dict
         or patched.reached_goal != engine.reached_goal
     ):
         return {"status": "unresolved", "reason": "endpoint_lost"}
+    if rule.kept == "some":
+        return _judge_some(rule, binding, points, patched, point, observed)
     predicted = read_plan(patched, point, binding)
     fields = {
         "predicted_plan": predicted,
@@ -395,6 +504,8 @@ def check_plan_chain(
         root_absent=binding.skip,
         fixed_tail=binding.tail,
         endpoint_replaced_by_final_point=binding.replaced,
+        kept=rule.kept,
+        kept_cells=len(binding.cells) if binding.cells else None,
         ordinary_plan=points,
     )
     for edit, executed, search_check in executions:
@@ -439,7 +550,8 @@ def finish_chains(versions) -> None:
     """Chain and plan-version verdicts once every replay has ended.
 
     A failed prediction refutes a readout even if another probe had a witness.
-    A version is "unmatched" when no frozen readout reads it at all.
+    A version is "unmatched" when no frozen readout reads it at all, unless it
+    is a copy of an earlier version, whose verdict it then shares.
     """
     for version in versions:
         applicable = []
@@ -462,7 +574,15 @@ def finish_chains(versions) -> None:
             else:
                 chain.update(status="unresolved", reason="no_complete_chain_witness")
         statuses = {c["status"] for c in applicable}
-        if "supported" in statuses:
+        source = version.get("copied_from")
+        if source is not None and not applicable:
+            # A copy of an earlier version (always resolved first) shares its
+            # verdict: the same waypoints from the same search.
+            version.update(
+                causal_status=versions[source]["causal_status"],
+                causal_reason=f"copy_of_version_{source}",
+            )
+        elif "supported" in statuses:
             version.update(
                 causal_status="supported", causal_reason="complete_chain_witness"
             )

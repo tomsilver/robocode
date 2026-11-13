@@ -96,6 +96,10 @@ def run_policy_suite(args: argparse.Namespace) -> int:
             summary = save_unresolved(directory, name, source, exc)
             failed = True
         summaries.append(summary)
+        score = at_least(
+            summary.get("mean_search_score"),
+            summary.get("lower_bound_search_score"),
+        )
         planning = at_least(
             summary.get("mean_planning_events"),
             summary.get("lower_bound_planning_events"),
@@ -106,6 +110,7 @@ def run_policy_suite(args: argparse.Namespace) -> int:
         )
         print(
             f'{name}: {finding_text(summary["finding"])}; '
+            f"search score={score}, "
             f"planning events={planning}, "
             f"expansion events={expansions}, "
             "followed-plan share="
@@ -116,24 +121,27 @@ def run_policy_suite(args: argparse.Namespace) -> int:
     rows = [
         "# Search explanations of stateful policies (milestone 8)",
         "",
-        "Means are uniform over each policy's frozen validation episodes. Effort is "
+        "Means are uniform over each policy's frozen validation episodes. The search "
+        "score is the mean, per policy call, of states expanded beyond the start "
+        "(0 for a call without a search), in the policy's own grid cells. Effort is "
         "summed within an episode, depth is a maximum, and the followed-plan share is "
         "the fraction of action calls whose command followed a cached plan with a "
         "complete search-to-action witness; its max adds calls whose plan evidence is "
         "unresolved. "
         "These are features of the frozen explanations, not a planningness score.",
         "",
-        "| Policy | Known fixture label | Finding | Planning events | "
-        "Expansion events | Attributed to actions | At initialization | "
-        "Followed-plan share (witnessed – max) | Searched share | "
-        "Max expanded depth | Solved |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Policy | Known fixture label | Finding | Search score (per call) | "
+        "Planning events | Expansion events | Attributed to actions | "
+        "At initialization | Followed-plan share (witnessed – max) | "
+        "Searched share | Max expanded depth | Solved |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in summaries:
         cells = [
             f'[{row["fixture"]}]({row["fixture"]}/report.html)',
             row.get("fixture_ground_truth"),
             finding_text(row["finding"]),
+            _bounded(row, "search_score"),
             _bounded(row, "planning_events"),
             _bounded(row, "expansion_events"),
             _bounded(

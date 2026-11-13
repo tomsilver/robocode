@@ -30,6 +30,7 @@ iteration (a point or pose) as a worklist, and integers no longer cut
 inspection. Schema 9 (grammar grid-priority-v2) proposes move tables,
 heuristic weights and heap-entry numbers from development runs and reads
 boolean-grid models. Schema 10 records small numpy arrays and tuples of lists.
+Schema 11 reads partial (smoothed) plans and point arrays.
 
 ## Run milestone 8: a stateful KinDER policy
 
@@ -1236,6 +1237,15 @@ Results on Astra's development episode (1, 0), measured under a profiler:
 Without the profiler, recording the episode took 1.1 s, against 11.3 s with
 the old encoder (which by then already used the faster numpy type check).
 
+**Memory.** Full Astra runs peaked at 3.7–5 GB resident (up to a 12 GB footprint).
+Two things were kept longer than needed:
+
+- Each run's recording caches (the conversion memo, the raw previous-frame copies and the identity table) lived until the episode ended. They now go when the run ends (`RunCapture.finish`), and frames go after the call's analysis (`release`).
+- A probe re-runs the whole call, but only the edited run is compared later. The other recorded searches in that call (about 30 in an Astra planning call) were kept until the call's analysis ended; they are now released as soon as the probe has checked its prefix.
+
+The full validation analysis of Astra's (15, 101) episode went from a 0.51 GB peak
+to 0.16 GB, at the same speed.
+
 ### Numpy vectors and tuples of lists (schema 10, 2026-11-12)
 
 With its A* explained, Astra's totals were still withheld. Two of its ordinary
@@ -1259,6 +1269,65 @@ Two follow-ups surfaced once the smoothing loop became readable:
 
 - **Cursor rule.** In 22 of the 249 smoothing runs of the 20-obstacle validation episode, `result` grows by one item per step while `i` advances with `i == len(result)`, whenever smoothing can skip no point. The growing-sequence rule fired on this. A read cursor points at the next unread item, so while items wait to be read it is strictly behind the end. The rule now requires `cursor < length` after the step (it used to accept `<=`). Append-only BFS with a head index is still caught, and so is the nested cursor test. A counter equal to the length, as in smoothing or a rollout step counter, is no longer flagged.
 - **Accounting.** A part that reads as "not a search" in the bank can have individual validation runs re-checked as unreadable. `account` assumed one status per part per episode and raised `KeyError: 'initialization_runs'`. The row now counts every run, with the unreadable ones under `unresolved_or_rejected`.
+
+### Partial (smoothed) plans and point arrays (schema 11, 2026-11-12)
+
+With complete totals, Astra's followed-plan share read 0.0. Every step that
+followed its stored plan was "unmatched", for two reasons:
+
+- **Coordinates.** Astra turns cells into waypoints with an array lookup, `self.points[k]`. Readouts were only policy callables.
+- **Smoothing.** Before storing a path, Astra keeps the farthest waypoint a straight line can reach without crossing a blocked cell. The plan is therefore a few corners of the search's path plus the exact goal, not every cell.
+
+"Unmatched" counts in neither end of the share, so a policy that plans and
+follows its plan was reported as never following one.
+
+- **Point arrays.** A policy attribute of shape (rows, columns, 2) is a read-out candidate, read as `point[i, j]` (decoding an existing representation). Stored plans and detour probes are read with the policy as the call left it.
+- **Partial readout** (`PlanRule.kept = "some"`). It is proposed only when no complete-chain readout reads a development plan. The plan's waypoints must be cells of the chain to the search goal, in order, with at least one cell before the goal. A final point, if present, must lie inside the goal cell. A plan holding only the destination says nothing about the route, so `discarded_search` stays unmatched (share 0–0).
+- **Under an edit**, smoothing is not modelled. The prediction is only that the new stored plan lies, in order, on the edited search's path to the same goal; that plan then goes through the same mediation replay (plan-only and restore controls). A changed plan that is not on that path may come from another search the policy ran instead, so it is unresolved, not a counterexample. Partial chains are marked "partial plan" in the report.
+- **Detour for partial plans:** drop a cell the plan kept, before its first expansion. The search must route around that corner, so the stored corners must change.
+
+| Control | Before | After |
+| --- | --- | --- |
+| `grid_octile` (waypoints from `self.points`) | unmatched, share 0–0 | witnessed, 1.0 in (3,100), (15,101), (20,102) |
+| `grid_smoothed` (Astra-style smoothing) | unmatched, share 0–0 | witnessed, 1.0 in (15,101), (20,102); unmatched in (3,100), where the stored plan is the goal alone (a straight shot) |
+| `discarded_search` | unmatched, 0–0 | unchanged |
+| `plan_once` | witnessed, 1.0 | unchanged |
+
+**Copied plans.** A plan version that no search in its call produced, and that is
+identical to another plan the policy already holds (for example
+`self.path = list(self.delivery)`), records `copied_from` and shares that
+version's verdict instead of being "unmatched". In a test where the searched plan
+is copied into a new list by the first action call, the share goes from 0.01
+(108 of 109 followed steps unmatched) to 1.0 (all witnessed). When the copy
+shares the original's list (`self.path = self.delivery`), the original is
+followed as well, so steps were already credited through it.
+
+On Astra 444, with the partial readout (measured before the copy rule; the rule
+cannot change it, as explained below) the means are 0.03–0.37 (0.0; 0.05–0.44;
+0.04–0.66). Almost every remaining unmatched step follows a plan that is the goal
+alone, because the straight line to the goal was clear and smoothing kept nothing
+of the route. That includes Astra's `self.path = self.delivery` copies, whose
+`delivery` plan is itself the goal alone. Such a plan carries no information from
+the search's route, so it is not credited (the same rule that keeps
+`discarded_search` at 0).
+
+### Search score (2026-11-12)
+
+Every report now carries a **search score**: the mean, over every policy call of
+an episode (the reset call and each action call), of the distinct states its
+search runs expanded beyond the start. Per call this is max(N - 1, 0), with N
+summed over the call's supported search runs; a call without a search scores 0,
+the reactive baseline. It follows the planning-explanations PDF's
+baseline-adjusted count (expansions beyond the root, averaged over inputs). The
+one choice the PDF does not specify, for calls that run several searches, is to
+sum them. The score is shown per episode, as a mean across validation episodes,
+in the CLI line, and in `summary.md`. It is withheld with a "≥" lower bound when
+a search-shaped run is unresolved, like the other totals.
+
+It measures search amount, not quality, in the policy's own states, so it depends
+on the policy's grid. Computed from the existing reports: GPT-5.6 Sol 7.3 per call
+(5 cm cells; its long failing episodes are mostly reactive calls), GPT-6 Astra
+428.7 per call (2.5 cm cells).
 
 Reports separate structural matches, exact plan predictions, action mediation,
 counterexamples and missing witnesses. Inspect
