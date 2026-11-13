@@ -12,8 +12,8 @@ counted, the planned share of actions is a fraction, and coverage is kept separa
 # pylint: disable=unidiomatic-typecheck
 
 import itertools
-import math
 import json
+import math
 import random
 from collections import deque
 from collections.abc import Iterator
@@ -38,11 +38,12 @@ from .policy_causality import (
     finish_chains,
     propose_rules,
 )
+from .policy_fit import fit_role
 from .policy_runner import (
-    boolean_grid,
     CallRecord,
     PolicyProgram,
     RunRecord,
+    boolean_grid,
     observe_episode,
     run_episode,
 )
@@ -61,7 +62,6 @@ from .policy_verify import (
     point_functions,
     readout_shape,
 )
-from .policy_fit import fit_role
 from .policy_worklist import (
     SCAN_DEPTH,
     SCAN_LIMIT,
@@ -69,7 +69,7 @@ from .policy_worklist import (
     unreadable_reason,
     worklist_signature,
 )
-from .selectors import inventory
+from .selectors import inventory, parse
 
 RUN_SELECTION = (
     "per part and episode, at most `probed_runs` runs: first the last run of each "
@@ -84,16 +84,30 @@ SEARCH_PARTS = ("search", "no_explanation")
 # be fully inspected: unknown, never zero.
 UNREADABLE = "unreadable_loop"
 LOOP_RULES = (
-    "numpy numbers are recorded as plain numbers, and only a list, dict, deque, "
-    "set or a tuple holding one counts as omitted container data; "
+    "every while loop is a part, and so is every for loop no other loop of its "
+    "function encloses, and every function that calls itself (its runs are "
+    "outermost calls; each call's arguments are one visit); a call to a library "
+    "graph search (scipy.sparse.csgraph, networkx or skimage.graph path "
+    "searches) is a part that is always unreadable. "
+    "numpy numbers are recorded as plain numbers; a list, deque, set or dict of "
+    "objects that holds no lists or dicts is followed by item identity; any other "
+    "unrecorded list, dict, deque, set or tuple holding one is omitted data once "
+    "the items it holds at any level (by value, objects by identity) change; "
     "a loop with no grammar binding is unreadable if container data was omitted, "
-    "a container gains and loses items, or a growing sequence has a possible "
-    "advancing integer read cursor; inspection limits also make it unreadable "
-    f"(depth {SCAN_DEPTH}, {SCAN_LIMIT} containers and integer candidates per "
-    "snapshot). These are bounded representation checks. Validation runs of "
-    "not-search-shaped parts are re-checked the same way"
+    "a container gains and loses items, a growing sequence has a possible "
+    "advancing integer read cursor (one the loop's code reads), or a 2-D "
+    "boolean grid changes only by growing by its own neighbours, at least three "
+    "times in one run (a wavefront); inspection limits also make it "
+    f"unreadable (depth {SCAN_DEPTH}, {SCAN_LIMIT} containers and integer "
+    "candidates per snapshot). Variables that cannot carry items between "
+    "iterations are not inspected: for-statement variables, variables whose first "
+    "use in the body rebuilds them from a new value, variables every read of "
+    "which follows a rebinding earlier in the same iteration, and variables an "
+    "explained search nested in the loop maps. These are bounded representation checks. "
+    "Validation runs of not-search-shaped parts are re-checked the same way"
 )
-BANK_SCHEMA = 11
+BANK_SCHEMA = 12
+LIBRARY = "library_search"
 # A call following a cached plan takes the strongest evidence among the plan
 # versions it follows, in this order.
 FOLLOWED = {
@@ -160,6 +174,34 @@ class PolicyLimits:
                 raise ValueError("Budgets must be positive integers")
         if self.mapping_depth > 4:
             raise ValueError("Mapping depth must be between zero and four")
+
+
+def _read_names(program: PolicyProgram, site: str) -> frozenset | None:
+    """Variables the part's code reads (None for sites recorded before schema 12)."""
+    read = program.sites[site].get("read")
+    return None if read is None else frozenset(read)
+
+
+def ignored_names(program: PolicyProgram, site: str, parts: dict) -> frozenset:
+    """Variables that cannot hold this loop's own worklist.
+
+    Its per-iteration variables, and the variables an explained search nested
+    inside it (same function) maps: that search accounts for them.
+    """
+    names = set(program.sites[site].get("fresh", ()))
+    for other, part in parts.items():
+        if other == site or part["status"] != "search":
+            continue
+        parent = program.sites[other].get("parent")
+        while parent is not None and parent != site:
+            parent = program.sites[parent].get("parent")
+        if parent != site:
+            continue
+        for explanation in part["explanations"]:
+            m = explanation.mapping
+            selectors = (m.root, m.frontier, m.parents, m.costs, m.goal, m.model)
+            names.update(parse(s)[0] for s in selectors if s)
+    return frozenset(names)
 
 
 def _returns_bool(function, cell) -> bool:
@@ -613,6 +655,7 @@ class EpisodeAnalyzer:
         self.actions: list = []
         self.executions: dict = {}
         self.replays: list = []
+        self.ignored: dict[str, frozenset] = {}
 
     def __call__(self, call: CallRecord, policy, state, extra, after) -> None:
         self.actions.append(call.action)
@@ -681,7 +724,15 @@ class EpisodeAnalyzer:
             shaped = part is not None and part["status"] == "not_search_shaped"
             if shaped:
                 # The frozen "not a search" verdict is re-checked on this run.
-                signature = worklist_signature(run)
+                if run.site not in self.ignored:
+                    self.ignored[run.site] = ignored_names(
+                        self.program, run.site, self.parts
+                    )
+                signature = worklist_signature(
+                    run,
+                    ignore=self.ignored[run.site],
+                    read=_read_names(self.program, run.site),
+                )
                 reason = unreadable_reason(signature)
                 if reason:
                     entry.update(
@@ -1135,20 +1186,30 @@ def discover_policy(
                 runs.setdefault(run.site, []).append(run)
     audit: dict = {"parts": {}, "tested": 0, "candidate_budget": False}
     parts: dict[str, dict] = {}
+    unbound = []
     for site in sorted(program.sites):
         if site not in runs:
             parts[site] = {"status": "not_executed_in_development", "explanations": []}
+            continue
+        kind = program.sites[site]["kind"]
+        if kind == "library":
+            # A library graph search runs outside the policy's own code.
+            audit["parts"][site] = {"runs": len(runs[site]), "unreadable": LIBRARY}
+            parts[site] = {"status": UNREADABLE, "explanations": []}
+            continue
+        if kind == "recursion":
+            # The grammar reads loops; a recursive function only gets the
+            # worklist test, on its calls' arguments.
+            audit["parts"][site] = {"runs": len(runs[site])}
+            unbound.append(site)
+            parts[site] = {"status": "not_search_shaped", "explanations": []}
             continue
         roles, bound = grid_bindings(runs[site], limits)
         record = {"runs": len(runs[site]), "bindings": len(roles), **bound, "tested": 0}
         audit["parts"][site] = record
         if not roles:
-            signature = scan_runs(runs[site])
-            record["worklist"] = signature
-            reason = unreadable_reason(signature)
-            record["unreadable"] = reason
-            status = UNREADABLE if reason else "not_search_shaped"
-            parts[site] = {"status": status, "explanations": []}
+            unbound.append(site)
+            parts[site] = {"status": "not_search_shaped", "explanations": []}
             continue
         survivors = []
         # Numbers for the fixed algorithm, proposed from development runs only.
@@ -1183,6 +1244,16 @@ def discover_policy(
             "readouts": readouts,
             "readout_candidates": readouts,
         }
+    # Loops without a binding are scanned once every bound part is known.
+    for site in unbound:
+        signature = scan_runs(
+            runs[site],
+            ignored_names(program, site, parts),
+            _read_names(program, site),
+        )
+        reason = unreadable_reason(signature)
+        audit["parts"][site].update(worklist=signature, unreadable=reason)
+        parts[site]["status"] = UNREADABLE if reason else "not_search_shaped"
     del traces, runs
     # Paired edits and plan links on development; validation is still untouched.
     analyses = [

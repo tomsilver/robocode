@@ -16,8 +16,8 @@ FINDINGS = {
     "partially_explained": "Some executed loops are unresolved; totals withheld",
     "no_search_parts": "No search-shaped loops within the grammar",
     "unreadable_loops": (
-        "Some loops keep a worklist the grammar cannot read (or could not be fully "
-        "inspected); totals withheld"
+        "Some loops or library calls search in a way the grammar cannot read (or "
+        "could not be fully inspected); totals withheld"
     ),
 }
 
@@ -40,8 +40,10 @@ RULES = (
     "predict the complete stored plan and a later action, with plan-only and "
     "plan-restoration controls. Probes are excluded from ordinary counts. A loop "
     "the grammar cannot bind is unreadable if containers gain and lose items, "
-    "a growing sequence has a possible advancing read cursor, or container data "
-    "was omitted or incompletely inspected. Totals are then withheld. These "
+    "a growing sequence has a possible advancing read cursor, a boolean grid keeps "
+    "growing by its own neighbours (a wavefront), or container data was omitted or "
+    "incompletely inspected; a call to a library graph search is always "
+    "unreadable. Totals are then withheld. These "
     "bounded checks do not rule out every other search representation. The "
     "followed-plan share is a range. Its low end counts calls that follow a plan "
     "with a complete search-to-action witness. Its max adds calls whose plan "

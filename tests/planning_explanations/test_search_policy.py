@@ -276,7 +276,9 @@ class ControlPolicyTest(unittest.TestCase):
         _, bank, validation = self.results["reactive"]
         self.assertFalse([p for p in bank.parts.values() if p["status"] == "search"])
         self.assertEqual(self.program_row("reactive")["planning_events"], 0)
-        self.assertEqual(validation["episodes"][0]["runs"], [])
+        # Only its watched obstacle for loop runs, never as a search.
+        runs = validation["episodes"][0]["runs"]
+        self.assertEqual({r["status"] for r in runs}, {"not_search_shaped"})
 
     def test_exhaustive_reachability_has_no_goal_test(self):
         """Search is recovered; a destination-keeping detour witnesses its plan."""

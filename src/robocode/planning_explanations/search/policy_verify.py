@@ -576,17 +576,18 @@ def execute_edit(
             run.capture.release()
         return {"target": None, "prefix_preserved": False, "error": error}
     position = session.runs.index(target)
-    earlier = [(r.site, r.ordinal, r.capture.length) for r in session.runs[:position]]
-    ordinary_earlier = [
-        (r.site, r.ordinal, r.capture.length) for r in call.runs[:position]
-    ]
     ordinary = next(
         r for r in call.runs if (r.site, r.ordinal) == (edit.site, edit.ordinal)
     )
-    # Frames 0..visit (pre-edit, inclusive) must replay unchanged.
+    # Everything before the run starts, then its frames 0..visit (pre-edit,
+    # inclusive), must replay unchanged. Runs enclosing it (an outer loop, a
+    # recursion) keep recording after the edit, so they are compared by what
+    # they had recorded when it started.
     prefix = (
         prefix
-        and earlier == ordinary_earlier
+        and [(r.site, r.ordinal) for r in session.runs[:position]]
+        == [(r.site, r.ordinal) for r in call.runs[:position]]
+        and target.started_after == ordinary.started_after
         and same_frames(ordinary, target, _frame_index(ordinary, edit.visit) + 1)
     )
     # Only the edited run is compared later; a planning call can hold dozens of

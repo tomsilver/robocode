@@ -14,11 +14,11 @@ import ast
 import copy
 import hashlib
 import heapq
-from collections import deque
-from itertools import compress, islice
-from operator import is_not
+from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from itertools import compress, islice
+from operator import is_not
 from typing import Any
 
 from ..instrument import UnsupportedProgram
@@ -198,6 +198,61 @@ def holds_mutable(value, depth: int = 0) -> bool:
     return False
 
 
+def _members(value) -> Counter | None:
+    """The objects a flat container holds, by identity (dictionary keys by value).
+
+    For containers the snapshot language cannot hold by value. None when an item
+    is itself a list, dict, deque or set: a worklist could hide inside it.
+    """
+    kind = type(value)
+    if kind is dict:
+        if any(type(v) in _CONTAINERS for v in value.values()):
+            return None
+        return Counter(k if immutable(k) else ("id", id(k)) for k in value)
+    if kind in (list, deque, set):
+        if any(type(v) in _CONTAINERS for v in value):
+            return None
+        return Counter(map(id, value))
+    return None
+
+
+def _skeleton(value, depth: int = 0):
+    """Which items a container holds at every level: plain items by value, objects
+    by identity, nested containers by their own skeleton (dictionary keys only, and
+    the skeletons of container values; a tuple only through containers inside it).
+
+    Two equal skeletons mean nothing was gained or lost anywhere inside. Beyond
+    depth 4 the result never equals another one.
+    """
+    if depth >= 4:
+        return object()
+    kind = type(value)
+    if kind is dict:
+        return (
+            dict,
+            tuple(
+                (k if immutable(k) else id(k), _skeleton(v, depth + 1))
+                for k, v in value.items()
+                if holds_mutable(v)
+            ),
+            tuple(k if immutable(k) else id(k) for k in value),
+        )
+    if kind is tuple:
+        return (
+            tuple,
+            tuple(_skeleton(v, depth + 1) for v in value if holds_mutable(v)),
+        )
+    items = tuple(
+        (
+            _skeleton(v, depth + 1)
+            if holds_mutable(v)
+            else (v if immutable(v) else ("id", id(v)))
+        )
+        for v in value
+    )
+    return (kind, frozenset(items) if kind is set else items)
+
+
 def policy_callable(value) -> bool:
     """A function or lambda written in the analyzed source, never a library call."""
     code = getattr(value, "__code__", None)
@@ -250,6 +305,16 @@ class RunCapture:
         # Raw containers as of the previous frame, and converted immutable items.
         self._raw: dict[str, Any] = {}
         self._memo: dict[int, tuple[Any, Any]] = {}
+        # Flat containers of opaque items, followed by item identity: per frame,
+        # (size, gained an item, lost an item, is a list or deque) since the
+        # previous frame.
+        self.members: list[dict[str, tuple[int, bool, bool, bool]]] = []
+        self._members: dict[str, Counter] = {}
+        # Size of every container variable in the previous frame, by value or not.
+        self._sizes: dict[str, tuple[bool, int]] = {}
+        # Unrecordable containers with containers inside: their last skeleton.
+        # They count as omitted only once their skeleton changes in the run.
+        self._skeletons: dict[str, Any] = {}
 
     def record(self, kind: str, values: dict) -> None:
         """Encode current values against the previous frame of this run."""
@@ -266,9 +331,13 @@ class RunCapture:
         # A read-only boolean grid; P and U are list and dictionary changes.
         previous = self._previous
         seen = set()
+        members: dict[str, tuple[int, bool, bool, bool]] = {}
+        sizes: dict[str, tuple[bool, int]] = {}
         for name, value in values.items():
             if name.startswith("__"):
                 continue
+            if type(value) in _CONTAINERS:
+                sizes[name] = (False, len(value))
             if self.incremental and self._incremental(name, value, encoded):
                 seen.add(name)
                 continue
@@ -281,9 +350,9 @@ class RunCapture:
                     recorded = self._encode(name, converted, encoded)
             if recorded:
                 seen.add(name)
-            elif holds_mutable(value):
-                # Unrecorded state that could change is not evidence of absence.
-                self.omitted_containers.add(name)
+            elif holds_mutable(value) and not self._follow(name, value, members, sizes):
+                self._compare_skeleton(name, value, sizes)
+        self._settle(values, members, sizes)
         for name in list(previous):
             if name not in seen:
                 encoded[name] = ("X",)
@@ -300,6 +369,58 @@ class RunCapture:
             frozenset(name for name, ident in ids.items() if old_ids.get(name) != ident)
         )
         self._ids = ids
+
+    def _follow(self, name: str, value, members: dict, sizes: dict) -> bool:
+        """Follow an unrecordable flat container by item identity.
+
+        False when it must count as omitted: an item is itself a container, or
+        the variable held plain items in the previous frame.
+        """
+        held = _members(value)
+        was_opaque, size = self._sizes.get(name, (True, 0))
+        if held is None or (not was_opaque and size) or name in self._skeletons:
+            return False
+        before = self._members.get(name, Counter())
+        members[name] = (
+            len(value),
+            bool(held - before),
+            bool(before - held),
+            type(value) in (list, deque),
+        )
+        self._members[name] = held
+        sizes[name] = (True, len(value))
+        return True
+
+    def _compare_skeleton(self, name: str, value, sizes: dict) -> None:
+        """Unrecorded state that changed is not evidence of absence: omitted."""
+        skeleton = _skeleton(value)
+        sizes[name] = (True, len(value))
+        was_opaque, size = self._sizes.get(name, (True, 0))
+        old = self._skeletons.get(name)
+        if (
+            (not was_opaque and size)
+            or name in self._members
+            or (old is not None and old != skeleton)
+        ):
+            self.omitted_containers.add(name)
+        self._skeletons[name] = skeleton
+
+    def _settle(self, values: dict, members: dict, sizes: dict) -> None:
+        """Close the frame's identity records: containers that dropped objects."""
+        for name, (opaque, size) in sizes.items():
+            was_opaque, old = self._sizes.get(name, (opaque, 0))
+            if not was_opaque or opaque or not old:
+                continue
+            if size:
+                # Objects replaced by plain items: not comparable either way.
+                self.omitted_containers.add(name)
+            else:
+                members[name] = (0, False, True, type(values[name]) in (list, deque))
+        self._members = {
+            k: v for k, v in self._members.items() if k in members and members[k][0]
+        }
+        self._sizes = sizes
+        self.members.append(members)
 
     def _item(self, value):
         """An immutable plain copy of one container item, or OPAQUE."""
@@ -532,12 +653,16 @@ class RunCapture:
         self._raw = {}
         self._memo = {}
         self._ids = {}
+        self._members = {}
+        self._sizes = {}
+        self._skeletons = {}
 
     def release(self) -> None:
         """Drop everything, frames included, once a call's analysis is done."""
         self.finish()
         self.records.clear()
         self.replaced.clear()
+        self.members.clear()
 
 
 @dataclass
@@ -550,6 +675,10 @@ class RunRecord:
     capture: RunCapture = field(default_factory=RunCapture)
     visits: int = 0
     exited: bool = False
+    # Open calls of a recursive function's run (its "iterations" are calls).
+    depth: int = 0
+    # Runs started and frames recorded in the call before this run started.
+    started_after: tuple[int, int] = (0, 0)
 
 
 class Session:
@@ -562,14 +691,25 @@ class Session:
         self.stack: list[str] = []
         self.edits = 0
         self._ordinals: dict[str, int] = {}
+        # The run of each recursive function with calls still open.
+        self.recursions: dict[str, RunRecord] = {}
+        # Frames recorded so far, by every run of this call.
+        self.frames = 0
 
     def start(self, site: str) -> RunRecord:
         """Begin a run; ordinals number this site's runs within the call."""
         ordinal = self._ordinals.get(site, 0)
         self._ordinals[site] = ordinal + 1
         run = RunRecord(site, ordinal, tuple(self.stack))
+        # An enclosing run still recording later is compared only up to here.
+        run.started_after = (len(self.runs), self.frames)
         self.runs.append(run)
         return run
+
+    def record(self, run: RunRecord, kind: str, values: dict) -> None:
+        """One frame of one run, counted for the call."""
+        run.capture.record(kind, values)
+        self.frames += 1
 
 
 class Recorder:
@@ -588,6 +728,41 @@ class Recorder:
         if self.sessions and self.sessions[-1].stack:
             self.sessions[-1].stack.pop()
 
+    def library(self, site: str, function):
+        """A library graph search is about to run: one (unreadable) run of it."""
+        if self.sessions:
+            self.sessions[-1].start(site).exited = True
+        return function
+
+    def call(self, site: str, values: dict) -> RunRecord | None:
+        """A recursive function was called: its arguments are one visit.
+
+        The outermost call starts a run; calls nested inside it are its later
+        visits, like the iterations of a loop.
+        """
+        if not self.sessions:
+            return None
+        session = self.sessions[-1]
+        run = session.recursions.get(site)
+        if run is None or run.depth == 0:
+            run = session.recursions[site] = session.start(site)
+        run.depth += 1
+        run.visits += 1
+        if session.capture:
+            session.record(run, "visit", values)
+        return run
+
+    def returned(self, run: RunRecord | None) -> None:
+        """A call of a recursive function ended (by return or exception)."""
+        if run is None:
+            return
+        run.depth -= 1
+        if run.depth == 0:
+            # Only call entries are recorded: an exit frame would hold the
+            # outermost call's own locals next to the deepest call's arguments.
+            run.exited = True
+            run.capture.finish()
+
     def enter(self, site: str) -> RunRecord | None:
         """A loop statement is about to run: one new run of this part."""
         return self.sessions[-1].start(site) if self.sessions else None
@@ -601,7 +776,7 @@ class Recorder:
         run.visits += 1
         edit = session.edit
         if session.capture:
-            run.capture.record("visit", values)
+            session.record(run, "visit", values)
         if (
             edit is not None
             and edit.site == run.site
@@ -611,15 +786,16 @@ class Recorder:
             apply_edit(values, edit)
             session.edits += 1
             if session.capture:
-                run.capture.record("edited", values)
+                session.record(run, "edited", values)
 
     def leave(self, run: RunRecord | None, values: dict, kind: str = "exit") -> None:
         """Loop termination: a false test or break ("exit"), or a return inside it."""
         if run is None:
             return
         run.exited = True
-        if self.sessions[-1].capture:
-            run.capture.record(kind, values)
+        session = self.sessions[-1]
+        if session.capture:
+            session.record(run, kind, values)
             # A run is never recorded again after it ends.
             run.capture.finish()
 
@@ -704,36 +880,447 @@ class _ReturnCheckpoints(ast.NodeTransformer):
     visit_ClassDef = visit_Lambda = _skip  # type: ignore[assignment]
 
 
-class _Transformer(ast.NodeTransformer):
-    """Wrap loops and class methods; the original statements are untouched."""
+# Library routines that are graph searches by definition (path searches only).
+LIBRARY_SEARCHES = {
+    "scipy.sparse.csgraph": {
+        "dijkstra",
+        "shortest_path",
+        "bellman_ford",
+        "johnson",
+        "floyd_warshall",
+        "yen",
+        "breadth_first_order",
+        "depth_first_order",
+        "breadth_first_tree",
+        "depth_first_tree",
+    },
+    "networkx": {
+        "shortest_path",
+        "shortest_path_length",
+        "all_shortest_paths",
+        "astar_path",
+        "astar_path_length",
+        "dijkstra_path",
+        "dijkstra_path_length",
+        "bidirectional_dijkstra",
+        "single_source_dijkstra",
+        "single_source_dijkstra_path",
+        "single_source_dijkstra_path_length",
+        "multi_source_dijkstra",
+        "bellman_ford_path",
+        "bfs_tree",
+        "dfs_tree",
+        "bfs_edges",
+        "dfs_edges",
+        "has_path",
+    },
+    "skimage.graph": {
+        "route_through_array",
+        "MCP",
+        "MCP_Geometric",
+        "MCP_Connect",
+        "MCP_Flexible",
+        "shortest_path",
+    },
+}
 
-    def __init__(self, source: str) -> None:
+
+def import_aliases(tree: ast.AST) -> dict[str, str]:
+    """Local names bound by imports anywhere in the module, to their full paths."""
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+                else:
+                    head = alias.name.split(".")[0]
+                    aliases[head] = head
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def library_search(func: ast.expr, aliases: dict[str, str]) -> str | None:
+    """The full name of a library graph search this callee resolves to, if any."""
+    parts = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if not isinstance(func, ast.Name) or func.id not in aliases:
+        return None
+    full = ".".join([aliases[func.id], *reversed(parts)])
+    for package, names in LIBRARY_SEARCHES.items():
+        if full.startswith(package + ".") and full.rsplit(".", 1)[1] in names:
+            return full
+    return None
+
+
+def _names(target) -> list[str]:
+    """Plain names bound by a loop target (`i`, `(x, y)`, `[a, b]`)."""
+    return [n.id for n in ast.walk(target) if isinstance(n, ast.Name)]
+
+
+# Expressions that build a new value (never an alias of an existing container).
+_NEW_VALUES = (
+    ast.Call,
+    ast.Constant,
+    ast.List,
+    ast.Tuple,
+    ast.Dict,
+    ast.Set,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Compare,
+    ast.JoinedStr,
+)
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _scope_walk(node):
+    """Nodes under `node` that belong to its own function (no nested scopes)."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        yield current
+        stack.extend(
+            c for c in ast.iter_child_nodes(current) if not isinstance(c, _SCOPES)
+        )
+
+
+def read_names(node) -> list[str]:
+    """Variables read anywhere in a loop or function (its own scope only)."""
+    return sorted(
+        {
+            n.id
+            for n in _scope_walk(node)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+        }
+    )
+
+
+def _mentioned(node) -> set[str]:
+    return {n.id for n in _scope_walk(node) if isinstance(n, ast.Name)}
+
+
+def _rebound(target) -> list[str]:
+    """Names a plain assignment target rebinds (not `a[i] = ...` or `a.x = ...`)."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _rebound(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = [_rebound(t) for t in target.elts]
+        return [n for group in names for n in group] if all(names) else []
+    return []
+
+
+def _self_recursive(function: ast.FunctionDef) -> bool:
+    """Calls itself by name, or as `self.name(...)` / `cls.name(...)`."""
+    for node in _scope_walk(function):
+        if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await)):
+            return False
+    for node in _scope_walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == function.name:
+            return True
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == function.name
+            and isinstance(func.value, ast.Name)
+            and func.value.id in ("self", "cls")
+        ):
+            return True
+    return False
+
+
+def _split_docstring(body: list) -> tuple[list, list]:
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return [body[0]], body[1:]
+    return [], body
+
+
+def _loads(node) -> set[str]:
+    """Variables an expression or statement reads (`x += 1` and `x[i] = v` read x)."""
+    names = {
+        n.id
+        for n in _scope_walk(node)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    if isinstance(node, ast.AugAssign):
+        names.update(_names(node.target))
+    return names
+
+
+def _root(value) -> str | None:
+    """`x`, `x.a` or `x[k]` (any depth) is rooted at x; other values have no root."""
+    while isinstance(value, (ast.Attribute, ast.Subscript)):
+        value = value.value
+    return value.id if isinstance(value, ast.Name) else None
+
+
+def _resets(statement, stored: set) -> set[str]:
+    """Variables a simple statement surely rebinds to a value of this iteration.
+
+    Rebinding to `x`, `x.a` or `x[k]` where x is not assigned in the loop is an
+    alias of outside state (`q = self.queue`), so it does not count.
+    """
+    if isinstance(statement, ast.Assign):
+        value, targets = statement.value, statement.targets
+    elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+        value, targets = statement.value, [statement.target]
+    else:
+        return set()
+    root = _root(value)
+    if root is not None and root not in stored:
+        return set()
+    return {n for t in targets for n in _rebound(t)}
+
+
+def _late_reads(block: list, assigned: set, stored: set, found: tuple) -> None:
+    """Variables read in `block` before this iteration surely rebinds them.
+
+    `found` is (late, rebound): reads not preceded by a rebinding, and every
+    variable some statement rebinds (for-statement variables included).
+    """
+    late, rebound = found
+    current = set(assigned)
+
+    def check(*nodes) -> None:
+        for node in nodes:
+            if node is not None:
+                late.update(_loads(node) - current)
+
+    for statement in block:
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            check(statement.iter)
+            rebound.update(_names(statement.target))
+            inner = current | set(_names(statement.target))
+            _late_reads(statement.body, inner, stored, found)
+            _late_reads(statement.orelse, current, stored, found)
+        elif isinstance(statement, (ast.While, ast.If)):
+            check(statement.test)
+            _late_reads(statement.body, current, stored, found)
+            _late_reads(statement.orelse, current, stored, found)
+        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            check(*(item.context_expr for item in statement.items))
+            bound = {
+                n
+                for item in statement.items
+                if item.optional_vars is not None
+                for n in _rebound(item.optional_vars)
+            }
+            _late_reads(statement.body, current | bound, stored, found)
+        elif isinstance(statement, ast.Try):
+            _late_reads(statement.body, current, stored, found)
+            for handler in statement.handlers:
+                check(handler.type)
+                named = {handler.name} if handler.name else set()
+                _late_reads(handler.body, current | named, stored, found)
+            _late_reads(statement.orelse, current, stored, found)
+            _late_reads(statement.finalbody, current, stored, found)
+        elif isinstance(statement, _SCOPES):
+            continue
+        else:
+            check(statement)
+            resets = _resets(statement, stored)
+            rebound |= resets
+            current |= resets
+
+
+def iteration_local(loop: ast.For | ast.While) -> set[str]:
+    """Variables every read of which, in one iteration, follows a rebinding of
+    them earlier in that iteration (in the same block or an enclosing one).
+
+    Whatever they held at the end of the previous iteration is never read, so
+    they cannot carry items from one iteration to the next.
+    """
+    stored = {
+        n.id
+        for n in _scope_walk(loop)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+    }
+    late: set = set()
+    if isinstance(loop, ast.While):
+        late |= _loads(loop.test)
+        start: set = set()
+    else:
+        start = set(_names(loop.target))
+    rebound = set(start)
+    _late_reads(loop.body, start, stored, (late, rebound))
+    return rebound - late
+
+
+def fresh_names(loop: ast.For | ast.While) -> list[str]:
+    """Variables that cannot carry items from one iteration of `loop` to the next.
+
+    A `for` statement's variables (the loop's own and nested ones) are set by
+    their iterator. A variable whose first use in the body is a top-level
+    assignment of a newly built value (a call, a literal, a comprehension, an
+    operator result) drops whatever it held: it is a per-iteration value. So
+    does any variable that is iteration-local (see `iteration_local`).
+    """
+    fresh = {
+        name
+        for node in _scope_walk(loop)
+        if isinstance(node, (ast.For, ast.AsyncFor))
+        for name in _names(node.target)
+    }
+    seen = _mentioned(loop.test) if isinstance(loop, ast.While) else set()
+    for statement in loop.body:
+        value, targets = None, []
+        if isinstance(statement, ast.Assign):
+            value, targets = statement.value, statement.targets
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            value, targets = statement.value, [statement.target]
+        if isinstance(value, _NEW_VALUES):
+            used = seen | _mentioned(value)
+            fresh.update(n for t in targets for n in _rebound(t) if n not in used)
+        seen |= _mentioned(statement)
+    return sorted(fresh | iteration_local(loop))
+
+
+class _Transformer(ast.NodeTransformer):
+    """Wrap loops and class methods; the original statements are untouched.
+
+    Every `while` loop is a part. A `for` loop is a part when no other loop of the
+    same function encloses it: an inner `for` (a search's neighbour loop) would
+    otherwise start a recorded run on every expansion, and the loop around it
+    already sees its effects.
+    """
+
+    def __init__(self, source: str, aliases: dict[str, str] | None = None) -> None:
         self.lines = source.splitlines()
+        self.aliases = aliases or {}
         self.sites: dict[str, dict] = {}
         self.functions: list[str] = []
+        # Enclosing loop sites (None for an unwatched loop) of the current function.
+        self.loops: list[str | None] = []
 
     def visit_FunctionDef(self, node: ast.FunctionDef):  # pylint: disable=invalid-name
-        """Track the enclosing function for site descriptions."""
+        """Track the enclosing function; a self-recursive function is a part.
+
+        Its calls are its iterations: each call's arguments are recorded on
+        entry, in one run per outermost call.
+        """
+        recursive = isinstance(node, ast.FunctionDef) and _self_recursive(node)
         self.functions.append(node.name)
+        site = None
+        if recursive:
+            site = f"{node.lineno}:{node.col_offset}:Recursion"
+            self.sites[site] = {
+                "kind": "recursion",
+                "line": node.lineno,
+                "function": ".".join(self.functions),
+                "source": self.lines[node.lineno - 1].strip(),
+                "parent": None,
+                "fresh": [],
+                "read": read_names(node),
+            }
+        outer, self.loops = self.loops, []
         self.generic_visit(node)
+        self.loops = outer
         self.functions.pop()
+        if site is not None:
+            token = f"__call_{node.lineno}_{node.col_offset}__"
+            enter = ast.parse(f"{token} = {RECORDER}.call({site!r}, locals())").body[0]
+            leave = ast.parse(f"{RECORDER}.returned({token})").body[0]
+            docstring, body = _split_docstring(node.body)
+            guarded = ast.Try(body or [ast.Pass()], [], [], [leave])
+            for statement in (enter, guarded, leave):
+                ast.copy_location(statement, node)
+            node.body = [*docstring, enter, guarded]
         return node
 
     visit_ClassDef = visit_FunctionDef  # type: ignore[assignment]
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
 
-    def visit_While(self, node: ast.While):  # pylint: disable=invalid-name
-        """Before each test, after exit, and a fresh run on every loop entry."""
-        self.generic_visit(node)
-        if node.orelse:
-            raise UnsupportedProgram("Loop else is outside the policy runner")
-        site = f"{node.lineno}:{node.col_offset}:While"
-        token = f"__run_{node.lineno}_{node.col_offset}__"
+    def _site(self, node, kind: str, **extra) -> str:
+        site = f"{node.lineno}:{node.col_offset}:{kind}"
+        parents = [s for s in self.loops if s]
         self.sites[site] = {
             "kind": "loop",
+            "loop": kind.lower(),
             "line": node.lineno,
             "function": ".".join(self.functions),
             "source": self.lines[node.lineno - 1].strip(),
+            "parent": parents[-1] if parents else None,
+            "fresh": fresh_names(node),
+            "read": read_names(node),
+            **extra,
         }
+        return site
+
+    def visit_Call(self, node: ast.Call):  # pylint: disable=invalid-name
+        """A library graph search becomes a site recorded each time it runs."""
+        self.generic_visit(node)
+        full = library_search(node.func, self.aliases)
+        if full is None:
+            return node
+        site = f"{node.lineno}:{node.col_offset}:Library"
+        parents = [s for s in self.loops if s]
+        self.sites[site] = {
+            "kind": "library",
+            "call": full,
+            "line": node.lineno,
+            "function": ".".join(self.functions),
+            "source": self.lines[node.lineno - 1].strip(),
+            "parent": parents[-1] if parents else None,
+        }
+        node.func = ast.Call(
+            ast.Attribute(ast.Name(RECORDER, ast.Load()), "library", ast.Load()),
+            [ast.Constant(site), node.func],
+            [],
+        )
+        return node
+
+    def visit_For(self, node: ast.For):  # pylint: disable=invalid-name
+        """Before each iteration's body, at exit, and at a return inside it."""
+        if self.loops:
+            self.loops.append(None)
+            self.generic_visit(node)
+            self.loops.pop()
+            return node
+        site = self._site(node, "For")
+        self.loops.append(site)
+        self.generic_visit(node)
+        self.loops.pop()
+        token = f"__run_{node.lineno}_{node.col_offset}__"
+        start = ast.parse(f"{token} = {RECORDER}.enter({site!r})").body[0]
+        visit = ast.parse(f"{RECORDER}.visit({token}, locals())").body[0]
+        leave = ast.parse(f"{RECORDER}.leave({token}, locals())").body[0]
+        rewriter = _ReturnCheckpoints(token)
+        body = [rewriter.visit(statement) for statement in node.body]
+        body = [
+            s for item in body for s in (item if isinstance(item, list) else [item])
+        ]
+        node.body = [visit, *body]
+        result = [start, node, leave]
+        for statement in result:
+            ast.copy_location(statement, node)
+        return result
+
+    def visit_While(self, node: ast.While):  # pylint: disable=invalid-name
+        """Before each test, after exit, and a fresh run on every loop entry."""
+        site = self._site(node, "While")
+        self.loops.append(site)
+        self.generic_visit(node)
+        self.loops.pop()
+        if node.orelse:
+            raise UnsupportedProgram("Loop else is outside the policy runner")
+        token = f"__run_{node.lineno}_{node.col_offset}__"
         start = ast.parse(f"{token} = {RECORDER}.enter({site!r})").body[0]
         visit = ast.parse(f"{RECORDER}.visit({token}, locals())").body[0]
         stop = ast.If(ast.UnaryOp(ast.Not(), node.test), [ast.Break()], [])
@@ -754,15 +1341,7 @@ def _wrap_method(function: ast.FunctionDef) -> None:
     """Record method entry/exit with try/finally, so helpers are attributed."""
     begin = ast.parse(f"{RECORDER}.begin({function.name!r})").body[0]
     end = ast.parse(f"{RECORDER}.end()").body[0]
-    body = function.body
-    docstring = []
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-        and isinstance(body[0].value.value, str)
-    ):
-        docstring, body = [body[0]], body[1:]
+    docstring, body = _split_docstring(function.body)
     guarded = ast.Try(body or [ast.Pass()], [], [], [end])
     for statement in (begin, guarded, end):
         ast.copy_location(statement, function)
@@ -787,7 +1366,7 @@ class PolicyProgram:
                 raise UnsupportedProgram("Reserved identifier")
         self.plain = compile(tree, FILENAME, "exec")
         transformed = copy.deepcopy(tree)
-        transformer = _Transformer(source)
+        transformer = _Transformer(source, import_aliases(tree))
         transformed = transformer.visit(transformed)
         for node in transformed.body:
             if isinstance(node, ast.ClassDef) and node.name == class_name:
@@ -921,9 +1500,9 @@ def run_episode(
 
 def observe_episode(program: PolicyProgram, domain, case: tuple) -> EpisodeTrace:
     """Instrumented episode, checked against the genuinely uninstrumented policy."""
-    plain = run_episode(program, domain, case, instrumented=False)
+    reference = run_episode(program, domain, case, instrumented=False)
     observed = run_episode(program, domain, case)
-    if [c.action for c in plain.calls] != [c.action for c in observed.calls]:
+    if [c.action for c in reference.calls] != [c.action for c in observed.calls]:
         raise AssertionError("Observation changed the policy's actions")
     return observed
 

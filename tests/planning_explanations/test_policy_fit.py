@@ -8,6 +8,12 @@ from dataclasses import asdict
 import numpy as np
 
 from robocode.planning_explanations.search.grid_engine import GridSearch, GridSpec
+from robocode.planning_explanations.search.policy_causality import (
+    TAIL_AFTER,
+    PlanRule,
+    _path,
+    bind_plan,
+)
 from robocode.planning_explanations.search.policy_discovery import (
     discover_policy,
     search_score,
@@ -19,23 +25,17 @@ from robocode.planning_explanations.search.policy_fit import (
     fit_heuristics,
     fit_moves,
 )
-from robocode.planning_explanations.search.policy_causality import (
-    TAIL_AFTER,
-    PlanRule,
-    _path,
-    bind_plan,
-)
 from robocode.planning_explanations.search.policy_fixtures import (
     GRID_OCTILE,
     GRID_SMOOTHED,
     PLAN_ONCE,
 )
 from robocode.planning_explanations.search.policy_runner import (
+    RECORDER,
     PolicyProgram,
     Recorder,
     RunCapture,
     Session,
-    RECORDER,
     same_snapshot,
 )
 from robocode.planning_explanations.search.policy_verify import (
@@ -89,7 +89,8 @@ class RecorderTest(unittest.TestCase):
         policy_class.find.__globals__[RECORDER] = recorder
         recorder.sessions.append(session)
         self.assertEqual(policy_class(None, None, None).find(2), 5)
-        (run,) = session.runs
+        self.assertEqual(len(session.runs), 1)
+        run = session.runs[0]
         kinds = [kind for kind, _ in run.capture.frames()]
         self.assertTrue(run.exited)
         self.assertEqual(kinds, ["visit", "visit", "visit", "return"])
@@ -186,6 +187,7 @@ class EngineTest(unittest.TestCase):
     """The fixed algorithm with fitted ingredients."""
 
     def spec(self, **changes) -> GridSpec:
+        """Astra's fitted ingredients, with any changes."""
         values = {
             "selection": "min",
             "priority": "g+h",
@@ -256,19 +258,23 @@ class AstraStyleTest(unittest.TestCase):
         )
         cls.validation = validate_policy(cls.program, DiscWorld(), cls.bank)
 
+    def search(self) -> str:
+        """The A* loop: the first while loop (an obstacle for loop precedes it)."""
+        loops = [
+            s for s in self.bank.parts if self.program.sites[s].get("loop") == "while"
+        ]
+        return min(loops, key=lambda s: self.program.sites[s]["line"])
+
     def test_ingredients_are_proposed_from_development(self):
         """Moves, weights and entry numbers come from data, not a menu."""
-        search = min(self.bank.parts, key=lambda s: self.program.sites[s]["line"])
-        (fit,) = self.bank.audit["parts"][search]["fitted"]
+        (fit,) = self.bank.audit["parts"][self.search()]["fitted"]
         self.assertEqual(fit["moves"], EIGHT_MOVES)
         self.assertEqual(fit["heuristics"]["dst"], [("g+h", "octile", (1.02, 0.414))])
         self.assertEqual(fit["fields"], ("g",))
 
     def test_interventions_choose_where_costs_are_read(self):
         """Only explanations reading g from the heap entry survive the probes."""
-        part = self.bank.parts[
-            min(self.bank.parts, key=lambda s: self.program.sites[s]["line"])
-        ]
+        part = self.bank.parts[self.search()]
         self.assertEqual(part["status"], "search")
         specs = [e.spec for e in part["explanations"]]
         self.assertTrue(specs)
@@ -293,6 +299,7 @@ class PartialPlanTest(unittest.TestCase):
     """A smoothed plan keeps some of the search path's cells, in order."""
 
     def engine(self) -> GridSearch:
+        """A four-neighbour open-grid search."""
         spec = GridSpec("min", "g", "none", model="open", neighborhood=4)
         engine = GridSearch(spec, (0, 0), (3, 0))
         while engine.phase == "ready":

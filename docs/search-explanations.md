@@ -1354,6 +1354,147 @@ binding and no worklist are listed in coverage and not counted; loops with no
 binding but a worklist (or not fully inspected) are unreadable, so totals are
 withheld rather than reported as zero.
 
+### Searches the analyzer could not see: for loops, library calls, wavefronts, recursion (schema 12, 2026-11-12)
+
+Before this change only `while` loops were parts. A search written any other way
+ran unseen, and a policy whose only search was unseen was reported as "no search
+parts", i.e. zero planning. A census of the ~1,000 cached KinDER policies showed
+about 88% of worklist searches sit in `while` loops; the rest are in `for` loops,
+library calls, numpy grids or recursion. These changes turn such false zeros
+into readable searches or unknowns:
+
+1. **For loops are parts.** A `for` loop is a part when no other loop of its
+   function encloses it (an inner `for`, such as a search's neighbour loop, would
+   otherwise start a run on every expansion; the loop around it sees its
+   effects). Every `while` loop is still a part. A `for` loop is checkpointed at
+   the start of each iteration's body, at exit, and at a `return` inside it. A*
+   written as `for _ in range(N): if not frontier: break; ...` is explained like
+   the `while` version and gets identical numbers (fixture test).
+2. **Library graph searches are parts, always unknown.** Calls that resolve
+   (through `import x as y` and `from x import y as z`) to a path search in
+   `scipy.sparse.csgraph` (dijkstra, shortest_path, bellman_ford, johnson,
+   floyd_warshall, yen, breadth/depth-first order and tree), `networkx`
+   (shortest_path and its variants, astar_path, dijkstra_*, bidirectional_dijkstra,
+   bellman_ford_path, bfs/dfs tree and edges, has_path) or `skimage.graph`
+   (route_through_array, MCP*, shortest_path) are recorded each time they run.
+   Their expansions happen in compiled code, so the part is `unreadable_loop` with
+   reason `library_search` and totals are withheld. Connectivity helpers such as
+   `scipy.ndimage.label` are not on the list.
+3. **Wavefronts.** A loop with no grammar binding is unreadable when, in one
+   run, a 2-D boolean grid changes only by growing by its own neighbours, at
+   least three times. Growing by neighbours means True cells are only added, and
+   every added cell touches (8-connected) a cell that was True before. This is
+   breadth-first search kept as a reached grid instead of a queue. The first
+   version flagged two growth steps and was a false unknown on Astra 444. Its
+   obstacle map thickens the border band by one row per arm shape (two
+   neighbour-growth steps) and then stamps a further shape. A real wavefront
+   grows ring after ring until it stops, so a run with any other change to the
+   grid, or with fewer than three rings, does not count.
+4. **What a loop can carry.** A worklist hands items from one iteration to the
+   next, so the worklist test skips variables that cannot do that:
+   - a `for` statement's variables (the loop's own and nested ones): their
+     iterator sets them, so `for i in range(n): xs.append(...)` is not a read
+     cursor;
+   - variables whose first use in the body is a top-level assignment of a newly
+     built value (a call, literal, comprehension or operator result): they drop
+     what they held (`path = astar(goal)`, `frontier = [(0, root)]` at the top
+     of each stop);
+   - variables that are iteration-local: every read of them in an iteration
+     comes after a rebinding of them earlier in that iteration, in the same
+     block or an enclosing one (`if ...: delivery = self.route(...)` followed
+     by reads of `delivery` in that branch). Whatever they held at the end of the
+     previous iteration is never read. Rebinding to `x`, `x.a` or `x[k]`, where x
+     is not assigned in the loop, aliases outside state (`q = self.open`) and
+     does not count. Level-by-level BFS still counts: its `frontier` is read
+     before `frontier = layer`. Astra's candidate loop needed this in the 15- and
+     20-obstacle validation episodes (`delivery`, and `comp` taken as a cursor);
+   - variables an explained search nested inside the loop maps (that search
+     accounts for them).
+
+   Watching `for` loops needs this: without it, an outer `for stop in stops:`
+   around an inline A* is a false unknown, because the A*'s containers are
+   rebuilt with new sizes at every stop (fixture test). The rule only removes
+   false unknowns and applies to `while` loops too. An alias (`q = self.queue`)
+   is not a new value, so it is still inspected.
+
+5. **Recursion.** A function that calls itself (by its name, or as
+   `self.name(...)` / `cls.name(...)`; generators and coroutines excluded) is a
+   part. Its calls are its iterations: the outermost call starts a run, and every
+   call records its arguments on entry as one visit (no exit frame: it would
+   hold the outermost call's own locals next to the deepest call's arguments).
+   No new sign: the grammar is not tried, only the worklist test. A backtracking
+   depth-first search that appends to and pops from a shared `path` shows churn
+   and is unknown. A `get_action` that calls itself to re-dispatch, and a
+   recursion over `items[1:]`, stay zero.
+6. **Shifted positions.** A container reached by position in a list (`items[0]`)
+   is compared across two snapshots only if that list kept its length. After
+   `items = items[1:]` the first position holds the next element, not the same
+   container edited. Before this, a list of lists consumed from the front (in a
+   loop or a recursion) was a false unknown. Bucket queues and `[open, closed]`
+   records keep their length, so their elements are still checked.
+
+7. **Containers of objects.** A list, deque, set or dict that cannot be
+   recorded by value because its items are objects (KinDER objects, node
+   classes, records holding arrays) used to be "omitted data" and therefore
+   unknown. With `for` loops watched, this made ordinary loops such as
+   `for obj in ordered:` (Astra's candidate loop, which appends candidate
+   records to `choices`) false unknowns. Such a container is now followed by
+   item identity, as long as no item is itself a list, dict, deque or set. Each
+   frame records its size and whether it gained or lost items since the previous
+   frame (no per-item copies, so memory stays flat). The churn and cursor tests
+   then apply as usual: a queue of node objects that pops one and pushes another
+   is still a worklist. A container that also holds lists or dicts (GenPlan's
+   parsed-state dict `d`, which holds a KinDER object next to corner lists) is
+   followed by a skeleton: which items it holds at every level, with plain items
+   by value, objects by identity, and dictionary keys. It counts as omitted only
+   once that skeleton changes during the run. Before, any such container made
+   every loop that merely read it unknown: 8 reactive loops of GenPlan seed 24.
+   A bucket queue that moves items between buckets still changes its skeleton,
+   so it is still omitted. So is a container that switches between plain items
+   and objects.
+9. **A read cursor is read.** The growing-sequence sign pairs a growing list
+   with an integer that advances and stays below its length. Only integers
+   whose variable the part's code reads (anywhere in the loop, or in the
+   recursive function) are now candidates. With `choices` followed by identity,
+   Astra's candidate loop was a false unknown: its "cursor" was `_`, the
+   component count from `components, _ = label(...)`, which the loop only
+   assigns.
+8. **Probe prefixes with enclosing parts.** A probe re-runs the call with one
+   edit and is valid only if everything before the edited run replays
+   unchanged. That used to be checked by comparing every earlier run's final
+   frame count. A run that encloses the edited search (an outer `for` loop, or a
+   recursion such as a `reset` that calls itself) keeps recording after the
+   edit, so every probe failed. The KinDER fixture's reset search and Astra's
+   A* lost all their explanations this way. Each run now stores how many runs
+   had started and how many frames had been recorded in the call when it
+   started. The probe compares those numbers, the earlier runs' sites and
+   ordinals, and the edited run's frames up to the edit.
+
+**Not covered.**
+- A recursive depth-first search that never backtracks, or that only backtracks
+  from one-cell dead ends, shows no sign: its worklist is Python's call stack.
+  Catching it would need a recursion-specific sign (open question).
+- A `for` loop that iterates over a list it appends to
+  (`for node in queue: queue.append(...)`) is not flagged: the loop variable is
+  iterator-driven, so this form stays zero unless another sign fires (open
+  question).
+
+A static census of the 1,103 distinct cached KinDER policies found 202 with a
+worklist loop (one that pops from and pushes to the same container) or a library
+search. Of these, 167 (83%) had one in a `while` loop and were already parts. 22
+(11%) have one in a `for` loop that is now a part. 13 (6%) call a library search
+(17 calls to scipy `dijkstra`, 1 to `shortest_path`). None is left outside a
+part. Another 79 policies have self-recursion and no other search machinery.
+Most of these are `get_action` re-dispatching itself, and a few are backtracking
+searches (`dfs`, `_perms`, `_plan`).
+
+New fixtures and tests (`test_policy_loops.py`): `FOR_ASTAR`, `MULTI_STOP`,
+`LOOP_COUNTER`, `SCIPY_DIJKSTRA`, `WAVEFRONT`, `RECURSIVE_DFS`, `REDISPATCH`,
+`LINEAR_RECURSION`, fresh-name and import-alias unit tests, wavefront signature
+tests (two steps, one step, stamps, shrinking, ignored) and shifted-position
+tests (a list consumed from the front; a bucket queue). Existing tests changed only where a reactive `for` loop is now a part
+with status `not_search_shaped`. Bank schema 12.
+
 ### Milestone 7: implementation decisions
 
 Add an opt-in `heuristics` suite with six-state, unit-cost tasks. Keep legacy

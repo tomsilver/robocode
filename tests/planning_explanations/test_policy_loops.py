@@ -1,5 +1,6 @@
 """Issue 2: a loop the analyzer cannot read is unknown, never zero planning."""
 
+import ast
 import json
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from robocode.planning_explanations.search.policy_discovery import (
+    LIBRARY,
     UNREADABLE,
     PolicyLimits,
     discover_policy,
@@ -17,6 +19,8 @@ from robocode.planning_explanations.search.policy_discovery import (
 )
 from robocode.planning_explanations.search.policy_domains import DiscWorld
 from robocode.planning_explanations.search.policy_fixtures import (
+    _FOLLOW,
+    _HEADER,
     BFS_WITHOUT_COSTS,
     DEQUE_BFS,
     NESTED_RENAMED,
@@ -34,6 +38,8 @@ from robocode.planning_explanations.search.policy_runner import (
     RunRecord,
     SearchEdit,
     apply_edit,
+    fresh_names,
+    iteration_local,
     observe_episode,
 )
 from robocode.planning_explanations.search.policy_worklist import (
@@ -149,6 +155,223 @@ LEVEL_BFS = BFS_WITHOUT_COSTS[:_START] + """        frontier = [root]
 """ + BFS_WITHOUT_COSTS[_END:]
 
 
+# plan_once with its A* written as a counted for loop that breaks when empty.
+FOR_ASTAR = PLAN_ONCE.replace(
+    "        while frontier:\n",
+    "        for _ in range(100000):\n"
+    "            if not frontier:\n"
+    "                break\n",
+)
+
+# One A* per stop on the way to the goal, inside an outer for loop. Every stop
+# rebuilds the search's containers and the path, so the outer loop carries none.
+_STOPS = """
+    def _plan(self, start, goal, obstacles):
+        step = 0.1
+
+        def cell(p):
+            return (int(round(p[0] / step)), int(round(p[1] / step)))
+
+        def point(c):
+            return (step * c[0], step * c[1])
+
+        def free(c):
+            x, y = point(c)
+            if not (0.05 <= x <= 2.45 and 0.05 <= y <= 2.45):
+                return False
+            return all(math.hypot(x - ox, y - oy) > r + 0.1 for ox, oy, r in obstacles)
+
+        full = []
+        for f in (0.3, 0.6, 1.0):
+            stop = (start[0] + (goal[0] - start[0]) * f, start[1] + (goal[1] - start[1]) * f)
+            root, target = cell(start), cell(stop)
+            frontier = [(0.0, root)]
+            cost, parent = {root: 0.0}, {root: None}
+            while frontier:
+                _, cur = heapq.heappop(frontier)
+                if cur == target:
+                    break
+                for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nxt = (cur[0] + di, cur[1] + dj)
+                    if not free(nxt):
+                        continue
+                    nc = cost[cur] + 1.0
+                    if nc < cost.get(nxt, 1e30):
+                        cost[nxt], parent[nxt] = nc, cur
+                        h = math.hypot(nxt[0] - target[0], nxt[1] - target[1])
+                        heapq.heappush(frontier, (nc + h, nxt))
+            path = []
+            node = target if target in parent else None
+            while node is not None:
+                path.append(point(node))
+                node = parent[node]
+            path.reverse()
+            full.extend(path)
+            start = stop
+        return full + [(goal[0], goal[1])]
+"""
+_PLAN_ON_RESET = """
+    def reset(self, state, info):
+        self.goal = tuple(state["goal"])
+        self.path = self._plan(state["robot"], self.goal, state["obstacles"])
+
+    def get_action(self, state):
+        return self._follow(state)
+"""
+MULTI_STOP = _HEADER + _STOPS + _FOLLOW + _PLAN_ON_RESET
+
+# A reactive policy that also fills a list from a counted for loop: the loop
+# variable advances behind the growing list, but the iterator drives it.
+LOOP_COUNTER = REACTIVE.replace(
+    "        dx, dy = self.goal[0] - x, self.goal[1] - y\n",
+    "        dx, dy = self.goal[0] - x, self.goal[1] - y\n"
+    "        samples = []\n"
+    "        for i in range(10):\n"
+    "            samples.append(i * 0.1)\n",
+)
+
+# Dijkstra from scipy on a 4-connected grid graph; only the path walk is ours.
+_SCIPY = """
+    def _plan(self, start, goal, obstacles):
+        step, n = 0.1, 25
+
+        def free(i, j):
+            x, y = i * step, j * step
+            if not (0.05 <= x <= 2.45 and 0.05 <= y <= 2.45):
+                return False
+            return all(math.hypot(x - ox, y - oy) > r + 0.1 for ox, oy, r in obstacles)
+
+        rows, cols = [], []
+        for i in range(n):
+            for j in range(n):
+                for di, dj in ((1, 0), (0, 1)):
+                    if i + di < n and j + dj < n and free(i, j) and free(i + di, j + dj):
+                        rows += [i * n + j, (i + di) * n + j + dj]
+                        cols += [(i + di) * n + j + dj, i * n + j]
+        graph = csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(n * n, n * n))
+        src = int(round(start[0] / step)) * n + int(round(start[1] / step))
+        dst = int(round(goal[0] / step)) * n + int(round(goal[1] / step))
+        _, pred = csgraph.dijkstra(graph, indices=src, return_predecessors=True)
+        path, k = [], dst
+        while k >= 0 and k != src:
+            path.append(((k // n) * step, (k % n) * step))
+            k = int(pred[k])
+        path.reverse()
+        return path + [(goal[0], goal[1])]
+"""
+SCIPY_DIJKSTRA = (
+    _HEADER.replace(
+        "import math\n",
+        "import math\n\nimport numpy as np\n"
+        "from scipy.sparse import csr_matrix, csgraph\n",
+    )
+    + _SCIPY
+    + _FOLLOW
+    + _PLAN_ON_RESET
+)
+
+# Breadth-first distances by growing a boolean reached grid one ring per round.
+_WAVE = """
+    def _plan(self, start, goal, obstacles):
+        step, n = 0.1, 25
+        axis = np.arange(n) * step
+        cx, cy = np.meshgrid(axis, axis, indexing="ij")
+        free = (cx >= 0.05) & (cx <= 2.45) & (cy >= 0.05) & (cy <= 2.45)
+        for ox, oy, r in obstacles:
+            free &= np.hypot(cx - ox, cy - oy) > r + 0.1
+        dst = (int(round(goal[0] / step)), int(round(goal[1] / step)))
+        reached = np.zeros((n, n), dtype=bool)
+        reached[dst] = True
+        self.dist = np.full((n, n), -1)
+        self.dist[dst] = 0
+        for k in range(1, 4 * n):
+            grown = reached.copy()
+            grown[1:, :] |= reached[:-1, :]
+            grown[:-1, :] |= reached[1:, :]
+            grown[:, 1:] |= reached[:, :-1]
+            grown[:, :-1] |= reached[:, 1:]
+            grown &= free
+            if (grown == reached).all():
+                break
+            self.dist[grown & ~reached] = k
+            reached = grown
+
+    def reset(self, state, info):
+        self.goal = tuple(state["goal"])
+        self._plan(state["robot"], self.goal, state["obstacles"])
+
+    def get_action(self, state):
+        x, y = state["robot"]
+        i, j = int(round(x / 0.1)), int(round(y / 0.1))
+        best, here = self.goal, self.dist[i, j]
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            a, b = i + di, j + dj
+            if 0 <= a < 25 and 0 <= b < 25 and 0 <= self.dist[a, b] < here:
+                best, here = (a * 0.1, b * 0.1), self.dist[a, b]
+        return self._steer(x, y, best)
+"""
+WAVEFRONT = (
+    _HEADER.replace("import math\n", "import math\n\nimport numpy as np\n")
+    + _FOLLOW
+    + _WAVE
+)
+
+
+# Backtracking depth-first search by recursion, sharing one path list. Its
+# neighbour order runs into dead ends, so the path loses cells it had gained.
+RECURSIVE_DFS = _HEADER + _FOLLOW + """
+    def _dfs(self, cell, target, free, path, seen):
+        path.append(cell)
+        seen.add(cell)
+        if cell == target:
+            return True
+        for di, dj in ((-1, 0), (0, -1), (1, 0), (0, 1)):
+            nxt = (cell[0] + di, cell[1] + dj)
+            if nxt not in seen and free(nxt) and self._dfs(nxt, target, free, path, seen):
+                return True
+        path.pop()
+        return False
+
+    def reset(self, state, info):
+        self.goal = tuple(state["goal"])
+        obstacles = state["obstacles"]
+
+        def free(c):
+            x, y = 0.1 * c[0], 0.1 * c[1]
+            if not (0.05 <= x <= 2.45 and 0.05 <= y <= 2.45):
+                return False
+            return all(math.hypot(x - ox, y - oy) > r + 0.1 for ox, oy, r in obstacles)
+
+        start = tuple(int(round(v / 0.1)) for v in state["robot"])
+        target = tuple(int(round(v / 0.1)) for v in self.goal)
+        path = []
+        self._dfs(start, target, free, path, set())
+        self.path = [(0.1 * i, 0.1 * j) for i, j in path] + [self.goal]
+
+    def get_action(self, state):
+        return self._follow(state)
+"""
+
+# A phase machine that re-dispatches by calling itself, and a linear recursion
+# over a shrinking list of obstacles: both reactive.
+REDISPATCH = REACTIVE.replace(
+    "    def get_action(self, state):\n",
+    "    def get_action(self, state):\n"
+    "        if getattr(self, 'phase', 0) == 0:\n"
+    "            self.phase = 1\n"
+    "            return self.get_action(state)\n",
+)
+LINEAR_RECURSION = REACTIVE.replace(
+    "    def get_action(self, state):\n",
+    "    def _total(self, items):\n"
+    "        if not items:\n"
+    "            return 0.0\n"
+    "        return items[0][2] + self._total(items[1:])\n\n"
+    "    def get_action(self, state):\n"
+    "        self.radius = self._total([list(o) for o in state['obstacles']])\n",
+)
+
+
 class UnreadableLoopTest(unittest.TestCase):
     """A loop counts as zero only with evidence that it is not a search."""
 
@@ -236,8 +459,10 @@ class UnreadableLoopTest(unittest.TestCase):
         self.assertTrue(episode["accounting"]["program"]["complete"])
         _, episode, statuses = analyze(REACTIVE)
         row = episode["accounting"]["program"]
+        # Its obstacle loop is a watched for loop with nothing to carry.
         self.assertEqual(
-            (statuses, row["complete"], row["planning_events"]), ([], True, 0)
+            (statuses, row["complete"], row["planning_events"]),
+            (["not_search_shaped"], True, 0),
         )
 
     def test_validation_rechecks_a_frozen_not_a_search_verdict(self):
@@ -256,7 +481,8 @@ class UnreadableLoopTest(unittest.TestCase):
         _, episode, statuses = analyze(
             source, development=((1, 0),), validation=((3, 1),)
         )
-        self.assertEqual(statuses, ["not_search_shaped"])
+        # The reset loop, then the reactive obstacle loop.
+        self.assertEqual(statuses, ["not_search_shaped", "not_search_shaped"])
         (run,) = [r for r in episode["runs"] if r["part_status"] == UNREADABLE]
         self.assertEqual(run["worklist"]["worklist"], "work")
         self.assertFalse(episode["accounting"]["program"]["complete"])
@@ -274,7 +500,7 @@ class UnreadableLoopTest(unittest.TestCase):
         _, episode, statuses = analyze(
             source, development=((1, 0),), validation=((3, 1),)
         )
-        self.assertEqual(statuses, ["not_search_shaped"])
+        self.assertEqual(statuses, ["not_search_shaped", "not_search_shaped"])
         self.assertFalse(episode["accounting"]["program"]["complete"])
         self.assertEqual(episode["runs"][0]["unreadable"], "snapshot_omission")
 
@@ -445,8 +671,13 @@ class WorklistSignatureTest(unittest.TestCase):
         self.assertFalse(signature["cut"])
 
     def test_partly_opaque_containers_are_not_silently_absent(self):
-        """Unsupported elements also leave omission evidence."""
+        """Unsupported elements are followed by identity, or leave omission evidence."""
         run = run_of({"q": [object()]})
+        self.assertEqual(run.capture.members[0], {"q": (1, True, False, True)})
+        inner = [object()]
+        run = run_of({"q": [inner]})
+        inner.append(object())
+        run.capture.record("visit", {"q": [inner]})
         signature = worklist_signature(run)
         self.assertTrue(signature["cut"])
         self.assertEqual(signature["omitted"], ["q"])
@@ -558,7 +789,12 @@ class NumpyAndUnknownLoopTest(unittest.TestCase):
         _, values = next(capture.frames())
         self.assertEqual(values["here"], (1.5, 2))
         self.assertIs(type(values["here"][0]), float)
-        self.assertEqual(capture.omitted_containers, {"heap", "box"})
+        # A list of object-holding tuples is followed by item identity instead,
+        # and a tuple holding a list counts as omitted once that list changes.
+        self.assertEqual(capture.omitted_containers, set())
+        self.assertEqual(capture.members[0]["heap"], (1, True, False, True))
+        capture.record("visit", {"box": ([object()], 2)})
+        self.assertEqual(capture.omitted_containers, {"box"})
 
 
 class OrdinaryCodeKeepsTotalsTest(unittest.TestCase):
@@ -622,6 +858,350 @@ class ReportBoundsTest(unittest.TestCase):
             self.assertGreater(summary["lower_bound_search_score"], 0)
             self.assertIn("Search score (per call)", (root / "report.md").read_text())
             self.assertIn(f"| ≥ {known} |", (root / "report.md").read_text())
+
+
+def loop_of(source: str):
+    """The first loop statement of a code fragment."""
+    return next(
+        n for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.For, ast.While))
+    )
+
+
+def grids(*rows_of_cells, size=7):
+    """Boolean grids with the given True cells."""
+    result = []
+    for cells in rows_of_cells:
+        grid = np.zeros((size, size), dtype=bool)
+        for cell in cells:
+            grid[cell] = True
+        result.append({"reached": grid})
+    return result
+
+
+class WatchedForLoopTest(unittest.TestCase):
+    """For loops are parts; only what one iteration hands the next is a worklist."""
+
+    def test_a_for_loop_search_is_read_like_a_while_loop(self):
+        """The same A* written as a counted for loop gets the same numbers."""
+        _, episode, statuses = analyze(
+            FOR_ASTAR, development=((1, 0), (3, 1)), validation=((3, 100),)
+        )
+        _, same, _ = analyze(
+            PLAN_ONCE, development=((1, 0), (3, 1)), validation=((3, 100),)
+        )
+        self.assertEqual(statuses[0], "search")
+        row, expected = episode["accounting"]["program"], same["accounting"]["program"]
+        self.assertTrue(row["complete"])
+        for key in ("search_score", "expansion_events", "planning_events"):
+            self.assertEqual(row[key], expected[key])
+
+    def test_an_outer_loop_around_a_search_is_not_a_worklist(self):
+        """Per-stop containers are rebuilt each iteration: nothing is carried."""
+        program = PolicyProgram(MULTI_STOP)
+        outer = next(s for s, i in program.sites.items() if i.get("loop") == "for")
+        self.assertTrue(
+            {"frontier", "cost", "parent", "path"} <= set(program.sites[outer]["fresh"])
+        )
+        _, episode, statuses = analyze(
+            MULTI_STOP, development=((1, 0), (3, 1)), validation=((3, 100),)
+        )
+        self.assertEqual(statuses[:2], ["not_search_shaped", "search"])
+        self.assertTrue(episode["accounting"]["program"]["complete"])
+        self.assertGreater(episode["accounting"]["program"]["search_score"], 0)
+
+    def test_iteration_local_variables(self):
+        """Rebound before every read in an iteration (even inside a branch)."""
+        cases = {
+            # Astra's candidate loop: a carry path rebuilt in a branch, then read.
+            "for obj in ordered:\n"
+            "    if obj:\n"
+            "        delivery = route(obj)\n"
+            "        if delivery is None:\n"
+            "            continue\n"
+            "        choices.append((len(delivery), obj))\n": {"delivery", "obj"},
+            # Level-by-level BFS: the frontier is read before it is rebound.
+            "while frontier:\n"
+            "    layer = []\n"
+            "    for cur in frontier:\n"
+            "        layer.append(cur)\n"
+            "    frontier = layer\n": {"cur", "layer"},
+            # Rebound in one branch only, read after it.
+            "for x in xs:\n"
+            "    if x:\n"
+            "        path = plan(x)\n"
+            "    use(path)\n": {"x"},
+            # An alias of outside state is still inspected.
+            "while True:\n    q = self.open\n    node = pop(q)\n": {"node"},
+        }
+        for source, expected in cases.items():
+            self.assertEqual(iteration_local(loop_of(source)), expected, source)
+
+    def test_a_counted_loop_variable_is_not_a_read_cursor(self):
+        """`for i in range(n): xs.append(...)` stays zero."""
+        _, episode, statuses = analyze(LOOP_COUNTER)
+        self.assertEqual(statuses, ["not_search_shaped", "not_search_shaped"])
+        row = episode["accounting"]["program"]
+        self.assertEqual((row["complete"], row["planning_events"]), (True, 0))
+
+    def test_fresh_names(self):
+        """For variables and values rebuilt before any use carry nothing."""
+        source = (
+            "for goal in goals:\n"
+            "    path = plan(goal)\n"
+            "    seen = set()\n"
+            "    total = total + len(path)\n"
+            "    queue = [goal] + queue\n"
+            "    alias = work\n"
+            "    items[0] = []\n"
+            "    for a, (b, c) in pairs:\n"
+            "        pass\n"
+            "    if path:\n"
+            "        late = []\n"
+            "    used_first = len(late)\n"
+        )
+        fresh = fresh_names(loop_of(source))
+        self.assertEqual(fresh, ["a", "b", "c", "goal", "path", "seen", "used_first"])
+        # A while loop's test reads its variables before the body rebuilds them.
+        fresh = fresh_names(
+            loop_of("while frontier:\n    frontier = []\n    x = f()\n")
+        )
+        self.assertEqual(fresh, ["x"])
+
+
+class LibrarySearchTest(unittest.TestCase):
+    """Library graph searches are parts, and always unknown."""
+
+    def test_imports_resolve_to_library_searches(self):
+        """Aliases and from-imports are followed; non-search helpers are not parts."""
+        source = (
+            "import networkx as nx\n"
+            "import scipy.sparse.csgraph\n"
+            "from scipy.sparse.csgraph import shortest_path as sp\n"
+            "from scipy import ndimage\n"
+            "class GeneratedApproach:\n"
+            "    def plan(self, g, grid):\n"
+            "        a = nx.astar_path(g, 0, 1)\n"
+            "        b = scipy.sparse.csgraph.dijkstra(g)\n"
+            "        c = sp(g)\n"
+            "        d = ndimage.label(grid)\n"
+            "        e = nx.Graph()\n"
+            "        return a, b, c, d, e\n"
+        )
+        calls = sorted(
+            info["call"]
+            for info in PolicyProgram(source).sites.values()
+            if info["kind"] == "library"
+        )
+        self.assertEqual(
+            calls,
+            [
+                "networkx.astar_path",
+                "scipy.sparse.csgraph.dijkstra",
+                "scipy.sparse.csgraph.shortest_path",
+            ],
+        )
+
+    def test_a_library_search_is_unknown_not_zero(self):
+        """scipy's Dijkstra withholds totals; the policy's own loops stay zero."""
+        program, domain = PolicyProgram(SCIPY_DIJKSTRA), DiscWorld()
+        bank = discover_policy(program, domain, ((1, 0),), ((3, 100),))
+        result = validate_policy(program, domain, bank)
+        (site,) = [s for s, i in program.sites.items() if i["kind"] == "library"]
+        self.assertEqual(bank.parts[site]["status"], UNREADABLE)
+        self.assertEqual(bank.audit["parts"][site]["unreadable"], LIBRARY)
+        others = {p["status"] for s, p in bank.parts.items() if s != site}
+        self.assertLessEqual(
+            others, {"not_search_shaped", "not_executed_in_development"}
+        )
+        self.assertEqual(_finding(bank, result)["code"], "unreadable_loops")
+        self.assert_withheld(result["episodes"][0])
+
+    assert_withheld = UnreadableLoopTest.assert_withheld
+
+
+class WavefrontTest(unittest.TestCase):
+    """A boolean grid growing by its own neighbours is a worklist in grid form."""
+
+    def signature(self, *frames, ignore=frozenset()):
+        """The worklist signature of one run with these frames."""
+        return worklist_signature(run_of(*frames), ignore=ignore)
+
+    def test_three_neighbour_growth_steps_are_a_wavefront(self):
+        """Three rings grown from a seed, and nothing else changed."""
+        frames = grids(
+            [(3, 3)],
+            [(3, 3), (3, 4)],
+            [(3, 3), (3, 4), (4, 5)],
+            [(3, 3), (3, 4), (4, 5), (5, 6)],
+        )
+        signature = self.signature(*frames)
+        self.assertEqual(
+            (signature["worklist"], signature["kind"]),
+            ("reached", "growing_reached_grid"),
+        )
+        # A wavefront in a variable that cannot carry it is not this loop's.
+        self.assertIsNone(
+            self.signature(*frames, ignore=frozenset({"reached"}))["worklist"]
+        )
+
+    def test_short_growth_stamps_and_shrinking_are_not(self):
+        """Too short, stamped shapes far apart, or cells removed."""
+        twice = grids([(3, 3)], [(3, 3), (3, 4)], [(3, 3), (3, 4), (3, 5)])
+        stamps = grids([(0, 0)], [(0, 0), (3, 3)], [(0, 0), (3, 3), (6, 6)])
+        shrink = grids([(3, 3), (3, 4)], [(3, 3)], [(3, 3), (3, 4)], [(3, 3)])
+        for frames in (twice, stamps, shrink):
+            self.assertIsNone(self.signature(*frames)["worklist"])
+
+    def test_bands_then_a_stamp_are_not_a_wavefront(self):
+        """An obstacle map thickened by thin bands, then stamped (Astra's map)."""
+        frames = grids(
+            [(0, c) for c in range(7)],
+            [(r, c) for r in range(2) for c in range(7)],
+            [(r, c) for r in range(3) for c in range(7)],
+            [(r, c) for r in range(4) for c in range(7)],
+            [(r, c) for r in range(4) for c in range(7)] + [(6, 6)],
+        )
+        self.assertIsNone(self.signature(*frames)["worklist"])
+
+    def test_a_wavefront_policy_is_unknown_not_zero(self):
+        """A breadth-first distance field kept as a reached grid."""
+        _, episode, statuses = analyze(
+            WAVEFRONT, development=((1, 0),), validation=((3, 100),)
+        )
+        self.assertIn(UNREADABLE, statuses)
+        program = PolicyProgram(WAVEFRONT)
+        bank = discover_policy(program, DiscWorld(), ((1, 0),), ((3, 100),))
+        reasons = {r.get("unreadable") for r in bank.audit["parts"].values()}
+        self.assertIn("growing_reached_grid", reasons)
+        self.assertFalse(episode["accounting"]["program"]["complete"])
+
+
+class RecursionTest(unittest.TestCase):
+    """A function that calls itself is a part; its calls are its iterations."""
+
+    def statuses(self, source):
+        """Bank, validation result and the recursion part of one policy."""
+        program = PolicyProgram(source)
+        bank = discover_policy(program, DiscWorld(), ((1, 0),), ((3, 100),))
+        result = validate_policy(program, DiscWorld(), bank)
+        (site,) = [s for s, i in program.sites.items() if i["kind"] == "recursion"]
+        return bank, result, site
+
+    def test_backtracking_recursion_is_unknown_not_zero(self):
+        """The shared path gains and loses cells across calls: a worklist."""
+        bank, result, site = self.statuses(RECURSIVE_DFS)
+        self.assertEqual(bank.parts[site]["status"], UNREADABLE)
+        self.assertEqual(bank.audit["parts"][site]["worklist"]["worklist"], "path")
+        self.assertEqual(_finding(bank, result)["code"], "unreadable_loops")
+
+    def test_reactive_recursion_stays_zero(self):
+        """Re-dispatching, and recursing on a shrinking list, carry no worklist."""
+        for source in (REDISPATCH, LINEAR_RECURSION):
+            bank, result, site = self.statuses(source)
+            self.assertEqual(bank.parts[site]["status"], "not_search_shaped")
+            row = result["episodes"][0]["accounting"]["program"]
+            self.assertEqual((row["complete"], row["planning_events"]), (True, 0))
+
+    def test_one_run_per_outermost_call(self):
+        """Nested calls are visits of the outermost call's run."""
+        program = PolicyProgram(RECURSIVE_DFS)
+        trace = observe_episode(program, DiscWorld(), (1, 0))
+        runs = [r for c in trace.calls for r in c.runs if r.site.endswith("Recursion")]
+        self.assertEqual(len(runs), 1)
+        self.assertGreater(runs[0].visits, 10)
+        self.assertTrue(runs[0].exited)
+        self.assertEqual(runs[0].depth, 0)
+
+
+class ShiftedPositionTest(unittest.TestCase):
+    """A list's elements are compared by position only if its length is kept."""
+
+    def test_a_shrinking_list_of_lists_is_not_churn(self):
+        """After `items = items[1:]`, items[0] is the next element."""
+        run = run_of(
+            {"items": [[1, 2], [3, 4], [5, 6]]},
+            {"items": [[3, 4], [5, 6]]},
+            {"items": [[5, 6]]},
+        )
+        self.assertIsNone(worklist_signature(run)["worklist"])
+
+    def test_a_bucket_queue_is_still_churn(self):
+        """Buckets keep their positions; one gains and loses items in place."""
+        run = run_of(
+            {"buckets": [[1], [2]]},
+            {"buckets": [[], [2, 5]]},
+            {"buckets": [[7], [5]]},
+        )
+        self.assertEqual(worklist_signature(run)["worklist"], "buckets[0]")
+
+
+class OpaqueItemTest(unittest.TestCase):
+    """Containers of objects are followed by item identity, not omitted."""
+
+    def test_an_integer_the_loop_never_reads_is_not_a_cursor(self):
+        """Astra's `components, _ = label(...)`: `_` grows but indexes nothing."""
+        objects = [object() for _ in range(4)]
+        choices: list = []
+        run = run_of()
+        for count, obj in enumerate(objects):
+            run.capture.record("visit", {"choices": choices, "_": count})
+            choices.extend([(1.0, obj), (2.0, obj)])
+        self.assertEqual(worklist_signature(run)["cursor"], "_")
+        signature = worklist_signature(run, read=frozenset({"choices"}))
+        self.assertIsNone(signature["worklist"])
+        program = PolicyProgram(
+            "class GeneratedApproach:\n"
+            "    def plan(self, ordered):\n"
+            "        choices = []\n"
+            "        for obj in ordered:\n"
+            "            if obj:\n"
+            "                labels, _ = obj.label()\n"
+            "            choices.append((labels, obj))\n"
+            "        return choices\n"
+        )
+        sites = list(program.sites.values())
+        self.assertEqual(len(sites), 1)
+        site = sites[0]
+        self.assertNotIn("_", site["read"])
+        self.assertIn("labels", site["read"])
+
+    def test_a_list_of_objects_only_iterated_or_appended_is_readable(self):
+        """`for obj in objects: choices.append((score, obj))` is not a worklist."""
+        objects = [object() for _ in range(3)]
+        choices: list = []
+        run = run_of()
+        for obj in objects:
+            run.capture.record(
+                "visit", {"objects": objects, "choices": choices, "obj": obj}
+            )
+            choices.append((1.0, obj))
+        run.capture.record("exit", {"objects": objects, "choices": choices})
+        signature = worklist_signature(run)
+        self.assertEqual((signature["worklist"], signature["omitted"]), (None, []))
+
+    def test_a_queue_of_objects_still_churns(self):
+        """Popping one node object and pushing another is a worklist."""
+        nodes = [object() for _ in range(4)]
+        queue = deque(nodes[:2])
+        run = run_of()
+        for node in nodes[2:]:
+            run.capture.record("visit", {"queue": queue})
+            queue.popleft()
+            queue.append(node)
+        run.capture.record("visit", {"queue": queue})
+        self.assertEqual(worklist_signature(run)["worklist"], "queue")
+
+    def test_lists_inside_are_omitted_once_they_change(self):
+        """Lists of lists of objects could hide a worklist one level down."""
+        buckets = [[object()], [object()]]
+        run = run_of()
+        run.capture.record("visit", {"buckets": buckets, "state": {"block": object()}})
+        run.capture.record("visit", {"buckets": buckets, "state": {"block": object()}})
+        # Read-only so far: nothing inside was gained or lost.
+        self.assertEqual(worklist_signature(run)["omitted"], [])
+        buckets[0].append(buckets[1].pop())
+        run.capture.record("visit", {"buckets": buckets, "state": {"block": object()}})
+        self.assertEqual(worklist_signature(run)["omitted"], ["buckets"])
 
 
 if __name__ == "__main__":
