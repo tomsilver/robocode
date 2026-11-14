@@ -97,7 +97,12 @@ LOOP_RULES = (
     "a container gains and loses items, a growing sequence has a possible "
     "advancing integer read cursor (one the loop's code reads), or a 2-D "
     "boolean grid changes only by growing by its own neighbours, at least three "
-    "times in one run (a wavefront); inspection limits also make it "
+    "times in one run (a wavefront), a for loop's own list (`for x in xs`, "
+    "`enumerate(xs)`) grows while it is iterated, or a pass that draws random "
+    "numbers (as the innermost running part) also changes state snapshots do not "
+    "hold and that can hold many items (a numeric numpy array of more than 64 "
+    "numbers, or a container, big array or object among the attributes of the "
+    "policy's own objects); inspection limits also make it "
     f"unreadable (depth {SCAN_DEPTH}, {SCAN_LIMIT} containers and integer "
     "candidates per snapshot). Variables that cannot carry items between "
     "iterations are not inspected: for-statement variables, variables whose first "
@@ -732,6 +737,7 @@ class EpisodeAnalyzer:
                     run,
                     ignore=self.ignored[run.site],
                     read=_read_names(self.program, run.site),
+                    iterated=self.program.sites[run.site].get("iterates"),
                 )
                 reason = unreadable_reason(signature)
                 if reason:
@@ -1250,6 +1256,7 @@ def discover_policy(
             runs[site],
             ignored_names(program, site, parts),
             _read_names(program, site),
+            program.sites[site].get("iterates"),
         )
         reason = unreadable_reason(signature)
         audit["parts"][site].update(worklist=signature, unreadable=reason)

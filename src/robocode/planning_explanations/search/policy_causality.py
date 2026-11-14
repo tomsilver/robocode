@@ -442,7 +442,7 @@ class ChainReplay:
         try:
             for name, policy in self.policies.items():
                 before = plan_attributes(policy).get(self.attribute, ())
-                session = Session(capture=False)
+                session = Session(capture=False, clock=call.clock)
                 output = program.call(
                     policy, call.method, (domain.copy_state(state), *extra), session
                 )

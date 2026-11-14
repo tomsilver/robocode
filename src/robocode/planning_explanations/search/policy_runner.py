@@ -11,9 +11,14 @@ iteration changes) so a 2,000-cell search does not cost 2,000 full copies.
 # pylint: disable=unidiomatic-typecheck
 
 import ast
+import builtins
 import copy
 import hashlib
 import heapq
+import random
+import sys
+import time as real_time
+import types
 from collections import Counter, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -27,6 +32,183 @@ from .selectors import locate
 FILENAME = "<search-policy-module>"
 RECORDER = "__m8__"
 _MISSING = object()
+
+
+POLICY_MODULE = "search_policy_module"
+
+
+def own_object(value) -> bool:
+    """An instance of a class the policy itself defines (its `self`, a `Tree`)."""
+    return getattr(type(value), "__module__", None) == POLICY_MODULE and hasattr(
+        value, "__dict__"
+    )
+
+
+def _generator(value) -> bool:
+    """A random-number generator: Python's `random.Random`, numpy's Generator or
+    RandomState (recognised without importing numpy)."""
+    kind = type(value)
+    return isinstance(value, random.Random) or (
+        kind.__name__ in ("Generator", "RandomState")
+        and kind.__module__.startswith("numpy.random")
+    )
+
+
+def _generator_state(value) -> Any:
+    """Something that changes whenever the generator draws a number."""
+    if isinstance(value, random.Random):
+        return hash(value.getstate())
+    if type(value).__name__ == "RandomState":
+        state = value.get_state()
+        return (state[2], hash(state[1].tobytes()))
+    state = value.bit_generator.state
+    inner = state.get("state")
+    if isinstance(inner, dict) and "state" in inner:
+        return inner["state"]
+    return hash(repr(state))
+
+
+def _big_array(value) -> bool:
+    """A numeric numpy array of more than 64 numbers: snapshots do not copy it."""
+    return (
+        type(value).__name__ == "ndarray"
+        and value.dtype.kind != "b"
+        and value.size > 64
+    )
+
+
+def _hidden_value(value) -> Any:
+    """A cheap fingerprint of a hidden value that can hold many items, else None.
+
+    Single numbers, strings and small arrays cannot hold a tree or a to-do list
+    (a call counter, a pose), so they are not watched.
+    """
+    kind = type(value)
+    if _big_array(value):
+        if value.size <= 1_000_000:
+            return ("array", value.shape, hash(value.tobytes()))
+        return ("array", value.shape, id(value))
+    if kind in (list, dict, set, deque, tuple):
+        return (kind.__name__, len(value))
+    if own_object(value):
+        return ("object", id(value))
+    return None
+
+
+def hidden_state(values: dict) -> dict[str, Any]:
+    """Fingerprints of what snapshots do not hold and that can hold many items:
+    numeric numpy arrays of more than 64 numbers, and the containers, big arrays
+    and objects among the attributes of the policy's own objects (`self.x`)."""
+    hidden: dict[str, Any] = {}
+    for name, value in values.items():
+        if name.startswith("__"):
+            continue
+        if _big_array(value):
+            hidden[name] = _hidden_value(value)
+        elif own_object(value):
+            for key, item in vars(value).items():
+                fingerprint = _hidden_value(item)
+                if fingerprint is not None:
+                    hidden[f"{name}.{key}"] = fingerprint
+    return hidden
+
+
+class RandomWatch:
+    """Which part draws random numbers: the innermost running one when a random
+    generator the policy can reach moves (Python's `random`, numpy's global
+    generator, and generators in the policy's locals, objects and module)."""
+
+    def __init__(self) -> None:
+        # Sites that have drawn random numbers: their hidden state is watched.
+        self.sites: set[str] = set()
+        self.namespace: dict | None = None
+
+    def learn(self, values: dict, generators: dict) -> None:
+        """Generators visible from a run's first checkpoint."""
+        sources = list(values.values())
+        if self.namespace is not None:
+            sources.extend(self.namespace.values())
+        for value in sources:
+            if _generator(value):
+                generators[id(value)] = value
+            elif own_object(value):
+                for item in vars(value).values():
+                    if _generator(item):
+                        generators[id(item)] = item
+
+    @staticmethod
+    def state(generators: dict) -> tuple:
+        """The joint state of every generator known so far in this call."""
+        parts: list = [hash(random.getstate())]
+        numpy = sys.modules.get("numpy")
+        if numpy is not None:
+            legacy = numpy.random.get_state()
+            parts.append((legacy[2], hash(legacy[1].tobytes())))
+        parts.extend(_generator_state(g) for g in generators.values())
+        return tuple(parts)
+
+
+class FakeClock:
+    """The policy's own view of time while it is analyzed.
+
+    A policy that plans "until 2 seconds have passed" would otherwise plan less
+    while it is recorded (recording is slow), so its recorded episode would differ
+    from its plain one. Every read of this clock advances it by `TICK` seconds and
+    nothing else does, so a time budget becomes a fixed number of clock reads: the
+    same with or without recording, on any machine. `sleep` advances it at once.
+    """
+
+    TICK = 1e-3
+    START = 1_700_000_000.0
+
+    def __init__(self) -> None:
+        self.now = self.START
+        self.reads = 0
+        module = types.ModuleType("time", "Deterministic stand-in for `time`.")
+        for name in dir(real_time):
+            if not name.startswith("__"):
+                setattr(module, name, getattr(real_time, name))
+        for name in (
+            "time",
+            "monotonic",
+            "perf_counter",
+            "process_time",
+            "thread_time",
+        ):
+            setattr(module, name, self.read)
+        for name in ("time_ns", "monotonic_ns", "perf_counter_ns", "process_time_ns"):
+            setattr(module, name, self.read_ns)
+        module.sleep = self.sleep
+        self.module = module
+
+    def reset(self) -> None:
+        """Every episode starts at the same time."""
+        self.now = self.START
+
+    def read(self) -> float:
+        """One look at the clock: time moves on by one tick."""
+        self.now += self.TICK
+        self.reads += 1
+        return self.now
+
+    def read_ns(self) -> int:
+        """The same reading in nanoseconds."""
+        return int(self.read() * 1e9)
+
+    def sleep(self, seconds: float) -> None:
+        """Sleeping passes the time without waiting."""
+        self.now += max(0.0, float(seconds))
+
+    def importer(self, real_import: Callable) -> Callable:
+        """`import time` (and `from time import ...`) in the policy gets this clock."""
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            # pylint: disable=redefined-builtin
+            if level == 0 and name == "time":
+                return self.module
+            return real_import(name, globals, locals, fromlist, level)
+
+        return fake_import
 
 
 _SCALARS = frozenset({type(None), bool, int, float, str})
@@ -312,6 +494,9 @@ class RunCapture:
         self._members: dict[str, Counter] = {}
         # Size of every container variable in the previous frame, by value or not.
         self._sizes: dict[str, tuple[bool, int]] = {}
+        # Per pass that drew random numbers (as the innermost running part): the
+        # hidden values (numpy arrays, the policy's own objects) that changed.
+        self.random_changes: list[frozenset[str]] = []
         # Unrecordable containers with containers inside: their last skeleton.
         # They count as omitted only once their skeleton changes in the run.
         self._skeletons: dict[str, Any] = {}
@@ -663,6 +848,7 @@ class RunCapture:
         self.records.clear()
         self.replaced.clear()
         self.members.clear()
+        self.random_changes.clear()
 
 
 @dataclass
@@ -679,14 +865,25 @@ class RunRecord:
     depth: int = 0
     # Runs started and frames recorded in the call before this run started.
     started_after: tuple[int, int] = (0, 0)
+    # Random numbers drawn while this run was the innermost running part, since
+    # its last checkpoint; and the hidden state at that checkpoint.
+    drew: bool = False
+    hidden: dict | None = None
 
 
 class Session:
     """Everything recorded during one harness call or one probe re-execution."""
 
-    def __init__(self, capture: bool = True, edit: SearchEdit | None = None) -> None:
+    def __init__(
+        self,
+        capture: bool = True,
+        edit: SearchEdit | None = None,
+        clock: float | None = None,
+    ) -> None:
         self.capture = capture
         self.edit = edit
+        # A re-executed call starts from its original call's clock reading.
+        self.clock = clock
         self.runs: list[RunRecord] = []
         self.stack: list[str] = []
         self.edits = 0
@@ -695,6 +892,10 @@ class Session:
         self.recursions: dict[str, RunRecord] = {}
         # Frames recorded so far, by every run of this call.
         self.frames = 0
+        # Running parts, innermost last; random generators seen in this call.
+        self.active: list[RunRecord] = []
+        self.generators: dict[int, Any] = {}
+        self.random_state: tuple | None = None
 
     def start(self, site: str) -> RunRecord:
         """Begin a run; ordinals number this site's runs within the call."""
@@ -717,6 +918,51 @@ class Recorder:
 
     def __init__(self) -> None:
         self.sessions: list[Session] = []
+        self.random = RandomWatch()
+
+    def _moved(self, session: Session) -> None:
+        """Random numbers drawn since the last checkpoint belong to the innermost
+        running part (a planner's loop, not the loop that called the planner)."""
+        state = self.random.state(session.generators)
+        if session.random_state is not None and state != session.random_state:
+            while session.active and session.active[-1].exited:
+                session.active.pop()
+            if session.active:
+                session.active[-1].drew = True
+        session.random_state = state
+
+    def _pass(self, session: Session, run: RunRecord, values: dict) -> None:
+        """At a checkpoint of `run`: did the pass that just ended draw random
+        numbers while state the snapshots do not hold changed?"""
+        if run.visits <= 1:
+            known = len(session.generators)
+            self.random.learn(values, session.generators)
+            if len(session.generators) != known:
+                # New generators join the baseline; finding one is not a draw.
+                session.random_state = self.random.state(session.generators)
+        if not run.drew and run.site not in self.random.sites:
+            run.hidden = None
+            return
+        hidden = hidden_state(values)
+        if run.drew:
+            self.random.sites.add(run.site)
+            if run.hidden is not None:
+                changed = frozenset(
+                    k
+                    for k, v in hidden.items()
+                    if k in run.hidden and run.hidden[k] != v
+                )
+                if changed:
+                    run.capture.random_changes.append(changed)
+        run.hidden = hidden
+        run.drew = False
+
+    @staticmethod
+    def _stop(session: Session, run: RunRecord) -> None:
+        """The run is no longer running."""
+        run.hidden = None
+        if run in session.active:
+            session.active.remove(run)
 
     def begin(self, method: str) -> None:
         """Method entry, for attributing runs to helpers and harness calls."""
@@ -743,13 +989,17 @@ class Recorder:
         if not self.sessions:
             return None
         session = self.sessions[-1]
+        if session.capture:
+            self._moved(session)
         run = session.recursions.get(site)
         if run is None or run.depth == 0:
             run = session.recursions[site] = session.start(site)
+            session.active.append(run)
         run.depth += 1
         run.visits += 1
         if session.capture:
             session.record(run, "visit", values)
+            self._pass(session, run, values)
         return run
 
     def returned(self, run: RunRecord | None) -> None:
@@ -760,12 +1010,23 @@ class Recorder:
         if run.depth == 0:
             # Only call entries are recorded: an exit frame would hold the
             # outermost call's own locals next to the deepest call's arguments.
+            session = self.sessions[-1]
+            if session.capture:
+                self._moved(session)
+            self._stop(session, run)
             run.exited = True
             run.capture.finish()
 
     def enter(self, site: str) -> RunRecord | None:
         """A loop statement is about to run: one new run of this part."""
-        return self.sessions[-1].start(site) if self.sessions else None
+        if not self.sessions:
+            return None
+        session = self.sessions[-1]
+        if session.capture:
+            self._moved(session)
+        run = session.start(site)
+        session.active.append(run)
+        return run
 
     def visit(self, run: RunRecord | None, values: dict) -> None:
         """Before every loop test, including the final false test."""
@@ -776,7 +1037,9 @@ class Recorder:
         run.visits += 1
         edit = session.edit
         if session.capture:
+            self._moved(session)
             session.record(run, "visit", values)
+            self._pass(session, run, values)
         if (
             edit is not None
             and edit.site == run.site
@@ -792,8 +1055,12 @@ class Recorder:
         """Loop termination: a false test or break ("exit"), or a return inside it."""
         if run is None:
             return
-        run.exited = True
         session = self.sessions[-1]
+        if session.capture:
+            self._moved(session)
+            self._pass(session, run, values)
+        self._stop(session, run)
+        run.exited = True
         if session.capture:
             session.record(run, kind, values)
             # A run is never recorded again after it ends.
@@ -867,7 +1134,7 @@ class _ReturnCheckpoints(ast.NodeTransformer):
         self.token = token
 
     def visit_Return(self, node: ast.Return):  # pylint: disable=invalid-name
-        """`return value` ends the loop's run here, as Tom's algorithm does."""
+        """`return value` ends the loop's run here, as the method's algorithm does."""
         leave = ast.parse(f"{RECORDER}.leave({self.token}, locals(), 'return')").body[0]
         ast.copy_location(leave, node)
         return [leave, node]
@@ -955,6 +1222,22 @@ def library_search(func: ast.expr, aliases: dict[str, str]) -> str | None:
         if full.startswith(package + ".") and full.rsplit(".", 1)[1] in names:
             return full
     return None
+
+
+def _iterated(iterable) -> str | None:
+    """The variable a `for` loop iterates directly (`xs`, or `enumerate(xs)`).
+
+    Python reads such a list lazily, by position, so items appended during the
+    loop are visited too.
+    """
+    if (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and iterable.func.id == "enumerate"
+        and len(iterable.args) == 1
+    ):
+        iterable = iterable.args[0]
+    return iterable.id if isinstance(iterable, ast.Name) else None
 
 
 def _names(target) -> list[str]:
@@ -1293,7 +1576,7 @@ class _Transformer(ast.NodeTransformer):
             self.generic_visit(node)
             self.loops.pop()
             return node
-        site = self._site(node, "For")
+        site = self._site(node, "For", iterates=_iterated(node.iter))
         self.loops.append(site)
         self.generic_visit(node)
         self.loops.pop()
@@ -1376,26 +1659,39 @@ class PolicyProgram:
         self.code = compile(ast.fix_missing_locations(transformed), FILENAME, "exec")
         self.sites = transformer.sites
         self.recorder = Recorder()
+        self.clock = FakeClock()
 
     def policy_class(self, instrumented: bool = True) -> type:
         """Execute the module in fresh globals and return the policy class."""
         namespace: dict[str, Any] = {
-            "__name__": "search_policy_module",
+            "__name__": POLICY_MODULE,
             "__file__": FILENAME,
+            "__builtins__": {
+                **builtins.__dict__,
+                "__import__": self.clock.importer(builtins.__import__),
+            },
             RECORDER: self.recorder,
         }
         exec(  # pylint: disable=exec-used
             self.code if instrumented else self.plain, namespace
         )
+        if instrumented:
+            self.recorder.random.namespace = namespace
         return namespace[self.class_name]
 
     def call(self, policy, method: str, args: tuple, session: Session):
         """Invoke one harness method under a session; always restore the stack."""
         self.recorder.sessions.append(session)
+        resumed = self.clock.now
+        if session.clock is not None:
+            self.clock.now = session.clock
         try:
             return getattr(policy, method)(*args)
         finally:
             self.recorder.sessions.pop()
+            if session.clock is not None:
+                # A re-execution never moves the episode's own clock.
+                self.clock.now = resumed
 
 
 def plan_attributes(policy) -> dict[str, tuple]:
@@ -1427,6 +1723,8 @@ class CallRecord:
     plans_before: dict[str, tuple]
     plans_after: dict[str, tuple]
     action: tuple[float, ...] | None = None
+    # The fake clock's reading when the call started.
+    clock: float = FakeClock.START
 
 
 @dataclass
@@ -1458,6 +1756,7 @@ def run_episode(
     The callback must copy the post-state before any counterfactual execution.
     """
     state, info = domain.reset(case)
+    program.clock.reset()
     policy = program.policy_class(instrumented)(
         domain.action_space, domain.observation_space, {}
     )
@@ -1471,6 +1770,7 @@ def run_episode(
         )
         session = Session(capture=instrumented and capture)
         plans_before = plan_attributes(policy)
+        started = program.clock.now
         result = program.call(policy, method, args, session)
         record = CallRecord(
             index,
@@ -1479,6 +1779,7 @@ def run_episode(
             plans_before,
             plan_attributes(policy),
             None if result is None else action_tuple(result),
+            started,
         )
         calls.append(record)
         if after_call is not None:

@@ -3,6 +3,7 @@
 import ast
 import json
 import tempfile
+import time
 import unittest
 from collections import deque
 from pathlib import Path
@@ -37,10 +38,12 @@ from robocode.planning_explanations.search.policy_runner import (
     RunCapture,
     RunRecord,
     SearchEdit,
+    Session,
     apply_edit,
     fresh_names,
     iteration_local,
     observe_episode,
+    run_episode,
 )
 from robocode.planning_explanations.search.policy_worklist import (
     containers,
@@ -369,6 +372,146 @@ LINEAR_RECURSION = REACTIVE.replace(
     "        return items[0][2] + self._total(items[1:])\n\n"
     "    def get_action(self, state):\n"
     "        self.radius = self._total([list(o) for o in state['obstacles']])\n",
+)
+
+
+# Breadth-first search written as a for loop over the list it appends to.
+FOR_QUEUE_BFS = _HEADER + """
+    def _plan(self, start, goal, obstacles):
+        step = 0.1
+
+        def cell(p):
+            return (int(round(p[0] / step)), int(round(p[1] / step)))
+
+        def point(c):
+            return (step * c[0], step * c[1])
+
+        def free(c):
+            x, y = point(c)
+            if not (0.05 <= x <= 2.45 and 0.05 <= y <= 2.45):
+                return False
+            return all(math.hypot(x - ox, y - oy) > r + 0.1 for ox, oy, r in obstacles)
+
+        root, target = cell(start), cell(goal)
+        queue = [root]
+        parent = {root: None}
+        for cur in queue:
+            if cur == target:
+                break
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt = (cur[0] + di, cur[1] + dj)
+                if nxt in parent or not free(nxt):
+                    continue
+                parent[nxt] = cur
+                queue.append(nxt)
+        path = []
+        node = target if target in parent else None
+        while node is not None:
+            path.append(point(node))
+            node = parent[node]
+        path.reverse()
+        return path + [(goal[0], goal[1])]
+""" + _FOLLOW + _PLAN_ON_RESET
+
+# A for loop that fills another list while iterating its own: not a queue.
+OTHER_LIST = REACTIVE.replace(
+    "        dx, dy = self.goal[0] - x, self.goal[1] - y\n",
+    "        dx, dy = self.goal[0] - x, self.goal[1] - y\n"
+    "        near = []\n"
+    "        for o in state['obstacles']:\n"
+    "            near.append(o)\n"
+    "            near.append(o)\n",
+)
+
+
+# Plans "for 50 milliseconds": the number of rounds depends on the clock.
+DEADLINE = REACTIVE.replace(
+    "import math\n",
+    "import math\nimport time\nfrom time import monotonic\n",
+).replace(
+    "        dx, dy = self.goal[0] - x, self.goal[1] - y\n",
+    "        dx, dy = self.goal[0] - x, self.goal[1] - y\n"
+    "        end, rounds = time.time() + 0.05, 0\n"
+    "        while time.time() < end and monotonic() < end + 1:\n"
+    "            rounds += 1\n"
+    "        time.sleep(30)\n"
+    "        self.rounds = rounds\n",
+)
+
+
+# An RRT whose tree lives in preallocated numpy arrays (invisible to snapshots),
+# called from an outer retry loop, next to a loop that tries random goal points.
+ARRAY_RRT = (
+    _HEADER.replace("import math\n", "import math\n\nimport numpy as np\n") + """
+    def _free(self, p, obstacles):
+        if not (0.05 <= p[0] <= 2.45 and 0.05 <= p[1] <= 2.45):
+            return False
+        return all(math.hypot(p[0] - ox, p[1] - oy) > r + 0.1 for ox, oy, r in obstacles)
+
+    def _rrt(self, start, goal, obstacles):
+        nodes = np.zeros((600, 2))
+        parent = np.full(600, -1)
+        nodes[0], n = start, 1
+        for _ in range(500):
+            if self.rng.random() < 0.2:
+                q = np.asarray(goal)
+            else:
+                q = self.rng.uniform(0.1, 2.4, size=2)
+            i = int(np.argmin(np.hypot(*(nodes[:n] - q).T)))
+            step = q - nodes[i]
+            new = nodes[i] + step * min(1.0, 0.1 / max(math.hypot(*step), 1e-9))
+            if not self._free(new, obstacles):
+                continue
+            nodes[n], parent[n] = new, i
+            n += 1
+            if math.hypot(*(new - goal)) < 0.1:
+                break
+        path, k = [], n - 1
+        while k >= 0:
+            path.append((float(nodes[k][0]), float(nodes[k][1])))
+            k = parent[k]
+        return path[::-1]
+
+    def reset(self, state, info):
+        self.rng = np.random.default_rng(0)
+        self.goal = tuple(state["goal"])
+        tries = []
+        for _ in range(10):
+            p = (float(self.rng.uniform(0.1, 2.4)), float(self.rng.uniform(0.1, 2.4)))
+            if self._free(p, state["obstacles"]):
+                tries.append(p)
+        self.path = []
+        for _ in range(2):
+            path = self._rrt(np.asarray(state["robot"]), self.goal, state["obstacles"])
+            if path:
+                self.path = path + [self.goal]
+                break
+
+    def get_action(self, state):
+        return self._follow(state)
+""" + _FOLLOW
+)
+
+
+# Holds a generator it does not draw from in its object loop, and draws random
+# numbers in another loop that only bumps a counter on itself.
+RNG_BYSTANDER = (
+    REACTIVE.replace("import math\n", "import math\n\nimport numpy as np\n")
+    .replace(
+        '        self.goal = tuple(state["goal"])\n',
+        '        self.goal = tuple(state["goal"])\n'
+        "        self.rng = np.random.default_rng(0)\n"
+        "        self.seen, self.tries = [], 0\n",
+    )
+    .replace(
+        "        dx, dy = self.goal[0] - x, self.goal[1] - y\n",
+        "        dx, dy = self.goal[0] - x, self.goal[1] - y\n"
+        "        for o in state['obstacles']:\n"
+        "            self.seen.append(o)\n"
+        "        for _ in range(3):\n"
+        "            jitter = self.rng.normal()\n"
+        "            self.tries += 1\n",
+    )
 )
 
 
@@ -966,6 +1109,125 @@ class WatchedForLoopTest(unittest.TestCase):
             loop_of("while frontier:\n    frontier = []\n    x = f()\n")
         )
         self.assertEqual(fresh, ["x"])
+
+
+class IteratedQueueTest(unittest.TestCase):
+    """A for loop over a list it appends to reads it with its own cursor."""
+
+    def test_a_for_loop_queue_is_unknown_not_zero(self):
+        """Breadth-first search as `for cur in queue: queue.append(...)`."""
+        program = PolicyProgram(FOR_QUEUE_BFS)
+        bank = discover_policy(program, DiscWorld(), ((1, 0),), ((3, 100),))
+        result = validate_policy(program, DiscWorld(), bank)
+        (site,) = [s for s, i in program.sites.items() if i.get("iterates") == "queue"]
+        self.assertEqual(bank.parts[site]["status"], UNREADABLE)
+        self.assertEqual(bank.audit["parts"][site]["unreadable"], "iterated_list_grows")
+        self.assertEqual(_finding(bank, result)["code"], "unreadable_loops")
+
+    def test_growing_another_list_stays_zero(self):
+        """Only the list being iterated counts."""
+        _, episode, statuses = analyze(OTHER_LIST)
+        self.assertEqual(statuses, ["not_search_shaped", "not_search_shaped"])
+        self.assertTrue(episode["accounting"]["program"]["complete"])
+
+    def test_signature(self):
+        """Growth of the iterated list counts; a rebound name does not."""
+        queue = [1]
+        run = run_of()
+        for item in (2, 3):
+            run.capture.record("visit", {"queue": queue})
+            queue.append(item)
+        run.capture.record("exit", {"queue": queue})
+        self.assertIsNone(worklist_signature(run)["worklist"])
+        signature = worklist_signature(run, iterated="queue")
+        self.assertEqual(signature["kind"], "iterated_list_grows")
+        rebound = run_of({"queue": [1]}, {"queue": [1, 2]})
+        self.assertIsNone(worklist_signature(rebound, iterated="queue")["worklist"])
+
+    def test_what_a_for_loop_iterates(self):
+        """A plain variable, or enumerate of one; nothing else."""
+        source = (
+            "class GeneratedApproach:\n"
+            "    def a(self, q):\n"
+            "        for x in q:\n"
+            "            pass\n"
+            "    def b(self, q):\n"
+            "        for i, x in enumerate(q):\n"
+            "            pass\n"
+            "    def c(self, q):\n"
+            "        for x in list(q):\n"
+            "            pass\n"
+        )
+        sites = PolicyProgram(source).sites.values()
+        self.assertEqual(sorted(str(i["iterates"]) for i in sites), ["None", "q", "q"])
+
+
+class FakeClockTest(unittest.TestCase):
+    """A time budget is a fixed number of clock reads, recorded or not."""
+
+    def test_a_deadline_loop_behaves_the_same_when_recorded(self):
+        """Same actions with and without recording, without really sleeping."""
+        program = PolicyProgram(DEADLINE)
+        started = time.monotonic()
+        trace = observe_episode(program, DiscWorld(), (0, 0))
+        self.assertLess(time.monotonic() - started, 30)
+        (site,) = [s for s, i in program.sites.items() if i.get("loop") == "while"]
+        visits = {r.visits for c in trace.calls for r in c.runs if r.site == site}
+        # 0.05 s at 1 ms per read, two reads per round: 25 rounds, every call.
+        self.assertEqual(visits, {26})
+
+    def test_a_reexecuted_call_starts_from_its_own_clock(self):
+        """Probes replay a call at its original time and leave the episode's."""
+        program = PolicyProgram(DEADLINE)
+        trace = run_episode(program, DiscWorld(), (0, 0))
+        call = trace.calls[3]
+        policy = program.policy_class()(None, None, None)
+        policy.goal = (1.0, 1.0)
+        program.clock.now = 5.0
+        session = Session(capture=False, clock=call.clock)
+        program.call(
+            policy, "get_action", ({"robot": (0.5, 0.5), "obstacles": []},), session
+        )
+        self.assertEqual(program.clock.now, 5.0)
+        self.assertEqual(policy.rounds, 25)
+        self.assertGreater(trace.calls[3].clock, trace.calls[2].clock)
+
+
+class RandomHiddenStateTest(unittest.TestCase):
+    """Random draws while state the snapshots do not hold changes: maybe a search."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.program = PolicyProgram(ARRAY_RRT)
+        cls.bank = discover_policy(cls.program, DiscWorld(), ((1, 0),), ((3, 100),))
+
+    def part(self, text):
+        """The part whose first line contains `text`."""
+        (site,) = [s for s, i in self.program.sites.items() if text in i["source"]]
+        return self.bank.parts[site]["status"], self.bank.audit["parts"][site]
+
+    def test_an_rrt_in_numpy_arrays_is_unknown_not_zero(self):
+        """Its nodes and parents are arrays the recorder does not copy."""
+        status, audit = self.part("for _ in range(500)")
+        self.assertEqual(status, UNREADABLE)
+        self.assertEqual(audit["unreadable"], "random_with_hidden_state")
+        self.assertIn(audit["worklist"]["worklist"], ("nodes", "parent"))
+
+    def test_the_loop_that_calls_the_planner_is_not_flagged(self):
+        """The planner's draws belong to the planner's own loop."""
+        status, _ = self.part("for _ in range(2)")
+        self.assertEqual(status, "not_search_shaped")
+
+    def test_holding_a_generator_or_bumping_a_counter_is_not_flagged(self):
+        """Finding `self.rng` is not a draw; a counter cannot hold a tree."""
+        _, episode, statuses = analyze(RNG_BYSTANDER)
+        self.assertNotIn(UNREADABLE, statuses)
+        self.assertTrue(episode["accounting"]["program"]["complete"])
+
+    def test_trying_random_points_with_visible_results_is_not_flagged(self):
+        """Random goal points kept in a visible list: the usual tests decide."""
+        status, _ = self.part("for _ in range(10)")
+        self.assertEqual(status, "not_search_shaped")
 
 
 class LibrarySearchTest(unittest.TestCase):

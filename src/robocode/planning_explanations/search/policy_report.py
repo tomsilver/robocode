@@ -22,6 +22,9 @@ FINDINGS = {
 }
 
 RULES = (
+    "During analysis the policy's clock is simulated: each read of time.time(), "
+    "time.monotonic() or time.perf_counter() advances it by 1 ms, so a time budget "
+    "is a fixed number of clock reads, the same with or without recording. "
     "The search score is the mean, over every policy call of an episode (reset and "
     "each action), of the distinct states its search runs expanded beyond the "
     "start: max(N - 1, 0) per call, with N summed over the call's runs; a call "
@@ -41,7 +44,9 @@ RULES = (
     "plan-restoration controls. Probes are excluded from ordinary counts. A loop "
     "the grammar cannot bind is unreadable if containers gain and lose items, "
     "a growing sequence has a possible advancing read cursor, a boolean grid keeps "
-    "growing by its own neighbours (a wavefront), or container data was omitted or "
+    "growing by its own neighbours (a wavefront), a for loop's list grows while it is "
+    "iterated, a pass draws random numbers while state the snapshots do not hold "
+    "changes, or container data was omitted or "
     "incompletely inspected; a call to a library graph search is always "
     "unreadable. Totals are then withheld. These "
     "bounded checks do not rule out every other search representation. The "

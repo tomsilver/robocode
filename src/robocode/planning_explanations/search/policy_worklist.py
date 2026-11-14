@@ -24,6 +24,15 @@ cells, over a whole run, change only by growing by their own neighbours (each ne
 cell next to an old one), at least three times, is the grid form of a worklist.
 Stamping shapes into a map does not keep growing by neighbours.
 
+A `for` loop over a list it appends to (`for node in queue: queue.append(...)`)
+reads that list with its own hidden cursor, so the list growing while it is
+iterated is the same sign: breadth-first search written as a for loop.
+
+A loop that draws random numbers (as the innermost running part) while state the
+snapshots do not hold changes in the same pass (a numpy array, an attribute of the
+policy's own objects) may be a sampling planner whose tree we cannot see, such as
+an RRT kept in preallocated arrays or a `Tree` object (`random_with_hidden_state`).
+
 `read` (if given) names the variables the loop's code reads: a read cursor is
 read, so an integer whose variable the loop never reads is not one.
 
@@ -205,14 +214,40 @@ def _grid_changes(values: dict, grids: dict, growth: Counter, stamped: set) -> N
             stamped.add(name)
 
 
+def _iterated_grows(run, name: str) -> bool:
+    """The list a `for` loop iterates gains items while it is being iterated."""
+    members = run.capture.members
+    old = None
+    for index, ((kind, frame), replaced) in enumerate(
+        zip(run.capture.frames(), run.capture.replaced)
+    ):
+        if old is not None and name in replaced:
+            # Rebound: later frames no longer show the list being iterated.
+            return False
+        value = frame.get(name)
+        entry = members[index].get(name) if index < len(members) else None
+        if type(value) is list:
+            size = len(value)
+        else:
+            size = entry[0] if entry is not None and entry[3] else None
+        if kind != "edited" and None not in (old, size) and size > old:
+            return True
+        old = size
+    return False
+
+
 def worklist_signature(
     run,
     depth: int = SCAN_DEPTH,
     limit: int = SCAN_LIMIT,
     ignore: frozenset = frozenset(),
     read: frozenset | None = None,
+    iterated: str | None = None,
 ):
-    """Churn, a growing sequence with a possible read cursor, or a wavefront."""
+    """Churn, a growing sequence with a possible read cursor, or a wavefront.
+
+    `iterated` is the variable a `for` loop iterates directly, if any.
+    """
     gained: set = set()
     lost: set = set()
     # Containers changed in place or resized: not a value rebuilt each iteration.
@@ -224,6 +259,13 @@ def worklist_signature(
     growing: set = set()
     omitted = sorted(set(run.capture.omitted_containers) - set(ignore))
     cut = bool(omitted)
+    if iterated is not None and _iterated_grows(run, iterated):
+        return {
+            "worklist": iterated,
+            "kind": "iterated_list_grows",
+            "cut": cut,
+            "omitted": omitted,
+        }
     grids: dict = {}
     growth: Counter = Counter()
     # Grids that changed other than by growing by neighbours in this run.
@@ -301,17 +343,29 @@ def worklist_signature(
                 "cut": cut,
                 "omitted": omitted,
             }
+    for names in getattr(run.capture, "random_changes", ()):
+        kept = sorted(n for n in names if n.split(".", 1)[0] not in ignore)
+        if kept:
+            return {
+                "worklist": kept[0],
+                "kind": "random_with_hidden_state",
+                "cut": cut,
+                "omitted": omitted,
+            }
     return {"worklist": None, "cut": cut, "omitted": omitted}
 
 
 def scan_runs(
-    runs, ignore: frozenset = frozenset(), read: frozenset | None = None
+    runs,
+    ignore: frozenset = frozenset(),
+    read: frozenset | None = None,
+    iterated: str | None = None,
 ) -> dict:
     """Combine the signature over every run of one part."""
     cut = False
     omitted: set[str] = set()
     for run in runs:
-        signature = worklist_signature(run, ignore=ignore, read=read)
+        signature = worklist_signature(run, ignore=ignore, read=read, iterated=iterated)
         if signature["worklist"] is not None:
             return {**signature, "run": run.ordinal}
         cut = cut or signature["cut"]

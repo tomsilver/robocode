@@ -555,7 +555,7 @@ def execute_edit(
 ) -> dict:
     """Re-run only the enclosing call from deep copies with one live edit."""
     policy, state, extra = before
-    session = Session(capture=True, edit=edit)
+    session = Session(capture=True, edit=edit, clock=call.clock)
     clone = copy.deepcopy(policy)
     output, error = None, None
     try:
@@ -773,7 +773,10 @@ def follow_probe(
         setattr(clone, attribute, replaced)
     try:
         output = program.call(
-            clone, "get_action", (domain.copy_state(state),), Session(capture=False)
+            clone,
+            "get_action",
+            (domain.copy_state(state),),
+            Session(capture=False, clock=call.clock),
         )
     except ERRORS as exc:
         record.update(passed=False, reason="policy_error", error=str(exc))
@@ -794,7 +797,7 @@ def follow_probe(
                 copy.deepcopy(policy),
                 "get_action",
                 (shifted,),
-                Session(capture=False),
+                Session(capture=False, clock=call.clock),
             )
             record["world_insensitive"] = _close(action_tuple(moved), call.action)
         except ERRORS as exc:
