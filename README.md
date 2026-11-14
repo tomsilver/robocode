@@ -1,5 +1,7 @@
 # Coding Agents for Generalized Task and Motion Planning Problems
 
+> **This branch (`abstract-tree`)** adds an analyzer that measures how much agent-written policies plan by search. Start with the [branch guide](README-abstract-tree.md).
+
 ![workflow](https://github.com/tomsilver/robocode/actions/workflows/ci.yml/badge.svg)
 
 [Project website and videos](https://agenticgentamp.github.io/) · [Paper](https://agenticgentamp.github.io/assets/paper.pdf) · [Code](https://github.com/tomsilver/robocode)
@@ -7,14 +9,6 @@
 RoboCode is the experiment code for **AgenticGenPlan**, our study of coding agents for generalized task and motion planning (TAMP). Given a task description and simulator access, an agent probes the environment, writes and tests Python, and returns one program that solves new instances of the task. We freeze that program and evaluate it without further LLM calls.
 
 The main setting is **strict black box**: no environment source, injected primitives, or robotics libraries. Programs use Python's standard library, NumPy, and SciPy; the agent interacts through `reset`/`step` and render tools. Source access is an additional condition. This is a study of off-the-shelf coding agents, with no prescribed symbolic representation or planning algorithm.
-
-For the small experimental prototype that discovers and tests planning explanations
-inside program executions, see [Planning explanations](docs/planning-explanations.md).
-It runs independently of the robotics and LLM stack using only Python's standard library.
-The separate [search-explanation prototype](docs/search-explanations.md) implements
-milestones 1–7 of the search/causal-abstraction proposal, with frozen discovery,
-live interventions, nested-value mappings, mixed execution routes, paired diagrams,
-priority search with cost improvement and goal timing, and validation on changing tasks.
 
 <table>
   <tr>

@@ -39,8 +39,7 @@ before it:
 1. **First run:** the original analyzer.
 2. **Depth-1 roles merged:** the depth-1 model has no separate score role.
 3. **Per-coordinate search:** each coordinate is matched and patch-tested on its
-   own, and compatible survivors are assembled (see `docs/planning-explanations.md`,
-   "Search space").
+   own, and compatible survivors are assembled.
 4. **Varied tables:** every input has its own transition table instead of one
    fixed table.
 5. **Boundary patches:** states are replaced by every other state, and values also
